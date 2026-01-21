@@ -12,9 +12,25 @@ This tool provides a thin, LLM-agent-focused CLI wrapper around the JIRA REST AP
 4. **Thin Command Surface**: Minimal commands covering core agent workflows.
 5. **LLM Context Awareness**: Comments and attachments support pagination/size limits to avoid overwhelming LLM context windows.
 
-## Standard Response Envelope
+## Output Format Specification
 
-### Success Response
+This section provides a complete specification of the output format, including the design rationale for each decision. This format is intended to be shared across multiple LLM-focused CLI tools (e.g., JIRA, Gerrit, etc.).
+
+### Design Goals
+
+The output format was designed with the following goals in mind:
+
+1. **LLM Parseability**: LLMs should be able to reliably extract information without complex parsing logic or regex
+2. **Determinism**: Same input always produces the same output structure (though values may differ)
+3. **Debuggability**: Sufficient metadata for troubleshooting without exposing sensitive information
+4. **Scriptability**: Works well in shell pipelines and CI/CD systems
+5. **Consistency**: Identical patterns across all commands and tools in the suite
+
+### Standard Response Envelope
+
+Every command produces a JSON object with exactly three top-level keys: `ok`, `data` or `error`, and `meta`.
+
+#### Success Response
 ```json
 {
   "ok": true,
@@ -27,7 +43,7 @@ This tool provides a thin, LLM-agent-focused CLI wrapper around the JIRA REST AP
 }
 ```
 
-### Error Response
+#### Error Response
 ```json
 {
   "ok": false,
@@ -45,14 +61,189 @@ This tool provides a thin, LLM-agent-focused CLI wrapper around the JIRA REST AP
 }
 ```
 
-## Exit Codes
+### Field-by-Field Design Rationale
 
-- `0`: Success
-- `1`: General error
-- `2`: Authentication error
-- `3`: Not found
-- `4`: Invalid input
-- `5`: Network/connection error
+#### The `ok` Field (Boolean)
+
+```json
+"ok": true
+```
+
+**Why a boolean?**
+- LLMs can trivially check success/failure with a single field inspection
+- No ambiguity: `true` means success, `false` means failure
+- Eliminates the need to check for presence of `error` field or parse status codes
+- Works identically across all commands—no special cases
+
+**Why not HTTP status codes?**
+- Not all operations map cleanly to HTTP semantics
+- CLI tools may have errors that don't originate from HTTP (config errors, network timeouts)
+- A boolean is more direct for programmatic consumption
+
+#### The `data` Field (Success Payload)
+
+```json
+"data": {
+  "key": "PROJ-123",
+  "summary": "Fix login bug",
+  "status": "In Progress"
+}
+```
+
+**Design decisions:**
+- Only present when `ok: true`
+- Contains the actual response payload—never metadata
+- Shape varies by command but is documented and consistent per-command
+- Never truncated silently (if truncation occurs, it's explicit in the data or meta)
+
+**Why separate from `meta`?**
+- Clear separation between "what you asked for" vs "information about the request"
+- LLMs can extract just the `data` field without filtering out metadata
+- Makes response structure predictable
+
+#### The `error` Field (Failure Payload)
+
+```json
+"error": {
+  "code": "ISSUE_NOT_FOUND",
+  "message": "Issue PROJ-999 does not exist",
+  "http_status": 404,
+  "details": {
+    "issue_key": "PROJ-999"
+  }
+}
+```
+
+**Design decisions:**
+- Only present when `ok: false`
+- Always contains `code` (machine-readable) and `message` (human-readable)
+- `http_status` included when the error originates from an HTTP response
+- `details` provides structured context for programmatic handling
+
+**Why string error codes instead of numeric?**
+- Self-documenting: `"AUTH_FAILED"` is immediately understandable
+- LLMs can reason about the error type without a lookup table
+- No collision concerns across different tools
+- Easier to extend without reserving number ranges
+
+**Why both `code` and `message`?**
+- `code` is for programmatic matching (stable, never changes)
+- `message` is for display/logging (may be refined over time)
+- LLMs can use either depending on the task
+
+#### The `meta` Field (Request Metadata)
+
+```json
+"meta": {
+  "tool": "jira",
+  "command": "issue.get",
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+**Design decisions:**
+- Always present in both success and error responses
+- Contains information about the request, not the response data
+- `tool`: Identifies which tool generated this response (useful when multiple tools share the format)
+- `command`: The specific operation that was invoked (dot-notation for namespacing)
+- `timestamp`: ISO-8601 UTC timestamp of when the response was generated
+
+**Why include `tool` and `command`?**
+- Enables log aggregation and debugging across multi-tool workflows
+- LLMs can verify they're processing the expected response type
+- Useful for audit trails and correlation
+
+**Why ISO-8601 timestamps?**
+- Universally parseable standard
+- Lexicographically sortable
+- Unambiguous timezone handling (always UTC with `Z` suffix)
+
+### Exit Codes
+
+Exit codes provide a secondary signal for shell scripts and CI/CD systems.
+
+| Code | Name | Description |
+|------|------|-------------|
+| 0 | SUCCESS | Operation completed successfully |
+| 1 | GENERAL_ERROR | Unspecified error |
+| 2 | AUTH_ERROR | Authentication/authorization failure |
+| 3 | NOT_FOUND | Requested resource does not exist |
+| 4 | INVALID_INPUT | Malformed input or invalid parameters |
+| 5 | NETWORK_ERROR | Connection failure or timeout |
+
+**Why separate exit codes from error codes?**
+- Exit codes are for shell-level control flow (`if jira issue get X; then ...`)
+- Error codes are for programmatic inspection of the JSON response
+- Exit codes are coarse-grained (5 categories); error codes are fine-grained (many specific codes)
+- Some environments only have access to exit codes (e.g., simple shell scripts)
+
+**Why these specific categories?**
+- Cover the most common failure modes that require different handling
+- Auth errors (2): May need credential refresh
+- Not found (3): May need to create the resource or handle gracefully
+- Invalid input (4): Caller bug, fix the request
+- Network error (5): Retry may help
+
+### JSON Formatting
+
+**Default: Compact JSON (no whitespace)**
+```bash
+jira issue get PROJ-123
+# {"ok":true,"data":{...},"meta":{...}}
+```
+
+**Pretty printing: `--pretty` flag**
+```bash
+jira issue get PROJ-123 --pretty
+# {
+#   "ok": true,
+#   "data": {...},
+#   "meta": {...}
+# }
+```
+
+**Why compact by default?**
+- Smaller output size (relevant for LLM context limits)
+- Single line per response (easier to process in pipelines)
+- `--pretty` available when human readability is needed
+
+**Why `--pretty` instead of detecting TTY?**
+- Deterministic: same command always produces same format
+- LLMs invoke commands non-interactively; auto-detection would be wrong
+- Explicit is better than implicit
+
+### Error Code Registry
+
+Error codes follow a naming convention: `CATEGORY_SPECIFIC_ERROR`
+
+| Code | Category | Exit Code | Description |
+|------|----------|-----------|-------------|
+| `AUTH_FAILED` | Auth | 2 | Credentials rejected |
+| `AUTH_MISSING` | Auth | 2 | No credentials provided |
+| `ISSUE_NOT_FOUND` | Resource | 3 | Issue does not exist |
+| `PROJECT_NOT_FOUND` | Resource | 3 | Project does not exist |
+| `TRANSITION_NOT_FOUND` | Resource | 3 | Transition ID invalid |
+| `INVALID_INPUT` | Input | 4 | Generic input validation failure |
+| `INVALID_JQL` | Input | 4 | JQL syntax error |
+| `MISSING_REQUIRED_FIELD` | Input | 4 | Required parameter not provided |
+| `INVALID_TRANSITION` | Input | 4 | Transition not available for current state |
+| `CONNECTION_ERROR` | Network | 5 | Could not connect to server |
+| `TIMEOUT` | Network | 5 | Request timed out |
+| `SERVER_ERROR` | Server | 1 | Server returned 5xx error |
+| `RATE_LIMITED` | Server | 1 | Too many requests |
+| `CONFIG_ERROR` | Config | 1 | Configuration invalid |
+| `CONFIG_NOT_FOUND` | Config | 1 | Configuration file missing |
+
+### Guidelines for Extending This Format
+
+When adding new commands or adapting this format for other tools:
+
+1. **Never add top-level fields**: The envelope is always `{ok, data|error, meta}`
+2. **Keep `data` shape documented**: Each command's `data` structure should be specified
+3. **Add error codes as needed**: Follow the `CATEGORY_SPECIFIC` naming pattern
+4. **Preserve exit code semantics**: Map new errors to existing exit codes when possible
+5. **Include command in meta**: Use dot-notation (e.g., `attachment.get`, `issue.create`)
+6. **Timestamps are always UTC**: Use `Z` suffix, never local time
 
 ## Commands
 
