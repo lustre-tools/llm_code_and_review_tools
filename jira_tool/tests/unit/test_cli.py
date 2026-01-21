@@ -562,3 +562,214 @@ class TestNormalizeAttachment:
 
         result = _normalize_attachment(raw)
         assert result["size_human"] == "5.0 MB"
+
+    def test_normalize_attachment_bytes_size(self):
+        """Should format small sizes in bytes."""
+        from jira_tool.cli import _normalize_attachment
+
+        raw = {
+            "id": "1",
+            "filename": "tiny.txt",
+            "size": 500,
+            "mimeType": "text/plain",
+            "content": "https://example.com/file",
+        }
+
+        result = _normalize_attachment(raw)
+        assert result["size_human"] == "500 B"
+
+
+class TestCLIIssueTransition:
+    """Tests for 'jira issue transition' command."""
+
+    @responses.activate
+    def test_transition_success(self, runner, mock_env):
+        """Should transition issue."""
+        # Mock get issue before
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"status": {"name": "Open"}}},
+            status=200,
+        )
+        # Mock transition
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/transitions",
+            status=204,
+        )
+        # Mock get issue after
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"status": {"name": "In Progress"}}},
+            status=200,
+        )
+
+        result = runner.invoke(main, ["issue", "transition", "PROJ-123", "11"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["status_before"] == "Open"
+        assert data["data"]["status_after"] == "In Progress"
+
+    @responses.activate
+    def test_transition_with_comment(self, runner, mock_env):
+        """Should transition with comment."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"status": {"name": "Open"}}},
+            status=200,
+        )
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/transitions",
+            status=204,
+        )
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"status": {"name": "Done"}}},
+            status=200,
+        )
+
+        result = runner.invoke(main, ["issue", "transition", "PROJ-123", "21", "--comment", "Closing"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["data"]["comment_added"] is True
+
+
+class TestCLIIssueCreate:
+    """Tests for 'jira issue create' command."""
+
+    @responses.activate
+    def test_create_issue(self, runner, mock_env):
+        """Should create issue."""
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue",
+            json={"id": "10001", "key": "PROJ-124", "self": "https://jira.example.com/rest/api/2/issue/10001"},
+            status=201,
+        )
+
+        result = runner.invoke(
+            main, ["issue", "create", "--project", "PROJ", "--type", "Bug", "--summary", "Test bug"]
+        )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["key"] == "PROJ-124"
+
+    @responses.activate
+    def test_create_issue_with_description(self, runner, mock_env):
+        """Should create issue with description."""
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue",
+            json={"id": "10001", "key": "PROJ-125", "self": "https://jira.example.com/rest/api/2/issue/10001"},
+            status=201,
+        )
+
+        result = runner.invoke(
+            main,
+            [
+                "issue",
+                "create",
+                "--project",
+                "PROJ",
+                "--type",
+                "Task",
+                "--summary",
+                "New task",
+                "--description",
+                "Task details",
+            ],
+        )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["data"]["key"] == "PROJ-125"
+
+
+class TestCLIConfigSample:
+    """Tests for 'jira config sample' command."""
+
+    def test_config_sample(self, runner):
+        """Should output sample config."""
+        result = runner.invoke(main, ["config", "sample"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert "sample_config" in data["data"]
+        assert "default_path" in data["data"]
+
+
+class TestCLICommentsAllFlag:
+    """Tests for 'jira issue comments --all' flag."""
+
+    @responses.activate
+    def test_comments_all_flag(self, runner, mock_env):
+        """Should fetch all comments with --all flag."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/comment",
+            json={
+                "comments": [{"id": "1", "body": "Comment", "author": {"displayName": "User"}}],
+                "total": 1,
+            },
+            status=200,
+        )
+
+        result = runner.invoke(main, ["issue", "comments", "PROJ-123", "--all"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        # With --all, limit should be set to 1000
+        assert data["data"]["pagination"]["limit"] == 1000
+
+
+class TestCLIConfigError:
+    """Tests for ConfigError handling in CLI commands."""
+
+    def test_missing_config_error(self, runner):
+        """Should return proper error for missing config."""
+        # Don't set environment variables
+        result = runner.invoke(main, ["issue", "get", "PROJ-123"])
+        assert result.exit_code == 1  # GENERAL_ERROR (ConfigError)
+        data = json.loads(result.output)
+        assert data["ok"] is False
+        assert "JIRA_SERVER" in data["error"]["message"] or "config" in data["error"]["message"].lower()
+
+
+class TestCLIAttachmentContentBinary:
+    """Tests for binary attachment content handling."""
+
+    @responses.activate
+    def test_attachment_content_binary(self, runner, mock_env):
+        """Should handle binary content gracefully."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/attachment/12345",
+            json={
+                "id": "12345",
+                "filename": "image.png",
+                "size": 10,
+                "mimeType": "image/png",
+                "content": "https://jira.example.com/secure/attachment/12345/image.png",
+            },
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/secure/attachment/12345/image.png",
+            body=b"\x89PNG\r\n\x1a\n\x00\x00",  # Invalid UTF-8
+            status=200,
+        )
+
+        result = runner.invoke(main, ["attachment", "content", "12345"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["is_text"] is False
+        assert data["data"]["content"] is None
+        assert "Binary content" in data["data"]["note"]

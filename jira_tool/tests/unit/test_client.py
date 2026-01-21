@@ -596,3 +596,68 @@ class TestGetAttachmentContent:
 
         content, metadata = client.get_attachment_content("12345", max_size=0)
         assert len(content) == 100
+
+
+class TestResponseParsing:
+    """Tests for response parsing edge cases."""
+
+    @responses.activate
+    def test_invalid_json_response(self, client):
+        """Should handle invalid JSON in error response."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            body="Not valid JSON",
+            status=400,
+        )
+
+        with pytest.raises(InvalidInputError):
+            client.get_issue("PROJ-123")
+
+    @responses.activate
+    def test_field_level_jira_errors(self, client):
+        """Should extract field-level errors from JIRA response."""
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue",
+            json={
+                "errors": {
+                    "summary": "Summary is required",
+                    "project": "Project does not exist",
+                },
+                "errorMessages": [],
+            },
+            status=400,
+        )
+
+        with pytest.raises(InvalidInputError) as exc_info:
+            client.create_issue("BADPROJ", "Bug", "")
+        assert "summary: Summary is required" in str(exc_info.value)
+
+    @responses.activate
+    def test_unexpected_http_status(self, client):
+        """Should handle unexpected HTTP status codes."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"message": "I'm a teapot"},
+            status=418,  # Unusual status code
+        )
+
+        with pytest.raises(JiraToolError) as exc_info:
+            client.get_issue("PROJ-123")
+        assert exc_info.value.code == ErrorCode.SERVER_ERROR
+        assert exc_info.value.http_status == 418
+
+    @responses.activate
+    def test_empty_response_body(self, client):
+        """Should handle empty error response body."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            body="",
+            status=401,
+        )
+
+        with pytest.raises(AuthError):
+            client.get_issue("PROJ-123")
