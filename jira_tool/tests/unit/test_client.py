@@ -2,17 +2,16 @@
 
 import pytest
 import responses
-from responses import matchers
 
 from jira_tool.client import JiraClient
 from jira_tool.config import JiraConfig
 from jira_tool.errors import (
     AuthError,
-    NotFoundError,
-    InvalidInputError,
-    NetworkError,
-    JiraToolError,
     ErrorCode,
+    InvalidInputError,
+    JiraToolError,
+    NetworkError,
+    NotFoundError,
 )
 
 
@@ -482,3 +481,118 @@ class TestGetServerInfo:
         result = client.get_server_info()
         assert result["version"] == "8.0.0"
         assert result["serverTitle"] == "Example JIRA"
+
+
+class TestGetAttachment:
+    """Tests for get_attachment method."""
+
+    @responses.activate
+    def test_get_attachment_success(self, client):
+        """Should return attachment metadata."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/attachment/12345",
+            json={
+                "id": "12345",
+                "filename": "test.txt",
+                "size": 1024,
+                "mimeType": "text/plain",
+                "content": "https://jira.example.com/secure/attachment/12345/test.txt",
+                "author": {"displayName": "Test User"},
+                "created": "2024-01-15T10:00:00.000+0000",
+            },
+            status=200,
+        )
+
+        result = client.get_attachment("12345")
+        assert result["id"] == "12345"
+        assert result["filename"] == "test.txt"
+        assert result["size"] == 1024
+
+    @responses.activate
+    def test_get_attachment_not_found(self, client):
+        """Should raise NotFoundError for missing attachment."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/attachment/99999",
+            json={"errorMessages": ["Attachment not found"]},
+            status=404,
+        )
+
+        with pytest.raises(NotFoundError):
+            client.get_attachment("99999")
+
+
+class TestGetAttachmentContent:
+    """Tests for get_attachment_content method."""
+
+    @responses.activate
+    def test_get_content_success(self, client):
+        """Should download attachment content."""
+        # Mock metadata endpoint
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/attachment/12345",
+            json={
+                "id": "12345",
+                "filename": "test.txt",
+                "size": 13,
+                "mimeType": "text/plain",
+                "content": "https://jira.example.com/secure/attachment/12345/test.txt",
+            },
+            status=200,
+        )
+        # Mock content download
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/secure/attachment/12345/test.txt",
+            body=b"Hello, World!",
+            status=200,
+        )
+
+        content, metadata = client.get_attachment_content("12345")
+        assert content == b"Hello, World!"
+        assert metadata["filename"] == "test.txt"
+
+    @responses.activate
+    def test_get_content_too_large(self, client):
+        """Should raise error when attachment exceeds max size."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/attachment/12345",
+            json={
+                "id": "12345",
+                "filename": "large.bin",
+                "size": 10 * 1024 * 1024,  # 10MB
+                "content": "https://jira.example.com/secure/attachment/12345/large.bin",
+            },
+            status=200,
+        )
+
+        with pytest.raises(InvalidInputError) as exc_info:
+            client.get_attachment_content("12345", max_size=1024 * 1024)  # 1MB limit
+        assert "too large" in str(exc_info.value)
+
+    @responses.activate
+    def test_get_content_no_limit(self, client):
+        """Should allow downloading large files with max_size=0."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/attachment/12345",
+            json={
+                "id": "12345",
+                "filename": "large.bin",
+                "size": 10 * 1024 * 1024,
+                "content": "https://jira.example.com/secure/attachment/12345/large.bin",
+            },
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/secure/attachment/12345/large.bin",
+            body=b"x" * 100,  # Just return some content
+            status=200,
+        )
+
+        content, metadata = client.get_attachment_content("12345", max_size=0)
+        assert len(content) == 100

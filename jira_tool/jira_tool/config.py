@@ -6,8 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .errors import ConfigError, ErrorCode
-
+from .errors import ConfigError
 
 DEFAULT_CONFIG_PATH = Path.home() / ".jira-tool.json"
 
@@ -95,18 +94,18 @@ def load_config(
 
     if config_path.exists():
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8") as f:
                 config_data = json.load(f)
         except json.JSONDecodeError as e:
             raise ConfigError(
                 f"Invalid JSON in config file: {e}",
                 details={"path": str(config_path)},
-            )
-        except PermissionError:
+            ) from e
+        except PermissionError as e:
             raise ConfigError(
                 f"Permission denied reading config file: {config_path}",
                 details={"path": str(config_path)},
-            )
+            ) from e
 
     # Apply environment variable overrides
     env_server = os.environ.get("JIRA_SERVER")
@@ -164,11 +163,5 @@ def create_sample_config(path: Path | str | None = None) -> str:
     Returns:
         Sample config file content as string
     """
-    sample = {
-        "server": "https://jira.example.com",
-        "auth": {
-            "type": "token",
-            "token": "your-api-token-here"
-        }
-    }
+    sample = {"server": "https://jira.example.com", "auth": {"type": "token", "token": "your-api-token-here"}}
     return json.dumps(sample, indent=2)

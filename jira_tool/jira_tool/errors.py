@@ -6,6 +6,7 @@ from typing import Any
 
 class ExitCode(IntEnum):
     """Standard exit codes for the JIRA tool."""
+
     SUCCESS = 0
     GENERAL_ERROR = 1
     AUTH_ERROR = 2
@@ -16,6 +17,7 @@ class ExitCode(IntEnum):
 
 class ErrorCode:
     """Standard error codes for structured error responses."""
+
     # Authentication errors
     AUTH_FAILED = "AUTH_FAILED"
     AUTH_MISSING = "AUTH_MISSING"

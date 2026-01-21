@@ -1,6 +1,5 @@
 """JIRA REST API client."""
 
-import base64
 from typing import Any
 from urllib.parse import urljoin
 
@@ -39,11 +38,13 @@ class JiraClient:
 
         # Set up authentication header
         # JIRA uses Bearer token auth for API tokens
-        self._session.headers.update({
-            "Authorization": f"Bearer {config.token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        })
+        self._session.headers.update(
+            {
+                "Authorization": f"Bearer {config.token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            }
+        )
 
     def _build_url(self, endpoint: str) -> str:
         """Build full URL for API endpoint."""
@@ -179,24 +180,24 @@ class JiraClient:
             )
             return self._handle_response(response, context)
 
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as e:
             raise NetworkError(
                 code=ErrorCode.TIMEOUT,
                 message=f"Request timed out after {self.timeout}s",
                 details={"url": url},
-            )
+            ) from e
         except requests.exceptions.ConnectionError as e:
             raise NetworkError(
                 code=ErrorCode.CONNECTION_ERROR,
                 message=f"Connection failed: {str(e)}",
                 details={"url": url},
-            )
+            ) from e
         except requests.exceptions.RequestException as e:
             raise NetworkError(
                 code=ErrorCode.CONNECTION_ERROR,
                 message=f"Request failed: {str(e)}",
                 details={"url": url},
-            )
+            ) from e
 
     # =========================================================================
     # Issue Operations
@@ -344,9 +345,7 @@ class JiraClient:
         }
 
         if comment:
-            body["update"] = {
-                "comment": [{"add": {"body": comment}}]
-            }
+            body["update"] = {"comment": [{"add": {"body": comment}}]}
 
         if fields:
             body["fields"] = fields
@@ -411,3 +410,83 @@ class JiraClient:
             Server info including version, base URL, etc.
         """
         return self._request("GET", "serverInfo")
+
+    # =========================================================================
+    # Attachment Operations
+    # =========================================================================
+
+    def get_attachment(self, attachment_id: str) -> dict[str, Any]:
+        """
+        Get attachment metadata by ID.
+
+        Args:
+            attachment_id: The attachment ID
+
+        Returns:
+            Attachment metadata (filename, size, mimeType, content URL, etc.)
+        """
+        return self._request("GET", f"attachment/{attachment_id}", context=f"attachment {attachment_id}")
+
+    def get_attachment_content(
+        self,
+        attachment_id: str,
+        max_size: int = 1024 * 1024,  # 1MB default limit
+    ) -> tuple[bytes, dict[str, Any]]:
+        """
+        Download attachment content.
+
+        Args:
+            attachment_id: The attachment ID
+            max_size: Maximum size in bytes to download (default: 1MB).
+                      Set to 0 for no limit (use with caution).
+
+        Returns:
+            Tuple of (content_bytes, metadata_dict)
+
+        Raises:
+            InvalidInputError: If attachment exceeds max_size
+        """
+        # First get metadata to check size
+        metadata = self.get_attachment(attachment_id)
+        size = metadata.get("size", 0)
+
+        if max_size > 0 and size > max_size:
+            raise InvalidInputError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"Attachment too large: {size} bytes exceeds limit of {max_size} bytes",
+                details={"size": size, "max_size": max_size, "filename": metadata.get("filename")},
+            )
+
+        # Download content from the content URL
+        content_url = metadata.get("content")
+        if not content_url:
+            raise JiraToolError(
+                code=ErrorCode.SERVER_ERROR,
+                message="Attachment metadata missing content URL",
+            )
+
+        try:
+            response = self._session.get(
+                content_url,
+                timeout=self.timeout,
+            )
+            if not response.ok:
+                raise JiraToolError(
+                    code=ErrorCode.SERVER_ERROR,
+                    message=f"Failed to download attachment: HTTP {response.status_code}",
+                    http_status=response.status_code,
+                )
+            return response.content, metadata
+
+        except requests.exceptions.Timeout as e:
+            raise NetworkError(
+                code=ErrorCode.TIMEOUT,
+                message=f"Attachment download timed out after {self.timeout}s",
+                details={"url": content_url},
+            ) from e
+        except requests.exceptions.RequestException as e:
+            raise NetworkError(
+                code=ErrorCode.CONNECTION_ERROR,
+                message=f"Attachment download failed: {str(e)}",
+                details={"url": content_url},
+            ) from e

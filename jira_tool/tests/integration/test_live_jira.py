@@ -21,8 +21,8 @@ from click.testing import CliRunner
 
 from jira_tool.cli import main
 from jira_tool.client import JiraClient
-from jira_tool.config import JiraConfig, load_config
-from jira_tool.errors import JiraToolError, NotFoundError
+from jira_tool.config import JiraConfig
+from jira_tool.errors import NotFoundError
 
 
 def get_test_config():
@@ -41,8 +41,7 @@ def get_test_project():
 
 # Skip all tests if no config
 requires_jira = pytest.mark.skipif(
-    get_test_config() is None,
-    reason="JIRA_SERVER and JIRA_TOKEN environment variables required"
+    get_test_config() is None, reason="JIRA_SERVER and JIRA_TOKEN environment variables required"
 )
 
 
@@ -146,10 +145,7 @@ class TestIssueSearch:
 
     def test_cli_search(self, runner, project):
         """CLI search should work."""
-        result = runner.invoke(
-            main,
-            ["issue", "search", f"project = {project} ORDER BY created DESC", "--limit", "3"]
-        )
+        result = runner.invoke(main, ["issue", "search", f"project = {project} ORDER BY created DESC", "--limit", "3"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["ok"] is True
@@ -206,16 +202,14 @@ class TestIssueGet:
         about which issue keys exist.
         """
         from jira_tool.errors import AuthError
+
         with pytest.raises((NotFoundError, AuthError)):
             client.get_issue(f"{project}-99999999")
 
     def test_cli_get_issue(self, runner, project):
         """CLI issue get should work."""
         # Find an issue first
-        search_result = runner.invoke(
-            main,
-            ["issue", "search", f"project = {project}", "--limit", "1"]
-        )
+        search_result = runner.invoke(main, ["issue", "search", f"project = {project}", "--limit", "1"])
         search_data = json.loads(search_result.output)
         if not search_data["data"]["issues"]:
             pytest.skip("No issues found")
@@ -270,10 +264,7 @@ class TestComments:
 
     def test_cli_comments(self, runner, project):
         """CLI comments should work."""
-        search_result = runner.invoke(
-            main,
-            ["issue", "search", f"project = {project}", "--limit", "1"]
-        )
+        search_result = runner.invoke(main, ["issue", "search", f"project = {project}", "--limit", "1"])
         search_data = json.loads(search_result.output)
         if not search_data["data"]["issues"]:
             pytest.skip("No issues found")
@@ -311,10 +302,7 @@ class TestTransitions:
 
     def test_cli_transitions(self, runner, project):
         """CLI transitions should work."""
-        search_result = runner.invoke(
-            main,
-            ["issue", "search", f"project = {project}", "--limit", "1"]
-        )
+        search_result = runner.invoke(main, ["issue", "search", f"project = {project}", "--limit", "1"])
         search_data = json.loads(search_result.output)
         if not search_data["data"]["issues"]:
             pytest.skip("No issues found")
@@ -335,10 +323,7 @@ class TestResponseEnvelope:
 
     def test_success_envelope_structure(self, runner, project):
         """Success responses should have consistent structure."""
-        result = runner.invoke(
-            main,
-            ["issue", "search", f"project = {project}", "--limit", "1"]
-        )
+        result = runner.invoke(main, ["issue", "search", f"project = {project}", "--limit", "1"])
         data = json.loads(result.output)
 
         # Required envelope fields

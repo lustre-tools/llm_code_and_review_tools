@@ -6,7 +6,7 @@ import pytest
 import responses
 from click.testing import CliRunner
 
-from jira_tool.cli import main, _normalize_issue, _normalize_comment, _normalize_comments
+from jira_tool.cli import _normalize_comment, _normalize_comments, _normalize_issue, main
 
 
 @pytest.fixture
@@ -112,8 +112,18 @@ class TestNormalizeComments:
         """Should include full comment content."""
         raw = {
             "comments": [
-                {"id": "1", "body": "First", "author": {"displayName": "User"}, "created": "2024-01-15T10:00:00.000+0000"},
-                {"id": "2", "body": "Second", "author": {"displayName": "User"}, "created": "2024-01-15T11:00:00.000+0000"},
+                {
+                    "id": "1",
+                    "body": "First",
+                    "author": {"displayName": "User"},
+                    "created": "2024-01-15T10:00:00.000+0000",
+                },
+                {
+                    "id": "2",
+                    "body": "Second",
+                    "author": {"displayName": "User"},
+                    "created": "2024-01-15T11:00:00.000+0000",
+                },
             ],
             "total": 2,
         }
@@ -128,7 +138,12 @@ class TestNormalizeComments:
         """Should only include summaries."""
         raw = {
             "comments": [
-                {"id": "1", "body": "A" * 200, "author": {"displayName": "User"}, "created": "2024-01-15T10:00:00.000+0000"},
+                {
+                    "id": "1",
+                    "body": "A" * 200,
+                    "author": {"displayName": "User"},
+                    "created": "2024-01-15T10:00:00.000+0000",
+                },
             ],
             "total": 1,
         }
@@ -245,7 +260,14 @@ class TestCLIIssueComments:
             responses.GET,
             "https://jira.example.com/rest/api/2/issue/PROJ-123/comment",
             json={
-                "comments": [{"id": "1", "body": "Test", "author": {"displayName": "User"}, "created": "2024-01-15T10:00:00.000+0000"}],
+                "comments": [
+                    {
+                        "id": "1",
+                        "body": "Test",
+                        "author": {"displayName": "User"},
+                        "created": "2024-01-15T10:00:00.000+0000",
+                    }
+                ],
                 "total": 10,
             },
             status=200,
@@ -379,3 +401,164 @@ class TestCLIConfigShow:
         assert "test-token" not in data["data"]["token"]
         # Short tokens show as ***, longer tokens show partial with ...
         assert "..." in data["data"]["token"] or "***" in data["data"]["token"]
+
+
+class TestCLIIssueAttachments:
+    """Tests for 'jira issue attachments' command."""
+
+    @responses.activate
+    def test_attachments_list(self, runner, mock_env):
+        """Should list attachments."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={
+                "key": "PROJ-123",
+                "fields": {
+                    "attachment": [
+                        {
+                            "id": "12345",
+                            "filename": "test.txt",
+                            "size": 1024,
+                            "mimeType": "text/plain",
+                            "author": {"displayName": "User"},
+                            "created": "2024-01-15T10:00:00.000+0000",
+                            "content": "https://jira.example.com/secure/attachment/12345/test.txt",
+                        }
+                    ]
+                },
+            },
+            status=200,
+        )
+
+        result = runner.invoke(main, ["issue", "attachments", "PROJ-123"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["total"] == 1
+        assert data["data"]["attachments"][0]["filename"] == "test.txt"
+
+
+class TestCLIAttachmentGet:
+    """Tests for 'jira attachment get' command."""
+
+    @responses.activate
+    def test_attachment_get(self, runner, mock_env):
+        """Should get attachment metadata."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/attachment/12345",
+            json={
+                "id": "12345",
+                "filename": "test.txt",
+                "size": 1024,
+                "mimeType": "text/plain",
+                "author": {"displayName": "User"},
+                "created": "2024-01-15T10:00:00.000+0000",
+                "content": "https://jira.example.com/secure/attachment/12345/test.txt",
+            },
+            status=200,
+        )
+
+        result = runner.invoke(main, ["attachment", "get", "12345"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["filename"] == "test.txt"
+        assert data["data"]["size_human"] == "1.0 KB"
+
+
+class TestCLIAttachmentContent:
+    """Tests for 'jira attachment content' command."""
+
+    @responses.activate
+    def test_attachment_content_text(self, runner, mock_env):
+        """Should get text attachment content."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/attachment/12345",
+            json={
+                "id": "12345",
+                "filename": "test.txt",
+                "size": 13,
+                "mimeType": "text/plain",
+                "content": "https://jira.example.com/secure/attachment/12345/test.txt",
+            },
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/secure/attachment/12345/test.txt",
+            body=b"Hello, World!",
+            status=200,
+        )
+
+        result = runner.invoke(main, ["attachment", "content", "12345"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["content"] == "Hello, World!"
+        assert data["data"]["is_text"] is True
+
+    @responses.activate
+    def test_attachment_content_too_large(self, runner, mock_env):
+        """Should error for large attachments."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/attachment/12345",
+            json={
+                "id": "12345",
+                "filename": "large.bin",
+                "size": 10 * 1024 * 1024,  # 10MB
+                "content": "https://jira.example.com/secure/attachment/12345/large.bin",
+            },
+            status=200,
+        )
+
+        result = runner.invoke(main, ["attachment", "content", "12345"])
+        assert result.exit_code == 4  # INVALID_INPUT
+        data = json.loads(result.output)
+        assert data["ok"] is False
+        assert "too large" in data["error"]["message"]
+
+
+class TestNormalizeAttachment:
+    """Tests for attachment normalization."""
+
+    def test_normalize_attachment(self):
+        """Should normalize attachment fields."""
+        from jira_tool.cli import _normalize_attachment
+
+        raw = {
+            "id": "12345",
+            "filename": "test.txt",
+            "size": 1536,  # 1.5 KB
+            "mimeType": "text/plain",
+            "author": {"displayName": "Test User"},
+            "created": "2024-01-15T10:00:00.000+0000",
+            "content": "https://jira.example.com/secure/attachment/12345/test.txt",
+        }
+
+        result = _normalize_attachment(raw)
+
+        assert result["id"] == "12345"
+        assert result["filename"] == "test.txt"
+        assert result["size"] == 1536
+        assert result["size_human"] == "1.5 KB"
+        assert result["mime_type"] == "text/plain"
+        assert result["author"] == "Test User"
+
+    def test_normalize_attachment_large_size(self):
+        """Should format large sizes in MB."""
+        from jira_tool.cli import _normalize_attachment
+
+        raw = {
+            "id": "1",
+            "filename": "large.bin",
+            "size": 5 * 1024 * 1024,  # 5MB
+            "mimeType": "application/octet-stream",
+            "content": "https://example.com/file",
+        }
+
+        result = _normalize_attachment(raw)
+        assert result["size_human"] == "5.0 MB"

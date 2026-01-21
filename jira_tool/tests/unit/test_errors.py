@@ -3,14 +3,14 @@
 import pytest
 
 from jira_tool.errors import (
-    ExitCode,
-    ErrorCode,
-    JiraToolError,
     AuthError,
-    NotFoundError,
-    InvalidInputError,
-    NetworkError,
     ConfigError,
+    ErrorCode,
+    ExitCode,
+    InvalidInputError,
+    JiraToolError,
+    NetworkError,
+    NotFoundError,
 )
 
 

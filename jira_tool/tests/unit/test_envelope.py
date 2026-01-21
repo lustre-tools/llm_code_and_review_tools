@@ -1,20 +1,18 @@
 """Unit tests for response envelope."""
 
 import json
-from unittest.mock import patch
 from datetime import datetime, timezone
-
-import pytest
+from unittest.mock import patch
 
 from jira_tool.envelope import (
-    success_response,
+    _build_meta,
+    _get_timestamp,
     error_response,
     error_response_from_dict,
     format_json,
-    _get_timestamp,
-    _build_meta,
+    success_response,
 )
-from jira_tool.errors import JiraToolError, ErrorCode
+from jira_tool.errors import JiraToolError
 
 
 class TestTimestamp:
@@ -36,7 +34,7 @@ class TestTimestamp:
         mock_datetime.now.return_value = mock_dt
         mock_datetime.strptime = datetime.strptime
 
-        ts = _get_timestamp()
+        _get_timestamp()  # Call to trigger the mock
         mock_datetime.now.assert_called_once_with(timezone.utc)
 
 

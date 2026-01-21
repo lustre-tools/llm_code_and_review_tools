@@ -6,10 +6,9 @@ from typing import Any
 import click
 
 from .client import JiraClient
-from .config import JiraConfig, load_config, create_sample_config, DEFAULT_CONFIG_PATH
-from .envelope import success_response, error_response, format_json
-from .errors import JiraToolError, ConfigError, ExitCode, ErrorCode
-
+from .config import DEFAULT_CONFIG_PATH, JiraConfig, create_sample_config, load_config
+from .envelope import error_response, format_json, success_response
+from .errors import ConfigError, ExitCode, JiraToolError
 
 # Global options for all commands
 pass_config = click.make_pass_decorator(JiraConfig, ensure=True)
@@ -34,7 +33,9 @@ def handle_error(error: JiraToolError, command: str, pretty: bool) -> int:
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
 @click.option("--debug", is_flag=True, help="Enable debug output to stderr")
 @click.pass_context
-def main(ctx: click.Context, server: str | None, token: str | None, config_path: str | None, pretty: bool, debug: bool) -> None:
+def main(
+    ctx: click.Context, server: str | None, token: str | None, config_path: str | None, pretty: bool, debug: bool
+) -> None:
     """
     JIRA CLI tool for LLM agents.
 
@@ -66,6 +67,7 @@ def get_client(ctx: click.Context) -> JiraClient:
 # =============================================================================
 # Issue Commands
 # =============================================================================
+
 
 @main.group()
 def issue() -> None:
@@ -362,9 +364,146 @@ def issue_create(ctx: click.Context, project: str, issue_type: str, summary: str
         sys.exit(handle_error(e, command, pretty))
 
 
+@issue.command("attachments")
+@click.argument("key")
+@click.pass_context
+def issue_attachments(ctx: click.Context, key: str) -> None:
+    """
+    List attachments for an issue.
+
+    KEY is the issue key (e.g., PROJ-123).
+
+    Returns attachment metadata including filename, size, and content URL.
+    """
+    command = "issue.attachments"
+    pretty = ctx.obj.get("pretty", False)
+
+    try:
+        client = get_client(ctx)
+
+        # Get issue with attachment field
+        raw_issue = client.get_issue(key, fields=["attachment"])
+        attachments = raw_issue.get("fields", {}).get("attachment", [])
+
+        # Normalize attachments
+        attachments_data = {
+            "issue_key": key,
+            "total": len(attachments),
+            "attachments": [_normalize_attachment(a) for a in attachments],
+        }
+
+        envelope = success_response(attachments_data, command)
+        output_result(envelope, pretty)
+        sys.exit(ExitCode.SUCCESS)
+
+    except JiraToolError as e:
+        sys.exit(handle_error(e, command, pretty))
+    except ConfigError as e:
+        sys.exit(handle_error(e, command, pretty))
+
+
+# =============================================================================
+# Attachment Commands
+# =============================================================================
+
+
+@main.group()
+def attachment() -> None:
+    """Attachment operations."""
+    pass
+
+
+@attachment.command("get")
+@click.argument("attachment_id")
+@click.pass_context
+def attachment_get(ctx: click.Context, attachment_id: str) -> None:
+    """
+    Get attachment metadata.
+
+    ATTACHMENT_ID is the numeric attachment ID.
+    """
+    command = "attachment.get"
+    pretty = ctx.obj.get("pretty", False)
+
+    try:
+        client = get_client(ctx)
+
+        raw_attachment = client.get_attachment(attachment_id)
+        attachment_data = _normalize_attachment(raw_attachment)
+
+        envelope = success_response(attachment_data, command)
+        output_result(envelope, pretty)
+        sys.exit(ExitCode.SUCCESS)
+
+    except JiraToolError as e:
+        sys.exit(handle_error(e, command, pretty))
+    except ConfigError as e:
+        sys.exit(handle_error(e, command, pretty))
+
+
+@attachment.command("content")
+@click.argument("attachment_id")
+@click.option("--max-size", default=102400, help="Maximum size in bytes (default: 100KB, 0 for no limit)")
+@click.option("--encoding", default="utf-8", help="Text encoding (default: utf-8)")
+@click.option("--raw", is_flag=True, help="Output raw content to stdout (no JSON envelope)")
+@click.pass_context
+def attachment_content(ctx: click.Context, attachment_id: str, max_size: int, encoding: str, raw: bool) -> None:
+    """
+    Get attachment content.
+
+    ATTACHMENT_ID is the numeric attachment ID.
+
+    By default, limits to 100KB and decodes as UTF-8 text.
+    Use --raw to output content directly (useful for piping).
+
+    Note: Binary files may not display correctly without --raw.
+    """
+    command = "attachment.content"
+    pretty = ctx.obj.get("pretty", False)
+
+    try:
+        client = get_client(ctx)
+
+        content_bytes, metadata = client.get_attachment_content(attachment_id, max_size=max_size)
+
+        if raw:
+            # Output raw content directly
+            sys.stdout.buffer.write(content_bytes)
+            sys.exit(ExitCode.SUCCESS)
+
+        # Try to decode as text
+        try:
+            content_text = content_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            # For binary files, indicate it's binary
+            content_text = None
+
+        content_data = {
+            "attachment": _normalize_attachment(metadata),
+            "size_bytes": len(content_bytes),
+            "encoding": encoding if content_text else None,
+            "is_text": content_text is not None,
+            "content": content_text,
+            "content_truncated": False,
+        }
+
+        if content_text is None:
+            content_data["note"] = "Binary content - use --raw flag to download"
+
+        envelope = success_response(content_data, command)
+        output_result(envelope, pretty)
+        sys.exit(ExitCode.SUCCESS)
+
+    except JiraToolError as e:
+        sys.exit(handle_error(e, command, pretty))
+    except ConfigError as e:
+        sys.exit(handle_error(e, command, pretty))
+
+
 # =============================================================================
 # Config Commands
 # =============================================================================
+
 
 @main.group()
 def config() -> None:
@@ -449,6 +588,7 @@ def config_test(ctx: click.Context) -> None:
 # =============================================================================
 # Helper Functions
 # =============================================================================
+
 
 def _normalize_issue(raw_issue: dict[str, Any]) -> dict[str, Any]:
     """Normalize JIRA issue to agent-friendly format."""
@@ -542,12 +682,39 @@ def _normalize_comments(raw_comments: dict[str, Any], summary_only: bool = False
                 "id": c.get("id"),
                 "author": c.get("author", {}).get("displayName"),
                 "created": c.get("created"),
-                "body_preview": (c.get("body", "")[:100] + "...") if len(c.get("body", "")) > 100 else c.get("body", ""),
+                "body_preview": (c.get("body", "")[:100] + "...")
+                if len(c.get("body", "")) > 100
+                else c.get("body", ""),
             }
             for c in comments
         ]
 
     return result
+
+
+def _normalize_attachment(raw_attachment: dict[str, Any]) -> dict[str, Any]:
+    """Normalize JIRA attachment to agent-friendly format."""
+    author = raw_attachment.get("author", {})
+
+    # Format size in human-readable form
+    size_bytes = raw_attachment.get("size", 0)
+    if size_bytes < 1024:
+        size_human = f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        size_human = f"{size_bytes / 1024:.1f} KB"
+    else:
+        size_human = f"{size_bytes / (1024 * 1024):.1f} MB"
+
+    return {
+        "id": raw_attachment.get("id"),
+        "filename": raw_attachment.get("filename"),
+        "size": size_bytes,
+        "size_human": size_human,
+        "mime_type": raw_attachment.get("mimeType"),
+        "author": author.get("displayName") if author else None,
+        "created": raw_attachment.get("created"),
+        "content_url": raw_attachment.get("content"),
+    }
 
 
 if __name__ == "__main__":

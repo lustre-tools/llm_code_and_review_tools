@@ -1,17 +1,13 @@
 """Unit tests for configuration handling."""
 
 import json
-import os
-from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 from jira_tool.config import (
     JiraConfig,
-    load_config,
     create_sample_config,
-    DEFAULT_CONFIG_PATH,
+    load_config,
 )
 from jira_tool.errors import ConfigError
 
@@ -86,10 +82,14 @@ class TestLoadConfig:
         """Explicit overrides should take precedence."""
         # Create a config file with different values
         config_file = tmp_path / "config.json"
-        config_file.write_text(json.dumps({
-            "server": "https://file-server.com",
-            "token": "file-token",
-        }))
+        config_file.write_text(
+            json.dumps(
+                {
+                    "server": "https://file-server.com",
+                    "token": "file-token",
+                }
+            )
+        )
 
         # Override should win
         config = load_config(
@@ -104,10 +104,14 @@ class TestLoadConfig:
         """Environment variables should override config file."""
         # Create config file
         config_file = tmp_path / "config.json"
-        config_file.write_text(json.dumps({
-            "server": "https://file-server.com",
-            "token": "file-token",
-        }))
+        config_file.write_text(
+            json.dumps(
+                {
+                    "server": "https://file-server.com",
+                    "token": "file-token",
+                }
+            )
+        )
 
         # Set env vars
         monkeypatch.setenv("JIRA_SERVER", "https://env-server.com")
@@ -124,10 +128,14 @@ class TestLoadConfig:
         monkeypatch.delenv("JIRA_TOKEN", raising=False)
 
         config_file = tmp_path / "config.json"
-        config_file.write_text(json.dumps({
-            "server": "https://file-server.com",
-            "token": "file-token",
-        }))
+        config_file.write_text(
+            json.dumps(
+                {
+                    "server": "https://file-server.com",
+                    "token": "file-token",
+                }
+            )
+        )
 
         config = load_config(config_path=config_file)
         assert config.server == "https://file-server.com"
@@ -184,10 +192,14 @@ class TestLoadConfig:
         """Test full priority chain: explicit > env > file."""
         # Config file
         config_file = tmp_path / "config.json"
-        config_file.write_text(json.dumps({
-            "server": "https://file.com",
-            "token": "file-token",
-        }))
+        config_file.write_text(
+            json.dumps(
+                {
+                    "server": "https://file.com",
+                    "token": "file-token",
+                }
+            )
+        )
 
         # Env vars (higher priority)
         monkeypatch.setenv("JIRA_SERVER", "https://env.com")
