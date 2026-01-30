@@ -1529,3 +1529,206 @@ class TestCmdReviewPostComments:
             with pytest.raises(SystemExit) as exc_info:
                 cmd_review(args)
             assert exc_info.value.code == 0
+
+
+class TestCmdDone:
+    """Tests for cmd_done shortcut command."""
+
+    def test_done_success(self):
+        """Test done command marks comment as resolved."""
+        from gerrit_comments.cli import cmd_done
+        args = argparse.Namespace(
+            url="https://example.com/12345",
+            thread_index=0,
+            message=None,
+            pretty=False,
+        )
+
+        with patch('gerrit_comments.cli.GerritCommentsClient') as MockClient, \
+             patch('gerrit_comments.cli.extract_comments') as mock_extract, \
+             patch('gerrit_comments.cli.CommentReplier') as MockReplier:
+
+            MockClient.parse_gerrit_url.return_value = ("https://example.com", 12345)
+
+            mock_thread = MagicMock()
+            mock_thread.root_comment.file_path = "foo.py"
+            mock_thread.root_comment.line = 42
+
+            mock_result = MagicMock()
+            mock_result.threads = [mock_thread]
+            mock_extract.return_value = mock_result
+
+            mock_reply_result = MagicMock()
+            mock_reply_result.success = True
+            mock_reply_result.to_dict.return_value = {"success": True}
+            MockReplier.return_value.reply_to_thread.return_value = mock_reply_result
+
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_done(args)
+            assert exc_info.value.code == 0
+
+            MockReplier.return_value.reply_to_thread.assert_called_once()
+            call_kwargs = MockReplier.return_value.reply_to_thread.call_args
+            assert call_kwargs[1]['message'] == "Done"
+            assert call_kwargs[1]['mark_resolved'] is True
+
+    def test_done_with_custom_message(self):
+        """Test done command with custom message."""
+        from gerrit_comments.cli import cmd_done
+        args = argparse.Namespace(
+            url="https://example.com/12345",
+            thread_index=0,
+            message="Fixed in v2",
+            pretty=False,
+        )
+
+        with patch('gerrit_comments.cli.GerritCommentsClient') as MockClient, \
+             patch('gerrit_comments.cli.extract_comments') as mock_extract, \
+             patch('gerrit_comments.cli.CommentReplier') as MockReplier:
+
+            MockClient.parse_gerrit_url.return_value = ("https://example.com", 12345)
+
+            mock_thread = MagicMock()
+            mock_result = MagicMock()
+            mock_result.threads = [mock_thread]
+            mock_extract.return_value = mock_result
+
+            mock_reply_result = MagicMock()
+            mock_reply_result.success = True
+            mock_reply_result.to_dict.return_value = {"success": True}
+            MockReplier.return_value.reply_to_thread.return_value = mock_reply_result
+
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_done(args)
+            assert exc_info.value.code == 0
+
+            call_kwargs = MockReplier.return_value.reply_to_thread.call_args
+            assert call_kwargs[1]['message'] == "Fixed in v2"
+
+    def test_done_thread_out_of_range(self):
+        """Test done with invalid thread index."""
+        from gerrit_comments.cli import cmd_done
+        args = argparse.Namespace(
+            url="https://example.com/12345",
+            thread_index=99,
+            message=None,
+            pretty=False,
+        )
+
+        with patch('gerrit_comments.cli.GerritCommentsClient') as MockClient, \
+             patch('gerrit_comments.cli.extract_comments') as mock_extract:
+
+            MockClient.parse_gerrit_url.return_value = ("https://example.com", 12345)
+
+            mock_result = MagicMock()
+            mock_result.threads = []
+            mock_extract.return_value = mock_result
+
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_done(args)
+            assert exc_info.value.code == 1
+
+
+class TestCmdAck:
+    """Tests for cmd_ack shortcut command."""
+
+    def test_ack_success(self):
+        """Test ack command acknowledges comment."""
+        from gerrit_comments.cli import cmd_ack
+        args = argparse.Namespace(
+            url="https://example.com/12345",
+            thread_index=0,
+            message=None,
+            pretty=False,
+        )
+
+        with patch('gerrit_comments.cli.GerritCommentsClient') as MockClient, \
+             patch('gerrit_comments.cli.extract_comments') as mock_extract, \
+             patch('gerrit_comments.cli.CommentReplier') as MockReplier:
+
+            MockClient.parse_gerrit_url.return_value = ("https://example.com", 12345)
+
+            mock_thread = MagicMock()
+            mock_thread.root_comment.file_path = "foo.py"
+            mock_thread.root_comment.line = 42
+
+            mock_result = MagicMock()
+            mock_result.threads = [mock_thread]
+            mock_extract.return_value = mock_result
+
+            mock_reply_result = MagicMock()
+            mock_reply_result.success = True
+            mock_reply_result.to_dict.return_value = {"success": True}
+            MockReplier.return_value.reply_to_thread.return_value = mock_reply_result
+
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_ack(args)
+            assert exc_info.value.code == 0
+
+            MockReplier.return_value.reply_to_thread.assert_called_once()
+            call_kwargs = MockReplier.return_value.reply_to_thread.call_args
+            assert call_kwargs[1]['message'] == "Acknowledged"
+            assert call_kwargs[1]['mark_resolved'] is True
+
+    def test_ack_with_custom_message(self):
+        """Test ack command with custom message."""
+        from gerrit_comments.cli import cmd_ack
+        args = argparse.Namespace(
+            url="https://example.com/12345",
+            thread_index=0,
+            message="Will address in follow-up",
+            pretty=False,
+        )
+
+        with patch('gerrit_comments.cli.GerritCommentsClient') as MockClient, \
+             patch('gerrit_comments.cli.extract_comments') as mock_extract, \
+             patch('gerrit_comments.cli.CommentReplier') as MockReplier:
+
+            MockClient.parse_gerrit_url.return_value = ("https://example.com", 12345)
+
+            mock_thread = MagicMock()
+            mock_result = MagicMock()
+            mock_result.threads = [mock_thread]
+            mock_extract.return_value = mock_result
+
+            mock_reply_result = MagicMock()
+            mock_reply_result.success = True
+            mock_reply_result.to_dict.return_value = {"success": True}
+            MockReplier.return_value.reply_to_thread.return_value = mock_reply_result
+
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_ack(args)
+            assert exc_info.value.code == 0
+
+            call_kwargs = MockReplier.return_value.reply_to_thread.call_args
+            assert call_kwargs[1]['message'] == "Will address in follow-up"
+
+    def test_ack_failure(self):
+        """Test ack when API call fails."""
+        from gerrit_comments.cli import cmd_ack
+        args = argparse.Namespace(
+            url="https://example.com/12345",
+            thread_index=0,
+            message=None,
+            pretty=False,
+        )
+
+        with patch('gerrit_comments.cli.GerritCommentsClient') as MockClient, \
+             patch('gerrit_comments.cli.extract_comments') as mock_extract, \
+             patch('gerrit_comments.cli.CommentReplier') as MockReplier:
+
+            MockClient.parse_gerrit_url.return_value = ("https://example.com", 12345)
+
+            mock_thread = MagicMock()
+            mock_result = MagicMock()
+            mock_result.threads = [mock_thread]
+            mock_extract.return_value = mock_result
+
+            mock_reply_result = MagicMock()
+            mock_reply_result.success = False
+            mock_reply_result.error = "Permission denied"
+            MockReplier.return_value.reply_to_thread.return_value = mock_reply_result
+
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_ack(args)
+            assert exc_info.value.code == 1

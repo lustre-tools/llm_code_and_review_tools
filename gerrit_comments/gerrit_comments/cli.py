@@ -269,6 +269,100 @@ def cmd_reply(args):
         sys.exit(output_error(ErrorCode.API_ERROR, f"Error posting reply: {e}", command, pretty))
 
 
+def cmd_done(args):
+    """Mark a comment as done (shortcut for reply --done)."""
+    command = "done"
+    pretty = getattr(args, 'pretty', False)
+
+    try:
+        # Parse URL to get change number
+        base_url, change_number = GerritCommentsClient.parse_gerrit_url(args.url)
+
+        # Extract to get the threads
+        result = extract_comments(
+            url=args.url,
+            include_resolved=False,
+            include_code_context=False,
+        )
+
+        if args.thread_index >= len(result.threads):
+            sys.exit(output_error(
+                ErrorCode.THREAD_INDEX_OUT_OF_RANGE,
+                f"Thread index {args.thread_index} out of range. Only {len(result.threads)} threads.",
+                command, pretty
+            ))
+
+        thread = result.threads[args.thread_index]
+        message = args.message or "Done"
+
+        # Post the reply
+        replier = CommentReplier()
+        reply_result = replier.reply_to_thread(
+            change_number=change_number,
+            thread=thread,
+            message=message,
+            mark_resolved=True,
+        )
+
+        if reply_result.success:
+            output_success(reply_result.to_dict(), command, pretty)
+            sys.exit(ExitCode.SUCCESS)
+        else:
+            sys.exit(output_error(ErrorCode.API_ERROR, reply_result.error or "Unknown error", command, pretty))
+
+    except ValueError as e:
+        sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
+    except Exception as e:
+        sys.exit(output_error(ErrorCode.API_ERROR, f"Error marking comment done: {e}", command, pretty))
+
+
+def cmd_ack(args):
+    """Acknowledge a comment (shortcut for reply --ack)."""
+    command = "ack"
+    pretty = getattr(args, 'pretty', False)
+
+    try:
+        # Parse URL to get change number
+        base_url, change_number = GerritCommentsClient.parse_gerrit_url(args.url)
+
+        # Extract to get the threads
+        result = extract_comments(
+            url=args.url,
+            include_resolved=False,
+            include_code_context=False,
+        )
+
+        if args.thread_index >= len(result.threads):
+            sys.exit(output_error(
+                ErrorCode.THREAD_INDEX_OUT_OF_RANGE,
+                f"Thread index {args.thread_index} out of range. Only {len(result.threads)} threads.",
+                command, pretty
+            ))
+
+        thread = result.threads[args.thread_index]
+        message = args.message or "Acknowledged"
+
+        # Post the reply
+        replier = CommentReplier()
+        reply_result = replier.reply_to_thread(
+            change_number=change_number,
+            thread=thread,
+            message=message,
+            mark_resolved=True,
+        )
+
+        if reply_result.success:
+            output_success(reply_result.to_dict(), command, pretty)
+            sys.exit(ExitCode.SUCCESS)
+        else:
+            sys.exit(output_error(ErrorCode.API_ERROR, reply_result.error or "Unknown error", command, pretty))
+
+    except ValueError as e:
+        sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
+    except Exception as e:
+        sys.exit(output_error(ErrorCode.API_ERROR, f"Error acknowledging comment: {e}", command, pretty))
+
+
 def cmd_batch_reply(args):
     """Reply to multiple comments from a JSON file."""
     import json as json_module
@@ -1638,6 +1732,8 @@ def main():
         'remove_reviewer': cmd_remove_reviewer,
         'find_user': cmd_find_user,
         'explain': cmd_explain,
+        'done': cmd_done,
+        'ack': cmd_ack,
     }
 
     setup_parsers(subparsers, handlers)

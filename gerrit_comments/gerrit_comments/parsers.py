@@ -635,6 +635,62 @@ def add_explain_parser(subparsers):
     return parser
 
 
+def add_done_parser(subparsers):
+    """Add the 'done' shortcut command parser."""
+    parser = subparsers.add_parser(
+        "done",
+        help="Mark a comment as done (shortcut for 'reply --done')",
+        description="Quickly mark a comment thread as resolved with 'Done' message. "
+                    "This is a shortcut for 'gc reply --done <url> <thread_index>'.",
+    )
+    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument(
+        "thread_index",
+        type=int,
+        help="Thread index from 'comments' output",
+    )
+    parser.add_argument(
+        "message",
+        nargs="?",
+        default="Done",
+        help="Custom message (default: 'Done')",
+    )
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
+def add_ack_parser(subparsers):
+    """Add the 'ack' shortcut command parser."""
+    parser = subparsers.add_parser(
+        "ack",
+        help="Acknowledge a comment (shortcut for 'reply --ack')",
+        description="Quickly acknowledge a comment thread with 'Acknowledged' message. "
+                    "This is a shortcut for 'gc reply --ack <url> <thread_index>'.",
+    )
+    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument(
+        "thread_index",
+        type=int,
+        help="Thread index from 'comments' output",
+    )
+    parser.add_argument(
+        "message",
+        nargs="?",
+        default="Acknowledged",
+        help="Custom message (default: 'Acknowledged')",
+    )
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
 def setup_parsers(subparsers, handlers):
     """Set up all subparsers and bind them to command handlers.
 
@@ -695,3 +751,7 @@ def setup_parsers(subparsers, handlers):
 
     # Help/documentation commands
     add_explain_parser(subparsers).set_defaults(func=handlers['explain'])
+
+    # Shortcut commands
+    add_done_parser(subparsers).set_defaults(func=handlers['done'])
+    add_ack_parser(subparsers).set_defaults(func=handlers['ack'])
