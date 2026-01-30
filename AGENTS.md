@@ -51,13 +51,23 @@ Use numeric priorities 0-4:
 - **P3**: Low priority
 - **P4**: Backlog
 
-### Starting Work
+### Starting Work (Claiming a Bead)
+
+⚠️ **Race Condition Warning**: Beads uses a local SQLite database. Status changes are LOCAL until you sync and push. Without the full claim sequence below, another worker may see the same bead as available and claim it too.
+
+**Always use the full claim sequence:**
 
 ```bash
 bd ready                              # Find available work
 bd show <id>                          # Review issue details
-bd update <id> --status in_progress   # Claim it
+bd update <id> --status in_progress   # Claim locally
+bd sync                               # Export to JSONL
+git add .beads/                       # Stage beads changes
+git commit -m "claim: <id>"           # Commit the claim
+git push                              # Push immediately!
 ```
+
+Only after `git push` succeeds is the bead truly claimed. If push fails (someone else claimed it), pick a different bead.
 
 ### Completing Work
 
@@ -71,6 +81,7 @@ git push                              # Push to remote
 ### Important Notes
 
 - **Do NOT use** `bd edit` - it opens an editor which blocks agents
+- **No distributed locking** - beads is local-first; always push claims immediately
 - Run `bd prime` after context compaction or new session
 - Use `bd doctor` to check for sync problems
 
