@@ -60,6 +60,70 @@ from .staging import StagingManager
 from .summary import truncate_extracted_comments, truncate_review_data, truncate_series_comments
 
 
+def filter_threads_by_fields(
+    threads: list,
+    fields: str,
+) -> list[dict]:
+    """Filter threads to only include specified fields.
+
+    This produces a flat list of thread summaries for reduced token usage.
+
+    Args:
+        threads: List of CommentThread objects
+        fields: Comma-separated field names
+
+    Available fields:
+        index - Thread index (0-based)
+        file - File path
+        line - Line number
+        message - Root comment message
+        author - Author name
+        resolved - Whether thread is resolved
+        patch_set - Patchset number
+        code_context - Code context around comment
+        replies - Reply messages
+
+    Returns:
+        List of dicts with only the requested fields per thread
+    """
+    field_list = [f.strip() for f in fields.split(",")]
+    result = []
+
+    for idx, thread in enumerate(threads):
+        thread_data = {}
+        root = thread.root_comment
+
+        for field in field_list:
+            if field == "index":
+                thread_data["index"] = idx
+            elif field == "file":
+                thread_data["file"] = root.file_path
+            elif field == "line":
+                thread_data["line"] = root.line
+            elif field == "message":
+                thread_data["message"] = root.message
+            elif field == "author":
+                thread_data["author"] = root.author.name
+            elif field == "resolved":
+                thread_data["resolved"] = thread.is_resolved
+            elif field == "patch_set":
+                thread_data["patch_set"] = root.patch_set
+            elif field == "code_context":
+                if root.code_context:
+                    thread_data["code_context"] = root.code_context.to_dict()
+                else:
+                    thread_data["code_context"] = None
+            elif field == "replies":
+                thread_data["replies"] = [
+                    {"author": r.author.name, "message": r.message}
+                    for r in thread.replies
+                ]
+
+        result.append(thread_data)
+
+    return result
+
+
 def output_result(envelope: dict[str, Any], pretty: bool) -> None:
     """Output result to stdout."""
     print(format_json(envelope, pretty=pretty))
@@ -111,6 +175,7 @@ def cmd_extract(args):
     command = "extract"
     pretty = getattr(args, 'pretty', False)
     summary_lines = getattr(args, 'summary', None)
+    fields = getattr(args, 'fields', None)
 
     try:
         result = extract_comments(
@@ -120,9 +185,16 @@ def cmd_extract(args):
             context_lines=args.context_lines,
         )
 
-        data = result.to_dict()
-        if summary_lines is not None:
-            data = truncate_extracted_comments(data, summary_lines)
+        if fields:
+            # Output filtered flat list of threads (--fields takes precedence)
+            data = {
+                "threads": filter_threads_by_fields(result.threads, fields),
+                "count": len(result.threads),
+            }
+        else:
+            data = result.to_dict()
+            if summary_lines is not None:
+                data = truncate_extracted_comments(data, summary_lines)
 
         output_success(data, command, pretty)
         sys.exit(ExitCode.SUCCESS)
@@ -314,6 +386,7 @@ def cmd_series_comments(args):
     command = "series-comments"
     pretty = getattr(args, 'pretty', False)
     summary_lines = getattr(args, 'summary', None)
+    fields = getattr(args, 'fields', None)
 
     try:
         finder = SeriesFinder()
@@ -325,9 +398,23 @@ def cmd_series_comments(args):
             show_progress=False,  # No progress in JSON mode
         )
 
-        data = result.to_dict()
-        if summary_lines is not None:
-            data = truncate_series_comments(data, summary_lines)
+        if fields:
+            # Output filtered threads per patch (--fields takes precedence)
+            patches_data = []
+            for patch in result.patches_with_comments:
+                patches_data.append({
+                    "change_number": patch.change_number,
+                    "subject": patch.subject,
+                    "threads": filter_threads_by_fields(patch.threads, fields),
+                })
+            data = {
+                "total_unresolved": result.total_unresolved,
+                "patches": patches_data,
+            }
+        else:
+            data = result.to_dict()
+            if summary_lines is not None:
+                data = truncate_series_comments(data, summary_lines)
 
         output_success(data, command, pretty)
         sys.exit(ExitCode.SUCCESS)

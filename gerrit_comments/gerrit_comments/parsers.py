@@ -44,6 +44,14 @@ def add_extract_parser(subparsers):
         metavar="LINES",
         help="Truncate code context to N lines (default: 10). Shows hint to use without --summary for full content.",
     )
+    parser.add_argument(
+        "--fields",
+        type=str,
+        default=None,
+        help="Comma-separated fields to include per thread. "
+             "Available: index,file,line,message,author,resolved,patch_set,code_context. "
+             "Example: --fields=index,file,message",
+    )
     return parser
 
 
@@ -206,6 +214,14 @@ def add_series_comments_parser(subparsers):
         type=int,
         metavar="LINES",
         help="Truncate code context to N lines (default: 10). Shows hint to use without --summary for full content.",
+    )
+    parser.add_argument(
+        "--fields",
+        type=str,
+        default=None,
+        help="Comma-separated fields to include per thread. "
+             "Available: index,file,line,message,author,resolved,patch_set,code_context. "
+             "Example: --fields=index,file,message",
     )
     return parser
 

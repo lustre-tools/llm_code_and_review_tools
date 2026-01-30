@@ -7,8 +7,120 @@ import pytest
 
 from gerrit_comments.cli import (
     cmd_series,
+    filter_threads_by_fields,
     generate_review_prompt,
 )
+from gerrit_comments.models import Author, CodeContext, Comment, CommentThread
+
+
+class TestFilterThreadsByFields:
+    """Tests for filter_threads_by_fields function."""
+
+    @pytest.fixture
+    def sample_threads(self):
+        """Create sample threads for testing."""
+        author = Author(name="Test User", email="test@example.com")
+        comment1 = Comment(
+            id="c1",
+            patch_set=1,
+            file_path="src/main.py",
+            line=10,
+            message="Please fix this bug",
+            author=author,
+            unresolved=True,
+            updated="2025-01-01",
+            code_context=CodeContext(
+                lines=["def foo():", "    pass"],
+                start_line=9,
+                end_line=11,
+                target_line=10,
+            ),
+        )
+        reply1 = Comment(
+            id="c2",
+            patch_set=1,
+            file_path="src/main.py",
+            line=10,
+            message="Working on it",
+            author=Author(name="Developer"),
+            unresolved=True,
+            updated="2025-01-02",
+        )
+        thread1 = CommentThread(root_comment=comment1, replies=[reply1])
+
+        comment2 = Comment(
+            id="c3",
+            patch_set=2,
+            file_path="tests/test_main.py",
+            line=None,
+            message="Add more tests",
+            author=author,
+            unresolved=False,
+            updated="2025-01-03",
+        )
+        thread2 = CommentThread(root_comment=comment2, replies=[])
+
+        return [thread1, thread2]
+
+    def test_filter_basic_fields(self, sample_threads):
+        """Test filtering to basic fields."""
+        result = filter_threads_by_fields(sample_threads, "index,file,message")
+        assert len(result) == 2
+        assert result[0] == {
+            "index": 0,
+            "file": "src/main.py",
+            "message": "Please fix this bug",
+        }
+        assert result[1] == {
+            "index": 1,
+            "file": "tests/test_main.py",
+            "message": "Add more tests",
+        }
+
+    def test_filter_with_line_and_author(self, sample_threads):
+        """Test filtering to line and author fields."""
+        result = filter_threads_by_fields(sample_threads, "file,line,author")
+        assert result[0] == {
+            "file": "src/main.py",
+            "line": 10,
+            "author": "Test User",
+        }
+        assert result[1] == {
+            "file": "tests/test_main.py",
+            "line": None,
+            "author": "Test User",
+        }
+
+    def test_filter_with_resolved(self, sample_threads):
+        """Test filtering to resolved status."""
+        result = filter_threads_by_fields(sample_threads, "index,resolved")
+        assert result[0] == {"index": 0, "resolved": False}
+        assert result[1] == {"index": 1, "resolved": True}
+
+    def test_filter_with_code_context(self, sample_threads):
+        """Test filtering to code_context."""
+        result = filter_threads_by_fields(sample_threads, "file,code_context")
+        assert result[0]["code_context"] == {
+            "lines": ["def foo():", "    pass"],
+            "start_line": 9,
+            "end_line": 11,
+            "target_line": 10,
+        }
+        assert result[1]["code_context"] is None
+
+    def test_filter_with_replies(self, sample_threads):
+        """Test filtering to replies."""
+        result = filter_threads_by_fields(sample_threads, "index,replies")
+        assert result[0]["replies"] == [
+            {"author": "Developer", "message": "Working on it"}
+        ]
+        assert result[1]["replies"] == []
+
+    def test_filter_with_patch_set(self, sample_threads):
+        """Test filtering to patch_set."""
+        result = filter_threads_by_fields(sample_threads, "file,patch_set")
+        assert result[0] == {"file": "src/main.py", "patch_set": 1}
+        assert result[1] == {"file": "tests/test_main.py", "patch_set": 2}
 
 
 class TestGenerateReviewPrompt:
