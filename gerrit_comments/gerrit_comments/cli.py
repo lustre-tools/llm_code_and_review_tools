@@ -57,6 +57,7 @@ from .reviewer import CodeReviewer
 from .series import SeriesFinder
 from .series_status import show_series_status
 from .staging import StagingManager
+from .summary import truncate_extracted_comments, truncate_review_data, truncate_series_comments
 
 
 def output_result(envelope: dict[str, Any], pretty: bool) -> None:
@@ -109,6 +110,7 @@ def cmd_extract(args):
     """Extract comments from a Gerrit change."""
     command = "extract"
     pretty = getattr(args, 'pretty', False)
+    summary_lines = getattr(args, 'summary', None)
 
     try:
         result = extract_comments(
@@ -118,7 +120,11 @@ def cmd_extract(args):
             context_lines=args.context_lines,
         )
 
-        output_success(result.to_dict(), command, pretty)
+        data = result.to_dict()
+        if summary_lines is not None:
+            data = truncate_extracted_comments(data, summary_lines)
+
+        output_success(data, command, pretty)
         sys.exit(ExitCode.SUCCESS)
 
     except ValueError as e:
@@ -255,6 +261,7 @@ def cmd_review(args):
     import json as json_module
     command = "review"
     pretty = getattr(args, 'pretty', False)
+    summary_lines = getattr(args, 'summary', None)
 
     try:
         reviewer = CodeReviewer()
@@ -289,7 +296,11 @@ def cmd_review(args):
                 sys.exit(output_error(ErrorCode.API_ERROR, result.error or "Unknown error", command, pretty))
 
         # Output the review data
-        output_success(review_data.to_dict(), command, pretty)
+        data = review_data.to_dict()
+        if summary_lines is not None:
+            data = truncate_review_data(data, summary_lines)
+
+        output_success(data, command, pretty)
         sys.exit(ExitCode.SUCCESS)
 
     except ValueError as e:
@@ -302,6 +313,7 @@ def cmd_series_comments(args):
     """Get all unresolved comments from all patches in a series."""
     command = "series-comments"
     pretty = getattr(args, 'pretty', False)
+    summary_lines = getattr(args, 'summary', None)
 
     try:
         finder = SeriesFinder()
@@ -313,7 +325,11 @@ def cmd_series_comments(args):
             show_progress=False,  # No progress in JSON mode
         )
 
-        output_success(result.to_dict(), command, pretty)
+        data = result.to_dict()
+        if summary_lines is not None:
+            data = truncate_series_comments(data, summary_lines)
+
+        output_success(data, command, pretty)
         sys.exit(ExitCode.SUCCESS)
 
     except ValueError as e:

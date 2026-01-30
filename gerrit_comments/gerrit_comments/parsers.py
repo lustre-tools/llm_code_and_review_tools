@@ -36,6 +36,14 @@ def add_extract_parser(subparsers):
         action="store_true",
         help="Pretty-print JSON output (default: compact JSON)",
     )
+    parser.add_argument(
+        "--summary", "-s",
+        nargs="?",
+        const=10,
+        type=int,
+        metavar="LINES",
+        help="Truncate code context to N lines (default: 10). Shows hint to use without --summary for full content.",
+    )
     return parser
 
 
@@ -151,6 +159,14 @@ def add_review_parser(subparsers):
         "--message", "-m",
         help="Review message",
     )
+    parser.add_argument(
+        "--summary", "-s",
+        nargs="?",
+        const=10,
+        type=int,
+        metavar="LINES",
+        help="Truncate diffs to N lines per hunk (default: 10). Shows hint to use without --summary for full content.",
+    )
     return parser
 
 
@@ -182,6 +198,14 @@ def add_series_comments_parser(subparsers):
         type=int,
         default=3,
         help="Lines of code context (default: 3)",
+    )
+    parser.add_argument(
+        "--summary", "-s",
+        nargs="?",
+        const=10,
+        type=int,
+        metavar="LINES",
+        help="Truncate code context to N lines (default: 10). Shows hint to use without --summary for full content.",
     )
     return parser
 
