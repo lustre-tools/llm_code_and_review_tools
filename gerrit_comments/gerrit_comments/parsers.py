@@ -89,6 +89,11 @@ def add_reply_parser(subparsers):
         help="Mark thread as resolved after reply",
     )
     parser.add_argument(
+        "--dry-run", "-n",
+        action="store_true",
+        help="Show what would be posted without actually posting",
+    )
+    parser.add_argument(
         "--pretty", "-p",
         action="store_true",
         help="Pretty-print JSON output (default: compact JSON)",
@@ -107,6 +112,11 @@ def add_batch_parser(subparsers):
     parser.add_argument(
         "file",
         help="JSON file with replies [{thread_index, message, mark_resolved}]",
+    )
+    parser.add_argument(
+        "--dry-run", "-n",
+        action="store_true",
+        help="Show what would be posted without actually posting",
     )
     parser.add_argument(
         "--pretty", "-p",
@@ -166,6 +176,11 @@ def add_review_parser(subparsers):
     parser.add_argument(
         "--message", "-m",
         help="Review message",
+    )
+    parser.add_argument(
+        "--dry-run", "-n",
+        action="store_true",
+        help="Show what would be posted without actually posting (with --post-comments)",
     )
     parser.add_argument(
         "--summary", "-s",
@@ -567,6 +582,11 @@ def add_add_reviewer_parser(subparsers):
         help="Add as CC instead of reviewer",
     )
     parser.add_argument(
+        "--dry-run", "-n",
+        action="store_true",
+        help="Show who would be added without actually adding",
+    )
+    parser.add_argument(
         "--pretty", "-p",
         action="store_true",
         help="Pretty-print JSON output",
@@ -585,6 +605,11 @@ def add_remove_reviewer_parser(subparsers):
     parser.add_argument(
         "name",
         help="Reviewer name, email, or username",
+    )
+    parser.add_argument(
+        "--dry-run", "-n",
+        action="store_true",
+        help="Show who would be removed without actually removing",
     )
     parser.add_argument(
         "--pretty", "-p",

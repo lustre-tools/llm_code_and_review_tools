@@ -248,6 +248,24 @@ def cmd_reply(args):
                 command, pretty
             ))
 
+        # Handle dry-run mode
+        dry_run = getattr(args, 'dry_run', False)
+        if dry_run:
+            last_comment = thread.replies[-1] if thread.replies else thread.root_comment
+            data = {
+                "dry_run": True,
+                "would_post": {
+                    "change_number": change_number,
+                    "thread_index": args.thread_index,
+                    "file": last_comment.file_path,
+                    "line": last_comment.line,
+                    "message": message,
+                    "mark_resolved": mark_resolved,
+                },
+            }
+            output_success(data, command, pretty)
+            sys.exit(ExitCode.SUCCESS)
+
         # Post the reply
         replier = CommentReplier()
         reply_result = replier.reply_to_thread(
@@ -400,7 +418,31 @@ def cmd_batch_reply(args):
                 'comment': last_comment,
                 'message': item['message'],
                 'mark_resolved': item.get('mark_resolved', False),
+                'thread_index': thread_idx,
             })
+
+        # Handle dry-run mode
+        dry_run = getattr(args, 'dry_run', False)
+        if dry_run:
+            would_post = []
+            for reply_spec in replies:
+                comment = reply_spec['comment']
+                would_post.append({
+                    "thread_index": reply_spec['thread_index'],
+                    "file": comment.file_path,
+                    "line": comment.line,
+                    "message": reply_spec['message'],
+                    "mark_resolved": reply_spec['mark_resolved'],
+                })
+            data = {
+                "dry_run": True,
+                "change_number": change_number,
+                "would_post": would_post,
+                "total": len(would_post),
+                "skipped_indices": skipped,
+            }
+            output_success(data, command, pretty)
+            sys.exit(ExitCode.SUCCESS)
 
         # Post all replies
         replier = CommentReplier()
@@ -442,6 +484,22 @@ def cmd_review(args):
         if args.post_comments:
             with open(args.post_comments) as f:
                 review_spec = json_module.load(f)
+
+            # Handle dry-run mode
+            dry_run = getattr(args, 'dry_run', False)
+            if dry_run:
+                data = {
+                    "dry_run": True,
+                    "change_number": review_data.change_info.change_number,
+                    "would_post": {
+                        "comments": review_spec.get('comments', []),
+                        "message": review_spec.get('message'),
+                        "vote": review_spec.get('vote'),
+                        "comment_count": len(review_spec.get('comments', [])),
+                    },
+                }
+                output_success(data, command, pretty)
+                sys.exit(ExitCode.SUCCESS)
 
             result = reviewer.post_review(
                 change_number=review_data.change_info.change_number,
@@ -1038,6 +1096,22 @@ def cmd_add_reviewer(args):
         reviewer_id = selected.get("username") or selected.get("email") or str(selected.get("_account_id"))
         state = "CC" if args.cc else "REVIEWER"
 
+        # Handle dry-run mode
+        dry_run = getattr(args, 'dry_run', False)
+        if dry_run:
+            data = {
+                "dry_run": True,
+                "change_number": change_number,
+                "would_add": {
+                    "name": selected.get("name", ""),
+                    "email": selected.get("email", ""),
+                    "username": selected.get("username", ""),
+                    "state": state,
+                },
+            }
+            output_success(data, command, pretty)
+            sys.exit(ExitCode.SUCCESS)
+
         result = client.add_reviewer(change_number, reviewer_id, state=state)
 
         data = {
@@ -1110,6 +1184,22 @@ def cmd_remove_reviewer(args):
 
         # Remove the reviewer
         reviewer_id = matched.get("username") or matched.get("email") or str(matched.get("_account_id"))
+
+        # Handle dry-run mode
+        dry_run = getattr(args, 'dry_run', False)
+        if dry_run:
+            data = {
+                "dry_run": True,
+                "change_number": change_number,
+                "would_remove": {
+                    "name": matched.get("name", ""),
+                    "email": matched.get("email", ""),
+                    "username": matched.get("username", ""),
+                },
+            }
+            output_success(data, command, pretty)
+            sys.exit(ExitCode.SUCCESS)
+
         client.remove_reviewer(change_number, reviewer_id)
 
         data = {
