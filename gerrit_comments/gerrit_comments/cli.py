@@ -974,6 +974,527 @@ def cmd_find_user(args):
         sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
 
 
+# Command explanations with detailed usage and examples
+COMMAND_EXPLANATIONS = {
+    "comments": {
+        "summary": "Get unresolved comments from a Gerrit change",
+        "description": """
+The 'comments' command extracts comment threads from a Gerrit change URL.
+By default, it only shows unresolved comments. Use --all to include resolved ones.
+
+Each comment thread is assigned an index (0, 1, 2, ...) that you can use with
+other commands like 'reply' or 'stage'.
+""",
+        "examples": [
+            {
+                "command": "gc comments https://review.example.com/c/project/+/12345",
+                "description": "Get all unresolved comments (JSON output)",
+            },
+            {
+                "command": "gc comments --pretty https://review.example.com/c/project/+/12345",
+                "description": "Get comments with human-readable JSON",
+            },
+            {
+                "command": "gc comments --all https://review.example.com/c/project/+/12345",
+                "description": "Include resolved comments",
+            },
+            {
+                "command": "gc comments --no-context https://review.example.com/c/project/+/12345",
+                "description": "Skip code context around comments",
+            },
+        ],
+        "related": ["reply", "stage", "series-comments"],
+    },
+    "reply": {
+        "summary": "Reply to a comment thread",
+        "description": """
+The 'reply' command posts a reply to a specific comment thread. You identify
+the thread by its index from the 'comments' output.
+
+Common patterns:
+- Use --done to mark a comment as addressed (adds "Done" and resolves)
+- Use --ack to acknowledge without action (adds "Acknowledged" and resolves)
+- Use --resolve with a custom message to resolve the thread
+""",
+        "examples": [
+            {
+                "command": "gc reply URL 0 \"Fixed in the latest patchset\"",
+                "description": "Reply to thread 0 with a message",
+            },
+            {
+                "command": "gc reply --done URL 0",
+                "description": "Mark thread 0 as done (resolved)",
+            },
+            {
+                "command": "gc reply --ack URL 2",
+                "description": "Acknowledge thread 2",
+            },
+            {
+                "command": "gc reply --resolve URL 1 \"Will fix in follow-up\"",
+                "description": "Reply and resolve with custom message",
+            },
+        ],
+        "related": ["comments", "stage", "batch"],
+    },
+    "stage": {
+        "summary": "Stage a comment reply for later posting",
+        "description": """
+The 'stage' command queues a reply without immediately posting it. This is
+useful when addressing multiple comments - you can stage all replies and
+then post them together with 'push'.
+
+If you're in an active session (from review-series), the URL is optional.
+""",
+        "examples": [
+            {
+                "command": "gc stage 0 \"Fixed\"",
+                "description": "Stage a reply to thread 0 (uses session URL)",
+            },
+            {
+                "command": "gc stage --done 1",
+                "description": "Stage thread 1 as done",
+            },
+            {
+                "command": "gc stage --url URL 2 \"Will address later\"",
+                "description": "Stage with explicit URL",
+            },
+        ],
+        "related": ["push", "staged", "reply"],
+    },
+    "push": {
+        "summary": "Post all staged comment replies",
+        "description": """
+The 'push' command posts all staged replies to Gerrit. Use --dry-run to
+preview what would be posted without actually sending.
+""",
+        "examples": [
+            {
+                "command": "gc push 12345",
+                "description": "Push staged replies for change 12345",
+            },
+            {
+                "command": "gc push --dry-run 12345",
+                "description": "Preview what would be pushed",
+            },
+            {
+                "command": "gc push",
+                "description": "Push all staged replies for all changes",
+            },
+        ],
+        "related": ["stage", "staged"],
+    },
+    "staged": {
+        "summary": "Manage staged comment replies",
+        "description": """
+The 'staged' command group helps you view and manage queued replies.
+
+Subcommands:
+- list: Show all staged operations
+- show <change>: Show staged ops for a specific change
+- remove <change> <index>: Remove a specific staged reply
+- clear [change]: Clear staged replies (all or for one change)
+- refresh <change>: Update patchset number after amending
+""",
+        "examples": [
+            {
+                "command": "gc staged list",
+                "description": "List all staged operations",
+            },
+            {
+                "command": "gc staged show 12345",
+                "description": "Show staged ops for change 12345",
+            },
+            {
+                "command": "gc staged remove 12345 0",
+                "description": "Remove first staged op for change 12345",
+            },
+            {
+                "command": "gc staged clear",
+                "description": "Clear all staged operations",
+            },
+            {
+                "command": "gc staged refresh 12345",
+                "description": "Update patchset after amending",
+            },
+        ],
+        "related": ["stage", "push"],
+    },
+    "review-series": {
+        "summary": "Start reviewing a patch series",
+        "description": """
+The 'review-series' command is the main entry point for AI-assisted patch
+series review. It finds all related patches, shows comment counts, and
+optionally checks out the first patch with comments.
+
+This command:
+1. Finds all patches in the series (following relations)
+2. Counts unresolved comments on each patch
+3. Checks out the first patch with comments (unless --no-checkout)
+4. Starts a session for tracking your progress
+""",
+        "examples": [
+            {
+                "command": "gc review-series https://review.example.com/c/project/+/12345",
+                "description": "Start reviewing - checkout first patch with comments",
+            },
+            {
+                "command": "gc review-series --no-checkout URL",
+                "description": "Just show series info without checkout",
+            },
+            {
+                "command": "gc review-series --urls-only URL",
+                "description": "List patch URLs only (plain text)",
+            },
+            {
+                "command": "gc review-series --numbers-only URL",
+                "description": "List change numbers only",
+            },
+        ],
+        "related": ["work-on-patch", "finish-patch", "status"],
+    },
+    "work-on-patch": {
+        "summary": "Start working on a specific patch",
+        "description": """
+Checkout a specific patch and show its comments. Use this to jump to a
+particular patch in the series, or to start a new session.
+""",
+        "examples": [
+            {
+                "command": "gc work-on-patch 12345 URL",
+                "description": "Start working on change 12345",
+            },
+            {
+                "command": "gc work-on-patch 12346",
+                "description": "Switch to change 12346 (uses session URL)",
+            },
+        ],
+        "related": ["review-series", "next-patch", "finish-patch"],
+    },
+    "finish-patch": {
+        "summary": "Finish current patch and rebase the series",
+        "description": """
+After making changes and staging replies, use 'finish-patch' to:
+1. Rebase all dependent patches on your changes
+2. Auto-advance to the next patch with comments (unless --stay)
+
+Always commit your changes before running this command.
+""",
+        "examples": [
+            {
+                "command": "gc finish-patch",
+                "description": "Finish patch, rebase series, advance to next",
+            },
+            {
+                "command": "gc finish-patch --stay",
+                "description": "Finish and rebase, but stay on current patch",
+            },
+        ],
+        "related": ["work-on-patch", "next-patch", "abort"],
+    },
+    "next-patch": {
+        "summary": "Move to the next patch in the series",
+        "description": """
+Skip to the next patch without rebasing. Use this when you don't have
+changes on the current patch or want to review without modifying.
+""",
+        "examples": [
+            {
+                "command": "gc next-patch",
+                "description": "Move to the next patch",
+            },
+            {
+                "command": "gc next-patch --with-comments",
+                "description": "Skip to next patch that has comments",
+            },
+        ],
+        "related": ["work-on-patch", "finish-patch", "status"],
+    },
+    "status": {
+        "summary": "Show current session status",
+        "description": """
+Display information about the active session: which patch you're on,
+remaining patches, staged replies, etc.
+""",
+        "examples": [
+            {
+                "command": "gc status",
+                "description": "Show current session status",
+            },
+        ],
+        "related": ["review-series", "work-on-patch"],
+    },
+    "abort": {
+        "summary": "End the current session",
+        "description": """
+End the session and optionally discard changes. By default, this restores
+the original git state. Use --keep-changes to preserve your work.
+""",
+        "examples": [
+            {
+                "command": "gc abort",
+                "description": "End session and discard changes",
+            },
+            {
+                "command": "gc abort --keep-changes",
+                "description": "End session but keep git state",
+            },
+        ],
+        "related": ["status", "review-series"],
+    },
+    "review": {
+        "summary": "Get code changes for review",
+        "description": """
+Get the diff and file changes from a Gerrit change for code review.
+Can also post review comments from a JSON file.
+""",
+        "examples": [
+            {
+                "command": "gc review URL",
+                "description": "Get changes for review (JSON)",
+            },
+            {
+                "command": "gc review --pretty URL",
+                "description": "Get changes with readable JSON",
+            },
+            {
+                "command": "gc review --full-content URL",
+                "description": "Include full file contents",
+            },
+            {
+                "command": "gc review --post-comments review.json URL",
+                "description": "Post review comments from file",
+            },
+        ],
+        "related": ["comments", "review-series"],
+    },
+    "series-comments": {
+        "summary": "Get comments from all patches in a series",
+        "description": """
+Extract comments from every patch in a series in one call. Useful for
+getting an overview of all feedback across the entire series.
+""",
+        "examples": [
+            {
+                "command": "gc series-comments URL",
+                "description": "Get all unresolved comments in series",
+            },
+            {
+                "command": "gc series-comments --all URL",
+                "description": "Include resolved comments",
+            },
+            {
+                "command": "gc series-comments --pretty URL",
+                "description": "Human-readable output",
+            },
+        ],
+        "related": ["comments", "review-series", "series-status"],
+    },
+    "series-status": {
+        "summary": "Show status dashboard for a patch series",
+        "description": """
+Display a summary of all patches in a series: their status, comment counts,
+review votes, and other metadata.
+""",
+        "examples": [
+            {
+                "command": "gc series-status URL",
+                "description": "Show series status dashboard",
+            },
+        ],
+        "related": ["review-series", "series-comments"],
+    },
+    "add-reviewer": {
+        "summary": "Add a reviewer to a change",
+        "description": """
+Add a reviewer or CC to a Gerrit change. Supports fuzzy name matching -
+just provide a partial name and it will find matches.
+
+If multiple users match, you'll be shown the options and asked to be
+more specific (use email or username for exact match).
+""",
+        "examples": [
+            {
+                "command": "gc add-reviewer URL \"John Smith\"",
+                "description": "Add John Smith as reviewer (fuzzy match)",
+            },
+            {
+                "command": "gc add-reviewer URL john@example.com",
+                "description": "Add by email (exact match)",
+            },
+            {
+                "command": "gc add-reviewer --cc URL jsmith",
+                "description": "Add as CC instead of reviewer",
+            },
+        ],
+        "related": ["remove-reviewer", "reviewers", "find-user"],
+    },
+    "remove-reviewer": {
+        "summary": "Remove a reviewer from a change",
+        "description": """
+Remove a reviewer from a Gerrit change. Matches against current reviewers
+by name, email, or username.
+""",
+        "examples": [
+            {
+                "command": "gc remove-reviewer URL \"John Smith\"",
+                "description": "Remove John Smith from reviewers",
+            },
+            {
+                "command": "gc remove-reviewer URL jsmith",
+                "description": "Remove by username",
+            },
+        ],
+        "related": ["add-reviewer", "reviewers"],
+    },
+    "reviewers": {
+        "summary": "List reviewers on a change",
+        "description": """
+Show all reviewers and their votes on a Gerrit change.
+""",
+        "examples": [
+            {
+                "command": "gc reviewers URL",
+                "description": "List all reviewers and their votes",
+            },
+            {
+                "command": "gc reviewers --pretty URL",
+                "description": "Human-readable output",
+            },
+        ],
+        "related": ["add-reviewer", "remove-reviewer"],
+    },
+    "find-user": {
+        "summary": "Search for users by name",
+        "description": """
+Search for Gerrit users by name, email, or username. Useful for finding
+the exact username before adding as a reviewer.
+""",
+        "examples": [
+            {
+                "command": "gc find-user \"John\"",
+                "description": "Search for users named John",
+            },
+            {
+                "command": "gc find-user --limit 20 \"smith\"",
+                "description": "Get up to 20 results matching smith",
+            },
+        ],
+        "related": ["add-reviewer", "reviewers"],
+    },
+    "batch": {
+        "summary": "Reply to multiple comments from a JSON file",
+        "description": """
+Post multiple replies at once from a JSON file. The file should contain
+an array of objects with thread_index, message, and optionally mark_resolved.
+""",
+        "examples": [
+            {
+                "command": "gc batch URL replies.json",
+                "description": "Post all replies from replies.json",
+            },
+        ],
+        "related": ["reply", "stage", "push"],
+    },
+    "interactive": {
+        "summary": "Interactive mode for reviewing comments",
+        "description": """
+Review and reply to comments in an interactive terminal interface.
+Use --vim for a vim-based interface with tmux.
+""",
+        "examples": [
+            {
+                "command": "gc interactive URL",
+                "description": "Start interactive review mode",
+            },
+            {
+                "command": "gc i URL",
+                "description": "Short alias for interactive",
+            },
+            {
+                "command": "gc interactive --vim URL",
+                "description": "Use vim-based interface",
+            },
+        ],
+        "related": ["comments", "review-series"],
+    },
+    "continue-reintegration": {
+        "summary": "Continue reintegration after resolving conflicts",
+        "description": """
+After resolving merge conflicts during reintegration, use this command
+to continue the cherry-pick process.
+""",
+        "examples": [
+            {
+                "command": "gc continue-reintegration",
+                "description": "Continue after resolving conflicts",
+            },
+        ],
+        "related": ["skip-reintegration", "finish-patch"],
+    },
+    "skip-reintegration": {
+        "summary": "Skip current change during reintegration",
+        "description": """
+Skip a conflicting change during reintegration and move to the next one.
+""",
+        "examples": [
+            {
+                "command": "gc skip-reintegration",
+                "description": "Skip current conflicting change",
+            },
+        ],
+        "related": ["continue-reintegration", "finish-patch"],
+    },
+}
+
+# Aliases for command lookup
+COMMAND_ALIASES = {
+    "extract": "comments",
+    "i": "interactive",
+}
+
+
+def cmd_explain(args):
+    """Show detailed usage for a specific command."""
+    command_name = args.command_name.lower().replace("_", "-")
+
+    # Resolve aliases
+    command_name = COMMAND_ALIASES.get(command_name, command_name)
+
+    if command_name not in COMMAND_EXPLANATIONS:
+        available = sorted(COMMAND_EXPLANATIONS.keys())
+        print(f"Unknown command: {command_name}", file=sys.stderr)
+        print(f"\nAvailable commands:", file=sys.stderr)
+        for cmd in available:
+            info = COMMAND_EXPLANATIONS[cmd]
+            print(f"  {cmd:20} {info['summary']}", file=sys.stderr)
+        sys.exit(1)
+
+    info = COMMAND_EXPLANATIONS[command_name]
+
+    # Format output
+    output = []
+    output.append(f"gc {command_name} - {info['summary']}")
+    output.append("=" * 60)
+    output.append("")
+    output.append("DESCRIPTION:")
+    output.append(info['description'].strip())
+    output.append("")
+    output.append("EXAMPLES:")
+    for ex in info['examples']:
+        output.append(f"  $ {ex['command']}")
+        output.append(f"    {ex['description']}")
+        output.append("")
+
+    if info.get('related'):
+        output.append("RELATED COMMANDS:")
+        output.append(f"  {', '.join(info['related'])}")
+        output.append("")
+
+    output.append(f"For full argument list, use: gc {command_name} --help")
+
+    print("\n".join(output))
+
+
 def main():
     """Main entry point."""
     from .parsers import setup_parsers
@@ -1013,6 +1534,7 @@ def main():
         'add_reviewer': cmd_add_reviewer,
         'remove_reviewer': cmd_remove_reviewer,
         'find_user': cmd_find_user,
+        'explain': cmd_explain,
     }
 
     setup_parsers(subparsers, handlers)
