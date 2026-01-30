@@ -588,6 +588,68 @@ class TestCLIIssueLinks:
         assert data["data"]["links"][1]["issue_key"] == "PROJ-789"
 
 
+class TestCLIIssueWorklogs:
+    """Tests for 'jira issue worklogs' command."""
+
+    @responses.activate
+    def test_worklogs_list(self, runner, mock_env):
+        """Should list worklogs."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/worklog",
+            json={
+                "worklogs": [
+                    {
+                        "id": "10001",
+                        "author": {"displayName": "John Doe"},
+                        "timeSpent": "2h",
+                        "timeSpentSeconds": 7200,
+                        "comment": "Working on feature",
+                        "started": "2024-01-15T10:00:00.000+0000",
+                        "created": "2024-01-15T12:00:00.000+0000",
+                        "updated": "2024-01-15T12:00:00.000+0000",
+                    }
+                ],
+                "total": 1,
+            },
+            status=200,
+        )
+
+        result = runner.invoke(main, ["issue", "worklogs", "PROJ-123"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["total"] == 1
+        assert data["data"]["worklogs"][0]["time_spent"] == "2h"
+        assert data["data"]["worklogs"][0]["author"] == "John Doe"
+
+
+class TestCLIIssueWorklogAdd:
+    """Tests for 'jira issue worklog' command."""
+
+    @responses.activate
+    def test_worklog_add(self, runner, mock_env):
+        """Should add worklog."""
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/worklog",
+            json={
+                "id": "10002",
+                "timeSpent": "1h 30m",
+                "timeSpentSeconds": 5400,
+                "comment": "Code review",
+                "started": "2024-01-15T14:00:00.000+0000",
+            },
+            status=201,
+        )
+
+        result = runner.invoke(main, ["issue", "worklog", "PROJ-123", "1h 30m", "--comment", "Code review"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["worklog"]["time_spent"] == "1h 30m"
+
+
 class TestCLIAttachmentGet:
     """Tests for 'jira attachment get' command."""
 

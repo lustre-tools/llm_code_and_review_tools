@@ -306,6 +306,65 @@ class JiraClient:
         )
 
     # =========================================================================
+    # Worklog Operations
+    # =========================================================================
+
+    def get_worklogs(
+        self,
+        key: str,
+        start_at: int = 0,
+        max_results: int = 50,
+    ) -> dict[str, Any]:
+        """
+        Get worklogs for an issue.
+
+        Args:
+            key: Issue key
+            start_at: Starting index for pagination
+            max_results: Maximum worklogs to return
+
+        Returns:
+            Worklogs data with pagination info
+        """
+        params = {
+            "startAt": str(start_at),
+            "maxResults": str(max_results),
+        }
+        return self._request("GET", f"issue/{key}/worklog", params=params, context=key)
+
+    def add_worklog(
+        self,
+        key: str,
+        time_spent: str,
+        comment: str | None = None,
+        started: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Add a worklog entry to an issue.
+
+        Args:
+            key: Issue key
+            time_spent: Time spent in JIRA duration format (e.g., "2h 30m", "1d")
+            comment: Optional comment for the worklog
+            started: Optional start time in ISO format (defaults to now)
+
+        Returns:
+            Created worklog data
+        """
+        body: dict[str, Any] = {"timeSpent": time_spent}
+        if comment:
+            body["comment"] = comment
+        if started:
+            body["started"] = started
+
+        return self._request(
+            "POST",
+            f"issue/{key}/worklog",
+            json_data=body,
+            context=key,
+        )
+
+    # =========================================================================
     # Transition Operations
     # =========================================================================
 
@@ -536,4 +595,72 @@ class JiraClient:
                 code=ErrorCode.CONNECTION_ERROR,
                 message=f"Attachment download failed: {str(e)}",
                 details={"url": content_url},
+            ) from e
+
+    def upload_attachment(
+        self,
+        key: str,
+        file_path: str,
+        filename: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Upload an attachment to an issue.
+
+        Args:
+            key: Issue key (e.g., "PROJ-123")
+            file_path: Path to the file to upload
+            filename: Optional filename (defaults to basename of file_path)
+
+        Returns:
+            List of created attachment data (JIRA returns a list)
+
+        Raises:
+            InvalidInputError: If file doesn't exist or can't be read
+            NetworkError: For upload failures
+        """
+        import os
+
+        if not os.path.exists(file_path):
+            raise InvalidInputError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"File not found: {file_path}",
+            )
+
+        if filename is None:
+            filename = os.path.basename(file_path)
+
+        url = self._build_url(f"issue/{key}/attachments")
+
+        try:
+            with open(file_path, "rb") as f:
+                # JIRA requires X-Atlassian-Token header for attachment uploads
+                headers = {
+                    "X-Atlassian-Token": "no-check",
+                }
+                response = self._session.post(
+                    url,
+                    files={"file": (filename, f)},
+                    headers=headers,
+                    timeout=self.timeout,
+                )
+
+            return self._handle_response(response, f"upload to {key}")
+
+        except requests.exceptions.Timeout as e:
+            raise NetworkError(
+                code=ErrorCode.TIMEOUT,
+                message=f"Attachment upload timed out after {self.timeout}s",
+                details={"file": file_path},
+            ) from e
+        except requests.exceptions.RequestException as e:
+            raise NetworkError(
+                code=ErrorCode.CONNECTION_ERROR,
+                message=f"Attachment upload failed: {str(e)}",
+                details={"file": file_path},
+            ) from e
+        except OSError as e:
+            raise InvalidInputError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"Cannot read file: {e}",
+                details={"file": file_path},
             ) from e
