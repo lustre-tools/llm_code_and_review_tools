@@ -1089,3 +1089,128 @@ class TestCLIAttachmentContentBinary:
         assert data["data"]["is_text"] is False
         assert data["data"]["content"] is None
         assert "Binary content" in data["data"]["note"]
+
+
+class TestCLIIssueWatchers:
+    """Tests for 'jira issue watchers' command."""
+
+    @responses.activate
+    def test_watchers_list(self, runner, mock_env):
+        """Should list watchers."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/watchers",
+            json={
+                "watchCount": 2,
+                "isWatching": True,
+                "watchers": [
+                    {
+                        "name": "jdoe",
+                        "displayName": "John Doe",
+                        "emailAddress": "john@example.com",
+                        "active": True,
+                    },
+                    {
+                        "name": "jsmith",
+                        "displayName": "Jane Smith",
+                        "emailAddress": "jane@example.com",
+                        "active": True,
+                    },
+                ],
+            },
+            status=200,
+        )
+
+        result = runner.invoke(main, ["issue", "watchers", "PROJ-123"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["count"] == 2
+        assert data["data"]["is_watching"] is True
+        assert len(data["data"]["watchers"]) == 2
+        assert data["data"]["watchers"][0]["name"] == "jdoe"
+        assert data["data"]["watchers"][0]["display_name"] == "John Doe"
+
+
+class TestCLIIssueWatch:
+    """Tests for 'jira issue watch' command."""
+
+    @responses.activate
+    def test_watch_with_user(self, runner, mock_env):
+        """Should add specified user as watcher."""
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/watchers",
+            status=204,
+        )
+
+        result = runner.invoke(main, ["issue", "watch", "PROJ-123", "--user", "jdoe"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["issue_key"] == "PROJ-123"
+        assert data["data"]["user"] == "jdoe"
+        assert data["data"]["action"] == "added"
+
+    @responses.activate
+    def test_watch_current_user(self, runner, mock_env):
+        """Should add current user as watcher when no --user specified."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/myself",
+            json={"name": "currentuser", "displayName": "Current User"},
+            status=200,
+        )
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/watchers",
+            status=204,
+        )
+
+        result = runner.invoke(main, ["issue", "watch", "PROJ-123"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["user"] == "currentuser"
+
+
+class TestCLIIssueUnwatch:
+    """Tests for 'jira issue unwatch' command."""
+
+    @responses.activate
+    def test_unwatch_with_user(self, runner, mock_env):
+        """Should remove specified user as watcher."""
+        responses.add(
+            responses.DELETE,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/watchers",
+            status=204,
+        )
+
+        result = runner.invoke(main, ["issue", "unwatch", "PROJ-123", "--user", "jdoe"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["issue_key"] == "PROJ-123"
+        assert data["data"]["user"] == "jdoe"
+        assert data["data"]["action"] == "removed"
+
+    @responses.activate
+    def test_unwatch_current_user(self, runner, mock_env):
+        """Should remove current user as watcher when no --user specified."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/myself",
+            json={"name": "currentuser", "displayName": "Current User"},
+            status=200,
+        )
+        responses.add(
+            responses.DELETE,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/watchers",
+            status=204,
+        )
+
+        result = runner.invoke(main, ["issue", "unwatch", "PROJ-123"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["user"] == "currentuser"

@@ -661,3 +661,89 @@ class TestResponseParsing:
 
         with pytest.raises(AuthError):
             client.get_issue("PROJ-123")
+
+
+class TestGetWatchers:
+    """Tests for get_watchers method."""
+
+    @responses.activate
+    def test_get_watchers_success(self, client):
+        """Should return watchers."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/watchers",
+            json={
+                "watchCount": 2,
+                "isWatching": True,
+                "watchers": [
+                    {"name": "jdoe", "displayName": "John Doe", "active": True},
+                    {"name": "jsmith", "displayName": "Jane Smith", "active": True},
+                ],
+            },
+            status=200,
+        )
+
+        result = client.get_watchers("PROJ-123")
+        assert result["watchCount"] == 2
+        assert result["isWatching"] is True
+        assert len(result["watchers"]) == 2
+
+
+class TestAddWatcher:
+    """Tests for add_watcher method."""
+
+    @responses.activate
+    def test_add_watcher_success(self, client):
+        """Should add watcher."""
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/watchers",
+            status=204,
+        )
+
+        result = client.add_watcher("PROJ-123", "jdoe")
+        assert result == {}
+
+    @responses.activate
+    def test_add_watcher_request_body(self, client):
+        """Should send username as JSON string."""
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/watchers",
+            status=204,
+        )
+
+        client.add_watcher("PROJ-123", "jdoe")
+
+        request_body = responses.calls[0].request.body
+        assert request_body == '"jdoe"'
+
+
+class TestRemoveWatcher:
+    """Tests for remove_watcher method."""
+
+    @responses.activate
+    def test_remove_watcher_success(self, client):
+        """Should remove watcher."""
+        responses.add(
+            responses.DELETE,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/watchers",
+            status=204,
+        )
+
+        result = client.remove_watcher("PROJ-123", "jdoe")
+        assert result == {}
+
+    @responses.activate
+    def test_remove_watcher_params(self, client):
+        """Should pass username as query parameter."""
+        responses.add(
+            responses.DELETE,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/watchers",
+            status=204,
+        )
+
+        client.remove_watcher("PROJ-123", "jdoe")
+
+        url = responses.calls[0].request.url
+        assert "username=jdoe" in url

@@ -597,6 +597,74 @@ class JiraClient:
                 details={"url": content_url},
             ) from e
 
+    # =========================================================================
+    # Watcher Operations
+    # =========================================================================
+
+    def get_watchers(self, key: str) -> dict[str, Any]:
+        """
+        Get watchers for an issue.
+
+        Args:
+            key: Issue key (e.g., "PROJ-123")
+
+        Returns:
+            Watchers data including count and list of watchers
+        """
+        return self._request("GET", f"issue/{key}/watchers", context=key)
+
+    def add_watcher(self, key: str, username: str) -> dict[str, Any]:
+        """
+        Add a watcher to an issue.
+
+        Args:
+            key: Issue key (e.g., "PROJ-123")
+            username: Username to add as watcher
+
+        Returns:
+            Empty dict on success (JIRA returns 204)
+        """
+        # JIRA expects the username as a raw JSON string, not an object
+        url = self._build_url(f"issue/{key}/watchers")
+        try:
+            import json
+            response = self._session.post(
+                url,
+                data=json.dumps(username),
+                timeout=self.timeout,
+            )
+            return self._handle_response(response, f"add watcher {username} to {key}")
+        except requests.exceptions.Timeout as e:
+            raise NetworkError(
+                code=ErrorCode.TIMEOUT,
+                message=f"Request timed out after {self.timeout}s",
+                details={"url": url},
+            ) from e
+        except requests.exceptions.RequestException as e:
+            raise NetworkError(
+                code=ErrorCode.CONNECTION_ERROR,
+                message=f"Request failed: {str(e)}",
+                details={"url": url},
+            ) from e
+
+    def remove_watcher(self, key: str, username: str) -> dict[str, Any]:
+        """
+        Remove a watcher from an issue.
+
+        Args:
+            key: Issue key (e.g., "PROJ-123")
+            username: Username to remove as watcher
+
+        Returns:
+            Empty dict on success (JIRA returns 204)
+        """
+        return self._request(
+            "DELETE",
+            f"issue/{key}/watchers",
+            params={"username": username},
+            context=f"remove watcher {username} from {key}",
+        )
+
     def upload_attachment(
         self,
         key: str,
