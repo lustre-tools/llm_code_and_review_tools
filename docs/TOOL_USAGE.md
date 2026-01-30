@@ -8,7 +8,7 @@ This document provides guidance for AI agents using these tools.
 |------|---------|----------|
 | `bd` | Task tracking (beads) | `bd ready`, `bd create`, `bd close`, etc. |
 | `jira` | JIRA issue tracking | `jira issue get`, `jira issue search`, etc. |
-| `gerrit-comments` | Gerrit code review | `gerrit-comments extract`, `gerrit-comments review`, etc. |
+| `gc` (or `gerrit-comments`) | Gerrit code review | `gc comments`, `gc review`, `gc add-reviewer`, etc. |
 
 ---
 
@@ -134,7 +134,9 @@ jira issue create --project LU --type Bug --summary "Bug title"
 
 ---
 
-# Gerrit Comments Tool
+# Gerrit Comments Tool (`gc`)
+
+**Alias:** Use `gc` instead of `gerrit-comments` for shorter commands.
 
 ## Configuration
 
@@ -150,84 +152,106 @@ export GERRIT_PASS="your-http-password"
 
 ```bash
 # 1. Start reviewing - checks out first patch with comments
-gerrit-comments review-series <URL>
+gc review-series <URL>
 
 # 2. For each patch: fix issues, stage replies, finish
-gerrit-comments stage --done <index>        # Mark comment as done
-gerrit-comments stage <index> "message"     # Reply with message
+gc stage --done <index>        # Mark comment as done
+gc stage <index> "message"     # Reply with message
 git add <files> && git commit --amend --no-edit
-gerrit-comments finish-patch                # Auto-advances to next
+gc finish-patch                # Auto-advances to next
 
 # 3. When done
-gerrit-comments abort --keep-changes
+gc abort --keep-changes
 git push origin HEAD:refs/for/master
 ```
 
 ### Information Commands
 
 ```bash
-# Extract unresolved comments with code context
-gerrit-comments extract <URL>
+# Get unresolved comments with code context
+gc comments <URL>
 
 # Get code changes for review
-gerrit-comments review <URL>
+gc review <URL>
 
 # Find all patches in a series
-gerrit-comments series <URL>
+gc review-series <URL>
 
 # Get comments from all patches in series
-gerrit-comments series-comments <URL>
+gc series-comments <URL>
 
 # Show status of all patches
-gerrit-comments series-status <URL>
+gc series-status <URL>
 ```
+
+### Reviewer Management
+
+```bash
+# List current reviewers and their votes
+gc reviewers <URL>
+
+# Add a reviewer (fuzzy name matching supported)
+gc add-reviewer <URL> "John Smith"     # Finds matching user
+gc add-reviewer <URL> jsmith           # Exact username
+gc add-reviewer <URL> "john" --cc      # Add as CC
+
+# Remove a reviewer
+gc remove-reviewer <URL> "simmons"
+
+# Search for users (to find exact username)
+gc find-user "farrell"
+gc find-user "john" --limit 5
+```
+
+**Fuzzy matching:** When adding reviewers, partial names work. If multiple
+matches are found, the tool shows candidates and asks you to be more specific.
 
 ### Navigation
 
 ```bash
 # Jump to specific patch
-gerrit-comments work-on-patch <URL> <change>
+gc work-on-patch <URL> <change>
 
 # Manually advance to next patch
-gerrit-comments next-patch
+gc next-patch
 
 # Check session status
-gerrit-comments status
+gc status
 ```
 
 ### Staging Management
 
 ```bash
 # List staged operations
-gerrit-comments staged list
+gc staged list
 
 # Show staged for specific change
-gerrit-comments staged show <change>
+gc staged show <change>
 
 # Push staged operations
-gerrit-comments push <change>
+gc push <change>
 
 # Clear staged operations
-gerrit-comments staged clear [change]
+gc staged clear [change]
 ```
 
 ### Reply to Comments
 
 ```bash
 # Reply to thread 0 with message
-gerrit-comments reply <URL> 0 "Fixed in next patchset"
+gc reply <URL> 0 "Fixed in next patchset"
 
 # Mark as done
-gerrit-comments reply --done <URL> 0
+gc reply --done <URL> 0
 
 # Acknowledge
-gerrit-comments reply --ack <URL> 1
+gc reply --ack <URL> 1
 ```
 
 ### Interactive Mode
 
 ```bash
-gerrit-comments interactive <URL>
+gc interactive <URL>
 # Actions: d=done, r=reply, a=ack, s=skip, q=quit, p=push
 ```
 
