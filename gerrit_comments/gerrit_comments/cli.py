@@ -2,33 +2,33 @@
 """Command-line interface for Gerrit comments tools.
 
 This CLI provides commands for:
-1. extract - Extract unresolved comments from a Gerrit change
+1. comments - Get unresolved comments from a Gerrit change
 2. reply - Reply to comments or mark them as done
 3. review - Get diff/changes for code review, optionally post review comments
 
 All commands output JSON by default. Use --pretty for human-readable output.
 
 Examples:
-    # Extract unresolved comments (JSON output)
-    gerrit-comments extract https://review.whamcloud.com/c/fs/lustre-release/+/62796
+    # Get unresolved comments (JSON output)
+    gc comments https://review.whamcloud.com/c/fs/lustre-release/+/62796
 
-    # Extract with human-readable output
-    gerrit-comments extract --pretty https://review.whamcloud.com/c/fs/lustre-release/+/62796
+    # Get comments with human-readable output
+    gc comments --pretty https://review.whamcloud.com/c/fs/lustre-release/+/62796
 
-    # Reply to a comment (by thread index from extract output)
-    gerrit-comments reply https://review.whamcloud.com/c/fs/lustre-release/+/62796 0 "Done"
+    # Reply to a comment (by thread index from comments output)
+    gc reply https://review.whamcloud.com/c/fs/lustre-release/+/62796 0 "Done"
 
     # Mark a comment as done
-    gerrit-comments reply --done https://review.whamcloud.com/c/fs/lustre-release/+/62796 0
+    gc reply --done https://review.whamcloud.com/c/fs/lustre-release/+/62796 0
 
     # Get changes for code review
-    gerrit-comments review https://review.whamcloud.com/c/fs/lustre-release/+/62796
+    gc review https://review.whamcloud.com/c/fs/lustre-release/+/62796
 
     # Get changes with pretty output
-    gerrit-comments review --pretty https://review.whamcloud.com/c/fs/lustre-release/+/62796
+    gc review --pretty https://review.whamcloud.com/c/fs/lustre-release/+/62796
 
     # Post a code review with comments from JSON file
-    gerrit-comments review --post-comments comments.json https://review.whamcloud.com/62796
+    gc review --post-comments comments.json https://review.whamcloud.com/62796
 """
 
 import argparse
@@ -770,7 +770,7 @@ def main():
 
     # Map command names to handler functions
     handlers = {
-        'extract': cmd_extract,
+        'comments': cmd_extract,
         'reply': cmd_reply,
         'batch': cmd_batch_reply,
         'review': cmd_review,

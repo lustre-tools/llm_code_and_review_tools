@@ -7,11 +7,12 @@ the main cli.py focused on command implementations.
 
 
 def add_extract_parser(subparsers):
-    """Add the 'extract' subcommand parser."""
+    """Add the 'comments' subcommand parser (with 'extract' as alias)."""
     parser = subparsers.add_parser(
-        "extract",
-        help="Extract comments from a Gerrit change",
-        description="Extract unresolved comments from a Gerrit change URL",
+        "comments",
+        aliases=["extract"],
+        help="Get comments from a Gerrit change",
+        description="Get unresolved comments from a Gerrit change URL",
     )
     parser.add_argument("url", help="Gerrit change URL")
     parser.add_argument(
@@ -502,7 +503,7 @@ def setup_parsers(subparsers, handlers):
         None - parsers are added to subparsers in-place
     """
     # Core comment commands
-    add_extract_parser(subparsers).set_defaults(func=handlers['extract'])
+    add_extract_parser(subparsers).set_defaults(func=handlers['comments'])
     add_reply_parser(subparsers).set_defaults(func=handlers['reply'])
     add_batch_parser(subparsers).set_defaults(func=handlers['batch'])
 
