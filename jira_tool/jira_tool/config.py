@@ -6,9 +6,38 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 from .errors import ConfigError
 
 DEFAULT_CONFIG_PATH = Path.home() / ".jira-tool.json"
+
+
+# Load .env file from standard locations (in priority order)
+def _load_env_file() -> None:
+    """Load environment variables from .env file in standard locations.
+
+    Priority order:
+    1. User config directory (~/.config/jira-tool/.env)
+    2. System config directory (/etc/jira-tool/.env)
+    3. Current directory (.env) - for development
+    """
+    env_locations = [
+        Path.home() / ".config" / "jira-tool" / ".env",
+        Path("/etc/jira-tool/.env"),
+        Path(".env"),
+    ]
+
+    for env_path in env_locations:
+        if env_path.exists():
+            load_dotenv(env_path)
+            return
+
+    # No .env file found, will use environment variables or JSON config
+
+
+# Load .env file when module is imported
+_load_env_file()
 
 
 @dataclass
