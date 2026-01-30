@@ -660,6 +660,24 @@ def add_explain_parser(subparsers):
     return parser
 
 
+def add_examples_parser(subparsers):
+    """Add the 'examples' subcommand parser."""
+    parser = subparsers.add_parser(
+        "examples",
+        help="Show common usage examples and workflows",
+        description="Display practical examples showing typical gerrit-comments workflows. "
+                    "This helps LLMs and users quickly understand how to use the tool.",
+    )
+    parser.add_argument(
+        "workflow",
+        nargs="?",
+        choices=["quick", "series", "staging", "reviewers", "all"],
+        default="quick",
+        help="Workflow to show examples for (default: quick)",
+    )
+    return parser
+
+
 def add_done_parser(subparsers):
     """Add the 'done' shortcut command parser."""
     parser = subparsers.add_parser(
@@ -776,6 +794,7 @@ def setup_parsers(subparsers, handlers):
 
     # Help/documentation commands
     add_explain_parser(subparsers).set_defaults(func=handlers['explain'])
+    add_examples_parser(subparsers).set_defaults(func=handlers['examples'])
 
     # Shortcut commands
     add_done_parser(subparsers).set_defaults(func=handlers['done'])

@@ -1782,6 +1782,98 @@ def cmd_explain(args):
     print("\n".join(output))
 
 
+# Workflow examples for the 'examples' command
+WORKFLOW_EXAMPLES = {
+    "quick": {
+        "title": "Quick Start - Single Change Review",
+        "description": "The fastest way to review and reply to comments on a single change.",
+        "examples": [
+            ("gc comments URL", "Get unresolved comments"),
+            ("gc reply --done URL 0", "Mark comment 0 as done"),
+            ("gc reply URL 1 \"Fixed in latest PS\"", "Reply to comment 1"),
+        ],
+    },
+    "staging": {
+        "title": "Staging Workflow - Batch Multiple Replies",
+        "description": "Stage multiple replies locally, review them, then push all at once.",
+        "examples": [
+            ("gc comments URL", "Get comments to address"),
+            ("gc stage --done 0", "Stage 'Done' for thread 0"),
+            ("gc stage 1 \"Will fix in follow-up\"", "Stage reply for thread 1"),
+            ("gc stage --ack 2", "Stage acknowledgment for thread 2"),
+            ("gc staged list", "Review all staged replies"),
+            ("gc push --dry-run CHANGE_ID", "Preview what will be posted"),
+            ("gc push CHANGE_ID", "Post all staged replies"),
+        ],
+    },
+    "series": {
+        "title": "Series Workflow - Multi-Patch Review Session",
+        "description": "Review a series of related patches interactively with rebase support.",
+        "examples": [
+            ("gc review-series URL", "Start session for a patch series"),
+            ("gc status", "Check current session state"),
+            ("gc comments", "Get comments for current patch"),
+            ("gc stage --done 0", "Stage reply"),
+            ("gc finish-patch", "Complete current patch, move to next"),
+            ("gc push CHANGE_ID", "Push staged replies for a change"),
+            ("gc abort", "Exit session without finishing"),
+        ],
+    },
+    "reviewers": {
+        "title": "Reviewer Management",
+        "description": "Add, remove, and find reviewers on changes.",
+        "examples": [
+            ("gc reviewers URL", "List current reviewers"),
+            ("gc find-user john", "Search for users by name"),
+            ("gc add-reviewer URL username", "Add a reviewer"),
+            ("gc add-reviewer --cc URL username", "Add as CC only"),
+            ("gc remove-reviewer URL username", "Remove a reviewer"),
+        ],
+    },
+}
+
+
+def cmd_examples(args):
+    """Show common usage examples and workflows."""
+    workflow = getattr(args, 'workflow', 'quick') or 'quick'
+
+    if workflow == "all":
+        # Show all workflows
+        workflows_to_show = ["quick", "staging", "series", "reviewers"]
+    else:
+        workflows_to_show = [workflow]
+
+    output = []
+    output.append("=" * 60)
+    output.append("GERRIT-COMMENTS EXAMPLES")
+    output.append("=" * 60)
+    output.append("")
+
+    for wf_name in workflows_to_show:
+        wf = WORKFLOW_EXAMPLES[wf_name]
+        output.append(f"## {wf['title']}")
+        output.append("")
+        output.append(wf['description'])
+        output.append("")
+
+        for cmd, desc in wf['examples']:
+            output.append(f"  $ {cmd}")
+            output.append(f"    # {desc}")
+        output.append("")
+
+    output.append("-" * 60)
+    output.append("Tips:")
+    output.append("  - Use 'gc explain <command>' for detailed help on any command")
+    output.append("  - URL can be a full Gerrit URL or just a change number")
+    output.append("  - Most commands support --pretty for readable JSON output")
+    output.append("")
+    output.append("Workflows: quick, staging, series, reviewers, all")
+    output.append("  $ gc examples staging    # Show staging workflow")
+    output.append("  $ gc examples all        # Show all workflows")
+
+    print("\n".join(output))
+
+
 def main():
     """Main entry point."""
     from .parsers import setup_parsers
@@ -1822,6 +1914,7 @@ def main():
         'remove_reviewer': cmd_remove_reviewer,
         'find_user': cmd_find_user,
         'explain': cmd_explain,
+        'examples': cmd_examples,
         'done': cmd_done,
         'ack': cmd_ack,
     }
