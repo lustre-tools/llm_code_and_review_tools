@@ -6,7 +6,7 @@ import pytest
 import responses
 from click.testing import CliRunner
 
-from jira_tool.cli import _normalize_comment, _normalize_comments, _normalize_issue, main
+from jira_tool.cli import _normalize_comment, _normalize_comments, _normalize_issue, extract_issue_key, extract_field, main
 
 
 @pytest.fixture
@@ -20,6 +20,61 @@ def mock_env(monkeypatch):
     """Set up mock environment variables."""
     monkeypatch.setenv("JIRA_SERVER", "https://jira.example.com")
     monkeypatch.setenv("JIRA_TOKEN", "test-token")
+
+
+class TestExtractField:
+    """Tests for extract_field function."""
+
+    def test_simple_field(self):
+        """Should extract top-level field."""
+        data = {"key": "PROJ-123", "status": "Open"}
+        assert extract_field(data, "key") == "PROJ-123"
+        assert extract_field(data, "status") == "Open"
+
+    def test_nested_field(self):
+        """Should extract nested field with dot notation."""
+        data = {"assignee": {"name": "jdoe", "displayName": "John Doe"}}
+        assert extract_field(data, "assignee.name") == "jdoe"
+        assert extract_field(data, "assignee.displayName") == "John Doe"
+
+    def test_missing_field(self):
+        """Should return None for missing field."""
+        data = {"key": "PROJ-123"}
+        assert extract_field(data, "status") is None
+        assert extract_field(data, "assignee.name") is None
+
+
+class TestExtractIssueKey:
+    """Tests for extract_issue_key function."""
+
+    def test_bare_key(self):
+        """Should return bare key unchanged."""
+        assert extract_issue_key("PROJ-123") == "PROJ-123"
+        assert extract_issue_key("LU-19839") == "LU-19839"
+        assert extract_issue_key("ABC_DEF-1") == "ABC_DEF-1"
+
+    def test_browse_url(self):
+        """Should extract key from browse URL."""
+        assert extract_issue_key("https://jira.example.com/browse/PROJ-123") == "PROJ-123"
+        assert extract_issue_key("https://jira.whamcloud.com/browse/LU-19839") == "LU-19839"
+        assert extract_issue_key("http://jira.example.com/browse/TEST-1") == "TEST-1"
+
+    def test_browse_url_with_query(self):
+        """Should extract key from browse URL with query params."""
+        assert extract_issue_key("https://jira.example.com/browse/PROJ-123?focusedCommentId=123") == "PROJ-123"
+
+    def test_rest_api_url(self):
+        """Should extract key from REST API URL."""
+        assert extract_issue_key("https://jira.example.com/rest/api/2/issue/PROJ-123") == "PROJ-123"
+
+    def test_fallback_pattern_match(self):
+        """Should find key pattern anywhere in string."""
+        assert extract_issue_key("some text PROJ-456 more text") == "PROJ-456"
+
+    def test_invalid_returns_original(self):
+        """Should return original if no key found."""
+        assert extract_issue_key("not-a-key") == "not-a-key"
+        assert extract_issue_key("lowercase-123") == "lowercase-123"
 
 
 class TestNormalizeIssue:
@@ -215,6 +270,42 @@ class TestCLIIssueGet:
         assert result.exit_code == 0
         assert "\n" in result.output
         assert "  " in result.output
+
+    @responses.activate
+    def test_issue_get_output_field(self, runner, mock_env):
+        """Should output only requested field as plain text."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={
+                "key": "PROJ-123",
+                "fields": {"status": {"name": "Open"}, "summary": "Test issue"},
+            },
+            status=200,
+        )
+
+        result = runner.invoke(main, ["issue", "get", "PROJ-123", "--output", "key"])
+        assert result.exit_code == 0
+        assert result.output.strip() == "PROJ-123"
+        # Should not be JSON
+        assert "{" not in result.output
+
+    @responses.activate
+    def test_issue_get_output_status(self, runner, mock_env):
+        """Should output status field."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={
+                "key": "PROJ-123",
+                "fields": {"status": {"name": "In Progress"}},
+            },
+            status=200,
+        )
+
+        result = runner.invoke(main, ["issue", "get", "PROJ-123", "--output", "status"])
+        assert result.exit_code == 0
+        assert result.output.strip() == "In Progress"
 
 
 class TestCLIIssueComments:
@@ -437,6 +528,64 @@ class TestCLIIssueAttachments:
         assert data["ok"] is True
         assert data["data"]["total"] == 1
         assert data["data"]["attachments"][0]["filename"] == "test.txt"
+
+
+class TestCLIIssueLinks:
+    """Tests for 'jira issue links' command."""
+
+    @responses.activate
+    def test_links_list(self, runner, mock_env):
+        """Should list issue links."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={
+                "key": "PROJ-123",
+                "fields": {
+                    "issuelinks": [
+                        {
+                            "type": {
+                                "name": "Blocks",
+                                "inward": "is blocked by",
+                                "outward": "blocks",
+                            },
+                            "outwardIssue": {
+                                "key": "PROJ-456",
+                                "fields": {
+                                    "summary": "Blocked issue",
+                                    "status": {"name": "Open"},
+                                },
+                            },
+                        },
+                        {
+                            "type": {
+                                "name": "Relates",
+                                "inward": "relates to",
+                                "outward": "relates to",
+                            },
+                            "inwardIssue": {
+                                "key": "PROJ-789",
+                                "fields": {
+                                    "summary": "Related issue",
+                                    "status": {"name": "Closed"},
+                                },
+                            },
+                        },
+                    ]
+                },
+            },
+            status=200,
+        )
+
+        result = runner.invoke(main, ["issue", "links", "PROJ-123"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["total"] == 2
+        assert data["data"]["links"][0]["relationship"] == "blocks"
+        assert data["data"]["links"][0]["issue_key"] == "PROJ-456"
+        assert data["data"]["links"][1]["relationship"] == "relates to"
+        assert data["data"]["links"][1]["issue_key"] == "PROJ-789"
 
 
 class TestCLIAttachmentGet:
@@ -689,6 +838,111 @@ class TestCLIIssueCreate:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["data"]["key"] == "PROJ-125"
+
+
+class TestCLIIssueUpdate:
+    """Tests for 'jira issue update' command."""
+
+    @responses.activate
+    def test_update_issue_summary(self, runner, mock_env):
+        """Should update issue summary."""
+        # Mock the GET before update
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={
+                "key": "PROJ-123",
+                "fields": {"summary": "Old summary", "status": {"name": "Open"}},
+            },
+            status=200,
+        )
+        # Mock the PUT update
+        responses.add(
+            responses.PUT,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            status=204,
+        )
+        # Mock the GET after update
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={
+                "key": "PROJ-123",
+                "fields": {"summary": "New summary", "status": {"name": "Open"}},
+            },
+            status=200,
+        )
+
+        result = runner.invoke(main, ["issue", "update", "PROJ-123", "--summary", "New summary"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["issue_key"] == "PROJ-123"
+        assert "summary" in data["data"]["updated_fields"]
+
+    @responses.activate
+    def test_update_issue_assignee(self, runner, mock_env):
+        """Should update issue assignee."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"assignee": None}},
+            status=200,
+        )
+        responses.add(
+            responses.PUT,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            status=204,
+        )
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"assignee": {"displayName": "John Doe"}}},
+            status=200,
+        )
+
+        result = runner.invoke(main, ["issue", "update", "PROJ-123", "--assignee", "jdoe"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert "assignee" in data["data"]["updated_fields"]
+        assert data["data"]["assignee"] == "John Doe"
+
+    def test_update_no_fields_error(self, runner, mock_env):
+        """Should error when no fields specified."""
+        result = runner.invoke(main, ["issue", "update", "PROJ-123"])
+        assert result.exit_code == 4  # INVALID_INPUT
+        data = json.loads(result.output)
+        assert data["ok"] is False
+        assert "No fields specified" in data["error"]["message"]
+
+    @responses.activate
+    def test_update_issue_labels(self, runner, mock_env):
+        """Should update issue labels."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"labels": ["old"]}},
+            status=200,
+        )
+        responses.add(
+            responses.PUT,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            status=204,
+        )
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"labels": ["new", "labels"]}},
+            status=200,
+        )
+
+        result = runner.invoke(main, ["issue", "update", "PROJ-123", "--labels", "new,labels"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert "labels" in data["data"]["updated_fields"]
+        assert data["data"]["labels"] == ["new", "labels"]
 
 
 class TestCLIConfigSample:

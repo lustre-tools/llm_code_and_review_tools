@@ -1,7 +1,9 @@
 """CLI entry point for JIRA tool."""
 
+import re
 import sys
 from typing import Any
+from urllib.parse import urlparse
 
 import click
 
@@ -17,6 +19,86 @@ pass_config = click.make_pass_decorator(JiraConfig, ensure=True)
 def output_result(envelope: dict[str, Any], pretty: bool) -> None:
     """Output result to stdout."""
     click.echo(format_json(envelope, pretty=pretty))
+
+
+def extract_field(data: dict[str, Any], field_path: str) -> Any:
+    """
+    Extract a field from data using dot notation.
+
+    Args:
+        data: Data dictionary
+        field_path: Field path (e.g., "key", "status", "assignee.name")
+
+    Returns:
+        Field value or None if not found
+    """
+    parts = field_path.split(".")
+    value = data
+    for part in parts:
+        if isinstance(value, dict) and part in value:
+            value = value[part]
+        else:
+            return None
+    return value
+
+
+def output_field(data: dict[str, Any], field_path: str) -> None:
+    """Output a single field value to stdout (plain text, no JSON)."""
+    value = extract_field(data, field_path)
+    if value is not None:
+        click.echo(str(value))
+
+
+# Pattern for JIRA issue keys: PROJECT-123
+ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
+
+
+def extract_issue_key(key_or_url: str) -> str:
+    """
+    Extract issue key from a key or URL.
+
+    Accepts:
+        - Bare key: "PROJ-123" -> "PROJ-123"
+        - Browse URL: "https://jira.example.com/browse/PROJ-123" -> "PROJ-123"
+        - REST URL: "https://jira.example.com/rest/api/2/issue/PROJ-123" -> "PROJ-123"
+
+    Args:
+        key_or_url: Issue key or JIRA URL
+
+    Returns:
+        Extracted issue key
+
+    Raises:
+        ValueError: If the input doesn't contain a valid issue key
+    """
+    # If it looks like an issue key, return it
+    if ISSUE_KEY_PATTERN.match(key_or_url):
+        return key_or_url
+
+    # Try to parse as URL
+    try:
+        parsed = urlparse(key_or_url)
+        if parsed.scheme in ("http", "https") and parsed.path:
+            # Handle /browse/PROJ-123 URLs
+            if "/browse/" in parsed.path:
+                key = parsed.path.split("/browse/")[-1].split("/")[0].split("?")[0]
+                if ISSUE_KEY_PATTERN.match(key):
+                    return key
+            # Handle /rest/api/.../issue/PROJ-123 URLs
+            if "/issue/" in parsed.path:
+                key = parsed.path.split("/issue/")[-1].split("/")[0].split("?")[0]
+                if ISSUE_KEY_PATTERN.match(key):
+                    return key
+    except Exception:
+        pass
+
+    # Fallback: try to find an issue key pattern anywhere in the string
+    match = re.search(r"[A-Z][A-Z0-9_]+-\d+", key_or_url)
+    if match:
+        return match.group(0)
+
+    # If nothing worked, return the original (let JIRA API report the error)
+    return key_or_url
 
 
 def handle_error(error: JiraToolError, command: str, pretty: bool) -> int:
@@ -78,26 +160,35 @@ def issue() -> None:
 @issue.command("get")
 @click.argument("key")
 @click.option("--fields", help="Comma-separated list of fields to return")
+@click.option("--output", "output_field_name", help="Output only this field (plain text, no JSON envelope)")
 @click.pass_context
-def issue_get(ctx: click.Context, key: str, fields: str | None) -> None:
+def issue_get(ctx: click.Context, key: str, fields: str | None, output_field_name: str | None) -> None:
     """
     Get issue details.
 
-    KEY is the issue key (e.g., PROJ-123).
+    KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
 
     Returns issue summary, description, status, and other core fields.
+
+    Use --output to extract a single field (e.g., --output key, --output status).
     """
     command = "issue.get"
     pretty = ctx.obj.get("pretty", False)
 
     try:
         client = get_client(ctx)
+        key = extract_issue_key(key)
 
         field_list = fields.split(",") if fields else None
         raw_issue = client.get_issue(key, fields=field_list)
 
         # Normalize output to agent-friendly format
         issue_data = _normalize_issue(raw_issue)
+
+        # If --output specified, just output that field
+        if output_field_name:
+            output_field(issue_data, output_field_name)
+            sys.exit(ExitCode.SUCCESS)
 
         envelope = success_response(issue_data, command)
         output_result(envelope, pretty)
@@ -115,26 +206,31 @@ def issue_get(ctx: click.Context, key: str, fields: str | None) -> None:
 @click.option("--offset", default=0, help="Skip first N comments (default: 0)")
 @click.option("--all", "fetch_all", is_flag=True, help="Fetch all comments (use with caution)")
 @click.option("--summary-only", is_flag=True, help="Only return comment summary, not content")
+@click.option("--newest-first", is_flag=True, help="Sort by newest first (default is oldest first)")
 @click.pass_context
-def issue_comments(ctx: click.Context, key: str, limit: int, offset: int, fetch_all: bool, summary_only: bool) -> None:
+def issue_comments(
+    ctx: click.Context, key: str, limit: int, offset: int, fetch_all: bool, summary_only: bool, newest_first: bool
+) -> None:
     """
     Get comments for an issue.
 
-    KEY is the issue key (e.g., PROJ-123).
+    KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
 
-    By default returns the last 5 comments to manage LLM context size.
-    Use --limit and --offset for pagination.
+    By default returns comments in chronological order (oldest first).
+    Use --newest-first to reverse the order.
     """
     command = "issue.comments"
     pretty = ctx.obj.get("pretty", False)
 
     try:
         client = get_client(ctx)
+        key = extract_issue_key(key)
 
         if fetch_all:
             limit = 1000  # JIRA max
 
-        raw_comments = client.get_comments(key, start_at=offset, max_results=limit)
+        order_by = "-created" if newest_first else "created"
+        raw_comments = client.get_comments(key, start_at=offset, max_results=limit, order_by=order_by)
 
         # Build response data
         comments_data = _normalize_comments(raw_comments, summary_only=summary_only)
@@ -161,14 +257,17 @@ def issue_comments(ctx: click.Context, key: str, limit: int, offset: int, fetch_
 @click.option("--limit", default=20, help="Maximum results to return (default: 20)")
 @click.option("--offset", default=0, help="Skip first N results (default: 0)")
 @click.option("--fields", help="Comma-separated list of fields to return")
+@click.option("--output", "output_field_name", help="Output only this field from each issue (one per line)")
 @click.pass_context
-def issue_search(ctx: click.Context, jql: str, limit: int, offset: int, fields: str | None) -> None:
+def issue_search(ctx: click.Context, jql: str, limit: int, offset: int, fields: str | None, output_field_name: str | None) -> None:
     """
     Search for issues using JQL.
 
     JQL is the JIRA Query Language query string.
 
     Example: jira issue search "project = PROJ AND status = Open"
+
+    Use --output to extract a field from each result (e.g., --output key).
     """
     command = "issue.search"
     pretty = ctx.obj.get("pretty", False)
@@ -180,9 +279,19 @@ def issue_search(ctx: click.Context, jql: str, limit: int, offset: int, fields: 
         raw_results = client.search_issues(jql, fields=field_list, start_at=offset, max_results=limit)
 
         # Normalize results
+        issues = [_normalize_issue(issue) for issue in raw_results.get("issues", [])]
+
+        # If --output specified, output that field from each issue
+        if output_field_name:
+            for issue in issues:
+                value = extract_field(issue, output_field_name)
+                if value is not None:
+                    click.echo(str(value))
+            sys.exit(ExitCode.SUCCESS)
+
         search_data = {
             "jql": jql,
-            "issues": [_normalize_issue(issue) for issue in raw_results.get("issues", [])],
+            "issues": issues,
             "pagination": {
                 "offset": raw_results.get("startAt", offset),
                 "limit": raw_results.get("maxResults", limit),
@@ -209,7 +318,7 @@ def issue_comment_add(ctx: click.Context, key: str, body: str) -> None:
     """
     Add a comment to an issue.
 
-    KEY is the issue key (e.g., PROJ-123).
+    KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
     BODY is the comment text.
     """
     command = "issue.comment"
@@ -217,6 +326,7 @@ def issue_comment_add(ctx: click.Context, key: str, body: str) -> None:
 
     try:
         client = get_client(ctx)
+        key = extract_issue_key(key)
 
         raw_comment = client.add_comment(key, body)
 
@@ -243,13 +353,14 @@ def issue_transitions_list(ctx: click.Context, key: str) -> None:
     """
     List available transitions for an issue.
 
-    KEY is the issue key (e.g., PROJ-123).
+    KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
     """
     command = "issue.transitions"
     pretty = ctx.obj.get("pretty", False)
 
     try:
         client = get_client(ctx)
+        key = extract_issue_key(key)
 
         raw_transitions = client.get_transitions(key)
 
@@ -285,7 +396,7 @@ def issue_transition(ctx: click.Context, key: str, transition_id: str, comment: 
     """
     Transition an issue to a new state.
 
-    KEY is the issue key (e.g., PROJ-123).
+    KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
     TRANSITION_ID is the transition ID (use 'transitions' command to list available).
     """
     command = "issue.transition"
@@ -293,6 +404,7 @@ def issue_transition(ctx: click.Context, key: str, transition_id: str, comment: 
 
     try:
         client = get_client(ctx)
+        key = extract_issue_key(key)
 
         # Get current status before transition
         issue_before = client.get_issue(key, fields=["status"])
@@ -364,6 +476,96 @@ def issue_create(ctx: click.Context, project: str, issue_type: str, summary: str
         sys.exit(handle_error(e, command, pretty))
 
 
+@issue.command("update")
+@click.argument("key")
+@click.option("--summary", help="New issue summary")
+@click.option("--description", help="New issue description")
+@click.option("--assignee", help="New assignee username (use empty string to unassign)")
+@click.option("--priority", help="New priority name (e.g., High, Medium, Low)")
+@click.option("--labels", help="Comma-separated list of labels (replaces existing)")
+@click.pass_context
+def issue_update(
+    ctx: click.Context,
+    key: str,
+    summary: str | None,
+    description: str | None,
+    assignee: str | None,
+    priority: str | None,
+    labels: str | None,
+) -> None:
+    """
+    Update an existing issue.
+
+    KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
+
+    At least one field must be specified to update.
+    """
+    command = "issue.update"
+    pretty = ctx.obj.get("pretty", False)
+
+    try:
+        client = get_client(ctx)
+        key = extract_issue_key(key)
+
+        # Parse labels if provided
+        label_list = [l.strip() for l in labels.split(",")] if labels else None
+
+        # Check if any updates are requested
+        if all(v is None for v in [summary, description, assignee, priority, label_list]):
+            from .errors import InvalidInputError, ErrorCode
+            raise InvalidInputError(
+                code=ErrorCode.INVALID_INPUT,
+                message="No fields specified to update. Use --summary, --description, --assignee, --priority, or --labels.",
+            )
+
+        # Get current issue state for comparison
+        issue_before = client.get_issue(key, fields=["summary", "status", "assignee", "priority", "labels"])
+
+        # Perform update
+        client.update_issue(
+            key=key,
+            summary=summary,
+            description=description,
+            assignee=assignee,
+            priority=priority,
+            labels=label_list,
+        )
+
+        # Get updated issue
+        issue_after = client.get_issue(key, fields=["summary", "status", "assignee", "priority", "labels"])
+
+        update_data = {
+            "issue_key": key,
+            "updated_fields": [],
+        }
+
+        # Track what changed
+        if summary is not None:
+            update_data["updated_fields"].append("summary")
+        if description is not None:
+            update_data["updated_fields"].append("description")
+        if assignee is not None:
+            update_data["updated_fields"].append("assignee")
+            update_data["assignee"] = issue_after.get("fields", {}).get("assignee", {})
+            if update_data["assignee"]:
+                update_data["assignee"] = update_data["assignee"].get("displayName")
+        if priority is not None:
+            update_data["updated_fields"].append("priority")
+            update_data["priority"] = issue_after.get("fields", {}).get("priority", {}).get("name")
+        if label_list is not None:
+            update_data["updated_fields"].append("labels")
+            update_data["labels"] = issue_after.get("fields", {}).get("labels", [])
+
+        envelope = success_response(update_data, command)
+        output_result(envelope, pretty)
+        sys.exit(ExitCode.SUCCESS)
+
+    except JiraToolError as e:
+        sys.exit(handle_error(e, command, pretty))
+    except ConfigError as e:
+        sys.exit(handle_error(e, command, pretty))
+
+
 @issue.command("attachments")
 @click.argument("key")
 @click.pass_context
@@ -371,7 +573,7 @@ def issue_attachments(ctx: click.Context, key: str) -> None:
     """
     List attachments for an issue.
 
-    KEY is the issue key (e.g., PROJ-123).
+    KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
 
     Returns attachment metadata including filename, size, and content URL.
     """
@@ -380,6 +582,7 @@ def issue_attachments(ctx: click.Context, key: str) -> None:
 
     try:
         client = get_client(ctx)
+        key = extract_issue_key(key)
 
         # Get issue with attachment field
         raw_issue = client.get_issue(key, fields=["attachment"])
@@ -393,6 +596,69 @@ def issue_attachments(ctx: click.Context, key: str) -> None:
         }
 
         envelope = success_response(attachments_data, command)
+        output_result(envelope, pretty)
+        sys.exit(ExitCode.SUCCESS)
+
+    except JiraToolError as e:
+        sys.exit(handle_error(e, command, pretty))
+    except ConfigError as e:
+        sys.exit(handle_error(e, command, pretty))
+
+
+@issue.command("links")
+@click.argument("key")
+@click.pass_context
+def issue_links(ctx: click.Context, key: str) -> None:
+    """
+    List issue links (relationships to other issues).
+
+    KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
+
+    Shows relationships like: blocks, is blocked by, relates to, duplicates, etc.
+    """
+    command = "issue.links"
+    pretty = ctx.obj.get("pretty", False)
+
+    try:
+        client = get_client(ctx)
+        key = extract_issue_key(key)
+
+        # Get issue with issuelinks field
+        raw_issue = client.get_issue(key, fields=["issuelinks"])
+        raw_links = raw_issue.get("fields", {}).get("issuelinks", [])
+
+        # Normalize links
+        links = []
+        for link in raw_links:
+            link_type = link.get("type", {})
+            # Each link has either inwardIssue or outwardIssue
+            if "inwardIssue" in link:
+                linked_issue = link["inwardIssue"]
+                direction = "inward"
+                relationship = link_type.get("inward", "related to")
+            elif "outwardIssue" in link:
+                linked_issue = link["outwardIssue"]
+                direction = "outward"
+                relationship = link_type.get("outward", "relates to")
+            else:
+                continue
+
+            links.append({
+                "direction": direction,
+                "relationship": relationship,
+                "link_type": link_type.get("name"),
+                "issue_key": linked_issue.get("key"),
+                "issue_summary": linked_issue.get("fields", {}).get("summary"),
+                "issue_status": linked_issue.get("fields", {}).get("status", {}).get("name"),
+            })
+
+        links_data = {
+            "issue_key": key,
+            "total": len(links),
+            "links": links,
+        }
+
+        envelope = success_response(links_data, command)
         output_result(envelope, pretty)
         sys.exit(ExitCode.SUCCESS)
 

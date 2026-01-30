@@ -266,7 +266,7 @@ class JiraClient:
         key: str,
         start_at: int = 0,
         max_results: int = 50,
-        order_by: str = "-created",
+        order_by: str = "created",
     ) -> dict[str, Any]:
         """
         Get comments for an issue.
@@ -275,7 +275,7 @@ class JiraClient:
             key: Issue key
             start_at: Starting index for pagination
             max_results: Maximum comments to return
-            order_by: Sort order (default: "-created" for newest first)
+            order_by: Sort order (default: "created" for oldest first, use "-created" for newest first)
 
         Returns:
             Comments data with pagination info
@@ -395,6 +395,53 @@ class JiraClient:
             body["fields"]["description"] = description
 
         return self._request("POST", "issue", json_data=body)
+
+    def update_issue(
+        self,
+        key: str,
+        summary: str | None = None,
+        description: str | None = None,
+        assignee: str | None = None,
+        priority: str | None = None,
+        labels: list[str] | None = None,
+        fields: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Update an existing issue.
+
+        Args:
+            key: Issue key (e.g., "PROJ-123")
+            summary: New summary (optional)
+            description: New description (optional)
+            assignee: New assignee username (optional, use "" to unassign)
+            priority: New priority name (optional)
+            labels: New labels list (optional, replaces existing)
+            fields: Additional fields to update (optional)
+
+        Returns:
+            Empty dict on success (JIRA returns 204)
+        """
+        update_fields: dict[str, Any] = {}
+
+        if summary is not None:
+            update_fields["summary"] = summary
+        if description is not None:
+            update_fields["description"] = description
+        if assignee is not None:
+            # Empty string means unassign, otherwise set to username
+            update_fields["assignee"] = {"name": assignee} if assignee else None
+        if priority is not None:
+            update_fields["priority"] = {"name": priority}
+        if labels is not None:
+            update_fields["labels"] = labels
+        if fields:
+            update_fields.update(fields)
+
+        if not update_fields:
+            return {}  # Nothing to update
+
+        body = {"fields": update_fields}
+        return self._request("PUT", f"issue/{key}", json_data=body, context=key)
 
     # =========================================================================
     # Server Info (for connectivity tests)
