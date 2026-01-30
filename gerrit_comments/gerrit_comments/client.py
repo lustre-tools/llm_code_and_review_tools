@@ -311,3 +311,94 @@ class GerritCommentsClient:
             Full URL to the change
         """
         return f"{self.url}/c/{project}/+/{change_number}"
+
+    def get_reviewers(self, change_number: int) -> list[dict[str, Any]]:
+        """Get all reviewers for a change.
+
+        Args:
+            change_number: The change number
+
+        Returns:
+            List of reviewer account dicts
+        """
+        return self.rest.get(f"/changes/{change_number}/reviewers")
+
+    def add_reviewer(
+        self,
+        change_number: int,
+        reviewer: str,
+        state: str = "REVIEWER",
+    ) -> dict[str, Any]:
+        """Add a reviewer to a change.
+
+        Args:
+            change_number: The change number
+            reviewer: Account ID, email, or username of the reviewer
+            state: "REVIEWER" (default) or "CC"
+
+        Returns:
+            Response with added reviewer info
+        """
+        return self.rest.post(
+            f"/changes/{change_number}/reviewers",
+            json={"reviewer": reviewer, "state": state},
+        )
+
+    def remove_reviewer(self, change_number: int, reviewer: str) -> None:
+        """Remove a reviewer from a change.
+
+        Args:
+            change_number: The change number
+            reviewer: Account ID, email, or username of the reviewer
+        """
+        self.rest.delete(f"/changes/{change_number}/reviewers/{reviewer}")
+
+    def suggest_accounts(
+        self,
+        query: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Suggest accounts matching a query string (fuzzy search).
+
+        Args:
+            query: Search string (name, email, or username)
+            limit: Maximum number of results
+
+        Returns:
+            List of matching account dicts with _account_id, name, email, username
+        """
+        encoded_query = quote(query, safe="")
+        return self.rest.get(f"/accounts/?suggest&q={encoded_query}&n={limit}")
+
+    def search_accounts(
+        self,
+        name: Optional[str] = None,
+        email: Optional[str] = None,
+        username: Optional[str] = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Search for accounts by name, email, or username.
+
+        Args:
+            name: Search by display name
+            email: Search by email
+            username: Search by username
+            limit: Maximum number of results
+
+        Returns:
+            List of matching account dicts
+        """
+        parts = []
+        if name:
+            parts.append(f"name:{name}")
+        if email:
+            parts.append(f"email:{email}")
+        if username:
+            parts.append(f"username:{username}")
+
+        if not parts:
+            return []
+
+        query = " OR ".join(parts)
+        encoded_query = quote(query, safe="")
+        return self.rest.get(f"/accounts/?q={encoded_query}&n={limit}")

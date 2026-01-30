@@ -492,6 +492,94 @@ def add_skip_reintegration_parser(subparsers):
     return parser
 
 
+def add_reviewers_parser(subparsers):
+    """Add the 'reviewers' subcommand parser."""
+    parser = subparsers.add_parser(
+        "reviewers",
+        help="List reviewers on a change",
+        description="Show all reviewers and their votes on a Gerrit change.",
+    )
+    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
+def add_add_reviewer_parser(subparsers):
+    """Add the 'add-reviewer' subcommand parser."""
+    parser = subparsers.add_parser(
+        "add-reviewer",
+        help="Add a reviewer to a change (supports fuzzy name matching)",
+        description="Add a reviewer to a Gerrit change. Supports fuzzy matching "
+                    "on names - just provide a partial name and it will find matches.",
+    )
+    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument(
+        "name",
+        help="Reviewer name, email, or username (fuzzy matching supported)",
+    )
+    parser.add_argument(
+        "--cc",
+        action="store_true",
+        help="Add as CC instead of reviewer",
+    )
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
+def add_remove_reviewer_parser(subparsers):
+    """Add the 'remove-reviewer' subcommand parser."""
+    parser = subparsers.add_parser(
+        "remove-reviewer",
+        help="Remove a reviewer from a change",
+        description="Remove a reviewer from a Gerrit change.",
+    )
+    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument(
+        "name",
+        help="Reviewer name, email, or username",
+    )
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
+def add_find_user_parser(subparsers):
+    """Add the 'find-user' subcommand parser."""
+    parser = subparsers.add_parser(
+        "find-user",
+        help="Search for users by name (fuzzy matching)",
+        description="Search for Gerrit users by name, email, or username. "
+                    "Useful for finding the exact username before adding as reviewer.",
+    )
+    parser.add_argument(
+        "query",
+        help="Name, email, or username to search for",
+    )
+    parser.add_argument(
+        "--limit", "-n",
+        type=int,
+        default=10,
+        help="Maximum number of results (default: 10)",
+    )
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
 def setup_parsers(subparsers, handlers):
     """Set up all subparsers and bind them to command handlers.
 
@@ -542,3 +630,10 @@ def setup_parsers(subparsers, handlers):
         func=handlers['continue_reintegration'])
     add_skip_reintegration_parser(subparsers).set_defaults(
         func=handlers['skip_reintegration'])
+
+    # Reviewer commands
+    add_reviewers_parser(subparsers).set_defaults(func=handlers['reviewers'])
+    add_add_reviewer_parser(subparsers).set_defaults(func=handlers['add_reviewer'])
+    add_remove_reviewer_parser(subparsers).set_defaults(
+        func=handlers['remove_reviewer'])
+    add_find_user_parser(subparsers).set_defaults(func=handlers['find_user'])
