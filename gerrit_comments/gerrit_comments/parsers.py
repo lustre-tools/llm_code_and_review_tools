@@ -580,6 +580,21 @@ def add_find_user_parser(subparsers):
     return parser
 
 
+def add_explain_parser(subparsers):
+    """Add the 'explain' subcommand parser."""
+    parser = subparsers.add_parser(
+        "explain",
+        help="Show detailed usage and examples for a command",
+        description="Get detailed documentation with examples for a specific command. "
+                    "This helps LLMs and users understand typical workflows and patterns.",
+    )
+    parser.add_argument(
+        "command_name",
+        help="Command to explain (e.g., 'add-reviewer', 'stage', 'review-series')",
+    )
+    return parser
+
+
 def setup_parsers(subparsers, handlers):
     """Set up all subparsers and bind them to command handlers.
 
@@ -637,3 +652,6 @@ def setup_parsers(subparsers, handlers):
     add_remove_reviewer_parser(subparsers).set_defaults(
         func=handlers['remove_reviewer'])
     add_find_user_parser(subparsers).set_defaults(func=handlers['find_user'])
+
+    # Help/documentation commands
+    add_explain_parser(subparsers).set_defaults(func=handlers['explain'])
