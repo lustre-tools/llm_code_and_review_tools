@@ -40,6 +40,10 @@ _load_env_file()
 # Config file location for error messages
 CONFIG_PATH = Path.home() / ".config" / "gerrit-comments" / ".env"
 
+# Default Gerrit URL for when only a change number is provided
+# Falls back to GERRIT_URL environment variable
+DEFAULT_GERRIT_URL: str | None = os.environ.get("GERRIT_URL")
+
 
 class GerritConfigError(Exception):
     """Raised when Gerrit credentials are not configured."""
@@ -109,6 +113,11 @@ class GerritCommentsClient:
         # Check if it's just a number
         if url.isdigit():
             base = default_base_url or DEFAULT_GERRIT_URL
+            if not base:
+                raise ValueError(
+                    f"Could not parse Gerrit URL or change number: {url}. "
+                    "Set GERRIT_URL environment variable to use change numbers directly."
+                )
             return base, int(url)
 
         # Pattern for /c/project/+/number style URLs

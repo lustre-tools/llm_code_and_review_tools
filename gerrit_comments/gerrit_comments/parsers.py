@@ -14,7 +14,7 @@ def add_extract_parser(subparsers):
         help="Get comments from a Gerrit change",
         description="Get unresolved comments from a Gerrit change URL",
     )
-    parser.add_argument("url", help="Gerrit change URL")
+    parser.add_argument("url", help="Gerrit change URL or number")
     parser.add_argument(
         "--all", "-a",
         action="store_true",
@@ -46,7 +46,7 @@ def add_reply_parser(subparsers):
         help="Reply to a comment",
         description="Reply to a comment thread",
     )
-    parser.add_argument("url", help="Gerrit change URL")
+    parser.add_argument("url", help="Gerrit change URL or number")
     parser.add_argument(
         "thread_index",
         type=int,
@@ -87,7 +87,7 @@ def add_batch_parser(subparsers):
         help="Reply to multiple comments from JSON file",
         description="Post multiple replies from a JSON file",
     )
-    parser.add_argument("url", help="Gerrit change URL")
+    parser.add_argument("url", help="Gerrit change URL or number")
     parser.add_argument(
         "file",
         help="JSON file with replies [{thread_index, message, mark_resolved}]",
@@ -107,7 +107,7 @@ def add_review_parser(subparsers):
         help="Get code changes for review",
         description="Get diffs and changes from a Gerrit change for code review",
     )
-    parser.add_argument("url", help="Gerrit change URL")
+    parser.add_argument("url", help="Gerrit change URL or number")
     parser.add_argument(
         "--pretty", "-p",
         action="store_true",
@@ -161,7 +161,7 @@ def add_series_comments_parser(subparsers):
         help="Get comments for all patches in a series",
         description="Extract comments from all patches in a Gerrit series",
     )
-    parser.add_argument("url", help="Gerrit change URL (any patch in the series)")
+    parser.add_argument("url", help="Gerrit change URL or number (any patch in the series)")
     parser.add_argument(
         "--pretty", "-p",
         action="store_true",
@@ -194,7 +194,7 @@ def add_review_series_parser(subparsers):
         description="List all patches in a series and show the AI review prompt. "
                     "This is the main entry point for AI-assisted patch series review.",
     )
-    parser.add_argument("url", help="Gerrit change URL (any patch in the series)")
+    parser.add_argument("url", help="Gerrit change URL or number (any patch in the series)")
     parser.add_argument(
         "--pretty", "-p",
         action="store_true",
@@ -235,7 +235,7 @@ def add_interactive_parser(subparsers):
         help="Interactive mode for reviewing comments",
         description="Review and reply to comments interactively",
     )
-    parser.add_argument("url", help="Gerrit change URL")
+    parser.add_argument("url", help="Gerrit change URL or number")
     parser.add_argument(
         "--vim",
         action="store_true",
@@ -251,7 +251,7 @@ def add_series_status_parser(subparsers):
         help="Show status of all patches in a series",
         description="Display status, comments, and review state for each patch",
     )
-    parser.add_argument("url", help="Gerrit change URL (any patch in series)")
+    parser.add_argument("url", help="Gerrit change URL or number (any patch in series)")
     parser.add_argument(
         "--pretty", "-p",
         action="store_true",

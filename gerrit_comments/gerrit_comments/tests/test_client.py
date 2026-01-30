@@ -56,6 +56,43 @@ class TestGerritCommentsClient:
         with pytest.raises(ValueError, match="Could not parse Gerrit URL"):
             GerritCommentsClient.parse_gerrit_url(url)
 
+    def test_parse_gerrit_url_change_number_only(self):
+        """Test parsing just a change number with explicit default URL."""
+        base_url, change_number = GerritCommentsClient.parse_gerrit_url(
+            "12345",
+            default_base_url="https://review.example.com"
+        )
+
+        assert base_url == "https://review.example.com"
+        assert change_number == 12345
+
+    def test_parse_gerrit_url_change_number_uses_env(self):
+        """Test parsing change number falls back to GERRIT_URL env var."""
+        with patch.dict('os.environ', {'GERRIT_URL': 'https://env.gerrit.com'}):
+            # Reload the module constant
+            import gerrit_comments.client as client_module
+            old_default = client_module.DEFAULT_GERRIT_URL
+            client_module.DEFAULT_GERRIT_URL = 'https://env.gerrit.com'
+
+            try:
+                base_url, change_number = GerritCommentsClient.parse_gerrit_url("67890")
+                assert base_url == "https://env.gerrit.com"
+                assert change_number == 67890
+            finally:
+                client_module.DEFAULT_GERRIT_URL = old_default
+
+    def test_parse_gerrit_url_change_number_no_default(self):
+        """Test parsing change number with no default URL raises error."""
+        import gerrit_comments.client as client_module
+        old_default = client_module.DEFAULT_GERRIT_URL
+        client_module.DEFAULT_GERRIT_URL = None
+
+        try:
+            with pytest.raises(ValueError, match="Could not parse Gerrit URL"):
+                GerritCommentsClient.parse_gerrit_url("12345")
+        finally:
+            client_module.DEFAULT_GERRIT_URL = old_default
+
     def test_parse_gerrit_url_http(self):
         """Test parsing HTTP URL."""
         url = "http://gerrit.local/c/project/+/999"
