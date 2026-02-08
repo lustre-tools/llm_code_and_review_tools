@@ -9,8 +9,9 @@ import click
 
 from .client import JiraClient
 from .config import DEFAULT_CONFIG_PATH, JiraConfig, create_sample_config, load_config
-from .envelope import error_response, format_json, success_response
-from .errors import ConfigError, ExitCode, JiraToolError
+from .describe import get_tool_description
+from .envelope import error_response, error_response_from_dict, format_json, success_response
+from .errors import ConfigError, ErrorCode, ExitCode, JiraToolError
 
 # Global options for all commands
 pass_config = click.make_pass_decorator(JiraConfig, ensure=True)
@@ -108,7 +109,31 @@ def handle_error(error: JiraToolError, command: str, pretty: bool) -> int:
     return error.exit_code
 
 
-@click.group()
+class JsonErrorGroup(click.Group):
+    """Click group that wraps usage errors in JSON envelope.
+
+    When an LLM passes invalid arguments, Click normally prints a
+    human-readable error to stderr and exits. This subclass catches
+    those errors and outputs a structured JSON error envelope to stdout
+    instead, maintaining the tool's JSON-only contract.
+    """
+
+    def invoke(self, ctx: click.Context) -> Any:
+        try:
+            return super().invoke(ctx)
+        except click.UsageError as e:
+            pretty = ctx.params.get("pretty", False)
+            envelope = error_response_from_dict(
+                code=ErrorCode.INVALID_INPUT,
+                message=str(e),
+                command="cli",
+                details={"hint": e.format_message()} if hasattr(e, "format_message") else None,
+            )
+            click.echo(format_json(envelope, pretty=pretty))
+            ctx.exit(ExitCode.INVALID_INPUT)
+
+
+@click.group(cls=JsonErrorGroup)
 @click.option("--server", envvar="JIRA_SERVER", help="JIRA server URL")
 @click.option("--token", envvar="JIRA_TOKEN", help="JIRA API token")
 @click.option("--config", "config_path", type=click.Path(), help="Config file path")
@@ -122,6 +147,7 @@ def main(
     JIRA CLI tool for LLM agents.
 
     All commands output JSON to stdout. Use --pretty for human-readable output.
+    Run 'jira describe' for machine-readable API documentation.
 
     Configuration priority:
     1. Command-line options (--server, --token)
@@ -144,6 +170,49 @@ def get_client(ctx: click.Context) -> JiraClient:
         token_override=ctx.obj.get("token_override"),
     )
     return JiraClient(config)
+
+
+# =============================================================================
+# Describe Command
+# =============================================================================
+
+
+@main.command("describe")
+@click.option("--command", "command_name", help="Show description for a specific command only")
+@click.pass_context
+def describe(ctx: click.Context, command_name: str | None) -> None:
+    """
+    Show machine-readable API description.
+
+    Returns a JSON document describing all available commands, their
+    arguments, expected output fields, and suggested next actions.
+    Use this to discover what the tool can do.
+    """
+    pretty = ctx.obj.get("pretty", False)
+    tool_desc = get_tool_description()
+
+    if command_name:
+        # Normalize: "issue.get" -> "issue get", or accept either form
+        normalized = command_name.replace(".", " ")
+        matching = [c for c in tool_desc.commands if c.name == normalized]
+        if not matching:
+            envelope = error_response_from_dict(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"Unknown command: {command_name}",
+                command="describe",
+                details={
+                    "available_commands": [c.name for c in tool_desc.commands],
+                },
+            )
+            output_result(envelope, pretty)
+            sys.exit(ExitCode.INVALID_INPUT)
+        data = matching[0].to_dict()
+    else:
+        data = tool_desc.to_dict()
+
+    envelope = success_response(data, "describe")
+    output_result(envelope, pretty)
+    sys.exit(ExitCode.SUCCESS)
 
 
 # =============================================================================
@@ -190,7 +259,17 @@ def issue_get(ctx: click.Context, key: str, fields: str | None, output_field_nam
             output_field(issue_data, output_field_name)
             sys.exit(ExitCode.SUCCESS)
 
-        envelope = success_response(issue_data, command)
+        issue_key = issue_data.get("key", key)
+        envelope = success_response(
+            issue_data,
+            command,
+            next_actions=[
+                f"jira issue comments {issue_key}",
+                f"jira issue transitions {issue_key}",
+                f"jira issue attachments {issue_key}",
+                f"jira issue links {issue_key}",
+            ],
+        )
         output_result(envelope, pretty)
         sys.exit(ExitCode.SUCCESS)
 
@@ -242,7 +321,14 @@ def issue_comments(
             "total": raw_comments.get("total", 0),
         }
 
-        envelope = success_response(comments_data, command)
+        envelope = success_response(
+            comments_data,
+            command,
+            next_actions=[
+                f"jira issue comment {key} \"<your reply>\"",
+                f"jira issue get {key}",
+            ],
+        )
         output_result(envelope, pretty)
         sys.exit(ExitCode.SUCCESS)
 
@@ -300,7 +386,11 @@ def issue_search(ctx: click.Context, jql: str, limit: int, offset: int, fields: 
             },
         }
 
-        envelope = success_response(search_data, command)
+        envelope = success_response(
+            search_data,
+            command,
+            next_actions=["jira issue get <KEY> -- get details for a specific result"],
+        )
         output_result(envelope, pretty)
         sys.exit(ExitCode.SUCCESS)
 
@@ -377,7 +467,13 @@ def issue_transitions_list(ctx: click.Context, key: str) -> None:
             ],
         }
 
-        envelope = success_response(transitions_data, command)
+        envelope = success_response(
+            transitions_data,
+            command,
+            next_actions=[
+                f"jira issue transition {key} <ID> -- use an ID from the list above",
+            ],
+        )
         output_result(envelope, pretty)
         sys.exit(ExitCode.SUCCESS)
 

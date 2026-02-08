@@ -29,7 +29,12 @@ def _build_meta(tool: str, command: str) -> dict[str, str]:
     }
 
 
-def success_response(data: Any, tool: str, command: str) -> dict[str, Any]:
+def success_response(
+    data: Any,
+    tool: str,
+    command: str,
+    next_actions: list[str] | None = None,
+) -> dict[str, Any]:
     """
     Create a success response envelope.
 
@@ -37,15 +42,20 @@ def success_response(data: Any, tool: str, command: str) -> dict[str, Any]:
         data: The response data payload
         tool: The tool name (e.g., "jira", "gerrit-comments")
         command: The command that was executed (e.g., "issue.get", "extract")
+        next_actions: Optional list of suggested follow-up commands.
+            Helps LLMs discover what to do next without consulting docs.
 
     Returns:
         Standard success envelope dictionary
     """
-    return {
+    envelope: dict[str, Any] = {
         "ok": True,
         "data": data,
         "meta": _build_meta(tool, command),
     }
+    if next_actions:
+        envelope["next_actions"] = next_actions
+    return envelope
 
 
 @runtime_checkable

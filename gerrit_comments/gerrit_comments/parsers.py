@@ -737,6 +737,28 @@ def add_ack_parser(subparsers):
     return parser
 
 
+def add_describe_parser(subparsers):
+    """Add the 'describe' subcommand parser."""
+    parser = subparsers.add_parser(
+        "describe",
+        help="Show machine-readable API description (for LLMs)",
+        description="Returns a structured JSON document describing all available commands, "
+                    "their arguments, types, defaults, output fields, and suggested next "
+                    "actions. Use this to discover what the tool can do.",
+    )
+    parser.add_argument(
+        "--command",
+        dest="command_name",
+        help="Show description for a specific command only",
+    )
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
 def setup_parsers(subparsers, handlers):
     """Set up all subparsers and bind them to command handlers.
 
@@ -802,3 +824,6 @@ def setup_parsers(subparsers, handlers):
     # Shortcut commands
     add_done_parser(subparsers).set_defaults(func=handlers['done'])
     add_ack_parser(subparsers).set_defaults(func=handlers['ack'])
+
+    # Self-description (LLM discoverability)
+    add_describe_parser(subparsers).set_defaults(func=handlers['describe'])

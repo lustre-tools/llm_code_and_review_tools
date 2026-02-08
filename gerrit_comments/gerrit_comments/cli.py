@@ -130,9 +130,14 @@ def output_result(envelope: dict[str, Any], pretty: bool) -> None:
     print(format_json(envelope, pretty=pretty))
 
 
-def output_success(data: Any, command: str, pretty: bool) -> None:
+def output_success(
+    data: Any,
+    command: str,
+    pretty: bool,
+    next_actions: list[str] | None = None,
+) -> None:
     """Output success envelope to stdout."""
-    envelope = success_response(data, command)
+    envelope = success_response(data, command, next_actions=next_actions)
     output_result(envelope, pretty)
 
 
@@ -200,7 +205,15 @@ def cmd_extract(args):
         # Save URL for subsequent commands (gc reply without URL)
         LastURLManager().save(args.url)
 
-        output_success(data, command, pretty)
+        output_success(
+            data, command, pretty,
+            next_actions=[
+                "gc reply <INDEX> \"<message>\" -- reply to a thread",
+                "gc reply --done <INDEX> -- mark a thread as done",
+                "gc stage --done <INDEX> -- stage a 'done' reply for later",
+                "gc review <URL> -- view code diffs",
+            ],
+        )
         sys.exit(ExitCode.SUCCESS)
 
     except ValueError as e:
@@ -539,7 +552,13 @@ def cmd_review(args):
         if summary_lines is not None:
             data = truncate_review_data(data, summary_lines)
 
-        output_success(data, command, pretty)
+        output_success(
+            data, command, pretty,
+            next_actions=[
+                "gc comments <URL> -- see unresolved comments",
+                "gc review <URL> --post-comments <file> -- post review comments",
+            ],
+        )
         sys.exit(ExitCode.SUCCESS)
 
     except ValueError as e:
@@ -1896,16 +1915,66 @@ def cmd_examples(args):
     print("\n".join(output))
 
 
+def cmd_describe(args):
+    """Show machine-readable API description."""
+    from .describe import get_tool_description
+
+    pretty = getattr(args, 'pretty', False)
+    command_name = getattr(args, 'command_name', None)
+    tool_desc = get_tool_description()
+
+    if command_name:
+        normalized = command_name.replace(".", " ")
+        matching = [c for c in tool_desc.commands if c.name == normalized]
+        if not matching:
+            sys.exit(output_error(
+                ErrorCode.INVALID_INPUT,
+                f"Unknown command: {command_name}",
+                "describe",
+                pretty,
+            ))
+        data = matching[0].to_dict()
+    else:
+        data = tool_desc.to_dict()
+
+    output_success(data, "describe", pretty)
+    sys.exit(ExitCode.SUCCESS)
+
+
+class _JsonErrorParser(argparse.ArgumentParser):
+    """ArgumentParser that outputs errors as JSON instead of stderr.
+
+    Used as parser_class for subparsers so that argument errors from
+    any subcommand produce structured JSON output.
+    """
+
+    def error(self, message: str) -> None:
+        envelope = error_response_from_dict(
+            ErrorCode.INVALID_INPUT,
+            message,
+            "cli",
+        )
+        print(format_json(envelope))
+        sys.exit(ExitCode.INVALID_INPUT)
+
+
 def main():
     """Main entry point."""
     from .parsers import setup_parsers
 
     parser = argparse.ArgumentParser(
-        description="Extract and reply to Gerrit review comments",
+        description="Extract and reply to Gerrit review comments. "
+                    "Run 'gc describe' for machine-readable API documentation.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+    # Use _JsonErrorParser for subparsers so argument errors from
+    # subcommands also produce JSON output. The top-level parser is
+    # left as standard ArgumentParser so tests that mock it still work.
+    subparsers = parser.add_subparsers(
+        dest="command", help="Command to run",
+        parser_class=_JsonErrorParser,
+    )
 
     # Map command names to handler functions
     handlers = {
@@ -1939,6 +2008,7 @@ def main():
         'examples': cmd_examples,
         'done': cmd_done,
         'ack': cmd_ack,
+        'describe': cmd_describe,
     }
 
     setup_parsers(subparsers, handlers)

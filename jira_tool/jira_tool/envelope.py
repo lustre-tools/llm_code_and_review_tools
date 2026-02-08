@@ -20,18 +20,23 @@ TOOL_NAME = "jira"
 __all__ = ["success_response", "error_response", "error_response_from_dict", "format_json"]
 
 
-def success_response(data: Any, command: str) -> dict[str, Any]:
+def success_response(
+    data: Any,
+    command: str,
+    next_actions: list[str] | None = None,
+) -> dict[str, Any]:
     """
     Create a success response envelope.
 
     Args:
         data: The response data payload
         command: The command that was executed (e.g., "issue.get")
+        next_actions: Optional list of suggested follow-up commands
 
     Returns:
         Standard success envelope dictionary
     """
-    return _success_response(data, TOOL_NAME, command)
+    return _success_response(data, TOOL_NAME, command, next_actions=next_actions)
 
 
 def error_response(error: Any, command: str) -> dict[str, Any]:

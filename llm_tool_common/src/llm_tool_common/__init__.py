@@ -22,6 +22,11 @@ from .errors import (
     NetworkError,
     ConfigError,
 )
+from .describe import (
+    Argument,
+    Command,
+    ToolDescription,
+)
 
 __all__ = [
     # Envelope functions
@@ -38,5 +43,9 @@ __all__ = [
     "InvalidInputError",
     "NetworkError",
     "ConfigError",
+    # Describe helpers
+    "Argument",
+    "Command",
+    "ToolDescription",
 ]
 
