@@ -629,8 +629,8 @@ class RebaseManager:
                     # Stale changes can be reintegrated
                     return self._start_reintegration(url, change_number, series)
                 else:
-                    # Stale changes pulled out of series - can't auto-fix
-                    return False, series.error
+                    # Stale changes pulled out of series - warn but proceed
+                    print(f"⚠ Warning: {series.error}")
 
             # Find the target patch
             target_patch = None

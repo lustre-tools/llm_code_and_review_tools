@@ -152,12 +152,11 @@ def get_tool_description() -> ToolDescription:
             Command(
                 name="work-on-patch",
                 description="Checkout a specific patch and show its comments",
-                usage="gc work-on-patch <CHANGE_NUMBER> [URL]",
+                usage="gc work-on-patch <CHANGE_NUMBER_OR_URL>",
                 arguments=[
-                    Argument(name="change_number", description="Change number to work on", type="integer", required=True),
-                    Argument(name="url", description="Gerrit URL (optional if session active)"),
+                    Argument(name="target", description="Change number (e.g. 64142) or Gerrit URL", required=True),
                 ],
-                examples=["gc work-on-patch 12345"],
+                examples=["gc work-on-patch 12345", "gc work-on-patch https://review.whamcloud.com/12345"],
                 next_actions=["stage", "finish-patch"],
             ),
             Command(

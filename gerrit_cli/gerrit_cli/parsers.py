@@ -346,17 +346,16 @@ def add_work_on_patch_parser(subparsers):
     parser = subparsers.add_parser(
         "work-on-patch",
         help="Start working on a patch (checkout and show comments)",
-        description="Checkout a specific patch and show its comments.",
+        description=(
+            "Checkout a specific patch and show its comments. "
+            "Accepts a change number (e.g. 64142) or a full Gerrit URL. "
+            "When given a change number, the URL is derived from the GERRIT_URL "
+            "environment variable."
+        ),
     )
     parser.add_argument(
-        "change_number",
-        type=int,
-        help="Change number to work on",
-    )
-    parser.add_argument(
-        "url",
-        nargs="?",
-        help="Gerrit change URL (optional if session active)",
+        "target",
+        help="Change number or Gerrit URL",
     )
     return parser
 

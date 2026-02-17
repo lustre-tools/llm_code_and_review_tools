@@ -767,18 +767,30 @@ def cmd_series_status(args):
 
 def cmd_work_on_patch(args):
     """Start working on a specific patch in a series."""
+    import os as _os
     try:
-        # If URL not provided, try to get it from active session
-        url = args.url
-        if url is None:
-            url = get_session_url()
-            if url is None:
-                print("Error: No URL provided and no active session.", file=sys.stderr)
-                print("Start a session with: gerrit work-on-patch <change> <url>", file=sys.stderr)
-                sys.exit(1)
-            print(f"Using URL from active session: {url}")
+        target = args.target
 
-        success, message = work_on_patch(url, args.change_number)
+        # Resolve target to (change_number, url)
+        if target.lstrip("-").isdigit():
+            # Plain change number - derive URL
+            change_number = int(target)
+            gerrit_base = _os.environ.get("GERRIT_URL", "").rstrip("/")
+            if gerrit_base:
+                url = f"{gerrit_base}/{change_number}"
+            else:
+                print("Error: Set GERRIT_URL environment variable to use change numbers directly.", file=sys.stderr)
+                sys.exit(1)
+        else:
+            # Full or short URL - parse it
+            try:
+                _, change_number = GerritCommentsClient.parse_gerrit_url(target)
+                url = target
+            except ValueError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+
+        success, message = work_on_patch(url, change_number)
         print(message)
         if not success:
             sys.exit(1)
@@ -889,7 +901,7 @@ def cmd_stage(args):
                 print(f"Using current patch: {target_change}")
             else:
                 print("Error: No URL provided and no active session.", file=sys.stderr)
-                print("Start a session with: gerrit work-on-patch <change> <url>", file=sys.stderr)
+                print("Start a session with: gerrit work-on-patch <change_or_url>", file=sys.stderr)
                 sys.exit(1)
 
         # Parse URL to get change number
@@ -2119,17 +2131,19 @@ This command:
     "work-on-patch": {
         "summary": "Start working on a specific patch",
         "description": """
-Checkout a specific patch and show its comments. Use this to jump to a
-particular patch in the series, or to start a new session.
+Checkout a specific patch and show its comments. Accepts a change number
+or a full Gerrit URL. When given a change number, the URL is derived from
+the GERRIT_URL environment variable. Fetches from Gerrit automatically if
+the patch is not already in the local git history.
 """,
         "examples": [
             {
-                "command": "gc work-on-patch 12345 URL",
-                "description": "Start working on change 12345",
+                "command": "gc work-on-patch 12345",
+                "description": "Checkout change 12345 (derives URL from GERRIT_URL)",
             },
             {
-                "command": "gc work-on-patch 12346",
-                "description": "Switch to change 12346 (uses session URL)",
+                "command": "gc work-on-patch https://review.whamcloud.com/12345",
+                "description": "Checkout change 12345 using full URL",
             },
         ],
         "related": ["review-series", "next-patch", "finish-patch"],
