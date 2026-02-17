@@ -672,6 +672,35 @@ def add_maloo_parser(subparsers):
     return parser
 
 
+def add_checkout_parser(subparsers):
+    """Add the 'checkout' subcommand parser."""
+    parser = subparsers.add_parser(
+        "checkout",
+        aliases=["co"],
+        help="Fetch and checkout a Gerrit change",
+        description="Fetch a Gerrit change ref and checkout the source. "
+                    "Detaches HEAD by default; use --branch to create a branch.",
+    )
+    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument(
+        "--patchset", "-r",
+        type=int,
+        default=None,
+        help="Patchset number (default: latest)",
+    )
+    parser.add_argument(
+        "--branch", "-b",
+        default=None,
+        help="Create a branch with this name instead of detaching HEAD",
+    )
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
 def add_find_user_parser(subparsers):
     """Add the 'find-user' subcommand parser."""
     parser = subparsers.add_parser(
@@ -867,6 +896,7 @@ def setup_parsers(subparsers, handlers):
         func=handlers['remove_reviewer'])
     add_find_user_parser(subparsers).set_defaults(func=handlers['find_user'])
     add_abandon_parser(subparsers).set_defaults(func=handlers['abandon'])
+    add_checkout_parser(subparsers).set_defaults(func=handlers['checkout'])
 
     # Test result triage
     add_maloo_parser(subparsers).set_defaults(func=handlers['maloo'])
