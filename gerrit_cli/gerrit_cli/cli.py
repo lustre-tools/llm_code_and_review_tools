@@ -250,9 +250,16 @@ def cmd_reply(args):
         )
 
         if args.thread_index >= len(result.threads):
+            if len(result.threads) == 0:
+                msg = (
+                    "No unresolved comment threads on this change. "
+                    "To post a top-level review comment use: gc message <URL> \"<text>\""
+                )
+            else:
+                msg = f"Thread index {args.thread_index} out of range. Only {len(result.threads)} threads."
             sys.exit(output_error(
                 ErrorCode.THREAD_INDEX_OUT_OF_RANGE,
-                f"Thread index {args.thread_index} out of range. Only {len(result.threads)} threads.",
+                msg,
                 command, pretty
             ))
 
@@ -502,10 +509,19 @@ def cmd_review(args):
     try:
         reviewer = CodeReviewer()
 
+        # Determine context lines for diff
+        if getattr(args, 'full_context', False):
+            context_lines = None  # Full file context (Gerrit default, verbose)
+        elif getattr(args, 'changes_only', False):
+            context_lines = 0    # Changed lines only, no context
+        else:
+            context_lines = getattr(args, 'unified', 3)
+
         # Get review data
         review_data = reviewer.get_review_data(
             url=args.url,
             include_file_content=args.full_content,
+            context_lines=context_lines,
         )
 
         # If posting comments from file

@@ -221,12 +221,16 @@ class CodeReviewer:
         self,
         url: str,
         include_file_content: bool = False,
+        context_lines: Optional[int] = 3,
     ) -> ReviewData:
         """Get all data needed to review a change.
 
         Args:
             url: Gerrit change URL
             include_file_content: Whether to fetch full file content (slower)
+            context_lines: Lines of context around each diff hunk. Pass None
+                to fetch the full file as context (Gerrit default, but very
+                verbose for large files). Default is 3.
 
         Returns:
             ReviewData with change info and all file diffs
@@ -239,6 +243,7 @@ class CodeReviewer:
         return self.get_review_data_for_change(
             change_number=change_number,
             include_file_content=include_file_content,
+            context_lines=context_lines,
         )
 
     def get_review_data_for_change(
@@ -246,6 +251,7 @@ class CodeReviewer:
         change_number: int,
         revision: str = "current",
         include_file_content: bool = False,
+        context_lines: Optional[int] = 3,
     ) -> ReviewData:
         """Get all data needed to review a change by number.
 
@@ -253,6 +259,7 @@ class CodeReviewer:
             change_number: The change number
             revision: Revision to review ("current" or specific SHA)
             include_file_content: Whether to fetch full file content
+            context_lines: Lines of context per hunk. None = full file context.
 
         Returns:
             ReviewData with change info and all file diffs
@@ -291,7 +298,7 @@ class CodeReviewer:
 
         # Get list of files
         files = self._get_files_for_revision(
-            change_number, revision, include_file_content
+            change_number, revision, include_file_content, context_lines
         )
 
         return ReviewData(
@@ -306,6 +313,7 @@ class CodeReviewer:
         change_number: int,
         revision: str,
         include_file_content: bool,
+        context_lines: Optional[int] = 3,
     ) -> list[FileChange]:
         """Get all changed files for a revision."""
         # Get file list
@@ -328,7 +336,7 @@ class CodeReviewer:
             )
 
             # Get diff for this file
-            self._add_diff_to_file(change_number, revision, file_change)
+            self._add_diff_to_file(change_number, revision, file_change, context_lines)
 
             # Optionally get full file content
             if include_file_content:
@@ -345,13 +353,23 @@ class CodeReviewer:
         change_number: int,
         revision: str,
         file_change: FileChange,
+        context_lines: Optional[int] = 3,
     ) -> None:
-        """Add diff hunks to a FileChange."""
+        """Add diff hunks to a FileChange.
+
+        Args:
+            context_lines: Lines of context around each changed hunk.
+                None means the Gerrit default (full file as context, very large).
+                0 means changed lines only, no surrounding context.
+                3 (default) gives a compact, readable diff.
+        """
         encoded_path = quote(file_change.path, safe="")
         try:
-            diff = self.client.rest.get(
-                f"/changes/{change_number}/revisions/{revision}/files/{encoded_path}/diff"
-            )
+            if context_lines is None:
+                diff_url = f"/changes/{change_number}/revisions/{revision}/files/{encoded_path}/diff"
+            else:
+                diff_url = f"/changes/{change_number}/revisions/{revision}/files/{encoded_path}/diff?context={context_lines}"
+            diff = self.client.rest.get(diff_url)
         except Exception as e:
             print(f"Error getting diff for {file_change.path}: {e}")
             return

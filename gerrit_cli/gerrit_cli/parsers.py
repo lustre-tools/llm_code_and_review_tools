@@ -134,7 +134,10 @@ def add_review_parser(subparsers):
     parser = subparsers.add_parser(
         "review",
         help="Get code changes for review",
-        description="Get diffs and changes from a Gerrit change for code review",
+        description="Get diffs and changes from a Gerrit change for code review. "
+                    "By default returns a compact diff with 3 lines of context per hunk "
+                    "(equivalent to 'git diff -U3'). Use --full-context for the full file, "
+                    "or --changes-only for just the changed lines.",
     )
     parser.add_argument("url", help="Gerrit change URL or number")
     parser.add_argument(
@@ -145,19 +148,29 @@ def add_review_parser(subparsers):
     parser.add_argument(
         "--changes-only", "-c",
         action="store_true",
-        help="Show only changed lines (no context)",
+        dest="changes_only",
+        help="Show only changed lines, no surrounding context",
+    )
+    parser.add_argument(
+        "--full-context",
+        action="store_true",
+        dest="full_context",
+        help="Include the full file as context around each change (very verbose; "
+             "use for in-depth review of small files)",
     )
     parser.add_argument(
         "--full-content", "-f",
         action="store_true",
         dest="full_content",
-        help="Include full file content in output",
+        help="Fetch and include the complete new file content alongside the diff",
     )
     parser.add_argument(
         "--unified", "-u",
         type=int,
         default=3,
-        help="Lines of unified diff context (default: 3)",
+        metavar="N",
+        help="Lines of context around each changed hunk (default: 3). "
+             "Ignored if --full-context or --changes-only is given.",
     )
     parser.add_argument(
         "--base", "-b",
