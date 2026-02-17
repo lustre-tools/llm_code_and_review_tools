@@ -794,6 +794,8 @@ def cmd_work_on_patch(args):
         print(message)
         if not success:
             sys.exit(1)
+        # Remember URL so `gc reply` works immediately without re-running `gc comments`
+        LastURLManager().save(url, change_number)
     except KeyboardInterrupt:
         print("\n\nInterrupted by user")
         sys.exit(1)

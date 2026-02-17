@@ -758,13 +758,12 @@ class RebaseManager:
         lines.append("🛠 WORKFLOW")
         lines.append("=" * 70)
         lines.append("")
-        lines.append("1. Edit files and stage replies")
-        lines.append("2. git add <files> && git commit --amend --no-edit")
-        lines.append("3. gerrit finish-patch  (rebases series, goes to next patch)")
+        lines.append("1. Edit files to address comments")
+        lines.append("2. gc stage --done <index>   # or: gc stage <index> \"message\"")
+        lines.append("3. git add <files> && git commit --amend --no-edit")
+        lines.append("4. gc finish-patch           # pushes to Gerrit + auto-advances")
         lines.append("")
-        lines.append("When done with all patches: gerrit end-session")
-        lines.append("To discard all changes:     gerrit abort-session")
-        lines.append("")
+        lines.append("Abort without pushing:  gc abort")
         lines.append("=" * 70)
 
         return "\n".join(lines)
@@ -978,13 +977,20 @@ class RebaseManager:
             lines.append("✓ Patch complete!")
             lines.append("")
 
-            # Show push instruction for just the current patch
+            # Auto-push amended commit to Gerrit
             if amended_commit != session.target_commit:
-                lines.append("To push this patch:")
-                lines.append(f"  git push origin {amended_commit}:refs/for/master")
+                try:
+                    remote = self._get_gerrit_remote()
+                    branch_info = self.client.get_change_detail(session.target_change)
+                    branch = branch_info.get("branch", "master")
+                    self._run_git(["push", remote, f"HEAD:refs/for/{branch}"])
+                    lines.append(f"📤 Pushed to Gerrit ({remote} → refs/for/{branch})")
+                except subprocess.CalledProcessError as push_err:
+                    lines.append(f"⚠ Auto-push failed: {push_err}")
+                    lines.append(f"  Run manually: git push {remote} HEAD:refs/for/{branch}")
                 lines.append("")
 
-            lines.append("Next: gerrit next-patch")
+            lines.append("Next: gc next-patch")
             lines.append("=" * 70)
 
             # DON'T clear session yet - keep it so work-on-patch can use the updated commits
