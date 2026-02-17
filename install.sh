@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Unified installer for LLM Code and Review Tools
-# Installs: jira, gerrit-cli, and beads (bd)
+# Installs: jira, gerrit-cli, maloo, jenkins, and beads (bd)
 #
 
 set -e
@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
-    echo "Install LLM code and review tools (jira, gerrit-cli, beads)"
+    echo "Install LLM code and review tools (jira, gerrit-cli, maloo, jenkins, beads)"
     echo ""
     echo "Options:"
     echo "  --help, -h     Show this help message"
@@ -78,6 +78,12 @@ install_tools() {
     $PYTHON -m pip install -q -e "$SCRIPT_DIR/maloo_tool"
     echo -e "${GREEN}✓${NC} maloo installed"
 
+    # Install jenkins_tool
+    echo ""
+    echo "Installing jenkins..."
+    $PYTHON -m pip install -q -e "$SCRIPT_DIR/jenkins_tool"
+    echo -e "${GREEN}✓${NC} jenkins installed"
+
     # Install beads (bd)
     echo ""
     echo "Installing beads (bd)..."
@@ -102,19 +108,22 @@ install_tools() {
     echo "  jira            - JIRA issue tracking"
     echo "  gerrit            - Gerrit code review (also: gc)"
     echo "  maloo           - Maloo test results"
+    echo "  jenkins         - Jenkins build server"
     echo "  bd              - Beads task tracking"
     echo ""
     echo "Verify installation:"
     echo "  jira --help"
     echo "  gerrit --help"
     echo "  maloo --help"
+    echo "  jenkins --help"
     echo "  bd --help"
     echo ""
     echo "Configuration:"
-    echo "  JIRA:   Set JIRA_SERVER and JIRA_TOKEN env vars"
-    echo "  Gerrit: Set GERRIT_URL, GERRIT_USER, GERRIT_PASS env vars (config dir: ~/.config/gerrit-cli)"
-    echo "  Maloo:  Set MALOO_USER and MALOO_PASS env vars"
-    echo "  Beads:  Run 'bd init --stealth' in your project"
+    echo "  JIRA:    Set JIRA_SERVER and JIRA_TOKEN env vars"
+    echo "  Gerrit:  Set GERRIT_URL, GERRIT_USER, GERRIT_PASS env vars (config dir: ~/.config/gerrit-cli)"
+    echo "  Maloo:   Set MALOO_USER and MALOO_PASS env vars"
+    echo "  Jenkins: Set JENKINS_URL, JENKINS_USER, JENKINS_TOKEN env vars"
+    echo "  Beads:   Run 'bd init --stealth' in your project"
     echo ""
     echo "See AGENTS.md for usage documentation."
 }
@@ -139,6 +148,9 @@ uninstall_tools() {
 
     echo "Uninstalling maloo-tool..."
     $PYTHON -m pip uninstall -y maloo-tool 2>/dev/null || true
+
+    echo "Uninstalling jenkins-tool..."
+    $PYTHON -m pip uninstall -y jenkins-tool 2>/dev/null || true
 
     echo "Uninstalling llm-tool-common..."
     $PYTHON -m pip uninstall -y llm-tool-common 2>/dev/null || true
