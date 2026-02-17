@@ -55,10 +55,34 @@ class RebaseManager:
         """Check if there are unmerged files (unresolved conflicts)."""
         return git_utils.has_unmerged_files()
 
+    def _get_gerrit_remote(self) -> str:
+        """Get the name of the Gerrit remote.
+
+        Looks for a remote whose URL contains a Gerrit hostname
+        (review.whamcloud.com or review.gerrithub.io or similar).
+        Falls back to 'origin' if none found.
+
+        Returns:
+            Remote name to use for Gerrit fetches
+        """
+        try:
+            result = self._run_git(["remote", "-v"])
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 2:
+                    name, url = parts[0], parts[1]
+                    if "review." in url or "gerrit" in url.lower():
+                        return name
+        except Exception:
+            pass
+        return "origin"
+
     def _fetch_gerrit_commit(self, change_number: int) -> tuple[bool, str]:
         """Fetch a specific change from Gerrit.
 
         Fetches the latest patchset of a change using refs/changes/XX/NNNNN/PS.
+        Tries the Gerrit remote first (any remote with a gerrit-like URL),
+        then falls back to 'origin'.
 
         Args:
             change_number: The Gerrit change number
@@ -82,8 +106,13 @@ class RebaseManager:
             suffix = str(change_number)[-2:].zfill(2)
             ref = f"refs/changes/{suffix}/{change_number}/{patchset}"
 
-            # Fetch the ref
-            self._run_git(["fetch", "origin", ref])
+            # Try the Gerrit remote first, fall back to origin
+            remote = self._get_gerrit_remote()
+            try:
+                self._run_git(["fetch", remote, ref])
+            except subprocess.CalledProcessError:
+                if remote != "origin":
+                    self._run_git(["fetch", "origin", ref])
 
             # FETCH_HEAD now points to the fetched commit
             result = self._run_git(["rev-parse", "FETCH_HEAD"])
@@ -615,10 +644,14 @@ class RebaseManager:
             if not target_patch:
                 return False, f"Change {change_number} not found in series"
 
-            # Find the commit hash for this change
+            # Find the commit hash for this change; if not local, fetch from Gerrit
             commit_hash = self.find_commit_by_change_id(change_number, patches)
             if not commit_hash:
-                return False, f"Could not find local commit for change {change_number}. Make sure the patch is in your local git history."
+                print(f"Change {change_number} not in local history, fetching from Gerrit...")
+                success, result = self._fetch_gerrit_commit(change_number)
+                if not success:
+                    return False, result
+                commit_hash = result
 
             # Get current state for restoration later
             head = self.get_current_commit()
