@@ -1303,6 +1303,112 @@ def cmd_abandon(args):
         sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
 
 
+def cmd_maloo(args):
+    """Triage Maloo test results from a Gerrit change."""
+    command = "maloo"
+    pretty = getattr(args, 'pretty', False)
+
+    try:
+        base_url, change_number = GerritCommentsClient.parse_gerrit_url(args.url)
+        client = GerritCommentsClient()
+        msgs = client.get_messages(change_number)
+
+        # Determine target patchset
+        patchset = getattr(args, 'patchset', None)
+        if not patchset:
+            patchset = max(
+                (m.get('_revision_number', 0) for m in msgs),
+                default=0,
+            )
+
+        enforced_results = {}  # test -> {pass: [platforms], fail: [platforms]}
+        optional_failed = []
+
+        for m in msgs:
+            author = m.get('author', {}).get('name', '')
+            if author != 'Maloo':
+                continue
+            ps = m.get('_revision_number', 0)
+            if ps != patchset:
+                continue
+            text = m.get('message', '')
+
+            for kind in ('enforced', 'optional'):
+                for status in ('Failed', 'Passed'):
+                    marker = f'{status} {kind} test '
+                    if marker not in text:
+                        continue
+                    rest = text.split(marker, 1)[1]
+                    name_plat = rest.split(' uploaded')[0].strip()
+                    parts = name_plat.split(' on ', 1)
+                    test_name = parts[0].strip()
+                    platform = parts[1].strip() if len(parts) > 1 else ''
+                    # Extract URL
+                    url = ''
+                    if 'https://testing.' in text:
+                        url = text[text.index('https://testing.'):].split()[0]
+
+                    if kind == 'enforced':
+                        if test_name not in enforced_results:
+                            enforced_results[test_name] = {'pass': [], 'fail': []}
+                        bucket = 'pass' if status == 'Passed' else 'fail'
+                        enforced_results[test_name][bucket].append({
+                            'platform': platform,
+                            'url': url,
+                        })
+                    elif status == 'Failed':
+                        optional_failed.append({
+                            'test': test_name,
+                            'platform': platform,
+                            'url': url,
+                        })
+
+        # Build summary
+        enforced_summary = []
+        total_pass = 0
+        total_fail = 0
+        for test_name in sorted(enforced_results):
+            r = enforced_results[test_name]
+            p = len(r['pass'])
+            f = len(r['fail'])
+            total_pass += p
+            total_fail += f
+            if f and p:
+                verdict = 'MIXED'
+            elif f:
+                verdict = 'FAIL'
+            else:
+                verdict = 'PASS'
+            entry = {
+                'test': test_name,
+                'verdict': verdict,
+                'passed': p,
+                'failed': f,
+            }
+            if r['fail']:
+                entry['failures'] = r['fail']
+            enforced_summary.append(entry)
+
+        data = {
+            'change_number': change_number,
+            'patchset': patchset,
+            'enforced': {
+                'total_pass': total_pass,
+                'total_fail': total_fail,
+                'tests': enforced_summary,
+            },
+            'optional_failures': optional_failed,
+        }
+
+        output_success(data, command, pretty)
+        sys.exit(ExitCode.SUCCESS)
+
+    except ValueError as e:
+        sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
+    except Exception as e:
+        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+
+
 def cmd_find_user(args):
     """Search for users by name."""
     command = "find-user"
@@ -2053,6 +2159,7 @@ def main():
         'remove_reviewer': cmd_remove_reviewer,
         'find_user': cmd_find_user,
         'abandon': cmd_abandon,
+        'maloo': cmd_maloo,
         'explain': cmd_explain,
         'examples': cmd_examples,
         'done': cmd_done,

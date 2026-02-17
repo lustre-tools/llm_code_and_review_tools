@@ -649,6 +649,29 @@ def add_abandon_parser(subparsers):
     return parser
 
 
+def add_maloo_parser(subparsers):
+    """Add the 'maloo' subcommand parser."""
+    parser = subparsers.add_parser(
+        "maloo",
+        help="Triage Maloo test results for a change",
+        description="Parse Maloo test messages and show a summary "
+                    "of enforced/optional pass/fail results.",
+    )
+    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument(
+        "--patchset", "-r",
+        type=int,
+        default=None,
+        help="Patchset number (default: latest)",
+    )
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
 def add_find_user_parser(subparsers):
     """Add the 'find-user' subcommand parser."""
     parser = subparsers.add_parser(
@@ -844,6 +867,9 @@ def setup_parsers(subparsers, handlers):
         func=handlers['remove_reviewer'])
     add_find_user_parser(subparsers).set_defaults(func=handlers['find_user'])
     add_abandon_parser(subparsers).set_defaults(func=handlers['abandon'])
+
+    # Test result triage
+    add_maloo_parser(subparsers).set_defaults(func=handlers['maloo'])
 
     # Help/documentation commands
     add_explain_parser(subparsers).set_defaults(func=handlers['explain'])
