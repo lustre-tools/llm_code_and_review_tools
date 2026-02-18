@@ -537,20 +537,22 @@ class MalooClient:
 
     # -- Web session auth (for non-API endpoints) --
 
-    _web_logged_in: bool = False
+    _web_session: requests.Session | None = None
 
-    def _web_login(self) -> None:
+    def _web_login(self) -> requests.Session:
         """Log in via the web sign-in form for cookie-based auth.
 
         The REST API uses basic auth, but web endpoints like
-        download_logs require cookie-based auth via the sign-in form.
+        download_logs and retest require cookie-based auth via the
+        sign-in form.  Returns a separate requests.Session that has
+        web cookies but no basic-auth header.
         """
-        if self._web_logged_in:
-            return
+        if self._web_session is not None:
+            return self._web_session
 
         import re as _re
 
-        # Use a separate session without basic auth for web login
+        # Use a separate session without basic auth
         web = requests.Session()
         signin_url = f"{self.config.base_url}/signin"
         resp = web.get(signin_url, timeout=30)
@@ -572,7 +574,7 @@ class MalooClient:
         )
         action = action_m.group(1) if action_m else "/sessions"
 
-        login_resp = web.post(
+        web.post(
             f"{self.config.base_url}{action}",
             data={
                 "authenticity_token": m.group(1),
@@ -584,20 +586,31 @@ class MalooClient:
             allow_redirects=True,
         )
 
-        # Merge web session cookies into our main session
+        # Also merge cookies into the main session for download_logs
         self.session.cookies.update(web.cookies)
-        self._web_logged_in = True
+        self._web_session = web
+        return web
 
     # -- Retest (web form, not REST API) --
 
-    def _get_csrf_token(self, session_id: str) -> str:
+    def _get_csrf_token(
+        self, web: requests.Session, session_id: str
+    ) -> str:
         """Fetch the CSRF token from the test session page."""
         url = f"{self.config.base_url}/test_sessions/{session_id}"
-        resp = self.session.get(url, timeout=30)
+        resp = web.get(url, timeout=30)
         resp.raise_for_status()
-        m = CSRF_RE.search(resp.text)
+        # Try <input> hidden field first, then <meta> tag
+        m = re.search(
+            r'name="authenticity_token"[^>]*value="([^"]+)"',
+            resp.text,
+        )
         if not m:
-            raise RuntimeError("Could not extract CSRF token from session page")
+            m = CSRF_RE.search(resp.text)
+        if not m:
+            raise RuntimeError(
+                "Could not extract CSRF token from session page"
+            )
         return m.group(1)
 
     def download_logs(
@@ -644,7 +657,8 @@ class MalooClient:
         Returns:
             Response status text
         """
-        token = self._get_csrf_token(session_id)
+        web = self._web_login()
+        token = self._get_csrf_token(web, session_id)
         url = (
             f"{self.config.base_url}"
             f"/test_sessions/{session_id}/retest"
@@ -653,7 +667,23 @@ class MalooClient:
             "authenticity_token": token,
             "retest_option": option,
             "bug_id": bug_id,
+            "commit": "Retest",
         }
-        resp = self.session.post(url, data=data, timeout=30)
+        resp = web.post(url, data=data, timeout=30, allow_redirects=True)
         resp.raise_for_status()
+
+        # Check for success flash message
+        m = re.search(
+            r'class="flash success">([^<]+)', resp.text
+        )
+        if m:
+            return m.group(1).strip()
+
+        # Check for error flash
+        m = re.search(
+            r'class="flash (?:error|alert)">([^<]+)', resp.text
+        )
+        if m:
+            raise RuntimeError(f"Retest failed: {m.group(1).strip()}")
+
         return f"HTTP {resp.status_code}"

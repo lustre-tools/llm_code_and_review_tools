@@ -14,24 +14,26 @@ from pygerrit2 import GerritRestAPI, HTTPBasicAuth  # type: ignore[import-untype
 def _load_env_file():
     """Load environment variables from .env file in standard locations.
 
-    Priority order:
+    Priority order (highest to lowest):
     1. Current directory (.env) - allows project-specific overrides
     2. User config directory (~/.config/gerrit-comments/.env)
     3. System config directory (/etc/gerrit-comments/.env)
+    4. Shared support files (/shared/support_files/.env)
+
+    All matching files are loaded. Higher-priority files override
+    values set by lower-priority ones.
     """
     env_locations = [
-        Path.cwd() / ".env",
-        Path.home() / ".config" / "gerrit-comments" / ".env",
-        Path("/etc/gerrit-comments/.env"),
         Path("/shared/support_files/.env"),
+        Path("/etc/gerrit-comments/.env"),
+        Path.home() / ".config" / "gerrit-comments" / ".env",
+        Path.cwd() / ".env",
     ]
 
+    # Load in priority order (lowest first); each overrides the previous
     for env_path in env_locations:
         if env_path.exists():
-            load_dotenv(env_path)
-            return
-
-    # No .env file found, will use environment variables only
+            load_dotenv(env_path, override=True)
 
 
 # Load .env file when module is imported
