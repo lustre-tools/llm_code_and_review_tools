@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "maloo-tool"
+version = "0.1.0"
+description = "LLM-agent-focused CLI tool for Maloo test results API"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "LLM Code Tools Team"}
+]
+dependencies = [
+    "click>=8.0.0",
+    "requests>=2.28.0",
+    "python-dotenv>=1.0.0",
+    "llm-tool-common",
+]
+
+[project.scripts]
+maloo = "maloo_tool.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+ignore = ["E501", "B008"]

@@ -71,6 +71,12 @@ install_tools() {
     $PYTHON -m pip install -q -e "$SCRIPT_DIR/gerrit_comments"
     echo -e "${GREEN}✓${NC} gerrit-comments installed"
 
+    # Install maloo_tool
+    echo ""
+    echo "Installing maloo..."
+    $PYTHON -m pip install -q -e "$SCRIPT_DIR/maloo_tool"
+    echo -e "${GREEN}✓${NC} maloo installed"
+
     # Install beads (bd)
     echo ""
     echo "Installing beads (bd)..."
@@ -94,16 +100,19 @@ install_tools() {
     echo "Installed tools:"
     echo "  jira            - JIRA issue tracking"
     echo "  gerrit-comments - Gerrit code review"
+    echo "  maloo           - Maloo test results"
     echo "  bd              - Beads task tracking"
     echo ""
     echo "Verify installation:"
     echo "  jira --help"
     echo "  gerrit-comments --help"
+    echo "  maloo --help"
     echo "  bd --help"
     echo ""
     echo "Configuration:"
     echo "  JIRA:   Set JIRA_SERVER and JIRA_TOKEN env vars"
     echo "  Gerrit: Set GERRIT_URL, GERRIT_USER, GERRIT_PASS env vars"
+    echo "  Maloo:  Set MALOO_USER and MALOO_PASS env vars"
     echo "  Beads:  Run 'bd init --stealth' in your project"
     echo ""
     echo "See AGENTS.md for usage documentation."
@@ -125,6 +134,9 @@ uninstall_tools() {
 
     echo "Uninstalling gerrit-comments..."
     $PYTHON -m pip uninstall -y gerrit-comments 2>/dev/null || true
+
+    echo "Uninstalling maloo-tool..."
+    $PYTHON -m pip uninstall -y maloo-tool 2>/dev/null || true
 
     echo "Uninstalling llm-tool-common..."
     $PYTHON -m pip uninstall -y llm-tool-common 2>/dev/null || true
