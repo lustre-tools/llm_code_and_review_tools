@@ -28,6 +28,8 @@ class MalooClient:
         resp = self.session.get(url, params=params, timeout=30)
         resp.raise_for_status()
         body = resp.json()
+        if isinstance(body, list):
+            return body
         return body.get("data", [])
 
     def _get_all(
