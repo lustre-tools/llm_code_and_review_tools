@@ -21,7 +21,6 @@ CI_BOT_AUTHORS: set[str] = {
     "Maloo",
     "jenkins",
     "Jenkins",
-    "Lustre Gerrit Janitor",
     # Common CI system names
     "Autotest",
     "CI Bot",
@@ -32,6 +31,7 @@ CI_BOT_AUTHORS: set[str] = {
 LINT_BOT_AUTHORS: set[str] = {
     "wc-checkpatch",
     "Misc Code Checks Robot (Gatekeeper helper)",
+    "Lustre Gerrit Janitor",  # Posts review comments about code problems
     "Janitor Bot",  # Static analysis and auto-fixes
 }
 
