@@ -1666,12 +1666,17 @@ def cmd_watch(args):
 
     try:
         with open(args.file) as f:
-            patches = _json.load(f)
+            raw = _json.load(f)
 
-        if not isinstance(patches, list):
+        # Support both bare array and {patches: [...]} object formats
+        if isinstance(raw, list):
+            patches = raw
+        elif isinstance(raw, dict) and "patches" in raw:
+            patches = raw["patches"]
+        else:
             sys.exit(output_error(
                 ErrorCode.INVALID_INPUT,
-                "JSON file must contain an array of patch objects",
+                "JSON file must contain an array or {patches: [...]}",
                 command, pretty))
 
         client = GerritCommentsClient()
