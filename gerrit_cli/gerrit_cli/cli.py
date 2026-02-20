@@ -593,6 +593,7 @@ def cmd_series_comments(args):
     fields = getattr(args, 'fields', None)
 
     try:
+        include_system = getattr(args, 'include_system', False)
         finder = SeriesFinder()
         result = finder.get_series_comments(
             url=args.url,
@@ -600,6 +601,7 @@ def cmd_series_comments(args):
             include_code_context=not args.no_context,
             context_lines=args.context_lines,
             show_progress=False,  # No progress in JSON mode
+            include_system=include_system,
         )
 
         if fields:
@@ -1329,6 +1331,7 @@ def cmd_maloo(args):
     try:
         base_url, change_number = GerritCommentsClient.parse_gerrit_url(args.url)
         client = GerritCommentsClient()
+        change = client.get_change_detail(change_number)
         msgs = client.get_messages(change_number)
 
         # Determine target patchset
@@ -1339,17 +1342,37 @@ def cmd_maloo(args):
                 default=0,
             )
 
+        # Get patchset upload date from revisions
+        patchset_uploaded = None
+        for rev_id, rev in change.get("revisions", {}).items():
+            if rev.get("_number") == patchset:
+                patchset_uploaded = rev.get("created")
+                break
+
         enforced_results = {}  # test -> {pass: [platforms], fail: [platforms]}
         optional_failed = []
+        retests = []  # Track retest requests
 
         for m in msgs:
             author = m.get('author', {}).get('name', '')
+            ps = m.get('_revision_number', 0)
+            text = m.get('message', '')
+
+            # Track Autotest retest messages on this patchset
+            if author == 'Autotest' and ps == patchset:
+                if 'retest' in text.lower():
+                    # Extract test group name from retest message
+                    # Format: "... retest <test-group> for build ..."
+                    retest_info = {
+                        'date': m.get('date', ''),
+                        'message': text.strip()[:150],
+                    }
+                    retests.append(retest_info)
+
             if author != 'Maloo':
                 continue
-            ps = m.get('_revision_number', 0)
             if ps != patchset:
                 continue
-            text = m.get('message', '')
 
             for kind in ('enforced', 'optional'):
                 for status in ('Failed', 'Passed'):
@@ -1394,6 +1417,15 @@ def cmd_maloo(args):
                             entry['detail'] = test_detail
                         optional_failed.append(entry)
 
+        # Build set of test groups that have retests pending
+        retested_groups = set()
+        for rt in retests:
+            msg = rt['message'].lower()
+            # Try to extract test group from "retest <group> for build"
+            for test_name in enforced_results:
+                if test_name.lower() in msg:
+                    retested_groups.add(test_name)
+
         # Build summary
         enforced_summary = []
         total_pass = 0
@@ -1418,17 +1450,144 @@ def cmd_maloo(args):
             }
             if r['fail']:
                 entry['failures'] = r['fail']
+            if test_name in retested_groups:
+                entry['retest_pending'] = True
             enforced_summary.append(entry)
 
         data = {
             'change_number': change_number,
             'patchset': patchset,
+            'patchset_uploaded': patchset_uploaded,
             'enforced': {
                 'total_pass': total_pass,
                 'total_fail': total_fail,
                 'tests': enforced_summary,
             },
             'optional_failures': optional_failed,
+        }
+
+        if retests:
+            data['retests'] = retests
+
+        output_success(data, command, pretty)
+        sys.exit(ExitCode.SUCCESS)
+
+    except ValueError as e:
+        sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
+    except Exception as e:
+        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+
+
+def cmd_info(args):
+    """Show quick overview of a change: patchsets, reviews, CI status."""
+    command = "info"
+    pretty = getattr(args, 'pretty', False)
+
+    try:
+        base_url, change_number = GerritCommentsClient.parse_gerrit_url(args.url)
+        client = GerritCommentsClient()
+
+        # Get change detail (includes ALL_REVISIONS)
+        change = client.get_change_detail(change_number)
+
+        # Build patchset info with upload dates
+        revisions = change.get("revisions", {})
+        patchsets = []
+        for rev_id, rev in revisions.items():
+            patchsets.append({
+                "number": rev.get("_number"),
+                "created": rev.get("created"),
+                "uploader": rev.get("uploader", {}).get("name", ""),
+            })
+        patchsets.sort(key=lambda x: x["number"])
+
+        current_revision = change.get("current_revision", "")
+        current_patchset = revisions.get(current_revision, {}).get("_number", 0)
+
+        # Get reviewers with approvals
+        reviewers_raw = client.get_reviewers(change_number)
+        reviewers = []
+        for r in reviewers_raw:
+            approvals = r.get("approvals", {})
+            if approvals:  # Only include reviewers who have voted
+                reviewers.append({
+                    "name": r.get("name", ""),
+                    "approvals": approvals,
+                })
+
+        # Get CI status via maloo message parsing (reuse cmd_maloo logic)
+        msgs = client.get_messages(change_number)
+
+        enforced_results = {}
+        optional_failed = []
+        retests_pending = []
+
+        for m in msgs:
+            author = m.get('author', {}).get('name', '')
+            ps = m.get('_revision_number', 0)
+            text = m.get('message', '')
+
+            if author == 'Maloo' and ps == current_patchset:
+                for kind in ('enforced', 'optional'):
+                    for status in ('Failed', 'Passed'):
+                        marker = f'{status} {kind} test '
+                        if marker not in text:
+                            continue
+                        rest = text.split(marker, 1)[1]
+                        name_plat = rest.split(' uploaded')[0].strip()
+                        parts = name_plat.split(' on ', 1)
+                        test_name = parts[0].strip()
+                        platform = parts[1].strip() if len(parts) > 1 else ''
+                        url = ''
+                        if 'https://testing.' in text:
+                            after_marker = text[text.index('https://testing.'):]
+                            url = after_marker.split()[0]
+
+                        if kind == 'enforced':
+                            if test_name not in enforced_results:
+                                enforced_results[test_name] = {'pass': 0, 'fail': 0}
+                            enforced_results[test_name]['pass' if status == 'Passed' else 'fail'] += 1
+                        elif status == 'Failed':
+                            optional_failed.append(test_name)
+
+            # Track retests
+            if author == 'Autotest' and ps == current_patchset:
+                if 'retest' in text.lower():
+                    retests_pending.append({
+                        'date': m.get('date', ''),
+                        'message': text[:120],
+                    })
+
+        # Summarize CI
+        enforced_pass = sum(r['pass'] for r in enforced_results.values())
+        enforced_fail = sum(r['fail'] for r in enforced_results.values())
+
+        ci_status = "no results"
+        if enforced_pass or enforced_fail:
+            if enforced_fail == 0:
+                ci_status = "all passing"
+            elif enforced_pass == 0:
+                ci_status = "failing"
+            else:
+                ci_status = "mixed"
+
+        data = {
+            "change_number": change_number,
+            "project": change.get("project", ""),
+            "branch": change.get("branch", ""),
+            "subject": change.get("subject", ""),
+            "status": change.get("status", ""),
+            "owner": change.get("owner", {}).get("name", ""),
+            "current_patchset": current_patchset,
+            "patchsets": patchsets,
+            "reviewers": reviewers,
+            "ci": {
+                "status": ci_status,
+                "enforced_pass": enforced_pass,
+                "enforced_fail": enforced_fail,
+                "optional_fail": len(optional_failed),
+                "retests_pending": len(retests_pending),
+            },
         }
 
         output_success(data, command, pretty)
@@ -2364,6 +2523,7 @@ def main():
         'abandon': cmd_abandon,
         'checkout': cmd_checkout,
         'maloo': cmd_maloo,
+        'info': cmd_info,
         'message': cmd_message,
         'explain': cmd_explain,
         'examples': cmd_examples,

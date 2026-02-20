@@ -400,6 +400,7 @@ class SeriesFinder:
         exclude_ci_bots: bool = True,
         exclude_lint_bots: bool = False,
         show_progress: bool = False,
+        include_system: bool = False,
     ) -> SeriesComments:
         """
         Get all unresolved comments from all patches in a series.
@@ -414,6 +415,7 @@ class SeriesFinder:
             exclude_lint_bots: Whether to exclude messages from lint/style checkers
                 (checkpatch, Janitor Bot, etc.). Default False.
             show_progress: If True, show progress indicator to stderr
+            include_system: If True, include system messages
 
         Returns:
             SeriesComments object with comments grouped by patch
@@ -442,6 +444,7 @@ class SeriesFinder:
                     context_lines=context_lines,
                     exclude_ci_bots=exclude_ci_bots,
                     exclude_lint_bots=exclude_lint_bots,
+                    include_system=include_system,
                 )
 
                 # Include patches that have threads or review messages

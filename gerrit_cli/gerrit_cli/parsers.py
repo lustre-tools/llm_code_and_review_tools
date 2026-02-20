@@ -259,6 +259,11 @@ def add_series_comments_parser(subparsers):
              "Available: index,file,line,message,author,resolved,patch_set,code_context. "
              "Example: --fields=index,file,message",
     )
+    parser.add_argument(
+        "--include-system",
+        action="store_true",
+        help="Include system messages (e.g. 'Uploaded patch set N', rebases, topic changes)",
+    )
     return parser
 
 
@@ -667,6 +672,23 @@ def add_abandon_parser(subparsers):
     return parser
 
 
+def add_info_parser(subparsers):
+    """Add the 'info' subcommand parser."""
+    parser = subparsers.add_parser(
+        "info",
+        help="Quick overview of a change (patchsets, reviews, CI)",
+        description="Show patchset upload dates, review scores, "
+                    "and CI status in one shot.",
+    )
+    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
 def add_maloo_parser(subparsers):
     """Add the 'maloo' subcommand parser."""
     parser = subparsers.add_parser(
@@ -937,6 +959,9 @@ def setup_parsers(subparsers, handlers):
 
     # Test result triage
     add_maloo_parser(subparsers).set_defaults(func=handlers['maloo'])
+
+    # Change overview
+    add_info_parser(subparsers).set_defaults(func=handlers['info'])
 
     # Top-level messaging
     add_message_parser(subparsers).set_defaults(func=handlers['message'])
