@@ -9,6 +9,7 @@ CLI tools designed for LLM agents to interact with code review and issue trackin
 | **jira** | JIRA issue tracking | [jira_tool/](jira_tool/) |
 | **gerrit-cli** | Gerrit code review comments | [gerrit_cli/](gerrit_cli/) |
 | **jenkins** | Jenkins build server | [jenkins_tool/](jenkins_tool/) |
+| **maloo** | Lustre CI test results | [maloo_tool/](maloo_tool/) |
 
 ## Design Philosophy
 
@@ -103,6 +104,8 @@ Per-tool documentation:
 
 - **JIRA Tool**: [README](jira_tool/README.md) | [Architecture](jira_tool/ARCHITECTURE.md) | [Skills](jira_tool/SKILLS.md)
 - **Gerrit CLI**: [README](gerrit_cli/README.md) | [Architecture](gerrit_cli/ARCHITECTURE.md) | [Skills](gerrit_cli/SKILLS.md)
+- **Jenkins Tool**: [README](jenkins_tool/README.md)
+- **Maloo Tool**: [README](maloo_tool/README.md)
 
 ## Output Format
 
