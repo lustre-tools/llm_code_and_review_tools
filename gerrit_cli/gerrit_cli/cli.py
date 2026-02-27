@@ -1666,6 +1666,56 @@ def cmd_info(args):
         sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
 
 
+def cmd_search(args):
+    """Search Gerrit for changes matching a query."""
+    command = "search"
+    pretty = getattr(args, 'pretty', False)
+
+    try:
+        client = GerritCommentsClient()
+        results = client.search_changes(
+            query=args.query,
+            limit=args.limit,
+            start=args.start,
+        )
+
+        changes = []
+        for change in results:
+            owner = change.get("owner", {})
+            entry = {
+                "number": change.get("_number"),
+                "subject": change.get("subject", ""),
+                "project": change.get("project", ""),
+                "branch": change.get("branch", ""),
+                "status": change.get("status", ""),
+                "owner": owner.get("name", owner.get("email", "")),
+                "updated": change.get("updated", ""),
+                "url": f"{client.rest.url}/#/c/{change.get('_number')}/",
+            }
+            if change.get("topic"):
+                entry["topic"] = change["topic"]
+            insertions = change.get("insertions", 0)
+            deletions = change.get("deletions", 0)
+            if insertions or deletions:
+                entry["size"] = f"+{insertions}/-{deletions}"
+            changes.append(entry)
+
+        data = {
+            "query": args.query,
+            "count": len(changes),
+            "changes": changes,
+        }
+        if len(results) == args.limit:
+            data["more_results"] = True
+            data["next_start"] = args.start + args.limit
+
+        output_success(data, command, pretty)
+        sys.exit(ExitCode.SUCCESS)
+
+    except Exception as e:
+        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+
+
 def cmd_watch(args):
     """Check CI status on a list of watched patches from a JSON file."""
     import json as _json
@@ -2660,6 +2710,7 @@ def main():
         'checkout': cmd_checkout,
         'maloo': cmd_maloo,
         'info': cmd_info,
+        'search': cmd_search,
         'watch': cmd_watch,
         'message': cmd_message,
         'explain': cmd_explain,

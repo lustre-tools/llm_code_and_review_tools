@@ -602,3 +602,34 @@ class GerritCommentsClient:
         query = " OR ".join(parts)
         encoded_query = quote(query, safe="")
         return self.rest.get(f"/accounts/?q={encoded_query}&n={limit}")
+
+    def search_changes(
+        self,
+        query: str,
+        limit: int = 25,
+        start: int = 0,
+        options: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search for changes using a Gerrit query string.
+
+        Args:
+            query: Gerrit search query (e.g. "owner:self status:open",
+                   "project:fs/lustre-release topic:LU-12345")
+            limit: Maximum number of results (default 25)
+            start: Offset for pagination (default 0)
+            options: Additional output options (e.g. ["CURRENT_REVISION",
+                     "DETAILED_ACCOUNTS"]). If None, includes
+                     CURRENT_REVISION and DETAILED_ACCOUNTS.
+
+        Returns:
+            List of change dicts matching the query
+        """
+        if options is None:
+            options = ["CURRENT_REVISION", "DETAILED_ACCOUNTS"]
+
+        encoded_query = quote(query, safe="")
+        params = f"/changes/?q={encoded_query}&n={limit}&S={start}"
+        for opt in options:
+            params += f"&o={opt}"
+
+        return self.rest.get(params)

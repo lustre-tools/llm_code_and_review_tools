@@ -918,6 +918,42 @@ def add_message_parser(subparsers):
     return parser
 
 
+def add_search_parser(subparsers):
+    """Add the 'search' subcommand parser."""
+    parser = subparsers.add_parser(
+        "search",
+        aliases=["s"],
+        help="Search for Gerrit changes",
+        description="Search Gerrit for changes matching a query. Uses the "
+                    "same query syntax as the Gerrit web UI search bar. "
+                    "Common operators: owner, reviewer, project, branch, "
+                    "topic, status, label, message, age, is.",
+    )
+    parser.add_argument(
+        "query",
+        help="Gerrit search query (e.g. 'owner:self status:open', "
+             "'project:fs/lustre-release topic:LU-12345')",
+    )
+    parser.add_argument(
+        "--limit", "-n",
+        type=int,
+        default=25,
+        help="Maximum number of results (default: 25)",
+    )
+    parser.add_argument(
+        "--start", "-S",
+        type=int,
+        default=0,
+        help="Offset for pagination (default: 0)",
+    )
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
 def setup_parsers(subparsers, handlers):
     """Set up all subparsers and bind them to command handlers.
 
@@ -984,6 +1020,9 @@ def setup_parsers(subparsers, handlers):
 
     # Change overview
     add_info_parser(subparsers).set_defaults(func=handlers['info'])
+
+    # Search
+    add_search_parser(subparsers).set_defaults(func=handlers['search'])
 
     # Top-level messaging
     add_message_parser(subparsers).set_defaults(func=handlers['message'])
