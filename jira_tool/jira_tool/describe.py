@@ -101,16 +101,27 @@ def get_tool_description() -> ToolDescription:
             ),
             Command(
                 name="edit-comment",
-                description="Edit an existing comment on an issue",
-                usage='jira edit-comment <KEY> <COMMENT_ID> "<BODY>"',
+                description="Edit an existing comment on an issue, optionally changing visibility",
+                usage='jira edit-comment <KEY> <COMMENT_ID> "<BODY>" [--visibility role:RoleName]',
                 arguments=[
                     Argument(name="key", description="Issue key or JIRA URL", required=True),
                     Argument(name="comment_id", description="Numeric comment ID to edit", required=True),
                     Argument(name="body", description="New comment text", required=True),
+                    Argument(
+                        name="--visibility",
+                        description="Restrict visibility: 'role:RoleName' or 'group:GroupName'. "
+                        "Use 'jira roles <PROJECT>' to list available roles.",
+                    ),
                 ],
-                examples=['jira edit-comment PROJ-123 12345 "Updated comment text"'],
-                output_fields=["issue_key", "comment.id", "comment.body", "comment.author", "comment.updated"],
-                next_actions=["get", "comments"],
+                examples=[
+                    'jira edit-comment PROJ-123 12345 "Updated comment text"',
+                    'jira edit-comment PROJ-123 12345 "Internal" --visibility "role:Developers"',
+                ],
+                output_fields=[
+                    "issue_key", "comment.id", "comment.body", "comment.author",
+                    "comment.updated", "comment.visibility",
+                ],
+                next_actions=["get", "comments", "roles"],
             ),
             Command(
                 name="link",
@@ -263,7 +274,18 @@ def get_tool_description() -> ToolDescription:
                 ],
                 examples=["jira subtasks PROJ-123"],
                 output_fields=["issue_key", "total", "subtasks[].key", "subtasks[].summary", "subtasks[].status"],
-                next_actions=["get", "create-subtask"],
+                next_actions=["get", "create-subtask", "delete-subtask"],
+            ),
+            Command(
+                name="delete-subtask",
+                description="Delete a subtask",
+                usage="jira delete-subtask <KEY>",
+                arguments=[
+                    Argument(name="key", description="Subtask issue key or JIRA URL", required=True),
+                ],
+                examples=["jira delete-subtask PROJ-124"],
+                output_fields=["issue_key", "deleted"],
+                next_actions=["subtasks"],
             ),
             Command(
                 name="transitions",
@@ -291,6 +313,29 @@ def get_tool_description() -> ToolDescription:
                 ],
                 output_fields=["issue_key", "transition_id", "status_before", "status_after", "comment_added"],
                 next_actions=["get"],
+            ),
+            Command(
+                name="issue-types",
+                description="List available issue types for a project or the whole server",
+                usage="jira issue-types [PROJECT_KEY]",
+                arguments=[
+                    Argument(name="project_key", description="Optional project key to list project-specific types"),
+                ],
+                examples=["jira issue-types", "jira issue-types LU"],
+                output_fields=["project_key", "total", "issue_types[].id", "issue_types[].name", "issue_types[].subtask"],
+                next_actions=["create"],
+            ),
+            Command(
+                name="users",
+                description="Search for users by name, username, or email",
+                usage="jira users <QUERY> [--limit N]",
+                arguments=[
+                    Argument(name="query", description="Search string (matches username, display name, email)", required=True),
+                    Argument(name="--limit", description="Maximum results to return", type="integer", default=10),
+                ],
+                examples=["jira users john", "jira users pfarrell --limit 5"],
+                output_fields=["query", "total", "users[].name", "users[].display_name", "users[].email", "users[].active"],
+                next_actions=["update (with --assignee)", "watch (with --user)"],
             ),
             Command(
                 name="create",
@@ -361,6 +406,17 @@ def get_tool_description() -> ToolDescription:
                     "jira attachment content 12345 --max-size 1048576",
                 ],
                 output_fields=["attachment", "size_bytes", "is_text", "content"],
+            ),
+            Command(
+                name="attachment delete",
+                description="Delete an attachment",
+                usage="jira attachment delete <ATTACHMENT_ID>",
+                arguments=[
+                    Argument(name="attachment_id", description="Numeric attachment ID", required=True),
+                ],
+                examples=["jira attachment delete 12345"],
+                output_fields=["attachment_id", "deleted"],
+                next_actions=["attachments"],
             ),
             Command(
                 name="attachment upload",

@@ -389,6 +389,178 @@ class TestGetProjectRoles:
         assert "Users" in result
 
 
+class TestEditCommentVisibility:
+    """Tests for edit_comment with visibility."""
+
+    @responses.activate
+    def test_edit_comment_with_visibility(self, client):
+        """Should include visibility in request body."""
+        responses.add(
+            responses.PUT,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/comment/456",
+            json={
+                "id": "456",
+                "body": "Updated",
+                "visibility": {"type": "role", "value": "Developers"},
+            },
+            status=200,
+        )
+
+        result = client.edit_comment(
+            "PROJ-123", "456", "Updated",
+            visibility={"type": "role", "value": "Developers"},
+        )
+        assert result["visibility"]["type"] == "role"
+
+        request_body = json.loads(responses.calls[0].request.body)
+        assert request_body["visibility"] == {"type": "role", "value": "Developers"}
+
+    @responses.activate
+    def test_edit_comment_without_visibility(self, client):
+        """Should not include visibility when not provided."""
+        responses.add(
+            responses.PUT,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/comment/456",
+            json={"id": "456", "body": "Updated"},
+            status=200,
+        )
+
+        client.edit_comment("PROJ-123", "456", "Updated")
+
+        request_body = json.loads(responses.calls[0].request.body)
+        assert "visibility" not in request_body
+
+
+class TestDeleteAttachment:
+    """Tests for delete_attachment method."""
+
+    @responses.activate
+    def test_delete_attachment_success(self, client):
+        """Should delete attachment."""
+        responses.add(
+            responses.DELETE,
+            "https://jira.example.com/rest/api/2/attachment/12345",
+            status=204,
+        )
+
+        client.delete_attachment("12345")
+        assert len(responses.calls) == 1
+
+
+class TestSearchUsers:
+    """Tests for search_users method."""
+
+    @responses.activate
+    def test_search_users_success(self, client):
+        """Should return matching users."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/user/search",
+            json=[
+                {"name": "jdoe", "displayName": "John Doe", "emailAddress": "jdoe@example.com", "active": True},
+                {"name": "jsmith", "displayName": "Jane Smith", "emailAddress": "jsmith@example.com", "active": True},
+            ],
+            status=200,
+        )
+
+        result = client.search_users("j")
+        assert len(result) == 2
+        assert result[0]["name"] == "jdoe"
+
+        url = responses.calls[0].request.url
+        assert "username=j" in url
+        assert "maxResults=10" in url
+
+    @responses.activate
+    def test_search_users_with_limit(self, client):
+        """Should pass custom limit."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/user/search",
+            json=[],
+            status=200,
+        )
+
+        client.search_users("test", max_results=5)
+
+        url = responses.calls[0].request.url
+        assert "maxResults=5" in url
+
+
+class TestGetIssueTypes:
+    """Tests for get_issue_types method."""
+
+    @responses.activate
+    def test_get_all_issue_types(self, client):
+        """Should return all server issue types."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issuetype",
+            json=[
+                {"id": "1", "name": "Bug", "subtask": False},
+                {"id": "2", "name": "Task", "subtask": False},
+                {"id": "3", "name": "Sub-task", "subtask": True},
+            ],
+            status=200,
+        )
+
+        result = client.get_issue_types()
+        assert len(result) == 3
+        assert result[0]["name"] == "Bug"
+
+    @responses.activate
+    def test_get_project_issue_types(self, client):
+        """Should return project-specific issue types."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/project/PROJ",
+            json={
+                "key": "PROJ",
+                "issueTypes": [
+                    {"id": "1", "name": "Bug", "subtask": False},
+                    {"id": "2", "name": "Task", "subtask": False},
+                ],
+            },
+            status=200,
+        )
+
+        result = client.get_issue_types("PROJ")
+        assert len(result) == 2
+
+        url = responses.calls[0].request.url
+        assert "expand=issueTypes" in url
+
+
+class TestDeleteIssue:
+    """Tests for delete_issue method."""
+
+    @responses.activate
+    def test_delete_issue_success(self, client):
+        """Should delete issue."""
+        responses.add(
+            responses.DELETE,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            status=204,
+        )
+
+        client.delete_issue("PROJ-123")
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_delete_issue_with_subtasks(self, client):
+        """Should pass deleteSubtasks param."""
+        responses.add(
+            responses.DELETE,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            status=204,
+        )
+
+        client.delete_issue("PROJ-123", delete_subtasks=True)
+
+        url = responses.calls[0].request.url
+        assert "deleteSubtasks=true" in url
+
+
 class TestGetTransitions:
     """Tests for get_transitions method."""
 

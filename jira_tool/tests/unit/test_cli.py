@@ -1455,3 +1455,222 @@ class TestCLIIssueUnwatch:
         data = json.loads(result.output)
         assert data["ok"] is True
         assert data["data"]["user"] == "currentuser"
+
+
+class TestCLIEditCommentVisibility:
+    """Tests for 'jira edit-comment' with --visibility."""
+
+    @responses.activate
+    def test_edit_comment_with_visibility(self, runner, mock_env):
+        """Should edit comment with visibility restriction."""
+        responses.add(
+            responses.PUT,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/comment/456",
+            json={
+                "id": "456",
+                "body": "Updated text",
+                "author": {"displayName": "User"},
+                "updated": "2024-01-15T12:00:00.000+0000",
+                "visibility": {"type": "role", "value": "Developers"},
+            },
+            status=200,
+        )
+
+        result = runner.invoke(
+            main, ["edit-comment", "PROJ-123", "456", "Updated text", "--visibility", "role:Developers"]
+        )
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["data"]["comment"]["visibility"]["type"] == "role"
+        assert data["data"]["comment"]["visibility"]["value"] == "Developers"
+
+        request_body = json.loads(responses.calls[0].request.body)
+        assert request_body["visibility"] == {"type": "role", "value": "Developers"}
+
+    @responses.activate
+    def test_edit_comment_without_visibility(self, runner, mock_env):
+        """Should not send visibility when option not provided."""
+        responses.add(
+            responses.PUT,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/comment/456",
+            json={
+                "id": "456",
+                "body": "Updated text",
+                "author": {"displayName": "User"},
+                "updated": "2024-01-15T12:00:00.000+0000",
+            },
+            status=200,
+        )
+
+        result = runner.invoke(main, ["edit-comment", "PROJ-123", "456", "Updated text"])
+
+        assert result.exit_code == 0
+        request_body = json.loads(responses.calls[0].request.body)
+        assert "visibility" not in request_body
+
+
+class TestCLIAttachmentDelete:
+    """Tests for 'jira attachment delete' command."""
+
+    @responses.activate
+    def test_delete_attachment(self, runner, mock_env):
+        """Should delete attachment."""
+        responses.add(
+            responses.DELETE,
+            "https://jira.example.com/rest/api/2/attachment/12345",
+            status=204,
+        )
+
+        result = runner.invoke(main, ["attachment", "delete", "12345"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["attachment_id"] == "12345"
+        assert data["data"]["deleted"] is True
+
+    @responses.activate
+    def test_delete_attachment_not_found(self, runner, mock_env):
+        """Should return error for non-existent attachment."""
+        responses.add(
+            responses.DELETE,
+            "https://jira.example.com/rest/api/2/attachment/99999",
+            json={"errorMessages": ["Attachment not found"]},
+            status=404,
+        )
+
+        result = runner.invoke(main, ["attachment", "delete", "99999"])
+
+        assert result.exit_code != 0
+
+
+class TestCLIUserSearch:
+    """Tests for 'jira users' command."""
+
+    @responses.activate
+    def test_search_users(self, runner, mock_env):
+        """Should search and return users."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/user/search",
+            json=[
+                {"name": "jdoe", "displayName": "John Doe", "emailAddress": "jdoe@example.com", "active": True},
+                {"name": "jsmith", "displayName": "Jane Smith", "emailAddress": "jsmith@example.com", "active": True},
+            ],
+            status=200,
+        )
+
+        result = runner.invoke(main, ["users", "j"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["query"] == "j"
+        assert data["data"]["total"] == 2
+        assert data["data"]["users"][0]["name"] == "jdoe"
+        assert data["data"]["users"][0]["display_name"] == "John Doe"
+        assert data["data"]["users"][0]["email"] == "jdoe@example.com"
+
+    @responses.activate
+    def test_search_users_with_limit(self, runner, mock_env):
+        """Should respect --limit option."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/user/search",
+            json=[],
+            status=200,
+        )
+
+        result = runner.invoke(main, ["users", "test", "--limit", "5"])
+
+        assert result.exit_code == 0
+        url = responses.calls[0].request.url
+        assert "maxResults=5" in url
+
+
+class TestCLIIssueTypes:
+    """Tests for 'jira issue-types' command."""
+
+    @responses.activate
+    def test_list_all_issue_types(self, runner, mock_env):
+        """Should list all server issue types."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issuetype",
+            json=[
+                {"id": "1", "name": "Bug", "subtask": False, "description": "A bug"},
+                {"id": "2", "name": "Task", "subtask": False},
+                {"id": "3", "name": "Sub-task", "subtask": True},
+            ],
+            status=200,
+        )
+
+        result = runner.invoke(main, ["issue-types"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["total"] == 3
+        assert data["data"]["issue_types"][0]["name"] == "Bug"
+        assert data["data"]["issue_types"][0]["description"] == "A bug"
+        assert data["data"]["issue_types"][2]["subtask"] is True
+        assert "project_key" not in data["data"]
+
+    @responses.activate
+    def test_list_project_issue_types(self, runner, mock_env):
+        """Should list project-specific issue types."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/project/PROJ",
+            json={
+                "key": "PROJ",
+                "issueTypes": [
+                    {"id": "1", "name": "Bug", "subtask": False},
+                    {"id": "2", "name": "Task", "subtask": False},
+                ],
+            },
+            status=200,
+        )
+
+        result = runner.invoke(main, ["issue-types", "PROJ"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["data"]["project_key"] == "PROJ"
+        assert data["data"]["total"] == 2
+
+
+class TestCLIDeleteSubtask:
+    """Tests for 'jira delete-subtask' command."""
+
+    @responses.activate
+    def test_delete_subtask(self, runner, mock_env):
+        """Should delete a subtask."""
+        responses.add(
+            responses.DELETE,
+            "https://jira.example.com/rest/api/2/issue/PROJ-124",
+            status=204,
+        )
+
+        result = runner.invoke(main, ["delete-subtask", "PROJ-124"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["issue_key"] == "PROJ-124"
+        assert data["data"]["deleted"] is True
+
+    @responses.activate
+    def test_delete_subtask_not_found(self, runner, mock_env):
+        """Should return error for non-existent subtask."""
+        responses.add(
+            responses.DELETE,
+            "https://jira.example.com/rest/api/2/issue/PROJ-999",
+            json={"errorMessages": ["Issue Does Not Exist"]},
+            status=404,
+        )
+
+        result = runner.invoke(main, ["delete-subtask", "PROJ-999"])
+
+        assert result.exit_code != 0

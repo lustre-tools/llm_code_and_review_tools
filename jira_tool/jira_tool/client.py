@@ -488,7 +488,13 @@ class JiraClient:
             context=key,
         )
 
-    def edit_comment(self, key: str, comment_id: str, body: str) -> dict[str, Any]:
+    def edit_comment(
+        self,
+        key: str,
+        comment_id: str,
+        body: str,
+        visibility: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """
         Edit an existing comment on an issue.
 
@@ -496,14 +502,19 @@ class JiraClient:
             key: Issue key
             comment_id: Comment ID to edit
             body: New comment body text
+            visibility: Optional visibility restriction dict with "type" ("role" or "group")
+                        and "value" (role/group name)
 
         Returns:
             Updated comment data
         """
+        json_data: dict[str, Any] = {"body": body}
+        if visibility:
+            json_data["visibility"] = visibility
         return self._request(
             "PUT",
             f"issue/{key}/comment/{comment_id}",
-            json_data={"body": body},
+            json_data=json_data,
             context=f"{key}/comment/{comment_id}",
         )
 
@@ -954,6 +965,91 @@ class JiraClient:
                 http_status=response.status_code,
             )
         return response.content, metadata
+
+    def delete_attachment(self, attachment_id: str) -> None:
+        """
+        Delete an attachment.
+
+        Args:
+            attachment_id: The attachment ID to delete
+        """
+        self._request(
+            "DELETE",
+            f"attachment/{attachment_id}",
+            context=f"attachment {attachment_id}",
+        )
+
+    # =========================================================================
+    # User Operations
+    # =========================================================================
+
+    def search_users(
+        self,
+        query: str,
+        max_results: int = 10,
+    ) -> list[dict[str, Any]]:
+        """
+        Search for users by username, display name, or email.
+
+        Args:
+            query: Search string (matches username, display name, email)
+            max_results: Maximum results to return (default: 10)
+
+        Returns:
+            List of user dicts
+        """
+        params = {
+            "username": query,
+            "maxResults": str(max_results),
+        }
+        return self._request("GET", "user/search", params=params, context=f"user search: {query}")
+
+    # =========================================================================
+    # Issue Type Operations
+    # =========================================================================
+
+    def get_issue_types(self, project_key: str | None = None) -> list[dict[str, Any]]:
+        """
+        Get available issue types.
+
+        Args:
+            project_key: Optional project key to get project-specific types.
+                         If None, returns all issue types on the server.
+
+        Returns:
+            List of issue type dicts
+        """
+        if project_key:
+            result = self._request(
+                "GET",
+                f"project/{project_key}",
+                params={"expand": "issueTypes"},
+                context=project_key,
+            )
+            return result.get("issueTypes", [])
+        return self._request("GET", "issuetype")
+
+    # =========================================================================
+    # Issue Delete Operations
+    # =========================================================================
+
+    def delete_issue(self, key: str, delete_subtasks: bool = False) -> None:
+        """
+        Delete an issue.
+
+        Args:
+            key: Issue key
+            delete_subtasks: If True, also delete subtasks
+        """
+        params = {}
+        if delete_subtasks:
+            params["deleteSubtasks"] = "true"
+        self._request(
+            "DELETE",
+            f"issue/{key}",
+            params=params if params else None,
+            context=key,
+        )
 
     # =========================================================================
     # Watcher Operations

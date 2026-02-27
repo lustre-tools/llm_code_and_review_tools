@@ -477,8 +477,14 @@ def issue_comment_add(ctx: click.Context, key: str, body: str, visibility: str |
 @click.argument("key")
 @click.argument("comment_id")
 @click.argument("body")
+@click.option(
+    "--visibility",
+    default=None,
+    help="Restrict comment visibility. Format: 'role:RoleName' or 'group:GroupName'. "
+    "Use 'jira roles <PROJECT_KEY>' to list available roles.",
+)
 @click.pass_context
-def issue_comment_edit(ctx: click.Context, key: str, comment_id: str, body: str) -> None:
+def issue_comment_edit(ctx: click.Context, key: str, comment_id: str, body: str, visibility: str | None) -> None:
     """
     Edit an existing comment on an issue.
 
@@ -493,7 +499,8 @@ def issue_comment_edit(ctx: click.Context, key: str, comment_id: str, body: str)
         client = get_client(ctx)
         key = extract_issue_key(key)
 
-        raw_comment = client.edit_comment(key, comment_id, body)
+        visibility_dict = _parse_visibility(visibility) if visibility else None
+        raw_comment = client.edit_comment(key, comment_id, body, visibility=visibility_dict)
 
         comment_data = {
             "issue_key": key,
@@ -1003,6 +1010,39 @@ def issue_subtasks(ctx: click.Context, key: str) -> None:
         sys.exit(handle_error(e, command, pretty))
 
 
+@main.command("delete-subtask")
+@click.argument("key")
+@click.pass_context
+def issue_delete_subtask(ctx: click.Context, key: str) -> None:
+    """
+    Delete a subtask.
+
+    KEY is the subtask issue key (e.g., PROJ-124) or a JIRA URL.
+    """
+    command = "delete-subtask"
+    pretty = ctx.obj.get("pretty", False)
+
+    try:
+        client = get_client(ctx)
+        key = extract_issue_key(key)
+
+        client.delete_issue(key)
+
+        data = {
+            "issue_key": key,
+            "deleted": True,
+        }
+
+        envelope = success_response(data, command)
+        output_result(envelope, pretty)
+        sys.exit(ExitCode.SUCCESS)
+
+    except JiraToolError as e:
+        sys.exit(handle_error(e, command, pretty))
+    except ConfigError as e:
+        sys.exit(handle_error(e, command, pretty))
+
+
 @main.command("transitions")
 @click.argument("key")
 @click.pass_context
@@ -1089,6 +1129,97 @@ def issue_transition(ctx: click.Context, key: str, transition_id: str, comment: 
         }
 
         envelope = success_response(transition_data, command)
+        output_result(envelope, pretty)
+        sys.exit(ExitCode.SUCCESS)
+
+    except JiraToolError as e:
+        sys.exit(handle_error(e, command, pretty))
+    except ConfigError as e:
+        sys.exit(handle_error(e, command, pretty))
+
+
+@main.command("issue-types")
+@click.argument("project_key", required=False, default=None)
+@click.pass_context
+def issue_types_list(ctx: click.Context, project_key: str | None) -> None:
+    """
+    List available issue types.
+
+    PROJECT_KEY is an optional project key (e.g., LU, EX).
+    If provided, shows only issue types valid for that project.
+    If omitted, shows all issue types on the server.
+    """
+    command = "issue-types"
+    pretty = ctx.obj.get("pretty", False)
+
+    try:
+        client = get_client(ctx)
+
+        raw_types = client.get_issue_types(project_key)
+
+        types = []
+        for it in raw_types:
+            entry: dict[str, Any] = {
+                "id": it.get("id"),
+                "name": it.get("name"),
+                "subtask": it.get("subtask", False),
+            }
+            desc = it.get("description")
+            if desc:
+                entry["description"] = desc
+            types.append(entry)
+
+        data: dict[str, Any] = {
+            "total": len(types),
+            "issue_types": types,
+        }
+        if project_key:
+            data["project_key"] = project_key
+
+        envelope = success_response(data, command)
+        output_result(envelope, pretty)
+        sys.exit(ExitCode.SUCCESS)
+
+    except JiraToolError as e:
+        sys.exit(handle_error(e, command, pretty))
+    except ConfigError as e:
+        sys.exit(handle_error(e, command, pretty))
+
+
+@main.command("users")
+@click.argument("query")
+@click.option("--limit", default=10, help="Maximum results to return (default: 10)")
+@click.pass_context
+def user_search(ctx: click.Context, query: str, limit: int) -> None:
+    """
+    Search for users by name, username, or email.
+
+    QUERY is the search string.
+    """
+    command = "users"
+    pretty = ctx.obj.get("pretty", False)
+
+    try:
+        client = get_client(ctx)
+
+        raw_users = client.search_users(query, max_results=limit)
+
+        users = []
+        for u in raw_users:
+            users.append({
+                "name": u.get("name"),
+                "display_name": u.get("displayName"),
+                "email": u.get("emailAddress"),
+                "active": u.get("active"),
+            })
+
+        data = {
+            "query": query,
+            "total": len(users),
+            "users": users,
+        }
+
+        envelope = success_response(data, command)
         output_result(envelope, pretty)
         sys.exit(ExitCode.SUCCESS)
 
@@ -1664,6 +1795,38 @@ def attachment_content(ctx: click.Context, attachment_id: str, max_size: int, en
             content_data["note"] = "Binary content - use --raw flag to download"
 
         envelope = success_response(content_data, command)
+        output_result(envelope, pretty)
+        sys.exit(ExitCode.SUCCESS)
+
+    except JiraToolError as e:
+        sys.exit(handle_error(e, command, pretty))
+    except ConfigError as e:
+        sys.exit(handle_error(e, command, pretty))
+
+
+@attachment.command("delete")
+@click.argument("attachment_id")
+@click.pass_context
+def attachment_delete(ctx: click.Context, attachment_id: str) -> None:
+    """
+    Delete an attachment.
+
+    ATTACHMENT_ID is the numeric attachment ID.
+    """
+    command = "attachment.delete"
+    pretty = ctx.obj.get("pretty", False)
+
+    try:
+        client = get_client(ctx)
+
+        client.delete_attachment(attachment_id)
+
+        data = {
+            "attachment_id": attachment_id,
+            "deleted": True,
+        }
+
+        envelope = success_response(data, command)
         output_result(envelope, pretty)
         sys.exit(ExitCode.SUCCESS)
 
