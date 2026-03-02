@@ -788,16 +788,25 @@ def queue(
 
     items = []
     for q in raw:
-        items.append({
+        entry: dict[str, Any] = {
             "id": q.get("id"),
             "job": q.get("job"),
             "buildno": q.get("buildno"),
             "test_group": q.get("test_group"),
+            "distros": q.get("distros"),
             "status": q.get("status"),
+            "info": q.get("info"),
             "instance": q.get("instance"),
+            "remain": q.get("remain"),
             "review_id": q.get("review_id"),
             "review_patch": q.get("review_patch"),
-        })
+        }
+        # Include current suite/test if running
+        if q.get("suite"):
+            entry["suite"] = q["suite"]
+        if q.get("test"):
+            entry["test"] = q["test"]
+        items.append(entry)
 
     filters = {}
     if review_id is not None:
