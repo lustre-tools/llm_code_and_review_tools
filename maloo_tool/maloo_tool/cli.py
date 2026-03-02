@@ -618,18 +618,55 @@ def test_history(
     _output(env, pretty)
 
 
+def _resolve_review_to_revision(review_id: int) -> str | None:
+    """Resolve a Gerrit change number to its current patchset revision hash.
+
+    Uses the gerrit CLI tool to look up the change.  Returns the commit
+    hash string, or None if the lookup fails.
+    """
+    import json
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["gerrit", "info", str(review_id)],
+            capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode != 0:
+            return None
+        data = json.loads(proc.stdout)
+        patchsets = data.get("data", {}).get("patchsets", [])
+        if patchsets:
+            # Last patchset has the current revision — get it from
+            # the change's current_revision if available, otherwise
+            # fall back to the Gerrit info output.
+            pass
+        # The gerrit info output includes the current revision in the
+        # change detail.  Try to extract it.
+        current_rev = data.get("data", {}).get("current_revision")
+        if current_rev:
+            return current_rev
+        # Fallback: use the gerrit REST-style query via the CLI
+        return None
+    except Exception:
+        return None
+
+
 @main.command()
-@click.option("--review", "review_id", type=int, default=None,
-              help="Gerrit review/change number")
+@click.option("--review", "review_id", type=str, default=None,
+              help="Gerrit change number or commit hash")
+@click.option("--build", "buildno", type=int, default=None,
+              help="Jenkins build number")
 @click.option("--branch", "job", type=str, default=None,
-              help="Filter by job name (branch)")
+              help="Filter by Jenkins job name (e.g. lustre-b_es-reviews)")
 @click.option("--status", type=str, default=None,
               help="Filter by queue status (e.g. Queued, Running)")
 @click.option("--limit", type=int, default=20,
               help="Max entries to return (default: 20)")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON")
 def queue(
-    review_id: int | None,
+    review_id: str | None,
+    buildno: int | None,
     job: str | None,
     status: str | None,
     limit: int,
@@ -638,20 +675,49 @@ def queue(
     """Show test queue status.
 
     Lists queued and running tests, optionally filtered by
-    Gerrit review, branch/job, or status.
+    Gerrit review, build number, branch/job, or status.
+
+    --review accepts a Gerrit change number (e.g. 64266) or a commit
+    hash.  Change numbers are automatically resolved to commit hashes
+    via the gerrit CLI.
+
+    --branch expects the Jenkins job name (e.g. lustre-b_es-reviews,
+    lustre-reviews), not the git branch name.
 
     \b
     Examples:
-      maloo queue --review 54321
-      maloo queue --branch lustre-master
+      maloo queue --review 64266
+      maloo queue --build 27341
+      maloo queue --branch lustre-b_es-reviews
       maloo queue --status Running
-      maloo queue --review 54321
     """
     client = _make_client()
 
     params: dict[str, Any] = {}
+    resolved_review = review_id  # track what we actually queried with
     if review_id is not None:
-        params["review_id"] = review_id
+        # If it looks like a pure integer (Gerrit change number),
+        # resolve to the current patchset commit hash via gerrit CLI.
+        if review_id.isdigit():
+            revision = _resolve_review_to_revision(int(review_id))
+            if revision:
+                params["review_id"] = revision
+                resolved_review = revision
+            else:
+                _error(
+                    "RESOLVE_FAILED",
+                    f"Could not resolve Gerrit change {review_id} to a "
+                    f"commit hash (is the gerrit CLI available?). "
+                    f"Try --build <buildno> or pass the commit hash directly.",
+                    "queue",
+                    pretty,
+                )
+                return
+        else:
+            # Assume it's already a commit hash
+            params["review_id"] = review_id
+    if buildno is not None:
+        params["buildno"] = buildno
     if job:
         params["job"] = job
     if status:
@@ -660,7 +726,7 @@ def queue(
     if not params:
         _error(
             "MISSING_FILTER",
-            "At least one filter required: --review, --branch, or --status",
+            "At least one filter required: --review, --build, --branch, or --status",
             "queue",
             pretty,
         )
@@ -688,6 +754,10 @@ def queue(
     filters = {}
     if review_id is not None:
         filters["review_id"] = review_id
+        if resolved_review != review_id:
+            filters["resolved_revision"] = resolved_review
+    if buildno is not None:
+        filters["buildno"] = buildno
     if job:
         filters["job"] = job
     if status:

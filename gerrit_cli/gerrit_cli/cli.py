@@ -214,6 +214,10 @@ def cmd_extract(args):
     try:
         include_system = getattr(args, 'include_system', False)
         include_ci = getattr(args, 'include_ci', False)
+        # --include-system implies --include-ci (system messages without
+        # CI bot messages is rarely useful and leads to confusion)
+        if include_system:
+            include_ci = True
         result = extract_comments(
             url=args.url,
             include_resolved=args.all,
@@ -625,6 +629,8 @@ def cmd_series_comments(args):
     try:
         include_system = getattr(args, 'include_system', False)
         include_ci = getattr(args, 'include_ci', False)
+        if include_system:
+            include_ci = True
         finder = SeriesFinder()
         result = finder.get_series_comments(
             url=args.url,
@@ -1859,6 +1865,7 @@ def cmd_info(args):
             "status": change.get("status", ""),
             "owner": change.get("owner", {}).get("name", ""),
             "current_patchset": current_patchset,
+            "current_revision": current_revision,
             "patchsets": patchsets,
             "reviewers": reviewers,
             "ci": {
