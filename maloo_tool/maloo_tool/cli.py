@@ -635,30 +635,73 @@ def _resolve_review_to_revision(review_id: int) -> str | None:
         if proc.returncode != 0:
             return None
         data = json.loads(proc.stdout)
-        patchsets = data.get("data", {}).get("patchsets", [])
-        if patchsets:
-            # Last patchset has the current revision — get it from
-            # the change's current_revision if available, otherwise
-            # fall back to the Gerrit info output.
-            pass
-        # The gerrit info output includes the current revision in the
-        # change detail.  Try to extract it.
-        current_rev = data.get("data", {}).get("current_revision")
-        if current_rev:
-            return current_rev
-        # Fallback: use the gerrit REST-style query via the CLI
-        return None
+        return data.get("data", {}).get("current_revision")
     except Exception:
         return None
 
 
+def _parse_review_arg(value: str) -> str:
+    """Parse a --review value into a change number or commit hash.
+
+    Accepts:
+      - A Gerrit URL: https://review.whamcloud.com/c/ex/lustre-release/+/64266
+      - A plain change number: 64266
+      - A commit hash: 7b77eeb0190d6d93880951533c2e1d1145780375
+
+    Returns the change number (digits only) or commit hash string.
+    """
+    # Full Gerrit URL — extract the change number
+    m = re.match(r"https?://[^/]+/c/[^/]+(?:/[^/]+)*/\+/(\d+)", value)
+    if m:
+        return m.group(1)
+    m = re.match(r"https?://[^/]+/(\d+)", value)
+    if m:
+        return m.group(1)
+    return value
+
+
+# Map common git branch names to their Jenkins review job names.
+# Integration branch jobs (lustre-b_es6_0, lustre-master) use the
+# branch name directly as lustre-{branch}, but review jobs have
+# different naming conventions.
+_BRANCH_TO_REVIEW_JOB = {
+    "master": "lustre-reviews",
+    "b_es6_0": "lustre-b_es-reviews",
+    "b_es7_0": "lustre-b_es-reviews",
+    "b_es5_2": "lustre-b_es-reviews",
+    "b_es5_1": "lustre-b_es-reviews",
+    "b_es5_0": "lustre-b_es-reviews",
+    "b_ieel3_0": "lustre-b_ieel-reviews",
+    "b_ieel2_3": "lustre-b_ieel-reviews",
+}
+
+
+def _resolve_branch_to_job(branch: str) -> str:
+    """Resolve a git branch name to a Jenkins job name.
+
+    If the value already looks like a Jenkins job name (starts with
+    'lustre-'), return it as-is.  Otherwise try the known mapping,
+    then fall back to 'lustre-{branch}'.
+    """
+    if branch.startswith("lustre-"):
+        return branch
+    if branch in _BRANCH_TO_REVIEW_JOB:
+        return _BRANCH_TO_REVIEW_JOB[branch]
+    # Heuristic: b_es* branches use lustre-b_es-reviews
+    if branch.startswith("b_es"):
+        return "lustre-b_es-reviews"
+    if branch.startswith("b_ieel"):
+        return "lustre-b_ieel-reviews"
+    return f"lustre-{branch}"
+
+
 @main.command()
 @click.option("--review", "review_id", type=str, default=None,
-              help="Gerrit change number or commit hash")
+              help="Gerrit change number, URL, or commit hash")
 @click.option("--build", "buildno", type=int, default=None,
               help="Jenkins build number")
 @click.option("--branch", "job", type=str, default=None,
-              help="Filter by Jenkins job name (e.g. lustre-b_es-reviews)")
+              help="Git branch or Jenkins job name (e.g. b_es6_0, lustre-reviews)")
 @click.option("--status", type=str, default=None,
               help="Filter by queue status (e.g. Queued, Running)")
 @click.option("--limit", type=int, default=20,
@@ -677,18 +720,21 @@ def queue(
     Lists queued and running tests, optionally filtered by
     Gerrit review, build number, branch/job, or status.
 
-    --review accepts a Gerrit change number (e.g. 64266) or a commit
-    hash.  Change numbers are automatically resolved to commit hashes
-    via the gerrit CLI.
+    --review accepts a Gerrit change number (e.g. 64266), a full
+    Gerrit URL, or a commit hash.  Change numbers are automatically
+    resolved to commit hashes via the gerrit CLI.
 
-    --branch expects the Jenkins job name (e.g. lustre-b_es-reviews,
-    lustre-reviews), not the git branch name.
+    --branch accepts a git branch name (e.g. b_es6_0, master) or a
+    Jenkins job name (e.g. lustre-b_es-reviews, lustre-reviews).
+    Branch names are mapped to their review job names automatically.
 
     \b
     Examples:
       maloo queue --review 64266
+      maloo queue --review https://review.whamcloud.com/c/ex/lustre-release/+/64266
       maloo queue --build 27341
-      maloo queue --branch lustre-b_es-reviews
+      maloo queue --branch b_es6_0
+      maloo queue --branch lustre-reviews
       maloo queue --status Running
     """
     client = _make_client()
@@ -696,6 +742,7 @@ def queue(
     params: dict[str, Any] = {}
     resolved_review = review_id  # track what we actually queried with
     if review_id is not None:
+        review_id = _parse_review_arg(review_id)
         # If it looks like a pure integer (Gerrit change number),
         # resolve to the current patchset commit hash via gerrit CLI.
         if review_id.isdigit():
@@ -719,6 +766,7 @@ def queue(
     if buildno is not None:
         params["buildno"] = buildno
     if job:
+        job = _resolve_branch_to_job(job)
         params["job"] = job
     if status:
         params["status"] = status
