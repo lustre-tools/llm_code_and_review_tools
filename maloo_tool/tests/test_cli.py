@@ -469,12 +469,14 @@ class TestQueue:
             },
         ]
 
-        result = runner.invoke(main, ["queue", "--review", "54321"])
+        with patch("maloo_tool.cli._resolve_review_to_revision",
+                    return_value="abc123def456"):
+            result = runner.invoke(main, ["queue", "--review", "54321"])
         env = _parse_output(result)
         assert env["ok"] is True
         assert env["data"]["count"] == 1
         assert env["data"]["queue_entries"][0]["status"] == "Running"
-        assert env["data"]["filters"]["review_id"] == 54321
+        assert env["data"]["filters"]["review_id"] == "54321"
 
     def test_queue_by_status(self, runner, mock_client):
         mock_client.get_test_queues.return_value = []
@@ -607,8 +609,8 @@ class TestClientPagination:
         assert len(results) == 50
         assert client._get.call_count == 1
 
-    def test_get_all_paginates(self):
-        """_get_all should fetch multiple pages."""
+    def test_get_paginated_fetches_multiple_pages(self):
+        """_get_paginated should fetch multiple pages."""
         from maloo_tool.client import MalooClient
         from maloo_tool.config import MalooConfig
 
@@ -624,7 +626,7 @@ class TestClientPagination:
 
         client._get = MagicMock(side_effect=[page1, page2])
 
-        results = client._get_all("test_sessions", {})
+        results = client._get_paginated("test_sessions", {})
         assert len(results) == 350
         assert client._get.call_count == 2
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=Lustre Patch Watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=build
+ExecStart=/shared/llm_code_and_review_tools/patch_watcher/run_watcher.sh
+TimeoutStartSec=600
+Environment=HOME=/home/build
+WorkingDirectory=/shared/llm_code_and_review_tools/patch_watcher

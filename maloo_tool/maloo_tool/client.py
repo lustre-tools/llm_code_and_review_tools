@@ -32,20 +32,33 @@ class MalooClient:
             return body
         return body.get("data", [])
 
-    def _get_all(
-        self, endpoint: str, params: dict[str, Any] | None = None
+    def _get_paginated(
+        self,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+        max_records: int = 0,
     ) -> list[dict[str, Any]]:
-        """GET with automatic pagination (200-record pages)."""
+        """GET with automatic pagination (200-record pages).
+
+        Args:
+            endpoint: API endpoint name.
+            params: Query parameters.
+            max_records: Stop after this many records (0 = no limit).
+        """
         params = dict(params) if params else {}
         results: list[dict[str, Any]] = []
         offset = 0
         while True:
+            if max_records > 0 and len(results) >= max_records:
+                break
             params["offset"] = offset
             page = self._get(endpoint, params)
             results.extend(page)
             if len(page) < 200:
                 break
             offset += 200
+        if max_records > 0:
+            return results[:max_records]
         return results
 
     # -- Test Sessions --
@@ -61,33 +74,13 @@ class MalooClient:
             params: Query parameters for the test_sessions endpoint.
             max_records: Stop after this many records (0 = no limit).
         """
-        if max_records <= 0:
-            return self._get_all("test_sessions", params)
-        params = dict(params)
-        results: list[dict[str, Any]] = []
-        offset = 0
-        while len(results) < max_records:
-            params["offset"] = offset
-            page = self._get("test_sessions", params)
-            results.extend(page)
-            if len(page) < 200:
-                break
-            offset += 200
-        return results[:max_records]
+        return self._get_paginated(
+            "test_sessions", params, max_records
+        )
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         """Get a single test session by ID."""
         rows = self._get("test_sessions", {"id": session_id})
-        return rows[0] if rows else None
-
-    def get_session_full(
-        self, session_id: str
-    ) -> dict[str, Any] | None:
-        """Get a test session with test_sets and sub_tests."""
-        rows = self._get(
-            "test_sessions",
-            {"id": session_id, "related": "['test_sets','sub_tests']"},
-        )
         return rows[0] if rows else None
 
     def find_sessions_by_review(
@@ -98,13 +91,13 @@ class MalooClient:
         if patch is not None:
             params["review_patch"] = patch
         # First get the code reviews to find session IDs
-        reviews = self._get_all("code_reviews", params)
+        reviews = self._get_paginated("code_reviews", params)
         if not reviews:
             # Try via test_queues as fallback
             qparams: dict[str, Any] = {"review_id": review_id}
             if patch is not None:
                 qparams["review_patch"] = patch
-            return self._get_all("test_queues", qparams)
+            return self._get_paginated("test_queues", qparams)
         # Fetch the actual sessions
         session_ids = {r["test_session_id"] for r in reviews}
         sessions = []
@@ -120,7 +113,7 @@ class MalooClient:
         self, session_id: str
     ) -> list[dict[str, Any]]:
         """Get test sets for a session."""
-        return self._get_all(
+        return self._get_paginated(
             "test_sets", {"test_session_id": session_id}
         )
 
@@ -129,16 +122,6 @@ class MalooClient:
     ) -> dict[str, Any] | None:
         """Get a single test set by ID."""
         rows = self._get("test_sets", {"id": test_set_id})
-        return rows[0] if rows else None
-
-    def get_test_set_with_subtests(
-        self, test_set_id: str
-    ) -> dict[str, Any] | None:
-        """Get a test set with its child subtests."""
-        rows = self._get(
-            "test_sets",
-            {"id": test_set_id, "related": "true"},
-        )
         return rows[0] if rows else None
 
     # -- Sub Tests --
@@ -154,7 +137,7 @@ class MalooClient:
             params["test_set_id"] = test_set_id
         if session_id:
             params["test_session_id"] = session_id
-        return self._get_all("sub_tests", params)
+        return self._get_paginated("sub_tests", params)
 
     # -- Script names (for resolving IDs to names) --
 
@@ -206,26 +189,6 @@ class MalooClient:
                 names[sid] = script["name"]
         return names
 
-    # -- Test nodes --
-
-    def get_test_nodes(
-        self, session_id: str
-    ) -> list[dict[str, Any]]:
-        """Get test nodes for a session."""
-        return self._get_all(
-            "test_nodes", {"test_session_id": session_id}
-        )
-
-    # -- Code reviews --
-
-    def get_code_reviews(
-        self, session_id: str
-    ) -> list[dict[str, Any]]:
-        """Get code review info for a session."""
-        return self._get_all(
-            "code_reviews", {"test_session_id": session_id}
-        )
-
     # -- Bug links --
 
     def get_bug_links(
@@ -240,7 +203,7 @@ class MalooClient:
             params["buggable_type"] = buggable_type
         if related:
             params["related"] = "true"
-        return self._get_all("bug_links", params)
+        return self._get_paginated("bug_links", params)
 
     def create_bug_link(
         self,
@@ -277,19 +240,9 @@ class MalooClient:
             params: Query parameters for the test_queues endpoint.
             max_records: Stop after this many records (0 = no limit).
         """
-        if max_records <= 0:
-            return self._get_all("test_queues", params)
-        params = dict(params)
-        results: list[dict[str, Any]] = []
-        offset = 0
-        while len(results) < max_records:
-            params["offset"] = offset
-            page = self._get("test_queues", params)
-            results.extend(page)
-            if len(page) < 200:
-                break
-            offset += 200
-        return results[:max_records]
+        return self._get_paginated(
+            "test_queues", params, max_records
+        )
 
     # -- Test history --
 
@@ -687,3 +640,127 @@ class MalooClient:
             raise RuntimeError(f"Retest failed: {m.group(1).strip()}")
 
         return f"HTTP {resp.status_code}"
+
+    # -- Raise bug (web form, not REST API) --
+
+    def raise_bug(
+        self,
+        buggable_id: str,
+        buggable_type: str = "TestSet",
+        project: str = "LU",
+        summary: str = "",
+        description: str | None = None,
+    ) -> dict[str, str]:
+        """Raise a new JIRA bug via Maloo's web form.
+
+        This uses the same "Raise bug..." button from the Maloo web UI.
+        Maloo creates the JIRA issue and auto-links it to the test
+        failure.
+
+        Args:
+            buggable_id: Test set or subtest UUID.
+            buggable_type: "TestSet" or "SubTest".
+            project: JIRA project (LU, EX, DDN, etc.).
+            summary: Bug summary line.
+            description: Bug description (None = use Maloo's default
+                which includes test session details and links).
+
+        Returns:
+            Dict with 'ticket' (e.g. "LU-12345") and 'url' keys.
+        """
+        web = self._web_login()
+
+        # Step 1: GET the form to extract defaults (pre-populated
+        # description with session links, etc.)
+        form_url = (
+            f"{self.config.base_url}/bug_references/new"
+            f"?buggable_id={buggable_id}"
+            f"&buggable_type={buggable_type}"
+        )
+        resp = web.get(form_url, timeout=30)
+        resp.raise_for_status()
+
+        # Extract default description if none provided
+        if description is None:
+            m = re.search(
+                r'<textarea[^>]*name="description"[^>]*>(.*?)</textarea>',
+                resp.text,
+                re.DOTALL,
+            )
+            if m:
+                import html
+                description = html.unescape(m.group(1)).strip()
+            else:
+                description = ""
+
+        # Extract default summary prefix (e.g. "sanity: ")
+        if not summary:
+            m = re.search(
+                r'<textarea[^>]*name="summary"[^>]*>(.*?)</textarea>',
+                resp.text,
+                re.DOTALL,
+            )
+            if m:
+                import html
+                summary = html.unescape(m.group(1)).strip()
+
+        # Step 2: Submit the form (method=GET with commit=Create issue)
+        params = {
+            "buggable_id": buggable_id,
+            "buggable_type": buggable_type,
+            "project": project,
+            "summary": summary,
+            "description": description,
+            "commit": "Create issue",
+        }
+        resp = web.get(form_url, params=params, timeout=30)
+        resp.raise_for_status()
+
+        # Parse response for the created ticket
+        # Look for flash success message with ticket ID
+        m = re.search(
+            r'class="flash success"[^>]*>([^<]+)', resp.text
+        )
+        flash_msg = m.group(1).strip() if m else ""
+
+        # Try to find ticket ID (e.g. LU-12345) in the response
+        m = re.search(
+            r'(?:Created|created|Bug)\s+.*?([A-Z]+-\d+)', resp.text
+        )
+        ticket = m.group(1) if m else ""
+
+        # Also check if we got redirected to a page showing the ticket
+        if not ticket:
+            m = re.search(
+                r'([A-Z]+-\d+)', flash_msg
+            )
+            ticket = m.group(1) if m else ""
+
+        # Look for the JIRA URL in the response
+        m = re.search(
+            r'(https://jira\.whamcloud\.com/browse/[A-Z]+-\d+)',
+            resp.text,
+        )
+        jira_url = m.group(1) if m else ""
+
+        if not ticket and jira_url:
+            m = re.search(r'([A-Z]+-\d+)$', jira_url)
+            ticket = m.group(1) if m else ""
+
+        # Check for error
+        m = re.search(
+            r'class="flash (?:error|alert)"[^>]*>([^<]+)', resp.text
+        )
+        if m:
+            raise RuntimeError(
+                f"Raise bug failed: {m.group(1).strip()}"
+            )
+
+        return {
+            "ticket": ticket,
+            "url": jira_url or (
+                f"https://jira.whamcloud.com/browse/{ticket}"
+                if ticket else ""
+            ),
+            "flash": flash_msg,
+        }

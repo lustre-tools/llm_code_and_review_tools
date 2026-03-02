@@ -1,0 +1,10 @@
+[Unit]
+Description=Lustre Patch Watcher Timer
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

@@ -392,6 +392,61 @@ def link_bug(
         _error("LINK_FAILED", resp, "link-bug", pretty)
 
 
+@main.command(name="raise-bug")
+@click.argument("buggable_id")
+@click.option(
+    "--project", default="LU",
+    help="JIRA project (default: LU)")
+@click.option(
+    "--summary", default="",
+    help="Bug summary (default: auto-generated from test set name)")
+@click.option(
+    "--description", default=None,
+    help="Bug description (default: Maloo's auto-generated template)")
+@click.option(
+    "--type", "buggable_type",
+    type=click.Choice(["TestSet", "SubTest"]),
+    default="TestSet",
+    help="Type of entity (default: TestSet)")
+@click.option("--pretty", is_flag=True, help="Pretty-print JSON")
+def raise_bug(
+    buggable_id: str,
+    project: str,
+    summary: str,
+    description: str | None,
+    buggable_type: str,
+    pretty: bool,
+) -> None:
+    """Raise a new JIRA bug via Maloo and auto-link to test failure.
+
+    Uses Maloo's "Raise bug" web feature to create a JIRA issue
+    and automatically associate it with the test set/subtest.
+
+    \b
+    Examples:
+      maloo raise-bug <test_set_id> --project LU --summary "sanity test_81a FAIL"
+      maloo raise-bug <test_set_id>  # uses Maloo's default summary/description
+    """
+    client = _make_client()
+    try:
+        result = client.raise_bug(
+            buggable_id=buggable_id,
+            buggable_type=buggable_type,
+            project=project,
+            summary=summary,
+            description=description,
+        )
+        result["buggable_id"] = buggable_id
+        result["buggable_type"] = buggable_type
+        result["project"] = project
+        env = success_response(result, TOOL_NAME, "raise-bug")
+        _output(env, pretty)
+    except RuntimeError as exc:
+        _error("RAISE_BUG_FAILED", str(exc), "raise-bug", pretty)
+    except Exception as exc:
+        _error("API_ERROR", str(exc), "raise-bug", pretty)
+
+
 @main.command()
 @click.option("--branch", type=str, default=None,
               help="Filter by branch (trigger_job), e.g. lustre-master")
