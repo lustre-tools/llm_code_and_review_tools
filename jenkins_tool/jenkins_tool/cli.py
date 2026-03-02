@@ -13,6 +13,7 @@ from llm_tool_common.envelope import (
     format_json,
     success_response,
 )
+from llm_tool_common.decorators import handle_errors
 
 from .client import JenkinsClient
 from .config import load_config
@@ -227,6 +228,7 @@ def main() -> None:
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--view", "view_name", default=None, help="Filter by view name")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
+@handle_errors(TOOL_NAME, "jobs")
 def jobs(
     url: str | None,
     user: str | None,
@@ -242,19 +244,12 @@ def jobs(
       jenkins jobs --view lustre
       jenkins jobs --pretty
     """
-    try:
-        client = _make_client(url, user, token)
-        if view_name:
-            view_data = client.get_view(view_name)
-            raw_jobs = view_data.get("jobs", [])
-        else:
-            raw_jobs = client.get_jobs()
-    except requests.HTTPError as e:
-        _error("API_ERROR", f"HTTP {e.response.status_code}: {e}", "jobs", pretty)
-        return
-    except Exception as exc:
-        _error("API_ERROR", str(exc), "jobs", pretty)
-        return
+    client = _make_client(url, user, token)
+    if view_name:
+        view_data = client.get_view(view_name)
+        raw_jobs = view_data.get("jobs", [])
+    else:
+        raw_jobs = client.get_jobs()
 
     items = []
     for j in raw_jobs:
@@ -283,6 +278,7 @@ def jobs(
 @click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
+@handle_errors(TOOL_NAME, "builds")
 def builds(
     job_name: str,
     limit: int,
@@ -298,18 +294,8 @@ def builds(
       jenkins builds lustre-master
       jenkins builds lustre-reviews --limit 20
     """
-    try:
-        client = _make_client(url, user, token)
-        raw_builds = client.get_builds(job_name, limit=limit)
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code == 404:
-            _error("NOT_FOUND", f"Job '{job_name}' not found", "builds", pretty)
-        else:
-            _error("API_ERROR", f"HTTP {e.response.status_code}: {e}", "builds", pretty)
-        return
-    except Exception as exc:
-        _error("API_ERROR", str(exc), "builds", pretty)
-        return
+    client = _make_client(url, user, token)
+    raw_builds = client.get_builds(job_name, limit=limit)
 
     items = []
     for b in raw_builds:
@@ -344,6 +330,7 @@ def builds(
 @click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
+@handle_errors(TOOL_NAME, "build")
 def build(
     job_name: str,
     build_number: str,
@@ -363,18 +350,8 @@ def build(
       jenkins build lustre-reviews lastBuild
       jenkins build lustre-master lastFailedBuild
     """
-    try:
-        client = _make_client(url, user, token)
-        data = client.get_build(job_name, build_number)
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code == 404:
-            _error("NOT_FOUND", f"Build {build_number} not found for '{job_name}'", "build", pretty)
-        else:
-            _error("API_ERROR", f"HTTP {e.response.status_code}: {e}", "build", pretty)
-        return
-    except Exception as exc:
-        _error("API_ERROR", str(exc), "build", pretty)
-        return
+    client = _make_client(url, user, token)
+    data = client.get_build(job_name, build_number)
 
     result = _normalize_build(data, job_name=job_name)
     bnum = result.get("number", build_number)
@@ -410,6 +387,7 @@ def build(
 @click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
+@handle_errors(TOOL_NAME, "console")
 def console(
     job_name: str,
     build_number: str,
@@ -433,18 +411,8 @@ def console(
       jenkins console lustre-master lastFailedBuild --grep "error"
       jenkins console lustre-master 4704 --head 100
     """
-    try:
-        client = _make_client(url, user, token)
-        text = client.get_console_text(job_name, build_number)
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code == 404:
-            _error("NOT_FOUND", f"Build {build_number} not found for '{job_name}'", "console", pretty)
-        else:
-            _error("API_ERROR", f"HTTP {e.response.status_code}: {e}", "console", pretty)
-        return
-    except Exception as exc:
-        _error("API_ERROR", str(exc), "console", pretty)
-        return
+    client = _make_client(url, user, token)
+    text = client.get_console_text(job_name, build_number)
 
     lines = text.splitlines()
     total_lines = len(lines)
@@ -494,6 +462,7 @@ def console(
 @click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
+@handle_errors(TOOL_NAME, "review")
 def review(
     change_number: int,
     job: str | None,
@@ -513,22 +482,15 @@ def review(
       jenkins review 54225
       jenkins review 54225 --job lustre-reviews
     """
-    try:
-        client = _make_client(url, user, token)
-        if job:
-            matches = client.find_builds_by_gerrit_change(
-                job, change_number, max_builds=limit
-            )
-            for m in matches:
-                m["_job_name"] = job
-        else:
-            matches = client.find_review_builds(change_number, max_builds=limit)
-    except requests.HTTPError as e:
-        _error("API_ERROR", f"HTTP {e.response.status_code}: {e}", "review", pretty)
-        return
-    except Exception as exc:
-        _error("API_ERROR", str(exc), "review", pretty)
-        return
+    client = _make_client(url, user, token)
+    if job:
+        matches = client.find_builds_by_gerrit_change(
+            job, change_number, max_builds=limit
+        )
+        for m in matches:
+            m["_job_name"] = job
+    else:
+        matches = client.find_review_builds(change_number, max_builds=limit)
 
     items = [_normalize_build(m) for m in matches]
 
@@ -565,6 +527,7 @@ def review(
 @click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
+@handle_errors(TOOL_NAME, "run-console")
 def run_console(
     job_name: str,
     build_number: int,
@@ -590,23 +553,9 @@ def run_console(
       jenkins run-console lustre-reviews 121880 "arch=x86_64,build_type=client,distro=el8.9,ib_stack=inkernel" --tail 50
       jenkins run-console lustre-reviews 121880 "arch=x86_64,build_type=client,distro=el8.9,ib_stack=inkernel" --grep "error"
     """
-    try:
-        client = _make_client(url, user, token)
-        run_url = f"{client.config.base_url}/job/{job_name}/{config}/{build_number}"
-        text = client.get_run_console_text(run_url)
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code == 404:
-            _error(
-                "NOT_FOUND",
-                f"Run not found: {job_name}/{config}/{build_number}",
-                "run-console", pretty,
-            )
-        else:
-            _error("API_ERROR", f"HTTP {e.response.status_code}: {e}", "run-console", pretty)
-        return
-    except Exception as exc:
-        _error("API_ERROR", str(exc), "run-console", pretty)
-        return
+    client = _make_client(url, user, token)
+    run_url = f"{client.config.base_url}/job/{job_name}/{config}/{build_number}"
+    text = client.get_run_console_text(run_url)
 
     lines = text.splitlines()
     total_lines = len(lines)
@@ -657,6 +606,7 @@ def run_console(
 @click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
+@handle_errors(TOOL_NAME, "abort")
 def abort(
     job_name: str,
     build_number: int,
@@ -678,36 +628,25 @@ def abort(
       jenkins abort lustre-reviews 121884
       jenkins abort lustre-reviews 121884 --kill
     """
-    try:
-        client = _make_client(url, user, token)
+    client = _make_client(url, user, token)
 
-        # First check if the build is actually running
-        data = client.get_build(job_name, build_number)
-        if not data.get("building", False):
-            msg = f"Build {build_number} is not running (result: {data.get('result')})"
-            result: dict[str, Any] = {
-                "job": job_name, "build": build_number,
-                "message": msg, "aborted": False,
-            }
-            _output(success_response(result, TOOL_NAME, "abort"), pretty)
-            return
-
-        if force_kill:
-            client.kill_build(job_name, build_number)
-            action = "killed"
-        else:
-            client.abort_build(job_name, build_number)
-            action = "aborted"
-
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code == 404:
-            _error("NOT_FOUND", f"Build {build_number} not found for '{job_name}'", "abort", pretty)
-        else:
-            _error("API_ERROR", f"HTTP {e.response.status_code}: {e}", "abort", pretty)
+    # First check if the build is actually running
+    data = client.get_build(job_name, build_number)
+    if not data.get("building", False):
+        msg = f"Build {build_number} is not running (result: {data.get('result')})"
+        result: dict[str, Any] = {
+            "job": job_name, "build": build_number,
+            "message": msg, "aborted": False,
+        }
+        _output(success_response(result, TOOL_NAME, "abort"), pretty)
         return
-    except Exception as exc:
-        _error("API_ERROR", str(exc), "abort", pretty)
-        return
+
+    if force_kill:
+        client.kill_build(job_name, build_number)
+        action = "killed"
+    else:
+        client.abort_build(job_name, build_number)
+        action = "aborted"
 
     # Count how many sub-builds were running
     runs = data.get("runs", [])
@@ -737,6 +676,7 @@ def abort(
 @click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
+@handle_errors(TOOL_NAME, "retrigger")
 def retrigger(
     job_name: str,
     build_number: int,
@@ -756,23 +696,8 @@ def retrigger(
       jenkins retrigger lustre-reviews 121880
       jenkins retrigger lustre-master 4699
     """
-    try:
-        client = _make_client(url, user, token)
-        location = client.retrigger_build(job_name, build_number)
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code == 404:
-            _error(
-                "NOT_FOUND",
-                f"Build {build_number} not found for '{job_name}' "
-                "(or gerrit-trigger retrigger not available)",
-                "retrigger", pretty,
-            )
-        else:
-            _error("API_ERROR", f"HTTP {e.response.status_code}: {e}", "retrigger", pretty)
-        return
-    except Exception as exc:
-        _error("API_ERROR", str(exc), "retrigger", pretty)
-        return
+    client = _make_client(url, user, token)
+    location = client.retrigger_build(job_name, build_number)
 
     result = {
         "success": True,

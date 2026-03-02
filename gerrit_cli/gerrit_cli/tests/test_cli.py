@@ -700,7 +700,7 @@ class TestCmdReintegration:
         """Test continue-reintegration success."""
         from gerrit_cli.cli import cmd_continue_reintegration
         args = argparse.Namespace()
-        with patch('gerrit_cli.rebase.RebaseManager') as MockManager:
+        with patch('gerrit_cli.cli.RebaseManager') as MockManager:
             mock_mgr = MagicMock()
             mock_mgr.continue_reintegration.return_value = (True, "Reintegration continued")
             MockManager.return_value = mock_mgr
@@ -711,7 +711,7 @@ class TestCmdReintegration:
         """Test continue-reintegration failure."""
         from gerrit_cli.cli import cmd_continue_reintegration
         args = argparse.Namespace()
-        with patch('gerrit_cli.rebase.RebaseManager') as MockManager, \
+        with patch('gerrit_cli.cli.RebaseManager') as MockManager, \
              pytest.raises(SystemExit) as exc_info:
             mock_mgr = MagicMock()
             mock_mgr.continue_reintegration.return_value = (False, "Error")
@@ -724,7 +724,7 @@ class TestCmdReintegration:
         """Test skip-reintegration success."""
         from gerrit_cli.cli import cmd_skip_reintegration
         args = argparse.Namespace()
-        with patch('gerrit_cli.rebase.RebaseManager') as MockManager:
+        with patch('gerrit_cli.cli.RebaseManager') as MockManager:
             mock_mgr = MagicMock()
             mock_mgr.skip_reintegration.return_value = (True, "Skipped")
             MockManager.return_value = mock_mgr
@@ -735,7 +735,7 @@ class TestCmdReintegration:
         """Test skip-reintegration failure."""
         from gerrit_cli.cli import cmd_skip_reintegration
         args = argparse.Namespace()
-        with patch('gerrit_cli.rebase.RebaseManager') as MockManager, \
+        with patch('gerrit_cli.cli.RebaseManager') as MockManager, \
              pytest.raises(SystemExit) as exc_info:
             mock_mgr = MagicMock()
             mock_mgr.skip_reintegration.return_value = (False, "Error")

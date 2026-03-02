@@ -27,6 +27,7 @@ from .describe import (
     Command,
     ToolDescription,
 )
+from .decorators import handle_errors
 
 __all__ = [
     # Envelope functions
@@ -47,5 +48,7 @@ __all__ = [
     "Argument",
     "Command",
     "ToolDescription",
+    # Decorators
+    "handle_errors",
 ]
 
