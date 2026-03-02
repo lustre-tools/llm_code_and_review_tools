@@ -1,0 +1,9 @@
+[Unit]
+Description=Lustre Patch Watcher Daily Confidence Report Timer
+
+[Timer]
+OnCalendar=*-*-* 08:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Lustre Patch Watcher Daily Confidence Report
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=build
+ExecStart=/shared/llm_code_and_review_tools/patch_watcher/daily_confidence.sh
+TimeoutStartSec=120
+Environment=HOME=/home/build
+WorkingDirectory=/shared/llm_code_and_review_tools/patch_watcher

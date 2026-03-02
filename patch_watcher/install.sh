@@ -28,21 +28,29 @@ fi
 echo "Installing systemd units..."
 sudo cp "$WATCHER_DIR/patch_watcher.service" "$SERVICE_DIR/"
 sudo cp "$WATCHER_DIR/patch_watcher.timer" "$SERVICE_DIR/"
+sudo cp "$WATCHER_DIR/patch_watcher_daily.service" "$SERVICE_DIR/"
+sudo cp "$WATCHER_DIR/patch_watcher_daily.timer" "$SERVICE_DIR/"
 sudo systemctl daemon-reload
 
-echo "Enabling timer..."
+echo "Enabling hourly watcher timer..."
 sudo systemctl enable patch_watcher.timer
 sudo systemctl start patch_watcher.timer
 
+echo "Enabling daily confidence report timer..."
+sudo systemctl enable patch_watcher_daily.timer
+sudo systemctl start patch_watcher_daily.timer
+
 echo ""
 echo "Timer status:"
-systemctl status patch_watcher.timer --no-pager || true
+systemctl list-timers 'patch_watcher*' --no-pager || true
 
 echo ""
 echo "=== Installation complete ==="
-echo "Timer will fire hourly (with up to 5 min random delay)."
+echo "Hourly watcher: checks patches, emails on actions."
+echo "Daily report:   confidence summary at 08:00."
 echo "Logs: ${HOME}/.patch_watcher/watcher.log"
 echo ""
-echo "Manual test: bash $WATCHER_DIR/run_watcher.sh"
-echo "Check timer: systemctl list-timers patch_watcher.timer"
-echo "Stop timer:  sudo systemctl stop patch_watcher.timer"
+echo "Manual test:    bash $WATCHER_DIR/run_watcher.sh"
+echo "Manual daily:   bash $WATCHER_DIR/daily_confidence.sh"
+echo "Check timers:   systemctl list-timers 'patch_watcher*'"
+echo "Stop all:       sudo systemctl stop patch_watcher.timer patch_watcher_daily.timer"
