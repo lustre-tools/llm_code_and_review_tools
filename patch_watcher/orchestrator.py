@@ -43,11 +43,14 @@ def log(msg):
 
 
 def run(args, stdin_data=None, timeout=60):
-    """Run a command, return parsed JSON or {"raw": ..., "rc": ...}."""
+    """Run a command, return parsed JSON or {"raw": ..., "rc": ...}.
+
+    stderr passes through to our stderr (for debug logging).
+    """
     try:
         r = subprocess.run(
-            args, capture_output=True, text=True,
-            timeout=timeout, input=stdin_data)
+            args, stdout=subprocess.PIPE, stderr=sys.stderr,
+            text=True, timeout=timeout, input=stdin_data)
         out = r.stdout.strip()
         if not out:
             return {"error": f"empty output (rc={r.returncode})",
@@ -62,7 +65,7 @@ def run(args, stdin_data=None, timeout=60):
         return {"error": str(e)}
 
 
-def watcher(action, *args, stdin_data=None, timeout=60):
+def watcher(action, *args, stdin_data=None, timeout=120):
     """Call watcher_tool.sh <action> [args...]."""
     return run(
         [WATCHER_TOOL, action] + list(args),
@@ -73,15 +76,17 @@ def watcher(action, *args, stdin_data=None, timeout=60):
 # Phase 1: Check all patches
 # -------------------------------------------------------------------
 
-def _check_one_patch(i, patch):
-    """Check a single patch. Called from thread pool."""
+def _check_one(i, patch):
+    """Check a single patch (called from thread pool)."""
+    import time
     url = patch["gerrit_url"]
     ws = patch.get("watch_status", "active")
     lp = str(patch.get("last_patchset", 0))
     lr = str(patch.get("last_review_count", 0))
 
-    result = watcher(
-        "check-patch", url, str(i), ws, lp, lr)
+    t0 = time.monotonic()
+    result = watcher("check-patch", url, str(i), ws, lp, lr)
+    elapsed = time.monotonic() - t0
 
     if "error" in result and "raw" not in result:
         result = {
@@ -91,26 +96,32 @@ def _check_one_patch(i, patch):
             "errors": [f"check-patch: {result['error']}"],
         }
 
+    n_act = len(result.get("actions_taken", []))
+    n_llm = len(result.get("needs_llm_decision", []))
+    n_err = len(result.get("errors", []))
+    skipped = result.get("skipped", False)
+    status = "skipped" if skipped else \
+        f"{n_act}act/{n_llm}llm/{n_err}err"
+    desc = patch.get("description", "?")[:50]
+    log(f"  [{i}] {desc} → {elapsed:.1f}s [{status}]")
+
     return (i, patch, result)
 
 
 def check_all_patches(patches):
     """Run check-patch for all patches in parallel."""
     results = [None] * len(patches)
-
     with ThreadPoolExecutor(max_workers=min(5, len(patches))) as pool:
         futures = {
-            pool.submit(_check_one_patch, i, p): i
+            pool.submit(_check_one, i, p): i
             for i, p in enumerate(patches)
         }
         for future in as_completed(futures):
             i = futures[future]
-            desc = patches[i].get("description", "?")[:50]
             try:
                 results[i] = future.result()
-                log(f"  [{i}] {desc}... done")
             except Exception as e:
-                log(f"  [{i}] {desc}... ERROR: {e}")
+                log(f"  [{i}] exception: {e}")
                 results[i] = (i, patches[i], {
                     "gerrit_url": patches[i]["gerrit_url"],
                     "patch_index": i,
@@ -118,7 +129,6 @@ def check_all_patches(patches):
                     "needs_llm_decision": [],
                     "errors": [f"check-patch exception: {e}"],
                 })
-
     return results
 
 

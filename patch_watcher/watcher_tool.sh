@@ -72,12 +72,20 @@ check-patch)
 
 	python3 - "$GERRIT_URL" "$PATCH_INDEX" "$WATCH_STATUS" \
 		"$LAST_PATCHSET" "$LAST_REVIEW_COUNT" <<'PYEOF'
-import json, subprocess, sys, re
+import json, subprocess, sys, re, time
+
+def dbg(msg):
+    """Debug log to stderr (stdout is the JSON result)."""
+    print(f"    check-patch: {msg}", file=sys.stderr)
 
 def run_tool(args):
     """Run a CLI tool, return parsed JSON or raw text."""
+    label = " ".join(args[:3])
+    t0 = time.monotonic()
     try:
         r = subprocess.run(args, capture_output=True, text=True, timeout=30)
+        elapsed = time.monotonic() - t0
+        dbg(f"{label} → {elapsed:.1f}s (rc={r.returncode})")
         out = r.stdout.strip()
         if not out:
             return None
@@ -85,7 +93,13 @@ def run_tool(args):
             return json.loads(out)
         except json.JSONDecodeError:
             return {"raw": out}
+    except subprocess.TimeoutExpired:
+        elapsed = time.monotonic() - t0
+        dbg(f"{label} → TIMEOUT after {elapsed:.1f}s")
+        return {"error": f"{label} timed out ({elapsed:.0f}s)"}
     except Exception as e:
+        elapsed = time.monotonic() - t0
+        dbg(f"{label} → ERROR after {elapsed:.1f}s: {e}")
         return {"error": str(e)}
 
 url = sys.argv[1]
@@ -236,6 +250,18 @@ for test in enforced.get("tests", []):
     if test.get("verdict") != "FAIL":
         continue
 
+    # retest_pending is on the test group, not individual
+    # failures. If a retest is pending for this test group,
+    # skip ALL its failures.
+    if test.get("retest_pending"):
+        result["actions_taken"].append({
+            "type": "skipped_retest_pending",
+            "description": (
+                f"{test['test']}: retest already pending"
+            ),
+        })
+        continue
+
     for failure in test.get("failures", []):
         session_url = failure.get("url", "")
         # Extract session ID from URL
@@ -246,17 +272,6 @@ for test in enforced.get("tests", []):
                 f"Could not extract session ID from {session_url}")
             continue
         session_id = sid_match.group(1)
-
-        # Check if retest already pending for this session
-        if failure.get("retest_pending"):
-            result["actions_taken"].append({
-                "type": "skipped_retest_pending",
-                "description": (
-                    f"{test['test']}: retest already pending"
-                ),
-                "session_id": session_id,
-            })
-            continue
 
         # Get failure details
         fails = run_tool(["maloo", "failures", session_id])
