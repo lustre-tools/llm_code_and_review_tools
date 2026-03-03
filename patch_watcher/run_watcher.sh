@@ -68,26 +68,32 @@ rm -f "$REPORT_FILE"
 
 # Run Claude Code with constrained tools
 # --model haiku: cheap and fast
-# --permission-mode bypassPermissions: non-interactive (no permission prompts)
-#   Required because this runs unattended as a daemon. The allowedTools
-#   flag + watcher_tool.sh guardrail restrict what Claude can actually do.
-# --allowedTools: ONLY watcher_tool.sh and Read
+# --allowedTools: ONLY watcher_tool.sh (no Read, no raw Bash)
+#   In non-interactive -p mode, tools not in this list are denied
+#   (fail-closed: no user to prompt). This is the primary security gate.
 # --max-budget-usd: hard cost cap per run
 # --no-session-persistence: clean slate each run
 # --output-format json: gives us usage stats (input/output tokens, cost)
+#
+# NOTE: We do NOT use --permission-mode bypassPermissions. That would
+# override --allowedTools and grant access to ALL tools. Instead, we
+# rely on --allowedTools as a restrictive allowlist; non-listed tools
+# are denied in non-interactive mode.
 log "Invoking Claude Code (haiku, budget \$2.00)..."
 
 # Unset CLAUDECODE to allow running from within another Claude session
 # (e.g., during testing). The systemd timer won't have this set.
 unset CLAUDECODE 2>/dev/null || true
 
+# Clean up stale rate limit files (>1 day old)
+find /tmp -name 'patch_watcher_rates.*' -mtime +1 -delete 2>/dev/null || true
+
 START_SECONDS=$SECONDS
 
 # Stderr goes to both log files for live monitoring
 claude -p \
 	--model haiku \
-	--permission-mode bypassPermissions \
-	--allowedTools "Bash(${WATCHER_DIR}/watcher_tool.sh:*) Read" \
+	--allowedTools "Bash(${WATCHER_DIR}/watcher_tool.sh *)" \
 	--max-budget-usd 2.00 \
 	--output-format json \
 	--no-session-persistence \

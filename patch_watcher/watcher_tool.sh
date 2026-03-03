@@ -8,6 +8,26 @@ set -euo pipefail
 
 PATCHES_FILE="/shared/support_files/patches_to_watch.json"
 
+# --- Rate limiting for write actions ---
+# Counter file in /tmp. PPID is the claude process that invoked us;
+# stable across all tool calls within a single run.
+RATE_FILE="/tmp/patch_watcher_rates.${PPID}"
+# Caps per run
+MAX_RETESTS=15
+MAX_RAISE_BUGS=5
+MAX_LINK_BUGS=20
+
+rate_check() {
+	local action="$1"
+	local max="$2"
+	local count
+	count=$(grep -c "^${action}$" "$RATE_FILE" 2>/dev/null || echo 0)
+	if (( count >= max )); then
+		die "Rate limit: ${action} called ${count} times (max ${max} per run)"
+	fi
+	echo "$action" >> "$RATE_FILE"
+}
+
 usage() {
 	cat <<'EOF'
 Usage: watcher_tool.sh <action> [args...]
@@ -360,16 +380,19 @@ check-linked-bugs)
 
 link-bug)
 	[[ $# -ge 2 ]] || die "link-bug requires <test_set_id> <JIRA_TICKET>"
+	rate_check link_bug "$MAX_LINK_BUGS"
 	exec maloo link-bug "$1" "$2"
 	;;
 
 raise-bug)
 	[[ $# -ge 1 ]] || die "raise-bug requires <test_set_id>"
+	rate_check raise_bug "$MAX_RAISE_BUGS"
 	exec maloo raise-bug "$@"
 	;;
 
 retest)
 	[[ $# -ge 2 ]] || die "retest requires <session_id> <JIRA_TICKET>"
+	rate_check retest "$MAX_RETESTS"
 	exec maloo retest "$1" "$2"
 	;;
 
