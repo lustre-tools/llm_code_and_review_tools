@@ -673,6 +673,12 @@ def add_abandon_parser(subparsers):
         help="Optional message explaining why (default: none)",
     )
     parser.add_argument(
+        "--message", "-m",
+        dest="message_flag",
+        default=None,
+        help="Optional message explaining why (alternative to positional)",
+    )
+    parser.add_argument(
         "--dry-run", "-n",
         action="store_true",
         help="Show what would be abandoned without actually doing it",

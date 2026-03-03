@@ -16,7 +16,8 @@ def cmd_abandon(args):
         base_url, change_number = cli.GerritCommentsClient.parse_gerrit_url(args.url)
         client = cli.GerritCommentsClient()
 
-        message = getattr(args, 'message', '') or ''
+        # --message/-m flag takes precedence over positional
+        message = getattr(args, 'message_flag', None) or getattr(args, 'message', '') or ''
 
         # Handle dry-run mode
         dry_run = getattr(args, 'dry_run', False)
