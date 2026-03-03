@@ -83,7 +83,7 @@ def run_tool(args):
     label = " ".join(args[:3])
     t0 = time.monotonic()
     try:
-        r = subprocess.run(args, capture_output=True, text=True, timeout=30)
+        r = subprocess.run(args, capture_output=True, text=True, timeout=300)
         elapsed = time.monotonic() - t0
         dbg(f"{label} → {elapsed:.1f}s (rc={r.returncode})")
         out = r.stdout.strip()
