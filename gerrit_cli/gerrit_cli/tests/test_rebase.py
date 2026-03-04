@@ -63,7 +63,7 @@ class TestRebaseSession:
 class TestRebaseManager:
     """Tests for RebaseManager class."""
 
-    @patch("gerrit_cli.rebase.Path")
+    @patch("gerrit_cli.tmux_integration.Path")
     def test_init(self, mock_path):
         """Test RebaseManager initialization."""
         manager = RebaseManager()
@@ -103,7 +103,7 @@ class TestRebaseManager:
         """Test check when not in a git repository."""
         manager = RebaseManager()
 
-        with patch("gerrit_cli.rebase.git_utils.check_git_repo") as mock_check:
+        with patch("gerrit_cli.tmux_integration.git_utils.check_git_repo") as mock_check:
             mock_check.return_value = (False, "Not a git repository")
 
             is_valid, msg = manager.check_git_repo()
@@ -115,8 +115,8 @@ class TestRebaseManager:
         """Test check when working tree is dirty."""
         manager = RebaseManager()
 
-        with patch("gerrit_cli.rebase.git_utils.check_git_repo") as mock_check:
-            with patch("gerrit_cli.rebase.git_utils.is_working_tree_clean") as mock_clean:
+        with patch("gerrit_cli.tmux_integration.git_utils.check_git_repo") as mock_check:
+            with patch("gerrit_cli.tmux_integration.git_utils.is_working_tree_clean") as mock_clean:
                 mock_check.return_value = (True, "Valid git repository")
                 mock_clean.return_value = (False, "Working tree is not clean. Please commit or stash your changes first.")
 
@@ -129,8 +129,8 @@ class TestRebaseManager:
         """Test check when git repo is clean."""
         manager = RebaseManager()
 
-        with patch("gerrit_cli.rebase.git_utils.check_git_repo") as mock_check:
-            with patch("gerrit_cli.rebase.git_utils.is_working_tree_clean") as mock_clean:
+        with patch("gerrit_cli.tmux_integration.git_utils.check_git_repo") as mock_check:
+            with patch("gerrit_cli.tmux_integration.git_utils.is_working_tree_clean") as mock_clean:
                 mock_check.return_value = (True, "Valid git repository")
                 mock_clean.return_value = (True, "Working tree is clean")
 
@@ -143,7 +143,7 @@ class TestRebaseManager:
         """Test getting current branch name."""
         manager = RebaseManager()
 
-        with patch("gerrit_cli.rebase.git_utils.get_current_branch") as mock_branch:
+        with patch("gerrit_cli.tmux_integration.git_utils.get_current_branch") as mock_branch:
             mock_branch.return_value = "main"
 
             branch = manager.get_current_branch()
@@ -154,7 +154,7 @@ class TestRebaseManager:
         """Test getting branch when in detached HEAD."""
         manager = RebaseManager()
 
-        with patch("gerrit_cli.rebase.git_utils.get_current_branch") as mock_branch:
+        with patch("gerrit_cli.tmux_integration.git_utils.get_current_branch") as mock_branch:
             mock_branch.return_value = None
 
             branch = manager.get_current_branch()
@@ -165,7 +165,7 @@ class TestRebaseManager:
         """Test getting current commit hash."""
         manager = RebaseManager()
 
-        with patch("gerrit_cli.rebase.git_utils.get_current_commit") as mock_commit:
+        with patch("gerrit_cli.tmux_integration.git_utils.get_current_commit") as mock_commit:
             mock_commit.return_value = "abc123"
 
             commit = manager.get_current_commit()
@@ -235,8 +235,8 @@ class TestRebaseManager:
             # Check that unlink was called (on the actual path instance)
             # Note: This is a simplified test
 
-    @patch("gerrit_cli.rebase.extract_comments")
-    @patch("gerrit_cli.rebase.SeriesFinder")
+    @patch("gerrit_cli.tmux_integration.extract_comments")
+    @patch("gerrit_cli.tmux_integration.SeriesFinder")
     def test_start_rebase_to_patch_not_in_repo(self, mock_finder_cls, mock_extract):
         """Test starting rebase when not in a git repo."""
         manager = RebaseManager()
@@ -251,8 +251,8 @@ class TestRebaseManager:
             assert not success
             assert "Not in a git repository" in msg
 
-    @patch("gerrit_cli.rebase.extract_comments")
-    @patch("gerrit_cli.rebase.SeriesFinder")
+    @patch("gerrit_cli.tmux_integration.extract_comments")
+    @patch("gerrit_cli.tmux_integration.SeriesFinder")
     def test_start_rebase_to_patch_continues_existing_session(
         self, mock_finder_cls, mock_extract
     ):
@@ -290,8 +290,8 @@ class TestRebaseManager:
             # Should have tried to checkout the commit from existing session
             mock_git.assert_called_with(["checkout", "def456"])
 
-    @patch("gerrit_cli.rebase.extract_comments")
-    @patch("gerrit_cli.rebase.SeriesFinder")
+    @patch("gerrit_cli.tmux_integration.extract_comments")
+    @patch("gerrit_cli.tmux_integration.SeriesFinder")
     def test_start_rebase_to_patch_patch_not_found(self, mock_finder_cls, mock_extract):
         """Test starting rebase when patch not in series."""
         # Set up the mock BEFORE creating the manager
@@ -383,7 +383,7 @@ class TestRebaseManager:
 class TestModuleFunctions:
     """Tests for module-level functions."""
 
-    @patch("gerrit_cli.rebase.RebaseManager")
+    @patch("gerrit_cli.patch_workflow.RebaseManager")
     def test_work_on_patch(self, mock_manager_cls):
         """Test work_on_patch function."""
         mock_manager = Mock()
@@ -398,7 +398,7 @@ class TestModuleFunctions:
             "https://review.whamcloud.com/62640", 62641
         )
 
-    @patch("gerrit_cli.rebase.RebaseManager")
+    @patch("gerrit_cli.patch_workflow.RebaseManager")
     def test_finish_patch(self, mock_manager_cls):
         """Test finish_patch function."""
         mock_manager = Mock()
@@ -413,7 +413,7 @@ class TestModuleFunctions:
         assert msg == "Done"
         mock_manager.finish_rebase.assert_called_once()
 
-    @patch("gerrit_cli.rebase.RebaseManager")
+    @patch("gerrit_cli.patch_workflow.RebaseManager")
     def test_abort_patch(self, mock_manager_cls):
         """Test abort_patch function."""
         mock_manager = Mock()
@@ -426,7 +426,7 @@ class TestModuleFunctions:
         assert msg == "Aborted"
         mock_manager.abort_rebase.assert_called_once()
 
-    @patch("gerrit_cli.rebase.RebaseManager")
+    @patch("gerrit_cli.patch_workflow.RebaseManager")
     def test_rebase_status(self, mock_manager_cls):
         """Test rebase_status function."""
         mock_manager = Mock()
@@ -439,7 +439,7 @@ class TestModuleFunctions:
         assert msg == "Status info"
         mock_manager.get_status.assert_called_once()
 
-    @patch("gerrit_cli.rebase.RebaseManager")
+    @patch("gerrit_cli.patch_workflow.RebaseManager")
     def test_end_session_no_session(self, mock_manager_cls):
         """Test end_session with no active session."""
         mock_manager = Mock()
@@ -451,7 +451,7 @@ class TestModuleFunctions:
         assert not success
         assert "No active rebase session" in msg
 
-    @patch("gerrit_cli.rebase.RebaseManager")
+    @patch("gerrit_cli.patch_workflow.RebaseManager")
     def test_end_session_success(self, mock_manager_cls):
         """Test end_session with active session."""
         mock_manager = Mock()
