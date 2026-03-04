@@ -57,8 +57,11 @@ include = ["gerrit_cli*"]
 
 [tool.pytest.ini_options]
 testpaths = ["gerrit_cli/tests"]
+addopts = "--strict-markers"
 markers = [
     "integration: marks tests that require network access to real Gerrit",
+    "unit: marks tests as unit tests",
+    "slow: marks tests as slow-running",
 ]
 
 [tool.ruff]

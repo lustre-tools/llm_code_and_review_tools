@@ -1,0 +1,24 @@
+[tool.pytest.ini_options]
+testpaths = [
+    "jira_tool/tests",
+    "gerrit_cli/gerrit_cli/tests",
+    "maloo_tool/tests",
+    "jenkins_tool/tests",
+    "llm_tool_common/tests",
+    "patch_watcher/tests",
+]
+pythonpath = [
+    "jira_tool",
+    "gerrit_cli",
+    "maloo_tool",
+    "jenkins_tool",
+    "llm_tool_common/src",
+    "patch_watcher",
+]
+addopts = "--strict-markers --import-mode=importlib"
+markers = [
+    "integration: marks tests as integration tests (may require network)",
+    "unit: marks tests as unit tests",
+    "readonly: marks integration tests that only read data (no side effects)",
+    "slow: marks tests as slow-running",
+]

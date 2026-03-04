@@ -24,6 +24,15 @@ jenkins = "jenkins_tool.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = [
+    "integration: marks tests as integration tests (may require network)",
+    "unit: marks tests as unit tests",
+    "slow: marks tests as slow-running",
+]
+
 [tool.ruff]
 line-length = 120
 target-version = "py39"

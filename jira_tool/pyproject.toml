@@ -40,11 +40,12 @@ where = ["."]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short --strict-markers"
 markers = [
     "integration: marks tests as integration tests (may require network)",
     "unit: marks tests as unit tests",
     "readonly: marks integration tests that only read data (no side effects)",
+    "slow: marks tests as slow-running",
 ]
 
 [tool.ruff]

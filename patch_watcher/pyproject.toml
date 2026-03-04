@@ -1,0 +1,8 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = [
+    "integration: marks tests as integration tests (may require network)",
+    "unit: marks tests as unit tests",
+    "slow: marks tests as slow-running",
+]
