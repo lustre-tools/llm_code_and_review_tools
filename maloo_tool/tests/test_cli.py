@@ -9,7 +9,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from maloo_tool.cli import main
+from maloo_tool.cli import (
+    main,
+    _extract_session_id,
+    _parse_review_arg,
+    _resolve_branch_to_job,
+)
 
 # Valid UUIDs for test data (required by _extract_session_id regex)
 SID_1 = "11111111-1111-1111-1111-111111111111"
@@ -662,3 +667,312 @@ class TestUUIDExtraction:
     def test_invalid_id(self, runner, mock_client):
         result = runner.invoke(main, ["session", "not-a-uuid"])
         assert result.exit_code != 0
+
+
+# -- _extract_session_id helper --
+
+
+class TestExtractSessionId:
+    def test_bare_uuid(self):
+        sid = _extract_session_id("11111111-1111-1111-1111-111111111111")
+        assert sid == "11111111-1111-1111-1111-111111111111"
+
+    def test_url_with_uuid(self):
+        url = "https://testing.whamcloud.com/test_sessions/aabbccdd-1234-5678-9abc-def012345678"
+        sid = _extract_session_id(url)
+        assert sid == "aabbccdd-1234-5678-9abc-def012345678"
+
+    def test_uppercase_uuid(self):
+        sid = _extract_session_id("AABBCCDD-1234-5678-9ABC-DEF012345678")
+        assert sid == "AABBCCDD-1234-5678-9ABC-DEF012345678"
+
+    def test_invalid_raises(self):
+        import click
+        with pytest.raises(click.BadParameter, match="Cannot extract session ID"):
+            _extract_session_id("not-a-uuid")
+
+
+# -- _parse_review_arg helper --
+
+
+class TestParseReviewArg:
+    def test_gerrit_url_with_plus(self):
+        url = "https://review.whamcloud.com/c/ex/lustre-release/+/64266"
+        assert _parse_review_arg(url) == "64266"
+
+    def test_simple_gerrit_url(self):
+        url = "https://review.whamcloud.com/64266"
+        assert _parse_review_arg(url) == "64266"
+
+    def test_plain_number(self):
+        assert _parse_review_arg("64266") == "64266"
+
+    def test_commit_hash(self):
+        h = "7b77eeb0190d6d93880951533c2e1d1145780375"
+        assert _parse_review_arg(h) == h
+
+
+# -- _resolve_branch_to_job helper --
+
+
+class TestResolveBranchToJob:
+    def test_already_jenkins_job(self):
+        assert _resolve_branch_to_job("lustre-reviews") == "lustre-reviews"
+
+    def test_master(self):
+        assert _resolve_branch_to_job("master") == "lustre-reviews"
+
+    def test_b_es6_0(self):
+        assert _resolve_branch_to_job("b_es6_0") == "lustre-b_es-reviews"
+
+    def test_b_ieel3_0(self):
+        assert _resolve_branch_to_job("b_ieel3_0") == "lustre-b_ieel-reviews"
+
+    def test_unknown_b_es_branch(self):
+        """Unknown b_es branch should use heuristic."""
+        assert _resolve_branch_to_job("b_es9_0") == "lustre-b_es-reviews"
+
+    def test_unknown_b_ieel_branch(self):
+        assert _resolve_branch_to_job("b_ieel9_0") == "lustre-b_ieel-reviews"
+
+    def test_generic_branch(self):
+        assert _resolve_branch_to_job("some-branch") == "lustre-some-branch"
+
+
+# -- raise-bug command --
+
+
+class TestRaiseBug:
+    def test_raise_bug_success(self, runner, mock_client):
+        mock_client.raise_bug.return_value = {
+            "ticket": "LU-99999",
+            "url": "https://jira.whamcloud.com/browse/LU-99999",
+            "flash": "Created LU-99999",
+        }
+        result = runner.invoke(main, ["raise-bug", TSID_1, "--project", "LU", "--summary", "test bug"])
+        env = _parse_output(result)
+        assert env["ok"] is True
+        assert env["data"]["buggable_id"] == TSID_1
+
+    def test_raise_bug_runtime_error(self, runner, mock_client):
+        mock_client.raise_bug.side_effect = RuntimeError("JIRA connection failed")
+        result = runner.invoke(main, ["raise-bug", TSID_1])
+        env = json.loads(result.output)
+        assert env["ok"] is False
+        assert "JIRA connection" in env["error"]["message"]
+        assert result.exit_code != 0
+
+    def test_raise_bug_generic_error(self, runner, mock_client):
+        mock_client.raise_bug.side_effect = Exception("unexpected")
+        result = runner.invoke(main, ["raise-bug", TSID_1])
+        env = json.loads(result.output)
+        assert env["ok"] is False
+        assert result.exit_code != 0
+
+    def test_raise_bug_with_subtest_type(self, runner, mock_client):
+        mock_client.raise_bug.return_value = {
+            "ticket": "LU-100", "url": "", "flash": "ok"
+        }
+        result = runner.invoke(main, [
+            "raise-bug", TSID_1, "--type", "SubTest",
+            "--summary", "subtest bug",
+        ])
+        env = _parse_output(result)
+        assert env["data"]["buggable_type"] == "SubTest"
+
+
+# -- queue command: branch resolution --
+
+
+class TestQueueBranchResolution:
+    def test_queue_by_branch(self, runner, mock_client):
+        """--branch should resolve branch name to job name."""
+        mock_client.get_test_queues.return_value = []
+        result = runner.invoke(main, ["queue", "--branch", "master"])
+        env = _parse_output(result)
+        assert env["ok"] is True
+        # Should resolve 'master' to 'lustre-reviews'
+        params = mock_client.get_test_queues.call_args[0][0]
+        assert params["job"] == "lustre-reviews"
+
+    def test_queue_by_build(self, runner, mock_client):
+        mock_client.get_test_queues.return_value = [
+            {
+                "id": "q1", "job": "lustre-master", "buildno": 27341,
+                "test_group": "full", "status": "Queued",
+                "review_id": None, "review_patch": None,
+            }
+        ]
+        result = runner.invoke(main, ["queue", "--build", "27341"])
+        env = _parse_output(result)
+        assert env["ok"] is True
+        assert env["data"]["queue_entries"][0]["buildno"] == 27341
+
+    def test_queue_review_resolve_failure(self, runner, mock_client):
+        """When gerrit CLI fails to resolve, should error."""
+        with patch("maloo_tool.cli._resolve_review_to_revision", return_value=None):
+            result = runner.invoke(main, ["queue", "--review", "64266"])
+        env = json.loads(result.output)
+        assert env["ok"] is False
+        assert "resolve" in env["error"]["message"].lower()
+
+    def test_queue_review_with_commit_hash(self, runner, mock_client):
+        """Commit hash should be passed through without resolution."""
+        mock_client.get_test_queues.return_value = []
+        result = runner.invoke(main, [
+            "queue", "--review", "7b77eeb0190d6d93880951533c2e1d1145780375"
+        ])
+        env = _parse_output(result)
+        params = mock_client.get_test_queues.call_args[0][0]
+        assert params["review_id"] == "7b77eeb0190d6d93880951533c2e1d1145780375"
+
+    def test_queue_api_error(self, runner, mock_client):
+        mock_client.get_test_queues.side_effect = Exception("API down")
+        result = runner.invoke(main, ["queue", "--status", "Running"])
+        env = json.loads(result.output)
+        assert env["ok"] is False
+        assert result.exit_code != 0
+
+
+# -- retest command: additional tests --
+
+
+class TestRetestExtended:
+    def test_retest_all_option(self, runner, mock_client):
+        mock_client.retest.return_value = "OK"
+        result = runner.invoke(main, ["retest", SID_1, "LU-19487", "--option", "all"])
+        env = _parse_output(result)
+        assert env["data"]["retest_option"] == "all"
+
+    def test_retest_livedebug_option(self, runner, mock_client):
+        mock_client.retest.return_value = "OK"
+        result = runner.invoke(main, ["retest", SID_1, "LU-19487", "--option", "livedebug"])
+        env = _parse_output(result)
+        assert env["data"]["retest_option"] == "livedebug"
+
+    def test_retest_extracts_uuid_from_url(self, runner, mock_client):
+        mock_client.retest.return_value = "OK"
+        url = f"https://testing.whamcloud.com/test_sessions/{SID_1}"
+        result = runner.invoke(main, ["retest", url, "LU-100"])
+        env = _parse_output(result)
+        assert env["data"]["session_id"] == SID_1
+
+
+# -- logs command: grep tests --
+
+
+class TestLogsGrep:
+    def test_logs_with_grep(self, runner, mock_client):
+        """Logs with --grep should search extracted files."""
+        import io
+        import zipfile
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("console.log", "test_81a FAIL\ntest_81b PASS\n")
+        mock_client.download_logs.return_value = buf.getvalue()
+
+        result = runner.invoke(main, [
+            "logs", TSID_1,
+            "--output-dir", "/tmp/test_maloo_grep",
+            "--grep", "test_81a",
+        ])
+        env = _parse_output(result)
+        assert env["ok"] is True
+        assert env["data"]["grep_pattern"] == "test_81a"
+        assert len(env["data"]["grep_results"]) >= 1
+        assert env["data"]["grep_results"][0]["match_count"] >= 1
+
+    def test_logs_grep_no_matches(self, runner, mock_client):
+        """Grep with no matches should return empty results."""
+        import io
+        import zipfile
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("console.log", "nothing interesting\n")
+        mock_client.download_logs.return_value = buf.getvalue()
+
+        result = runner.invoke(main, [
+            "logs", TSID_1,
+            "--output-dir", "/tmp/test_maloo_grep2",
+            "--grep", "nonexistent_pattern",
+        ])
+        env = _parse_output(result)
+        assert env["ok"] is True
+        assert env["data"]["grep_results"] == []
+
+
+# -- sessions command: additional coverage --
+
+
+class TestSessionsExtended:
+    def test_sessions_api_error(self, runner, mock_client):
+        mock_client.get_sessions.side_effect = Exception("timeout")
+        result = runner.invoke(main, ["sessions", "--branch", "lustre-master"])
+        env = json.loads(result.output)
+        assert env["ok"] is False
+        assert result.exit_code != 0
+
+    def test_sessions_no_filters(self, runner, mock_client):
+        """Sessions without filters should still work (uses default days)."""
+        mock_client.get_sessions.return_value = []
+        result = runner.invoke(main, ["sessions"])
+        env = _parse_output(result)
+        assert env["ok"] is True
+        assert env["data"]["filters"] == {}
+
+    def test_sessions_next_actions(self, runner, mock_client):
+        """Should suggest next actions when there are results."""
+        mock_client.get_sessions.return_value = [
+            {
+                "id": SID_1, "test_group": "full", "test_name": "test",
+                "test_host": "h1", "submission": "2026-01-01", "enforcing": True,
+                "test_sets_passed_count": 1, "test_sets_failed_count": 2,
+                "test_sets_aborted_count": 0, "test_sets_count": 3,
+                "duration": 100, "trigger_job": "lustre-master",
+            },
+        ]
+        result = runner.invoke(main, ["sessions"])
+        env = _parse_output(result)
+        # Should have next_actions for failed session
+        assert env.get("next_actions") is not None
+        assert any("failures" in a for a in env["next_actions"])
+
+
+# -- top-failures command: additional coverage --
+
+
+class TestTopFailuresExtended:
+    def test_top_failures_api_error(self, runner, mock_client):
+        mock_client.get_top_failures.side_effect = Exception("connection refused")
+        result = runner.invoke(main, ["top-failures"])
+        env = json.loads(result.output)
+        assert env["ok"] is False
+        assert result.exit_code != 0
+
+    def test_top_failures_with_options(self, runner, mock_client):
+        mock_client.get_top_failures.return_value = ([], 0, 0)
+        result = runner.invoke(main, [
+            "top-failures", "lustre-b2_15",
+            "--days", "30", "--limit", "5", "--sessions", "100",
+        ])
+        env = _parse_output(result)
+        assert env["data"]["branch"] == "lustre-b2_15"
+        assert env["data"]["days"] == 30
+
+    def test_top_failures_next_actions(self, runner, mock_client):
+        mock_client.get_top_failures.return_value = (
+            [{
+                "test_name": "test_1", "suite": "sanity", "count": 3,
+                "session_count": 2, "statuses": {"FAIL": 3},
+                "error_sample": "err", "example_session_id": SID_1,
+                "example_test_set_id": TSID_1,
+            }],
+            5, 5,
+        )
+        result = runner.invoke(main, ["top-failures"])
+        env = _parse_output(result)
+        assert env.get("next_actions") is not None
+        assert any("failures" in a for a in env["next_actions"])
+        assert any("bugs" in a for a in env["next_actions"])
