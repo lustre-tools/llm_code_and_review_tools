@@ -4,50 +4,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from llm_tool_common.config import load_env_files
 
-def _load_env_file() -> None:
-    """Load environment variables from .env file in standard locations.
-
-    Only sets variables that are not already in the environment.
-    Uses stdlib parsing (no dotenv dependency).
-    """
-    env_locations = [
-        Path.home() / ".config" / "patch-watcher" / ".env",
-        Path("/shared/support_files/.env"),
-        Path(".env"),
-    ]
-    for env_path in env_locations:
-        if env_path.exists():
-            _parse_env_file(env_path)
-            return
-
-
-def _parse_env_file(path: Path) -> None:
-    """Parse a simple KEY=VALUE .env file into os.environ.
-
-    Supports:
-      - Lines with KEY=VALUE (optional quoting with ' or ")
-      - Comments (#) and blank lines are skipped
-      - Does NOT override existing environment variables
-    """
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip()
-            # Strip matching quotes
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-                value = value[1:-1]
-            if key and key not in os.environ:
-                os.environ[key] = value
-
-
-_load_env_file()
+load_env_files("patch-watcher")
 
 
 @dataclass

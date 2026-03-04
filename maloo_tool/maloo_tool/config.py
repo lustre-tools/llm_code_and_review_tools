@@ -2,25 +2,10 @@
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 
-from dotenv import load_dotenv
+from llm_tool_common.config import load_env_files
 
-
-def _load_env_file() -> None:
-    """Load environment variables from .env file in standard locations."""
-    env_locations = [
-        Path.home() / ".config" / "maloo-tool" / ".env",
-        Path("/shared/support_files/.env"),
-        Path(".env"),
-    ]
-    for env_path in env_locations:
-        if env_path.exists():
-            load_dotenv(env_path)
-            return
-
-
-_load_env_file()
+load_env_files("maloo-tool")
 
 
 @dataclass
