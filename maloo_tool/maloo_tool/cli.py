@@ -15,6 +15,7 @@ from llm_tool_common.envelope import (
 
 from .client import MalooClient
 from .config import load_config
+from .errors import ErrorCode
 
 TOOL_NAME = "maloo"
 
@@ -70,7 +71,7 @@ def session(session_url: str, pretty: bool) -> None:
     client = _make_client()
     data = client.get_session(sid)
     if not data:
-        _error("NOT_FOUND", f"Session {sid} not found", "session", pretty)
+        _error(ErrorCode.NOT_FOUND, f"Session {sid} not found", "session", pretty)
 
     # Get test sets for summary
     test_sets = client.get_test_sets(sid)
@@ -134,7 +135,7 @@ def failures(session_url: str, pretty: bool) -> None:
 
     data = client.get_session(sid)
     if not data:
-        _error("NOT_FOUND", f"Session {sid} not found", "failures", pretty)
+        _error(ErrorCode.NOT_FOUND, f"Session {sid} not found", "failures", pretty)
 
     test_sets = client.get_test_sets(sid)
     set_names = client.resolve_test_set_names(test_sets)
@@ -218,7 +219,7 @@ def subtests(test_set_id: str, status: str | None, show_all: bool, pretty: bool)
 
     ts = client.get_test_set(test_set_id)
     if not ts:
-        _error("NOT_FOUND", f"Test set {test_set_id} not found", "subtests", pretty)
+        _error(ErrorCode.NOT_FOUND, f"Test set {test_set_id} not found", "subtests", pretty)
 
     all_subtests = client.get_subtests(test_set_id=test_set_id)
     subtest_names = client.resolve_subtest_names(all_subtests)
@@ -389,7 +390,7 @@ def link_bug(
         env = success_response(result, TOOL_NAME, "link-bug")
         _output(env, pretty)
     else:
-        _error("LINK_FAILED", resp, "link-bug", pretty)
+        _error(ErrorCode.LINK_FAILED, resp, "link-bug", pretty)
 
 
 @main.command(name="raise-bug")
@@ -442,9 +443,9 @@ def raise_bug(
         env = success_response(result, TOOL_NAME, "raise-bug")
         _output(env, pretty)
     except RuntimeError as exc:
-        _error("RAISE_BUG_FAILED", str(exc), "raise-bug", pretty)
+        _error(ErrorCode.RAISE_BUG_FAILED, str(exc), "raise-bug", pretty)
     except Exception as exc:
-        _error("API_ERROR", str(exc), "raise-bug", pretty)
+        _error(ErrorCode.API_ERROR, str(exc), "raise-bug", pretty)
 
 
 @main.command()
@@ -499,7 +500,7 @@ def sessions(
     try:
         raw = client.get_sessions(params, max_records=limit)
     except Exception as exc:
-        _error("API_ERROR", str(exc), "sessions", pretty)
+        _error(ErrorCode.API_ERROR, str(exc), "sessions", pretty)
         return
 
     items = []
@@ -609,7 +610,7 @@ def test_history(
             max_sessions=max_sessions,
         )
     except Exception as exc:
-        _error("API_ERROR", str(exc), "test-history", pretty)
+        _error(ErrorCode.API_ERROR, str(exc), "test-history", pretty)
         return
 
     # Compute summary stats
@@ -807,7 +808,7 @@ def queue(
                 resolved_review = revision
             else:
                 _error(
-                    "RESOLVE_FAILED",
+                    ErrorCode.RESOLVE_FAILED,
                     f"Could not resolve Gerrit change {review_id} to a "
                     f"commit hash (is the gerrit CLI available?). "
                     f"Try --build <buildno> or pass the commit hash directly.",
@@ -828,7 +829,7 @@ def queue(
 
     if not params:
         _error(
-            "MISSING_FILTER",
+            ErrorCode.MISSING_FILTER,
             "At least one filter required: --review, --build, --branch, or --status",
             "queue",
             pretty,
@@ -838,7 +839,7 @@ def queue(
     try:
         raw = client.get_test_queues(params, max_records=limit)
     except Exception as exc:
-        _error("API_ERROR", str(exc), "queue", pretty)
+        _error(ErrorCode.API_ERROR, str(exc), "queue", pretty)
         return
 
     items = []
@@ -936,7 +937,7 @@ def top_failures(
             max_sessions=max_sessions,
         )
     except Exception as exc:
-        _error("API_ERROR", str(exc), "top-failures", pretty)
+        _error(ErrorCode.API_ERROR, str(exc), "top-failures", pretty)
         return  # unreachable, _error calls sys.exit
 
     top = failures[:limit]
@@ -1049,7 +1050,7 @@ def logs(
     try:
         data = client.download_logs(test_set_id)
     except Exception as exc:
-        _error("DOWNLOAD_FAILED", str(exc), "logs", pretty)
+        _error(ErrorCode.DOWNLOAD_FAILED, str(exc), "logs", pretty)
         return
 
     # Extract the archive
