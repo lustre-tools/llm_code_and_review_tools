@@ -55,6 +55,8 @@ def run_session(
     timeout: int = 120,
     minimal: bool = False,
     extra_args: list[str] | None = None,
+    mod_dir: str | None = None,
+    pre_commands: list[str] | None = None,
 ) -> SessionResult:
     """Run one or more commands in a single crash session.
 
@@ -71,6 +73,9 @@ def run_session(
         timeout: Maximum seconds to wait for the session.
         minimal: Use --minimal mode (faster init, fewer commands).
         extra_args: Additional arguments to pass to crash.
+        mod_dir: Directory containing .ko files to load via 'mod -S'.
+        pre_commands: Commands to run before user commands (output
+            not captured in per-command results).
 
     Returns:
         SessionResult with per-command output.
@@ -78,15 +83,17 @@ def run_session(
     if crash_binary is None:
         crash_binary = find_crash_binary()
 
-    # Build the command input file with sentinels between commands.
-    # We use 'p (char)0' which prints "$N = 0 '\000'" as a cheap
-    # always-available command, then match on our sentinel comment
-    # line that we emit via 'alias'.  Since crash doesn't have a
-    # proper echo, we use the approach of emitting a known unique
-    # expression: 'p (int)<unique_number>' which outputs
+    # Build the command input with sentinels between commands.
+    # We use 'p (int)<unique_number>' which outputs
     # "$N = <unique_number>" — reliable and always available.
     input_lines: list[str] = []
     sentinels: list[str] = []
+
+    # Pre-commands: module loading, setup, etc. (output goes to init)
+    if mod_dir:
+        input_lines.append(f"mod -S {mod_dir}")
+    if pre_commands:
+        input_lines.extend(pre_commands)
 
     # Emit a sentinel BEFORE each command.  This way:
     #   chunks[0] = init output (everything before first sentinel)

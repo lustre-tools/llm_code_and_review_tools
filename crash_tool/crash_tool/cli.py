@@ -90,6 +90,7 @@ def main(ctx: click.Context, pretty: bool, envelope: bool) -> None:
 @click.option("--timeout", default=120, type=int, help="Session timeout in seconds.")
 @click.option("--minimal", is_flag=True, help="Use --minimal mode (faster init).")
 @click.option("--crash-bin", default=None, help="Path to crash binary.")
+@click.option("--mod-dir", default=None, help="Directory with .ko files to load via 'mod -S'.")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output.")
 @click.pass_context
 def run(
@@ -100,6 +101,7 @@ def run(
     timeout: int,
     minimal: bool,
     crash_bin: str | None,
+    mod_dir: str | None,
     pretty: bool,
 ) -> None:
     """Run one or more crash commands and return structured output.
@@ -113,7 +115,7 @@ def run(
 
         crash-tool run "ps" "files 1234" --vmlinux /boot/vmlinux
 
-        crash-tool run "log" --minimal --timeout 30
+        crash-tool run --mod-dir /path/to/lustre/kos "sym obd_devs"
     """
     pretty = pretty or ctx.obj.get("pretty", False)
     full_env = ctx.obj.get("envelope", False)
@@ -126,6 +128,7 @@ def run(
             crash_binary=crash_bin,
             timeout=timeout,
             minimal=minimal,
+            mod_dir=mod_dir,
         )
     except FileNotFoundError as e:
         envelope = error_response_from_dict(
@@ -227,6 +230,7 @@ def script(
 @click.option("--vmcore", default=None, help="Path to vmcore dump file.")
 @click.option("--timeout", default=300, type=int, help="Session timeout in seconds.")
 @click.option("--crash-bin", default=None, help="Path to crash binary.")
+@click.option("--mod-dir", default=None, help="Directory with .ko files to load via 'mod -S'.")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output.")
 @click.pass_context
 def recipes(
@@ -236,6 +240,7 @@ def recipes(
     vmcore: str | None,
     timeout: int,
     crash_bin: str | None,
+    mod_dir: str | None,
     pretty: bool,
 ) -> None:
     """Run a pre-built analysis recipe.
@@ -248,7 +253,7 @@ def recipes(
         overview    - System info, uptime, panic message, and task summary
         backtrace   - All CPU backtraces and panic task detail
         memory      - Memory usage, slab info, and VM stats
-        lustre      - Lustre module info and key symbol state
+        lustre      - Lustre state (requires --mod-dir with Lustre .ko files)
         io          - Block I/O state and hung task detection
     """
     pretty = pretty or ctx.obj.get("pretty", False)
@@ -278,7 +283,20 @@ def recipes(
         click.echo(format_json(envelope, pretty=pretty, full_envelope=full_env))
         sys.exit(2)
 
-    commands = available[recipe]["commands"]
+    recipe_def = available[recipe]
+    commands = recipe_def["commands"]
+    needs_mods = recipe_def.get("needs_modules", False)
+
+    if needs_mods and not mod_dir:
+        envelope = error_response_from_dict(
+            code="INVALID_INPUT",
+            message=f"Recipe '{recipe}' requires --mod-dir to load Lustre module symbols",
+            tool=TOOL_NAME,
+            command="recipes",
+        )
+        click.echo(format_json(envelope, pretty=pretty, full_envelope=full_env))
+        sys.exit(2)
+
     try:
         sr = run_session(
             commands=commands,
@@ -286,6 +304,7 @@ def recipes(
             vmcore=vmcore,
             crash_binary=crash_bin,
             timeout=timeout,
+            mod_dir=mod_dir if needs_mods else None,
         )
     except Exception as e:
         envelope = error_response_from_dict(
@@ -299,7 +318,7 @@ def recipes(
 
     data = {
         "recipe": recipe,
-        "description": available[recipe]["description"],
+        "description": recipe_def["description"],
         **_format_session(sr),
     }
     envelope = success_response(data, tool=TOOL_NAME, command="recipes")
@@ -313,9 +332,9 @@ def _get_recipes() -> dict[str, dict[str, Any]]:
             "description": "System info, uptime, panic message, and task summary",
             "commands": [
                 "sys",
-                "bt -a -l",
+                "bt",
                 "log -T | tail -50",
-                "ps -m",
+                "ps -m | head -40",
             ],
         },
         "backtrace": {
@@ -323,32 +342,39 @@ def _get_recipes() -> dict[str, dict[str, Any]]:
             "commands": [
                 "bt -a",
                 "bt -f",
-                "foreach bt",
             ],
         },
         "memory": {
             "description": "Memory usage, slab info, and VM stats",
             "commands": [
                 "kmem -i",
-                "kmem -s",
-                "vm -M",
+                "kmem -s | head -60",
             ],
         },
         "lustre": {
-            "description": "Lustre module info and key symbol state",
+            "description": "Lustre OBD devices, imports, and LDLM lock state (requires --mod-dir)",
+            "needs_modules": True,
             "commands": [
-                'mod | grep -i "lustre\\|lnet\\|ko2iblnd\\|ldiskfs\\|libcfs"',
-                "sym lustre",
-                "sym lnet",
-                "log -T | tail -100",
+                # Module verification
+                'mod | grep -i "lustre\\|lnet\\|ko2iblnd\\|ldiskfs\\|libcfs\\|osc\\|mdc\\|lov\\|lmv\\|obdclass\\|ptlrpc\\|fid\\|fld\\|mgc"',
+                # OBD device count and active devices
+                "sym obd_devs",
+                # Panic task backtrace with Lustre symbols
+                "bt",
+                # All tasks in UN (uninterruptible sleep) state
+                'ps | grep " UN "',
+                # Backtraces of hung tasks
+                "foreach UN bt",
+                # Kernel log tail with timestamps
+                "log -T | tail -80",
             ],
         },
         "io": {
             "description": "Block I/O state and hung task detection",
             "commands": [
                 "dev -d",
-                'ps -m | grep "UN"',
-                'foreach UN bt',
+                'ps | grep " UN "',
+                "foreach UN bt",
             ],
         },
     }
