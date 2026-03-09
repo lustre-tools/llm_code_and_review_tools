@@ -79,18 +79,28 @@ def run_session(
         crash_binary = find_crash_binary()
 
     # Build the command input file with sentinels between commands.
-    # We echo a unique sentinel after each command so we can split
-    # the combined output into per-command chunks.
+    # We use 'p (char)0' which prints "$N = 0 '\000'" as a cheap
+    # always-available command, then match on our sentinel comment
+    # line that we emit via 'alias'.  Since crash doesn't have a
+    # proper echo, we use the approach of emitting a known unique
+    # expression: 'p (int)<unique_number>' which outputs
+    # "$N = <unique_number>" — reliable and always available.
     input_lines: list[str] = []
     sentinels: list[str] = []
 
+    # Emit a sentinel BEFORE each command.  This way:
+    #   chunks[0] = init output (everything before first sentinel)
+    #   chunks[1] = command 0 output (between sentinel 0 and 1)
+    #   chunks[N+1] = command N output
     for i, cmd in enumerate(commands):
-        sentinel = f"{_SENTINEL_PREFIX}{i}_{os.getpid()}"
-        sentinels.append(sentinel)
+        sentinel_val = 7777000 + i
+        sentinels.append(str(sentinel_val))
+        input_lines.append(f"p (int){sentinel_val}")
         input_lines.append(cmd)
-        # Use 'eval' to echo our sentinel — it's always available
-        # even in --minimal mode.
-        input_lines.append(f'eval "{sentinel}"')
+    # Final sentinel after last command
+    final_val = 7777000 + len(commands)
+    sentinels.append(str(final_val))
+    input_lines.append(f"p (int){final_val}")
 
     input_lines.append("quit")
     input_text = "\n".join(input_lines) + "\n"
@@ -135,12 +145,12 @@ def run_session(
 
     # Split on sentinel lines.  The output looks like:
     #   <init output>
+    #   $1 = 7777000        <- sentinel before cmd 0
+    #   <command 0 output>
+    #   $2 = 7777001        <- sentinel before cmd 1
     #   <command 1 output>
-    #   __CRASH_TOOL_DELIM_0_<pid> = <decimal>
-    #   <command 2 output>
-    #   __CRASH_TOOL_DELIM_1_<pid> = <decimal>
-    #   ...
-    # crash's eval prints: <expr> = <value>, so we match on the sentinel prefix.
+    #   $3 = 7777002        <- final sentinel
+    # So chunks[0] = init, chunks[i+1] = command i output.
     chunks = _split_on_sentinels(raw_output, sentinels)
 
     if chunks:
@@ -179,16 +189,18 @@ def _split_on_sentinels(output: str, sentinels: list[str]) -> list[str]:
 
     Returns a list where chunks[0] is everything before the first
     sentinel, chunks[1] is between sentinel 0 and 1, etc.
+
+    Sentinels are unique integer values.  crash's 'p (int)N' command
+    outputs lines like: '$42 = 7777000' or '$42 = 7777000\n'.
+    We match on the sentinel value at the end of such lines.
     """
     if not sentinels:
         return [output]
 
-    # Build a regex that matches any of our sentinel eval output lines.
-    # crash eval prints:  SENTINEL = <decimal_value>
-    # We also handle the case where it just prints the sentinel.
+    # Match lines like: $42 = 7777000
     escaped = [re.escape(s) for s in sentinels]
     pattern = re.compile(
-        r"^(?:" + "|".join(escaped) + r")(?:\s*=\s*\d+)?\s*$",
+        r"^\$\d+\s*=\s*(?:" + "|".join(escaped) + r")\s*$",
         re.MULTILINE,
     )
 
