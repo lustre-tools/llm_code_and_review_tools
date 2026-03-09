@@ -29,7 +29,10 @@ def get_all_stack_traces(prog, include_swapper=False, task_filter=None):
         try:
             comm = task.comm.string_().decode(errors="replace")
             pid = task.pid.value_()
-            task_addr = task.address_of_().value_()
+            try:
+                task_addr = task.address_of_().value_()
+            except ValueError:
+                task_addr = task.value_()
 
             # Skip swapper threads unless requested
             if not include_swapper and comm.startswith("swapper/"):
@@ -37,11 +40,15 @@ def get_all_stack_traces(prog, include_swapper=False, task_filter=None):
 
             # Apply task filter if given (e.g., "UN" for uninterruptible)
             if task_filter:
-                state = task.state.value_() if hasattr(task, 'state') else task.__state.value_()
-                # TASK_UNINTERRUPTIBLE = 2, TASK_RUNNING = 0
-                if task_filter == "UN" and state != 2:
+                try:
+                    from drgn.helpers.linux.sched import task_state_to_char
+                    state_char = task_state_to_char(task)
+                except (ImportError, Exception):
+                    state_char = "?"
+
+                if task_filter == "UN" and state_char != "D":
                     continue
-                elif task_filter == "RU" and state != 0:
+                elif task_filter == "RU" and state_char != "R":
                     continue
 
             # Get stack trace

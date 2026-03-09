@@ -121,10 +121,18 @@ def get_ptlrpc_body(prog, req):
         return None
 
 
+def _obj_addr(obj):
+    """Get address of a drgn Object, whether it's a pointer or by-value."""
+    try:
+        return obj.address_of_().value_()
+    except ValueError:
+        return obj.value_()
+
+
 def get_request_info(prog, req):
     """Extract key info from a ptlrpc_request."""
     info = {
-        "address": f"0x{req.address_of_().value_():x}",
+        "address": f"0x{_obj_addr(req):x}",
         "xid": req.rq_xid.value_(),
         "phase_flags": get_phase_flags(req),
         "bulk_rw": f"{req.rq_bulk_read.value_()}:{req.rq_bulk_write.value_()}",
@@ -256,8 +264,8 @@ def dump_overview_text(prog):
     """Print overview of ptlrpcd threads."""
     def print_entry(prog, pd):
         name = pd.pc_name.string_().decode(errors="replace")
-        pd_addr = pd.address_of_().value_()
-        pc_set_addr = pd.pc_set.value_() if hasattr(pd.pc_set, 'value_') else pd.pc_set.address_of_().value_()
+        pd_addr = _obj_addr(pd)
+        pc_set_addr = _obj_addr(pd.pc_set)
         print(f"{name + ':':<14s}  ptlrpcd_ctl 0x{pd_addr:x}   "
               f"ptlrpc_request_set 0x{pc_set_addr:x}")
 
@@ -275,7 +283,7 @@ def dump_pcsets_text(prog):
         remaining = pd.pc_set.set_remaining.counter.value_()
         if new_count != 0 or remaining != 0:
             name = pd.pc_name.string_().decode(errors="replace")
-            set_addr = pd.pc_set.address_of_().value_()
+            set_addr = _obj_addr(pd.pc_set)
             refcount = pd.pc_set.set_refcount.counter.value_()
             print(f"{name + ':':<13s} 0x{set_addr:<18x} {refcount:<4d} "
                   f"{new_count:<4d} {remaining:<6d}")

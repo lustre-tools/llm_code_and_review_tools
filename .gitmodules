@@ -1,3 +1,6 @@
 [submodule "claude_images"]
 	path = claude_images
 	url = git@github.com:paf0186/claude-images.git
+[submodule "lustre-drgn-tools"]
+	path = lustre-drgn-tools
+	url = git@github.com:paf0186/lustre-drgn-tools.git

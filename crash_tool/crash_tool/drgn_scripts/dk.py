@@ -202,27 +202,32 @@ def walk_trace_data(prog):
     except (KeyError, LookupError):
         nr_cpus = 256  # safe upper bound
 
-    # cfs_trace_data is an array of 3 pointers to per-CPU arrays
-    # (TCD_TYPE_PROC, TCD_TYPE_SOFTIRQ, TCD_TYPE_IRQ)
+    # cfs_trace_data is union cfs_trace_data_union (*[TCD_TYPE_MAX])[NR_CPUS]
+    # i.e., array of pointers to per-CPU arrays of unions.
+    # Access pattern: cfs_trace_data[type][0][cpu].tcd
     for tcd_type in range(3):  # TCD_TYPE_MAX
         try:
-            tcd_array = cfs_trace_data[tcd_type]
-            if tcd_array.value_() == 0:
+            tcd_ptr = cfs_trace_data[tcd_type]
+            if tcd_ptr.value_() == 0:
                 continue
+
+            # Deref the pointer to get the array, then index by CPU
+            tcd_array = tcd_ptr[0]
 
             for cpu in range(nr_cpus):
                 try:
                     u = tcd_array[cpu]
+                    tcd = u.tcd
                     # tcd_pages list
                     walk_trace_pages(
                         prog, lines,
-                        u.tcd.tcd_pages.address_of_(),
+                        tcd.tcd_pages.address_of_(),
                         trace_page_struct,
                     )
                     # tcd_stock_pages list
                     walk_trace_pages(
                         prog, lines,
-                        u.tcd.tcd_stock_pages.address_of_(),
+                        tcd.tcd_stock_pages.address_of_(),
                         trace_page_struct,
                     )
                 except (drgn.FaultError, drgn.ObjectAbsentError):

@@ -84,11 +84,29 @@ install_tools() {
     $PYTHON -m pip install -q -e "$SCRIPT_DIR/jenkins_tool"
     echo -e "${GREEN}✓${NC} jenkins installed"
 
+    # Initialize submodules
+    echo ""
+    echo "Initializing submodules..."
+    (cd "$SCRIPT_DIR" && git submodule update --init --recursive 2>/dev/null || true)
+    echo -e "${GREEN}✓${NC} submodules initialized"
+
     # Install crash_tool
     echo ""
     echo "Installing crash-tool..."
     $PYTHON -m pip install -q -e "$SCRIPT_DIR/crash_tool"
     echo -e "${GREEN}✓${NC} crash-tool installed"
+
+    # Install lustre-drgn-tools (if submodule present and drgn available)
+    if [[ -d "$SCRIPT_DIR/lustre-drgn-tools" ]]; then
+        echo ""
+        echo "Installing lustre-drgn-tools..."
+        if $PYTHON -c "import drgn" 2>/dev/null; then
+            echo -e "${GREEN}✓${NC} lustre-drgn-tools ready (drgn available)"
+        else
+            echo -e "${YELLOW}!${NC} lustre-drgn-tools: drgn not installed"
+            echo "    Run: lustre-drgn-tools/install-drgn.sh"
+        fi
+    fi
 
     # Install claude_images
     echo ""
