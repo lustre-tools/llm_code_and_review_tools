@@ -50,17 +50,18 @@ class DiffLine:
     type: str  # 'context', 'added', 'deleted'
 
     def format(self) -> str:
-        """Format the line for display."""
+        """Format the line in standard unified diff format.
+
+        Output: +/-/space prefix followed by the content.
+        Line numbers are available in the hunk @@ header; per-line numbers
+        are omitted to keep output compact and unambiguously parseable.
+        """
         if self.type == 'added':
-            prefix = '+'
-            line_num = f"    {self.line_number_new:4d}"
+            return f"+{self.content}"
         elif self.type == 'deleted':
-            prefix = '-'
-            line_num = f"{self.line_number_old:4d}    "
+            return f"-{self.content}"
         else:
-            prefix = ' '
-            line_num = f"{self.line_number_old:4d} {self.line_number_new:4d}"
-        return f"{line_num} {prefix} {self.content}"
+            return f" {self.content}"
 
 
 @dataclass

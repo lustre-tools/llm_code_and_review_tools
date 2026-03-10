@@ -26,10 +26,7 @@ class TestDiffLine:
             content="new code here",
             type="added",
         )
-        formatted = line.format()
-        assert "+" in formatted
-        assert "42" in formatted
-        assert "new code here" in formatted
+        assert line.format() == "+new code here"
 
     def test_format_deleted_line(self):
         """Test formatting a deleted line."""
@@ -39,10 +36,7 @@ class TestDiffLine:
             content="old code here",
             type="deleted",
         )
-        formatted = line.format()
-        assert "-" in formatted
-        assert "10" in formatted
-        assert "old code here" in formatted
+        assert line.format() == "-old code here"
 
     def test_format_context_line(self):
         """Test formatting a context line."""
@@ -52,8 +46,7 @@ class TestDiffLine:
             content="unchanged code",
             type="context",
         )
-        formatted = line.format()
-        assert " unchanged code" in formatted
+        assert line.format() == " unchanged code"
 
 
 class TestDiffHunk:

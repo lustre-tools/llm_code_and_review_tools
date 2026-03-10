@@ -106,6 +106,7 @@ class TestParserHandlerIntegration:
             'checkout': MagicMock(),
             'maloo': MagicMock(),
             'info': MagicMock(),
+            'series_info': MagicMock(),
             'watch': MagicMock(),
             'set_topic': MagicMock(),
             'restore': MagicMock(),
