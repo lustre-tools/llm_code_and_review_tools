@@ -1,7 +1,7 @@
 """Shared configuration loading for LLM CLI tools.
 
 Provides common env-file loading and a base config mixin used by
-jenkins_tool, maloo_tool, patch_watcher, etc.
+jenkins_tool, maloo_tool, patch_shepherd, etc.
 """
 
 import os

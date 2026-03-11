@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""orchestrator.py — Pure-code patch watcher orchestrator.
+"""orchestrator.py — Pure-code patch shepherd orchestrator.
 
 Replaces the previous architecture where Claude Haiku ran the entire
 loop.  Now the code handles all mechanical work:
@@ -25,12 +25,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 try:
-    from patch_watcher.config import load_config
+    from patch_shepherd.config import load_config
 except ImportError:
-    # When run as a script (python3 patch_watcher/orchestrator.py),
+    # When run as a script (python3 patch_shepherd/orchestrator.py),
     # the parent directory may not be on sys.path.
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from patch_watcher.config import load_config
+    from patch_shepherd.config import load_config
 
 # Module-level config — initialized lazily in main() so import
 # doesn't trigger validation (allows testing / partial imports).

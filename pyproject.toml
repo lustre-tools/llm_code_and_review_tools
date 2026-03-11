@@ -5,7 +5,7 @@ testpaths = [
     "maloo_tool/tests",
     "jenkins_tool/tests",
     "llm_tool_common/tests",
-    "patch_watcher/tests",
+    "patch_shepherd/tests",
     "crash_tool",
 ]
 pythonpath = [
@@ -14,7 +14,7 @@ pythonpath = [
     "maloo_tool",
     "jenkins_tool",
     "llm_tool_common/src",
-    "patch_watcher",
+    "patch_shepherd",
     "crash_tool",
 ]
 addopts = "--strict-markers --import-mode=importlib"

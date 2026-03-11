@@ -1,5 +1,5 @@
 #!/bin/bash
-# run_watcher.sh — Main entry point for the patch watcher daemon.
+# run_watcher.sh — Main entry point for the patch shepherd daemon.
 #
 # Invoked by systemd timer (hourly) or manually for testing.
 # Runs orchestrator.py (pure code) for the mechanical work;
@@ -9,15 +9,15 @@ set -euo pipefail
 
 WATCHER_DIR="$(cd "$(dirname "$0")" && pwd)"
 PATCHES_FILE="${PATCHES_FILE:-/shared/support_files/patches_to_watch.json}"
-REPORT_FILE="/tmp/patch_watcher_report.json"
-LOG_DIR="${HOME}/.patch_watcher"
+REPORT_FILE="/tmp/patch_shepherd_report.json"
+LOG_DIR="${HOME}/.patch_shepherd"
 LOG_FILE="${LOG_DIR}/watcher.log"
 ORCHESTRATOR_OUTPUT="${LOG_DIR}/orchestrator_output.json"
 
 # Per-run log file for tail -f while running
 RUN_TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 RUN_LOG="${LOG_DIR}/run_${RUN_TIMESTAMP}.log"
-# Symlink for easy access: tail -f ~/.patch_watcher/current_run.log
+# Symlink for easy access: tail -f ~/.patch_shepherd/current_run.log
 CURRENT_RUN_LINK="${LOG_DIR}/current_run.log"
 
 mkdir -p "$LOG_DIR"
@@ -65,7 +65,7 @@ if isinstance(data, dict):
 rm -f "$REPORT_FILE"
 
 # Clean up stale rate limit files (>1 day old)
-find /tmp -name 'patch_watcher_rates.*' -mtime +1 -delete 2>/dev/null || true
+find /tmp -name 'patch_shepherd_rates.*' -mtime +1 -delete 2>/dev/null || true
 
 log "Running orchestrator..."
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=Lustre Patch Watcher Daily Confidence Report Timer
+Description=Lustre Patch Shepherd Daily Confidence Report Timer
 
 [Timer]
 OnCalendar=*-*-* 08:00:00

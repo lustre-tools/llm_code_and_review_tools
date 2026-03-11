@@ -1,5 +1,5 @@
 [Unit]
-Description=Lustre Patch Watcher Timer
+Description=Lustre Patch Shepherd Timer
 
 [Timer]
 OnCalendar=hourly

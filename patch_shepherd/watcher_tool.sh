@@ -1,5 +1,5 @@
 #!/bin/bash
-# watcher_tool.sh — Guardrail wrapper for the patch watcher daemon.
+# watcher_tool.sh — Guardrail wrapper for the patch shepherd daemon.
 #
 # This is the ONLY tool the watcher Claude instance can call.
 # It validates the action against an allowlist before executing.
@@ -11,7 +11,7 @@ PATCHES_FILE="/shared/support_files/patches_to_watch.json"
 # --- Rate limiting for write actions ---
 # Counter file in /tmp. PPID is the claude process that invoked us;
 # stable across all tool calls within a single run.
-RATE_FILE="/tmp/patch_watcher_rates.${PPID}"
+RATE_FILE="/tmp/patch_shepherd_rates.${PPID}"
 # Caps per run
 MAX_RETESTS=15
 MAX_RAISE_BUGS=5

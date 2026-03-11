@@ -1,4 +1,4 @@
-"""Configuration loading for patch watcher."""
+"""Configuration loading for patch shepherd."""
 
 import os
 from dataclasses import dataclass
@@ -6,11 +6,11 @@ from pathlib import Path
 
 from llm_tool_common.config import load_env_files
 
-load_env_files("patch-watcher")
+load_env_files("patch-shepherd")
 
 
 @dataclass
-class PatchWatcherConfig:
+class PatchShepherdConfig:
     """Patch watcher configuration.
 
     Attributes:
@@ -26,30 +26,30 @@ class PatchWatcherConfig:
     def __post_init__(self) -> None:
         watcher_dir = str(Path(__file__).resolve().parent)
 
-        # patches_file: PATCH_WATCHER_PATCHES_FILE > PATCHES_FILE > default
+        # patches_file: PATCH_SHEPHERD_PATCHES_FILE > PATCHES_FILE > default
         if not self.patches_file:
             self.patches_file = os.environ.get(
-                "PATCH_WATCHER_PATCHES_FILE",
+                "PATCH_SHEPHERD_PATCHES_FILE",
                 os.environ.get(
                     "PATCHES_FILE",
                     "/shared/support_files/patches_to_watch.json",
                 ),
             )
 
-        # report_file: PATCH_WATCHER_REPORT_FILE > REPORT_FILE > default
+        # report_file: PATCH_SHEPHERD_REPORT_FILE > REPORT_FILE > default
         if not self.report_file:
             self.report_file = os.environ.get(
-                "PATCH_WATCHER_REPORT_FILE",
+                "PATCH_SHEPHERD_REPORT_FILE",
                 os.environ.get(
                     "REPORT_FILE",
-                    "/tmp/patch_watcher_report.json",
+                    "/tmp/patch_shepherd_report.json",
                 ),
             )
 
-        # watcher_tool: PATCH_WATCHER_TOOL_PATH > derived from __file__
+        # watcher_tool: PATCH_SHEPHERD_TOOL_PATH > derived from __file__
         if not self.watcher_tool:
             self.watcher_tool = os.environ.get(
-                "PATCH_WATCHER_TOOL_PATH",
+                "PATCH_SHEPHERD_TOOL_PATH",
                 os.path.join(watcher_dir, "watcher_tool.sh"),
             )
 
@@ -58,7 +58,7 @@ class PatchWatcherConfig:
         if not watcher_path.exists():
             raise FileNotFoundError(
                 f"watcher_tool.sh not found at {self.watcher_tool}\n"
-                f"Set PATCH_WATCHER_TOOL_PATH or ensure watcher_tool.sh "
+                f"Set PATCH_SHEPHERD_TOOL_PATH or ensure watcher_tool.sh "
                 f"is in {watcher_dir}/"
             )
         if not os.access(self.watcher_tool, os.X_OK):
@@ -70,7 +70,7 @@ class PatchWatcherConfig:
         if not patches_path.exists():
             raise FileNotFoundError(
                 f"Patches file not found: {self.patches_file}\n"
-                f"Set PATCH_WATCHER_PATCHES_FILE or PATCHES_FILE, "
+                f"Set PATCH_SHEPHERD_PATCHES_FILE or PATCHES_FILE, "
                 f"or create the file at the default location."
             )
 
@@ -79,12 +79,12 @@ def load_config(
     patches_file: str | None = None,
     report_file: str | None = None,
     watcher_tool: str | None = None,
-) -> PatchWatcherConfig:
-    """Load patch watcher configuration from environment.
+) -> PatchShepherdConfig:
+    """Load patch shepherd configuration from environment.
 
     Explicit arguments override environment variables.
     """
-    return PatchWatcherConfig(
+    return PatchShepherdConfig(
         patches_file=patches_file or "",
         report_file=report_file or "",
         watcher_tool=watcher_tool or "",

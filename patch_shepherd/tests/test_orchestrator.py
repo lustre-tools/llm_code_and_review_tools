@@ -1,4 +1,4 @@
-"""Tests for patch_watcher/orchestrator.py.
+"""Tests for patch_shepherd/orchestrator.py.
 
 Covers: prompt generation, decision parsing, config/path handling,
 error recovery paths, report generation, decision execution.
@@ -273,16 +273,16 @@ class TestConfigPaths:
         with patch.dict(os.environ, {"REPORT_FILE": "/custom/report.json"},
                         clear=False):
             val = os.environ.get(
-                "REPORT_FILE", "/tmp/patch_watcher_report.json")
+                "REPORT_FILE", "/tmp/patch_shepherd_report.json")
             assert val == "/custom/report.json"
 
     def test_config_dataclass_explicit_values(self, tmp_path):
-        """PatchWatcherConfig accepts explicit values that skip env lookup."""
-        from patch_watcher.config import PatchWatcherConfig
+        """PatchShepherdConfig accepts explicit values that skip env lookup."""
+        from patch_shepherd.config import PatchShepherdConfig
         patches_file = str(tmp_path / "patches.json")
         with open(patches_file, "w") as f:
             f.write("{}")
-        cfg = PatchWatcherConfig(
+        cfg = PatchShepherdConfig(
             patches_file=patches_file,
             report_file="/tmp/test_report.json",
             watcher_tool=WATCHER_TOOL_PATH,

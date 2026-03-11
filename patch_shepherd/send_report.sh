@@ -1,13 +1,13 @@
 #!/bin/bash
-# send_report.sh — Format and send the patch watcher email report.
+# send_report.sh — Format and send the patch shepherd email report.
 #
 # Reads the JSON report + patches file, generates HTML email, sends via mutt.
 
 set -euo pipefail
 
-REPORT_FILE="${1:-/tmp/patch_watcher_report.json}"
+REPORT_FILE="${1:-/tmp/patch_shepherd_report.json}"
 PATCHES_FILE="${PATCHES_FILE:-/shared/support_files/patches_to_watch.json}"
-RECIPIENT="${PATCH_WATCHER_EMAIL:-pfarrell@whamcloud.com}"
+RECIPIENT="${PATCH_SHEPHERD_EMAIL:-pfarrell@whamcloud.com}"
 FROM="noreply@mulberrytree.us"
 
 if [[ ! -f "$REPORT_FILE" ]]; then
@@ -16,7 +16,7 @@ if [[ ! -f "$REPORT_FILE" ]]; then
 fi
 
 # Generate HTML email from JSON report
-HTML_FILE="/tmp/patch_watcher_email.html"
+HTML_FILE="/tmp/patch_shepherd_email.html"
 
 python3 -c "
 import json, sys, re
@@ -59,7 +59,7 @@ if summary.get('retests_requested', 0):
 if summary.get('bugs_raised', 0):
     parts.append(f\"{summary['bugs_raised']} bugs raised\")
 status_str = ', '.join(parts) if parts else 'no changes'
-subject = f'[Patch Watcher] {n_actions} actions, {n_patches} patches ({status_str})'
+subject = f'[Patch Shepherd] {n_actions} actions, {n_patches} patches ({status_str})'
 
 # Color map for statuses and action types
 status_colors = {
@@ -97,7 +97,7 @@ html = '''<!DOCTYPE html>
 <body style=\"font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 720px; margin: 0 auto; padding: 20px; color: #333;\">
 
 <h2 style=\"color: #1a237e; border-bottom: 2px solid #1a237e; padding-bottom: 8px; margin-bottom: 16px;\">
-  Lustre Patch Watcher Report
+  Lustre Patch Shepherd Report
 </h2>
 <p style=\"color: #666; font-size: 13px; margin-top: -12px;\">''' + ts + '''</p>
 
@@ -250,7 +250,7 @@ if skipped:
 html += '''</div>
 
 <p style=\"color: #999; font-size: 11px; margin-top: 12px;\">
-  Automated by Patch Watcher &middot; Next check in ~1 hour
+  Automated by Patch Shepherd &middot; Next check in ~1 hour
 </p>
 
 </body>
@@ -260,18 +260,18 @@ with open('$HTML_FILE', 'w') as f:
     f.write(html)
 
 # Write subject to a temp file for the shell to read
-with open('/tmp/patch_watcher_subject.txt', 'w') as f:
+with open('/tmp/patch_shepherd_subject.txt', 'w') as f:
     f.write(subject)
 " || {
 	echo "ERROR: Failed to generate HTML email" >&2
 	exit 1
 }
 
-SUBJECT="$(cat /tmp/patch_watcher_subject.txt)"
+SUBJECT="$(cat /tmp/patch_shepherd_subject.txt)"
 
 # Send via mutt with HTML content type
 mutt -e "set from=$FROM" \
-	-e "set realname='Patch Watcher'" \
+	-e "set realname='Patch Shepherd'" \
 	-e "set use_from=yes" \
 	-e "set envelope_from=yes" \
 	-e "set content_type=text/html" \
@@ -281,4 +281,4 @@ mutt -e "set from=$FROM" \
 echo "Email sent to $RECIPIENT: $SUBJECT"
 
 # Cleanup
-rm -f "$HTML_FILE" /tmp/patch_watcher_subject.txt
+rm -f "$HTML_FILE" /tmp/patch_shepherd_subject.txt
