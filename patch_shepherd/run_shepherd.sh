@@ -1,5 +1,5 @@
 #!/bin/bash
-# run_watcher.sh — Main entry point for the patch shepherd daemon.
+# run_shepherd.sh — Main entry point for the patch shepherd daemon.
 #
 # Invoked by systemd timer (hourly) or manually for testing.
 # Runs orchestrator.py (pure code) for the mechanical work;
@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-WATCHER_DIR="$(cd "$(dirname "$0")" && pwd)"
+SHEPHERD_DIR="$(cd "$(dirname "$0")" && pwd)"
 PATCHES_FILE="${PATCHES_FILE:-/shared/support_files/patches_to_watch.json}"
 REPORT_FILE="/tmp/patch_shepherd_report.json"
 LOG_DIR="${HOME}/.patch_shepherd"
@@ -15,7 +15,7 @@ DRY_RUN=""
 if [[ "${1:-}" == "--dry-run" ]]; then
     DRY_RUN=1
 fi
-LOG_FILE="${LOG_DIR}/watcher.log"
+LOG_FILE="${LOG_DIR}/shepherd.log"
 ORCHESTRATOR_OUTPUT="${LOG_DIR}/orchestrator_output.json"
 
 # Per-run log file for tail -f while running
@@ -36,7 +36,7 @@ log() {
 	echo "$msg" >> "$RUN_LOG"
 }
 
-log "=== Patch watcher run starting (PID $$) ==="
+log "=== Patch shepherd run starting (PID $$) ==="
 [[ -n "$DRY_RUN" ]] && log "DRY RUN mode — no writes will be made"
 
 # Verify patches file exists
@@ -82,7 +82,7 @@ START_SECONDS=$SECONDS
 PATCHES_FILE="$PATCHES_FILE" \
 REPORT_FILE="$REPORT_FILE" \
 ${DRY_RUN:+PATCH_SHEPHERD_DRY_RUN=1} \
-python3 "$WATCHER_DIR/orchestrator.py" ${DRY_RUN:+--dry-run} \
+python3 "$SHEPHERD_DIR/orchestrator.py" ${DRY_RUN:+--dry-run} \
 	> "$ORCHESTRATOR_OUTPUT" \
 	2> >(tee -a "$LOG_FILE" >> "$RUN_LOG") || {
 	EXITCODE=$?
@@ -140,9 +140,9 @@ print('yes' if actions else 'no')
 
 if [[ "$HAS_ACTIONS" == "yes" ]]; then
 	log "Actions found — sending email report."
-	bash "$WATCHER_DIR/send_report.sh" "$REPORT_FILE"
+	bash "$SHEPHERD_DIR/send_report.sh" "$REPORT_FILE"
 else
 	log "No actions — silent run, no email."
 fi
 
-log "=== Patch watcher run complete (PID $$) ==="
+log "=== Patch shepherd run complete (PID $$) ==="

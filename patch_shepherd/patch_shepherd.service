@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=patchshepherd
-ExecStart=/shared/llm_code_and_review_tools/patch_shepherd/run_watcher.sh
+ExecStart=/shared/llm_code_and_review_tools/patch_shepherd/run_shepherd.sh
 TimeoutStartSec=600
 Environment=HOME=/home/patchshepherd
 Environment=PATH=/home/patchshepherd/.local/bin:/usr/local/bin:/usr/bin:/bin

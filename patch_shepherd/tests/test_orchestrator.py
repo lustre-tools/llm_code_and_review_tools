@@ -21,15 +21,15 @@ import orchestrator  # noqa: E402
 # Fixtures
 # -------------------------------------------------------------------
 
-WATCHER_TOOL_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "watcher_tool.sh")
+SHEPHERD_TOOL_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "shepherd_tool.sh")
 
 
 @pytest.fixture(autouse=True)
 def _set_config():
-    """Ensure orchestrator._config is set for tests that call watcher()."""
+    """Ensure orchestrator._config is set for tests that call tool()."""
     fake_config = MagicMock()
-    fake_config.watcher_tool = WATCHER_TOOL_PATH
+    fake_config.shepherd_tool = SHEPHERD_TOOL_PATH
     fake_config.patches_file = "/tmp/fake_patches.json"
     fake_config.report_file = "/tmp/fake_report.json"
     orchestrator._config = fake_config
@@ -255,10 +255,10 @@ class TestFallbackDecisions:
 # -------------------------------------------------------------------
 
 class TestConfigPaths:
-    def test_config_watcher_tool_is_absolute(self):
-        """The real watcher_tool.sh path should be absolute."""
-        assert os.path.isabs(WATCHER_TOOL_PATH)
-        assert WATCHER_TOOL_PATH.endswith("watcher_tool.sh")
+    def test_config_shepherd_tool_is_absolute(self):
+        """The real shepherd_tool.sh path should be absolute."""
+        assert os.path.isabs(SHEPHERD_TOOL_PATH)
+        assert SHEPHERD_TOOL_PATH.endswith("shepherd_tool.sh")
 
     def test_env_var_override_patches_file(self):
         """Verify PATCHES_FILE env var is respected by config."""
@@ -285,11 +285,11 @@ class TestConfigPaths:
         cfg = PatchShepherdConfig(
             patches_file=patches_file,
             report_file="/tmp/test_report.json",
-            watcher_tool=WATCHER_TOOL_PATH,
+            shepherd_tool=SHEPHERD_TOOL_PATH,
         )
         assert cfg.patches_file == patches_file
         assert cfg.report_file == "/tmp/test_report.json"
-        assert cfg.watcher_tool == WATCHER_TOOL_PATH
+        assert cfg.shepherd_tool == SHEPHERD_TOOL_PATH
 
 
 # -------------------------------------------------------------------
@@ -343,14 +343,14 @@ class TestRunHelper:
 
 
 # -------------------------------------------------------------------
-# 6. watcher() helper
+# 6. tool() helper
 # -------------------------------------------------------------------
 
-class TestWatcherHelper:
+class TestToolHelper:
     @patch("orchestrator.run")
     def test_builds_correct_command(self, mock_run):
         mock_run.return_value = {"ok": True}
-        orchestrator.watcher("check-patch", "url1", "0", "active")
+        orchestrator.tool("check-patch", "url1", "0", "active")
         args = mock_run.call_args[0][0]
         assert args[0] == WATCHER_TOOL_PATH
         assert args[1] == "check-patch"
@@ -359,7 +359,7 @@ class TestWatcherHelper:
     @patch("orchestrator.run")
     def test_passes_stdin_and_timeout(self, mock_run):
         mock_run.return_value = {"ok": True}
-        orchestrator.watcher("write-report", "/tmp/r.json",
+        orchestrator.tool("write-report", "/tmp/r.json",
                              stdin_data="data", timeout=30)
         _, kwargs = mock_run.call_args
         assert kwargs["stdin_data"] == "data"
@@ -371,35 +371,35 @@ class TestWatcherHelper:
 # -------------------------------------------------------------------
 
 class TestCheckOne:
-    @patch("orchestrator.watcher")
-    def test_returns_tuple(self, mock_watcher, sample_patch,
+    @patch("orchestrator.tool")
+    def test_returns_tuple(self, mock_tool, sample_patch,
                            sample_check_result):
-        mock_watcher.return_value = sample_check_result
+        mock_tool.return_value = sample_check_result
         i, p, result = orchestrator._check_one(0, sample_patch)
         assert i == 0
         assert p is sample_patch
         assert result is sample_check_result
 
-    @patch("orchestrator.watcher")
-    def test_wraps_error_result(self, mock_watcher, sample_patch):
+    @patch("orchestrator.tool")
+    def test_wraps_error_result(self, mock_tool, sample_patch):
         """When check-patch returns an error dict, wrap in standard format."""
-        mock_watcher.return_value = {"error": "connection refused"}
+        mock_tool.return_value = {"error": "connection refused"}
         i, p, result = orchestrator._check_one(0, sample_patch)
         assert result["errors"] == ["check-patch: connection refused"]
         assert result["needs_llm_decision"] == []
         assert result["skipped"] is False
 
-    @patch("orchestrator.watcher")
-    def test_uses_patch_fields(self, mock_watcher, sample_patch):
-        """Verify patch fields are forwarded to watcher call."""
-        mock_watcher.return_value = {
+    @patch("orchestrator.tool")
+    def test_uses_patch_fields(self, mock_tool, sample_patch):
+        """Verify patch fields are forwarded to tool call."""
+        mock_tool.return_value = {
             "gerrit_url": sample_patch["gerrit_url"],
             "patch_index": 0, "skipped": True,
             "skip_reason": "merged",
             "actions_taken": [], "needs_llm_decision": [], "errors": [],
         }
         orchestrator._check_one(0, sample_patch)
-        mock_watcher.assert_called_once_with(
+        mock_tool.assert_called_once_with(
             "check-patch",
             sample_patch["gerrit_url"],
             "0", "active", "3", "2",
@@ -411,8 +411,8 @@ class TestCheckOne:
 # -------------------------------------------------------------------
 
 class TestCheckAllPatches:
-    @patch("orchestrator.watcher")
-    def test_parallel_check(self, mock_watcher):
+    @patch("orchestrator.tool")
+    def test_parallel_check(self, mock_tool):
         """All patches checked, results in correct order."""
         patches = [
             {"gerrit_url": f"url{i}", "description": f"p{i}",
@@ -421,27 +421,27 @@ class TestCheckAllPatches:
             for i in range(3)
         ]
 
-        def fake_watcher(action, url, idx, *args):
+        def fake_tool(action, url, idx, *args):
             return {
                 "gerrit_url": url, "patch_index": int(idx),
                 "skipped": False, "actions_taken": [],
                 "needs_llm_decision": [], "errors": [],
             }
 
-        mock_watcher.side_effect = fake_watcher
+        mock_tool.side_effect = fake_tool
         results = orchestrator.check_all_patches(patches)
         assert len(results) == 3
         for i, (idx, p, result) in enumerate(results):
             assert idx == i
             assert result["gerrit_url"] == f"url{i}"
 
-    @patch("orchestrator.watcher")
-    def test_exception_in_thread_handled(self, mock_watcher):
+    @patch("orchestrator.tool")
+    def test_exception_in_thread_handled(self, mock_tool):
         """An exception in a thread produces an error result, not a crash."""
         patches = [{"gerrit_url": "url0", "description": "p0",
                      "watch_status": "active", "last_patchset": 0,
                      "last_review_count": 0}]
-        mock_watcher.side_effect = RuntimeError("boom")
+        mock_tool.side_effect = RuntimeError("boom")
         results = orchestrator.check_all_patches(patches)
         assert len(results) == 1
         _, _, result = results[0]
@@ -513,10 +513,10 @@ class TestResearchFailures:
 # -------------------------------------------------------------------
 
 class TestExecuteDecisions:
-    @patch("orchestrator.watcher")
-    def test_link_and_retest(self, mock_watcher, sample_patch,
+    @patch("orchestrator.tool")
+    def test_link_and_retest(self, mock_tool, sample_patch,
                               sample_failure):
-        mock_watcher.return_value = {"ok": True}
+        mock_tool.return_value = {"ok": True}
         unknown = [(0, sample_patch, sample_failure)]
         decisions = [{"index": 0, "found_bug": "LU-100",
                       "related": False, "reason": "exact match",
@@ -529,14 +529,14 @@ class TestExecuteDecisions:
         assert actions[0]["type"] == "link_bug"
         assert actions[0]["jira"] == "LU-100"
         assert tool_calls == 2  # link-bug + retest
-        calls = mock_watcher.call_args_list
+        calls = mock_tool.call_args_list
         assert calls[0] == call("link-bug", "suite-777", "LU-100")
         assert calls[1] == call("retest", "sess-888", "LU-100")
 
-    @patch("orchestrator.watcher")
-    def test_raise_and_retest(self, mock_watcher, sample_patch,
+    @patch("orchestrator.tool")
+    def test_raise_and_retest(self, mock_tool, sample_patch,
                                sample_failure):
-        mock_watcher.side_effect = [
+        mock_tool.side_effect = [
             {"ok": True, "data": {"key": "LU-200"}},  # raise-bug
             {"ok": True},  # retest
         ]
@@ -552,11 +552,11 @@ class TestExecuteDecisions:
         assert actions[0]["jira"] == "LU-200"
         assert tool_calls == 2
 
-    @patch("orchestrator.watcher")
-    def test_raise_bug_no_key_extracted(self, mock_watcher, sample_patch,
+    @patch("orchestrator.tool")
+    def test_raise_bug_no_key_extracted(self, mock_tool, sample_patch,
                                         sample_failure):
         """When raise-bug returns no parseable key, action still recorded."""
-        mock_watcher.return_value = {"raw": "something weird", "rc": 1}
+        mock_tool.return_value = {"raw": "something weird", "rc": 1}
         unknown = [(0, sample_patch, sample_failure)]
         decisions = [{"index": 0, "found_bug": None, "related": False,
                       "reason": "new", "action": "raise_and_retest"}]
@@ -567,8 +567,8 @@ class TestExecuteDecisions:
         assert actions[0]["jira"] == ""
         assert tool_calls == 1
 
-    @patch("orchestrator.watcher")
-    def test_stop_action(self, mock_watcher, sample_patch, sample_failure):
+    @patch("orchestrator.tool")
+    def test_stop_action(self, mock_tool, sample_patch, sample_failure):
         unknown = [(0, sample_patch, sample_failure)]
         decisions = [{"index": 0, "found_bug": None, "related": True,
                       "reason": "looks related to patch",
@@ -579,10 +579,10 @@ class TestExecuteDecisions:
 
         assert actions[0]["type"] == "stopped"
         assert tool_calls == 0
-        mock_watcher.assert_not_called()
+        mock_tool.assert_not_called()
 
-    @patch("orchestrator.watcher")
-    def test_unknown_action_treated_as_stop(self, mock_watcher,
+    @patch("orchestrator.tool")
+    def test_unknown_action_treated_as_stop(self, mock_tool,
                                              sample_patch, sample_failure):
         unknown = [(0, sample_patch, sample_failure)]
         decisions = [{"index": 0, "found_bug": None, "related": True,
@@ -590,11 +590,11 @@ class TestExecuteDecisions:
 
         actions, _ = orchestrator.execute_decisions(unknown, decisions)
         assert actions[0]["type"] == "stopped"
-        mock_watcher.assert_not_called()
+        mock_tool.assert_not_called()
 
-    @patch("orchestrator.watcher")
+    @patch("orchestrator.tool")
     def test_link_and_retest_without_bug_falls_to_stop(
-            self, mock_watcher, sample_patch, sample_failure):
+            self, mock_tool, sample_patch, sample_failure):
         """link_and_retest with found_bug=None falls through to stop."""
         unknown = [(0, sample_patch, sample_failure)]
         decisions = [{"index": 0, "found_bug": None, "related": True,
@@ -703,11 +703,11 @@ class TestBuildReport:
 # -------------------------------------------------------------------
 
 class TestMain:
-    @patch("orchestrator.watcher")
+    @patch("orchestrator.tool")
     @patch("orchestrator.load_config")
     @patch("builtins.open", create=True)
     def test_no_unknown_failures_path(self, mock_open, mock_load_config,
-                                       mock_watcher):
+                                       mock_tool):
         """Happy path: all patches checked, none need LLM."""
         patches_data = {
             "patches": [
@@ -721,7 +721,7 @@ class TestMain:
         fake_cfg = MagicMock()
         fake_cfg.patches_file = "/tmp/fake_patches.json"
         fake_cfg.report_file = "/tmp/fake_report.json"
-        fake_cfg.watcher_tool = WATCHER_TOOL_PATH
+        fake_cfg.shepherd_tool = SHEPHERD_TOOL_PATH
         mock_load_config.return_value = fake_cfg
 
         # File mock
@@ -738,20 +738,20 @@ class TestMain:
             "needs_llm_decision": [], "errors": [],
         }
         write_result = {"ok": True}
-        mock_watcher.side_effect = [check_result, write_result]
+        mock_tool.side_effect = [check_result, write_result]
 
         with patch("sys.stdout"):
             result = orchestrator.main()
 
         assert result == 0
-        write_call = mock_watcher.call_args_list[-1]
+        write_call = mock_tool.call_args_list[-1]
         assert write_call[0][0] == "write-report"
 
-    @patch("orchestrator.watcher")
+    @patch("orchestrator.tool")
     @patch("orchestrator.load_config")
     @patch("builtins.open", create=True)
     def test_with_unknown_failures_invokes_llm(
-            self, mock_open, mock_load_config, mock_watcher):
+            self, mock_open, mock_load_config, mock_tool):
         """When unknown failures exist, LLM is invoked."""
         patches_data = {
             "patches": [
@@ -765,7 +765,7 @@ class TestMain:
         fake_cfg = MagicMock()
         fake_cfg.patches_file = "/tmp/p.json"
         fake_cfg.report_file = "/tmp/r.json"
-        fake_cfg.watcher_tool = WATCHER_TOOL_PATH
+        fake_cfg.shepherd_tool = SHEPHERD_TOOL_PATH
         mock_load_config.return_value = fake_cfg
 
         mock_file = MagicMock()
@@ -785,7 +785,7 @@ class TestMain:
             "errors": [],
         }
         write_result = {"ok": True}
-        mock_watcher.side_effect = [check_result, write_result]
+        mock_tool.side_effect = [check_result, write_result]
 
         # Mock the LLM research to return a stop decision
         with patch("orchestrator.research_failures") as mock_research:

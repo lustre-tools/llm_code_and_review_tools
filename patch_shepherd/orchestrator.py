@@ -4,13 +4,13 @@
 Replaces the previous architecture where Claude Haiku ran the entire
 loop.  Now the code handles all mechanical work:
 
-  Phase 1: Check each patch via watcher_tool.sh check-patch
+  Phase 1: Check each patch via shepherd_tool.sh check-patch
            (gerrit status, reviews, CI, linked-bug retests)
   Phase 2: For unknown failures, call Claude with jira access
            to do real multi-round JIRA research + relatedness
-  Phase 3: Execute the LLM's decisions via watcher_tool.sh
+  Phase 3: Execute the LLM's decisions via shepherd_tool.sh
            (link-bug, raise-bug, retest, stop)
-  Phase 4: Build report JSON + write via watcher_tool.sh
+  Phase 4: Build report JSON + write via shepherd_tool.sh
 
 Most runs have zero unknown failures → zero LLM cost.
 When the LLM is invoked, it does genuine research instead of
@@ -70,10 +70,10 @@ def run(args, stdin_data=None, timeout=60):
         return {"error": str(e)}
 
 
-def watcher(action, *args, stdin_data=None, timeout=120):
-    """Call watcher_tool.sh <action> [args...]."""
+def tool(action, *args, stdin_data=None, timeout=120):
+    """Call shepherd_tool.sh <action> [args...]."""
     return run(
-        [_config.watcher_tool, action] + list(args),
+        [_config.shepherd_tool, action] + list(args),
         stdin_data=stdin_data, timeout=timeout)
 
 
@@ -90,7 +90,7 @@ def _check_one(i, patch):
     lr = str(patch.get("last_review_count", 0))
 
     t0 = time.monotonic()
-    result = watcher("check-patch", url, str(i), ws, lp, lr)
+    result = tool("check-patch", url, str(i), ws, lp, lr)
     elapsed = time.monotonic() - t0
 
     if "error" in result and "raw" not in result:
@@ -403,8 +403,8 @@ def execute_decisions(unknown_failures, decisions):
         if action_type == "link_and_retest" and found_bug:
             log(f"  #{patch_idx}: link {found_bug} + retest "
                 f"({test})")
-            watcher("link-bug", suite_id, found_bug)
-            watcher("retest", session_id, found_bug)
+            tool("link-bug", suite_id, found_bug)
+            tool("retest", session_id, found_bug)
             tool_calls += 2
             actions.append({
                 "type": "link_bug",
@@ -423,14 +423,14 @@ def execute_decisions(unknown_failures, decisions):
             if error:
                 summary = f"{test}: {error[:80]}"
 
-            bug_result = watcher(
+            bug_result = tool(
                 "raise-bug", suite_id,
                 "--project", "LU", "--summary", summary)
             tool_calls += 1
 
             bug_key = _extract_bug_key(bug_result)
             if bug_key and session_id:
-                watcher("retest", session_id, bug_key)
+                tool("retest", session_id, bug_key)
                 tool_calls += 1
 
             actions.append({
@@ -596,7 +596,7 @@ def main():
         len(patches), tool_calls, llm_calls)
 
     report_json = json.dumps(report, indent=4)
-    write_result = watcher(
+    write_result = tool(
         "write-report", _config.report_file, stdin_data=report_json)
     tool_calls += 1
 
@@ -606,7 +606,7 @@ def main():
     if write_result.get("patches_updated"):
         log("patches_to_watch.json updated")
 
-    # Structured summary on stdout for run_watcher.sh
+    # Structured summary on stdout for run_shepherd.sh
     print(json.dumps({
         "actions": len(all_actions),
         "errors": len(all_errors),

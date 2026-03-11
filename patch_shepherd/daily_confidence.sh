@@ -2,13 +2,13 @@
 # daily_confidence.sh — Daily confidence report for the patch shepherd.
 #
 # Pure code — no LLM. Aggregates the last 24 hours of archived reports
-# and watcher.log to produce a health summary email.
+# and shepherd.log to produce a health summary email.
 
 set -euo pipefail
 
-WATCHER_DIR="$(cd "$(dirname "$0")" && pwd)"
+SHEPHERD_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_DIR="${HOME}/.patch_shepherd"
-LOG_FILE="${LOG_DIR}/watcher.log"
+LOG_FILE="${LOG_DIR}/shepherd.log"
 PATCHES_FILE="${PATCHES_FILE:-/shared/support_files/patches_to_watch.json}"
 RECIPIENT="${PATCH_SHEPHERD_EMAIL:-pfarrell@whamcloud.com}"
 FROM="noreply@mulberrytree.us"
@@ -47,8 +47,8 @@ for path in sorted(glob.glob(f"{LOG_DIR}/report_*.json")):
     except Exception:
         continue
 
-# --- Scan watcher.log for failures in the last 24h ---
-log_file = f"{LOG_DIR}/watcher.log"
+# --- Scan shepherd.log for failures in the last 24h ---
+log_file = f"{LOG_DIR}/shepherd.log"
 failed_runs = 0
 total_log_runs = 0
 log_errors = []

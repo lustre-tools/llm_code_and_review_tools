@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-WATCHER_DIR="$(cd "$(dirname "$0")" && pwd)"
+SHEPHERD_DIR="$(cd "$(dirname "$0")" && pwd)"
 SERVICE_DIR="/etc/systemd/system"
 
 echo "=== Patch Shepherd Installer ==="
@@ -26,13 +26,13 @@ fi
 
 # Install systemd units
 echo "Installing systemd units..."
-sudo cp "$WATCHER_DIR/patch_shepherd.service" "$SERVICE_DIR/"
-sudo cp "$WATCHER_DIR/patch_shepherd.timer" "$SERVICE_DIR/"
-sudo cp "$WATCHER_DIR/patch_shepherd_daily.service" "$SERVICE_DIR/"
-sudo cp "$WATCHER_DIR/patch_shepherd_daily.timer" "$SERVICE_DIR/"
+sudo cp "$SHEPHERD_DIR/patch_shepherd.service" "$SERVICE_DIR/"
+sudo cp "$SHEPHERD_DIR/patch_shepherd.timer" "$SERVICE_DIR/"
+sudo cp "$SHEPHERD_DIR/patch_shepherd_daily.service" "$SERVICE_DIR/"
+sudo cp "$SHEPHERD_DIR/patch_shepherd_daily.timer" "$SERVICE_DIR/"
 sudo systemctl daemon-reload
 
-echo "Enabling hourly watcher timer..."
+echo "Enabling hourly shepherd timer..."
 sudo systemctl enable patch_shepherd.timer
 sudo systemctl start patch_shepherd.timer
 
@@ -46,11 +46,11 @@ systemctl list-timers 'patch_shepherd*' --no-pager || true
 
 echo ""
 echo "=== Installation complete ==="
-echo "Hourly watcher: checks patches, emails on actions."
+echo "Hourly shepherd: checks patches, emails on actions."
 echo "Daily report:   confidence summary at 08:00."
-echo "Logs: ${HOME}/.patch_shepherd/watcher.log"
+echo "Logs: ${HOME}/.patch_shepherd/shepherd.log"
 echo ""
-echo "Manual test:    bash $WATCHER_DIR/run_watcher.sh"
-echo "Manual daily:   bash $WATCHER_DIR/daily_confidence.sh"
+echo "Manual test:    bash $SHEPHERD_DIR/run_shepherd.sh"
+echo "Manual daily:   bash $SHEPHERD_DIR/daily_confidence.sh"
 echo "Check timers:   systemctl list-timers 'patch_shepherd*'"
 echo "Stop all:       sudo systemctl stop patch_shepherd.timer patch_shepherd_daily.timer"

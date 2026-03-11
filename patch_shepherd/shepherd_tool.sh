@@ -1,7 +1,7 @@
 #!/bin/bash
-# watcher_tool.sh — Guardrail wrapper for the patch shepherd daemon.
+# shepherd_tool.sh — Guardrail wrapper for the patch shepherd daemon.
 #
-# This is the ONLY tool the watcher Claude instance can call.
+# This is the ONLY tool the shepherd Claude instance can call.
 # It validates the action against an allowlist before executing.
 
 set -euo pipefail
@@ -32,7 +32,7 @@ rate_check() {
 
 usage() {
 	cat <<'EOF'
-Usage: watcher_tool.sh <action> [args...]
+Usage: shepherd_tool.sh <action> [args...]
 
 Allowed actions:
   check-patch <url> [idx] [status] [ps] [rc]

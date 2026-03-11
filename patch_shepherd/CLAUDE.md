@@ -10,7 +10,7 @@ The patch shepherd runs as a systemd timer (hourly) under a dedicated
 `patchshepherd` user with limited permissions.
 
 **orchestrator.py** (pure code) handles all mechanical work:
-- Phase 1: Check each patch in parallel via `watcher_tool.sh check-patch`
+- Phase 1: Check each patch in parallel via `shepherd_tool.sh check-patch`
   (Gerrit status, reviews, CI results, linked-bug retests)
 - Phase 2: For unknown failures only, invoke Claude (you) for JIRA research
 - Phase 3: Execute your decisions (link-bug, retest, stop)
@@ -21,8 +21,8 @@ invoked when there are unlinked CI failures that need JIRA research.
 
 ## Security Model
 
-- The watcher runs as its own dedicated user, NOT as a developer.
-- `watcher_tool.sh` is the only tool available — it validates all
+- The shepherd runs as its own dedicated user, NOT as a developer.
+- `shepherd_tool.sh` is the only tool available — it validates all
   actions against an allowlist and enforces per-run rate limits.
 - Write actions are capped: max 15 retests, 5 bug raises, 20 bug
   links per run.
