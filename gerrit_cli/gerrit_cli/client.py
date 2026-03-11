@@ -567,6 +567,27 @@ class GerritCommentsClient:
         """
         return self.rest.get(f"/changes/{change_number}/hashtags")
 
+    def get_related_changes(
+        self,
+        change_number: int,
+    ) -> list[dict]:
+        """Get the relation chain for a change (git parent/child series).
+
+        Returns changes in order from series root (ancestor) to tip
+        (descendant). The current change is included in the list.
+
+        Args:
+            change_number: The change number
+
+        Returns:
+            List of dicts with keys: _change_number, _revision_number,
+            _current_revision_number, status, subject, change_id
+        """
+        result = self.rest.get(
+            f"/changes/{change_number}/revisions/current/related"
+        )
+        return result.get("changes", [])
+
     def add_hashtags(
         self,
         change_number: int,

@@ -6,6 +6,8 @@
 
 set -euo pipefail
 
+DRY_RUN="${PATCH_SHEPHERD_DRY_RUN:-}"
+
 PATCHES_FILE="${PATCHES_FILE:-/shared/support_files/patches_to_watch.json}"
 
 # --- Rate limiting for write actions ---
@@ -118,6 +120,7 @@ result = {
     "review_count": 0,
     "new_reviews": False,
     "needs_human_review": False,
+    "negative_cr": False,
     "review_summary": None,
     "ci_summary": None,
     "actions_taken": [],
@@ -217,6 +220,7 @@ if comments and comments.get("ok"):
             if has_inline or is_negative or is_substantive:
                 reviewer = msg.get("author", {}).get("name", "unknown")
                 result["needs_human_review"] = True
+                result["negative_cr"] = is_negative
                 result["review_summary"] = (
                     f"Review from {reviewer}: {message[:200]}"
                 )
@@ -358,18 +362,30 @@ check-linked-bugs)
 
 link-bug)
 	[[ $# -ge 2 ]] || die "link-bug requires <test_set_id> <JIRA_TICKET>"
+	if [[ -n "$DRY_RUN" ]]; then
+		echo "{\"ok\": true, \"dry_run\": true, \"action\": \"link-bug\", \"args\": [\"$1\", \"$2\"]}"
+		exit 0
+	fi
 	rate_check link_bug "$MAX_LINK_BUGS"
 	exec maloo link-bug "$1" "$2"
 	;;
 
 raise-bug)
 	[[ $# -ge 1 ]] || die "raise-bug requires <test_set_id>"
+	if [[ -n "$DRY_RUN" ]]; then
+		echo "{\"ok\": true, \"dry_run\": true, \"action\": \"raise-bug\", \"args\": [\"$1\"]}"
+		exit 0
+	fi
 	rate_check raise_bug "$MAX_RAISE_BUGS"
 	exec maloo raise-bug "$@"
 	;;
 
 retest)
 	[[ $# -ge 2 ]] || die "retest requires <session_id> <JIRA_TICKET>"
+	if [[ -n "$DRY_RUN" ]]; then
+		echo "{\"ok\": true, \"dry_run\": true, \"action\": \"retest\", \"args\": [\"$1\", \"$2\"]}"
+		exit 0
+	fi
 	rate_check retest "$MAX_RETESTS"
 	exec maloo retest "$1" "$2"
 	;;

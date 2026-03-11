@@ -227,6 +227,48 @@ def cmd_hashtag(args):
         sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
 
 
+def cmd_related(args):
+    """Get the relation chain (series) for a Gerrit change."""
+    cli = _cli()
+    command = "related"
+    pretty = getattr(args, 'pretty', False)
+
+    try:
+        base_url, change_number = cli.GerritCommentsClient.parse_gerrit_url(args.url)
+        client = cli.GerritCommentsClient()
+
+        changes = client.get_related_changes(change_number)
+
+        # Build clean output: list of change numbers in series order
+        series = []
+        for c in changes:
+            num = c.get("_change_number")
+            if num is None:
+                continue
+            series.append({
+                "change_number": num,
+                "patchset": c.get("_revision_number"),
+                "current_patchset": c.get("_current_revision_number"),
+                "status": c.get("status", "NEW"),
+                "subject": c.get("subject", ""),
+                "is_current": num == change_number,
+            })
+
+        data = {
+            "change_number": change_number,
+            "series_length": len(series),
+            "series": series,
+        }
+
+        output_success(data, command, pretty)
+        sys.exit(0)
+
+    except ValueError as e:
+        sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
+    except Exception as e:
+        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+
+
 def cmd_message(args):
     """Post a top-level message on a Gerrit change."""
     cli = _cli()

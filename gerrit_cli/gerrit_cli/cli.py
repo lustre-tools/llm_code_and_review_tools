@@ -136,6 +136,7 @@ cmd_rebase = _cmd_change.cmd_rebase
 cmd_vote = _cmd_change.cmd_vote
 cmd_set_topic = _cmd_change.cmd_set_topic
 cmd_hashtag = _cmd_change.cmd_hashtag
+cmd_related = _cmd_change.cmd_related
 cmd_message = _cmd_change.cmd_message
 
 cmd_reviewers = _cmd_reviewers.cmd_reviewers
@@ -233,6 +234,7 @@ def main():
         'watch': cmd_watch,
         'set_topic': cmd_set_topic,
         'hashtag': cmd_hashtag,
+        'related': cmd_related,
         'restore': cmd_restore,
         'rebase': cmd_rebase,
         'vote': cmd_vote,

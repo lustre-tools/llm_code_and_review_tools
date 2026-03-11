@@ -138,6 +138,87 @@ def check_all_patches(patches):
 
 
 # -------------------------------------------------------------------
+# Series-aware blocking
+# -------------------------------------------------------------------
+
+def _change_number_from_url(url):
+    """Extract the numeric change ID from a Gerrit URL."""
+    import re
+    m = re.search(r"/\+/(\d+)", url)
+    return int(m.group(1)) if m else None
+
+
+def propagate_series_blocks(patches, results):
+    """Stop dependents when a patch in the series has a negative CR.
+
+    For each patch with negative_cr=True, call 'gerrit related' to get
+    the full relation chain, then stop any watched patches that appear
+    downstream (later in the chain) from the blocked patch.
+
+    Returns list of (patch_index, patch, reason) tuples for newly blocked patches.
+    """
+    newly_blocked = []
+
+    # Find patches with negative human CR
+    blocked_indices = set()
+    for i, patch, result in results:
+        if result.get("negative_cr") and not result.get("skipped"):
+            blocked_indices.add(i)
+
+    if not blocked_indices:
+        return newly_blocked
+
+    # For each blocked patch, get its relation chain
+    for blocked_i in blocked_indices:
+        blocked_patch = patches[blocked_i]
+        blocked_url = blocked_patch["gerrit_url"]
+        blocked_change = _change_number_from_url(blocked_url)
+        if not blocked_change:
+            continue
+
+        log(f"  Patch #{blocked_i} has negative CR — checking series...")
+        related = run(["gerrit", "related", blocked_url], timeout=30)
+        series = related.get("data", {}).get("series", [])
+        if not series:
+            continue
+
+        # Find position of blocked patch in series
+        blocked_pos = None
+        change_positions = {}
+        for pos, entry in enumerate(series):
+            cn = entry.get("change_number")
+            if cn is not None:
+                change_positions[cn] = pos
+            if cn == blocked_change:
+                blocked_pos = pos
+
+        if blocked_pos is None:
+            continue
+
+        # Find watched patches that are downstream (higher position = later in series)
+        for j, patch, result in results:
+            if j == blocked_i:
+                continue
+            if result.get("skipped") or result.get("watch_status") in (
+                    "stopped", "merged", "abandoned"):
+                continue
+            dep_change = _change_number_from_url(patch["gerrit_url"])
+            if dep_change is None:
+                continue
+            dep_pos = change_positions.get(dep_change)
+            if dep_pos is not None and dep_pos > blocked_pos:
+                reason = (
+                    f"Blocked: patch #{blocked_i} "
+                    f"({blocked_patch.get('description', blocked_url)}) "
+                    f"has a negative Code-Review"
+                )
+                log(f"  → Stopping patch #{j} ({patch.get('description','?')[:50]}): {reason}")
+                newly_blocked.append((j, patch, reason))
+
+    return newly_blocked
+
+
+# -------------------------------------------------------------------
 # Phase 2: LLM research for unknown failures
 # -------------------------------------------------------------------
 
@@ -431,6 +512,13 @@ def build_report(all_actions, all_errors, all_skipped,
 
 def main():
     global _config
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true")
+    args, _ = ap.parse_known_args()
+    if args.dry_run:
+        log("DRY RUN mode — no writes will be made")
+        os.environ["PATCH_SHEPHERD_DRY_RUN"] = "1"
     _config = load_config()
 
     with open(_config.patches_file) as f:
@@ -475,6 +563,17 @@ def main():
         for item in result.get("needs_llm_decision", []):
             unknown_failures.append((i, patch, item))
             log(f"    unknown: {item.get('test', '?')[:70]}")
+
+    # Series-aware blocking: stop dependents of patches with negative CR
+    series_blocks = propagate_series_blocks(patches, results)
+    for j, patch, reason in series_blocks:
+        all_actions.append({
+            "type": "stopped",
+            "patch_index": j,
+            "gerrit_url": patch["gerrit_url"],
+            "jira": patch.get("jira", ""),
+            "description": reason,
+        })
 
     # --- Phase 2: Research unknown failures ---
     if unknown_failures:

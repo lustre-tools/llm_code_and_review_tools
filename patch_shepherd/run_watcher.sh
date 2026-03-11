@@ -11,6 +11,10 @@ WATCHER_DIR="$(cd "$(dirname "$0")" && pwd)"
 PATCHES_FILE="${PATCHES_FILE:-/shared/support_files/patches_to_watch.json}"
 REPORT_FILE="/tmp/patch_shepherd_report.json"
 LOG_DIR="${HOME}/.patch_shepherd"
+DRY_RUN=""
+if [[ "${1:-}" == "--dry-run" ]]; then
+    DRY_RUN=1
+fi
 LOG_FILE="${LOG_DIR}/watcher.log"
 ORCHESTRATOR_OUTPUT="${LOG_DIR}/orchestrator_output.json"
 
@@ -33,6 +37,7 @@ log() {
 }
 
 log "=== Patch watcher run starting (PID $$) ==="
+[[ -n "$DRY_RUN" ]] && log "DRY RUN mode — no writes will be made"
 
 # Verify patches file exists
 if [[ ! -f "$PATCHES_FILE" ]]; then
@@ -76,7 +81,8 @@ START_SECONDS=$SECONDS
 # Stderr has progress logs; stdout has a JSON summary.
 PATCHES_FILE="$PATCHES_FILE" \
 REPORT_FILE="$REPORT_FILE" \
-python3 "$WATCHER_DIR/orchestrator.py" \
+${DRY_RUN:+PATCH_SHEPHERD_DRY_RUN=1} \
+python3 "$WATCHER_DIR/orchestrator.py" ${DRY_RUN:+--dry-run} \
 	> "$ORCHESTRATOR_OUTPUT" \
 	2> >(tee -a "$LOG_FILE" >> "$RUN_LOG") || {
 	EXITCODE=$?

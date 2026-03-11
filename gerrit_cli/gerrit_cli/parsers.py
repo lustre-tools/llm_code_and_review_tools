@@ -1134,6 +1134,23 @@ def add_search_parser(subparsers):
     return parser
 
 
+def add_related_parser(subparsers):
+    """Add the 'related' subcommand parser."""
+    parser = subparsers.add_parser(
+        "related",
+        help="Get the relation chain (series) for a Gerrit change",
+        description="Show all changes in the git relation chain for a change. "
+                    "Returns the series from root ancestor to tip, in order.",
+    )
+    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
 def setup_parsers(subparsers, handlers):
     """Set up all subparsers and bind them to command handlers.
 
@@ -1210,6 +1227,7 @@ def setup_parsers(subparsers, handlers):
     add_set_topic_parser(subparsers).set_defaults(
         func=handlers['set_topic'])
     add_hashtag_parser(subparsers).set_defaults(func=handlers['hashtag'])
+    add_related_parser(subparsers).set_defaults(func=handlers['related'])
     add_restore_parser(subparsers).set_defaults(func=handlers['restore'])
     add_rebase_parser(subparsers).set_defaults(func=handlers['rebase'])
 
