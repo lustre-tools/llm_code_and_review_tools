@@ -553,6 +553,44 @@ class GerritCommentsClient:
             "topic": topic,
         }
 
+    def get_hashtags(
+        self,
+        change_number: int,
+    ) -> list[str]:
+        """Get the hashtags on a Gerrit change.
+
+        Args:
+            change_number: The change number
+
+        Returns:
+            List of hashtag strings
+        """
+        return self.rest.get(f"/changes/{change_number}/hashtags")
+
+    def add_hashtags(
+        self,
+        change_number: int,
+        add: list[str],
+        remove: list[str] | None = None,
+    ) -> list[str]:
+        """Add (and optionally remove) hashtags on a Gerrit change.
+
+        Args:
+            change_number: The change number
+            add: Hashtags to add
+            remove: Hashtags to remove (optional)
+
+        Returns:
+            Updated list of hashtags on the change
+        """
+        body: dict[str, Any] = {"add": add}
+        if remove:
+            body["remove"] = remove
+        return self.rest.post(
+            f"/changes/{change_number}/hashtags",
+            json=body,
+        )
+
     def restore_change(
         self,
         change_number: int,

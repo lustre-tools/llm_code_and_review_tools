@@ -961,6 +961,37 @@ def add_set_topic_parser(subparsers):
     return parser
 
 
+def add_hashtag_parser(subparsers):
+    """Add the 'hashtag' subcommand parser."""
+    parser = subparsers.add_parser(
+        "hashtag",
+        help="Get or modify hashtags on a Gerrit change",
+        description="Get, add, or remove hashtags on a Gerrit change. "
+                    "Hashtags are free-form tags that can coexist with a change's topic.",
+    )
+    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument(
+        "--add", "-a",
+        metavar="TAG",
+        action="append",
+        default=[],
+        help="Hashtag to add (repeatable)",
+    )
+    parser.add_argument(
+        "--remove", "-r",
+        metavar="TAG",
+        action="append",
+        default=[],
+        help="Hashtag to remove (repeatable)",
+    )
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
 def add_restore_parser(subparsers):
     """Add the 'restore' subcommand parser."""
     parser = subparsers.add_parser(
@@ -1178,6 +1209,7 @@ def setup_parsers(subparsers, handlers):
     # Change management
     add_set_topic_parser(subparsers).set_defaults(
         func=handlers['set_topic'])
+    add_hashtag_parser(subparsers).set_defaults(func=handlers['hashtag'])
     add_restore_parser(subparsers).set_defaults(func=handlers['restore'])
     add_rebase_parser(subparsers).set_defaults(func=handlers['rebase'])
 

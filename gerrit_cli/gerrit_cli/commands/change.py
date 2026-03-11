@@ -191,6 +191,42 @@ def cmd_set_topic(args):
         sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
 
 
+def cmd_hashtag(args):
+    """Get or modify hashtags on a Gerrit change."""
+    cli = _cli()
+    command = "hashtag"
+    pretty = getattr(args, 'pretty', False)
+
+    try:
+        base_url, change_number = cli.GerritCommentsClient.parse_gerrit_url(args.url)
+        client = cli.GerritCommentsClient()
+
+        add = getattr(args, 'add', None) or []
+        remove = getattr(args, 'remove', None) or []
+
+        if add or remove:
+            hashtags = client.add_hashtags(change_number, add=add, remove=remove or None)
+            data = {
+                "success": True,
+                "change_number": change_number,
+                "hashtags": hashtags,
+            }
+        else:
+            hashtags = client.get_hashtags(change_number)
+            data = {
+                "change_number": change_number,
+                "hashtags": hashtags,
+            }
+
+        output_success(data, command, pretty)
+        sys.exit(0)
+
+    except ValueError as e:
+        sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
+    except Exception as e:
+        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+
+
 def cmd_message(args):
     """Post a top-level message on a Gerrit change."""
     cli = _cli()
