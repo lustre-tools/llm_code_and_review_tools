@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
-    echo "Install LLM code and review tools (jira, gerrit-cli, maloo, jenkins, beads)"
+    echo "Install LLM code and review tools (jira, gerrit-cli, maloo, jenkins, janitor, beads)"
     echo ""
     echo "Options:"
     echo "  --help, -h     Show this help message"
@@ -96,6 +96,12 @@ install_tools() {
     $PYTHON -m pip install -q -e "$SCRIPT_DIR/crash_tool"
     echo -e "${GREEN}✓${NC} crash-tool installed"
 
+    # Install janitor_tool
+    echo ""
+    echo "Installing janitor..."
+    $PYTHON -m pip install -q -e "$SCRIPT_DIR/janitor_tool"
+    echo -e "${GREEN}✓${NC} janitor installed"
+
     # Install lustre-drgn-tools (if submodule present and drgn available)
     if [[ -d "$SCRIPT_DIR/lustre-drgn-tools" ]]; then
         echo ""
@@ -140,6 +146,7 @@ install_tools() {
     echo "  maloo           - Maloo test results"
     echo "  jenkins         - Jenkins build server"
     echo "  crash-tool      - Non-interactive crash dump analysis"
+    echo "  janitor         - Gerrit Janitor test results"
     echo "  claude-images   - Extract images from Claude Code conversations"
     echo "  bd              - Beads task tracking"
     echo ""
@@ -149,6 +156,7 @@ install_tools() {
     echo "  maloo --help"
     echo "  jenkins --help"
     echo "  crash-tool --help"
+    echo "  janitor --help"
     echo "  claude-images --help"
     echo "  bd --help"
     echo ""
@@ -185,6 +193,9 @@ uninstall_tools() {
 
     echo "Uninstalling jenkins-tool..."
     $PYTHON -m pip uninstall -y jenkins-tool 2>/dev/null || true
+
+    echo "Uninstalling janitor-tool..."
+    $PYTHON -m pip uninstall -y janitor-tool 2>/dev/null || true
 
     echo "Uninstalling claude-images..."
     $PYTHON -m pip uninstall -y claude-images 2>/dev/null || true
