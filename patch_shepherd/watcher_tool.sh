@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-PATCHES_FILE="/shared/support_files/patches_to_watch.json"
+PATCHES_FILE="${PATCHES_FILE:-/shared/support_files/patches_to_watch.json}"
 
 # --- Rate limiting for write actions ---
 # Counter file in /tmp. PPID is the claude process that invoked us;
