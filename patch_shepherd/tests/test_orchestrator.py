@@ -352,7 +352,7 @@ class TestToolHelper:
         mock_run.return_value = {"ok": True}
         orchestrator.tool("check-patch", "url1", "0", "active")
         args = mock_run.call_args[0][0]
-        assert args[0] == WATCHER_TOOL_PATH
+        assert args[0] == SHEPHERD_TOOL_PATH
         assert args[1] == "check-patch"
         assert args[2:] == ["url1", "0", "active"]
 
