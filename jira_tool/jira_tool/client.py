@@ -703,6 +703,36 @@ class JiraClient:
         }
         return self._request("PUT", f"issue/{key}", json_data=body, context=key)
 
+    def add_components(self, key: str, components: list[str]) -> dict[str, Any]:
+        """
+        Add components to an issue without replacing existing ones.
+
+        Args:
+            key: Issue key
+            components: Component names to add
+        """
+        body = {
+            "update": {
+                "components": [{"add": {"name": c}} for c in components],
+            }
+        }
+        return self._request("PUT", f"issue/{key}", json_data=body, context=key)
+
+    def remove_components(self, key: str, components: list[str]) -> dict[str, Any]:
+        """
+        Remove components from an issue.
+
+        Args:
+            key: Issue key
+            components: Component names to remove
+        """
+        body = {
+            "update": {
+                "components": [{"remove": {"name": c}} for c in components],
+            }
+        }
+        return self._request("PUT", f"issue/{key}", json_data=body, context=key)
+
     def set_fix_versions(self, key: str, versions: list[str]) -> dict[str, Any]:
         """
         Set fix versions on an issue (replaces existing).
@@ -714,6 +744,36 @@ class JiraClient:
         body = {
             "fields": {
                 "fixVersions": [{"name": v} for v in versions],
+            }
+        }
+        return self._request("PUT", f"issue/{key}", json_data=body, context=key)
+
+    def add_fix_versions(self, key: str, versions: list[str]) -> dict[str, Any]:
+        """
+        Add fix versions to an issue without replacing existing ones.
+
+        Args:
+            key: Issue key
+            versions: Version names to add
+        """
+        body = {
+            "update": {
+                "fixVersions": [{"add": {"name": v}} for v in versions],
+            }
+        }
+        return self._request("PUT", f"issue/{key}", json_data=body, context=key)
+
+    def remove_fix_versions(self, key: str, versions: list[str]) -> dict[str, Any]:
+        """
+        Remove fix versions from an issue.
+
+        Args:
+            key: Issue key
+            versions: Version names to remove
+        """
+        body = {
+            "update": {
+                "fixVersions": [{"remove": {"name": v}} for v in versions],
             }
         }
         return self._request("PUT", f"issue/{key}", json_data=body, context=key)

@@ -135,7 +135,9 @@ def register(main):
     @click.option("--description", help="New issue description")
     @click.option("--assignee", help="New assignee username (use empty string to unassign)")
     @click.option("--priority", help="New priority name (e.g., High, Medium, Low)")
-    @click.option("--labels", help="Comma-separated list of labels (replaces existing)")
+    @click.option("--labels", help="Comma-separated labels to add (keeps existing labels)")
+    @click.option("--remove-labels", help="Comma-separated labels to remove")
+    @click.option("--replace-labels", help="Comma-separated labels that replace ALL existing labels")
     @click.pass_context
     def issue_update(
         ctx: click.Context,
@@ -145,6 +147,8 @@ def register(main):
         assignee: str | None,
         priority: str | None,
         labels: str | None,
+        remove_labels: str | None,
+        replace_labels: str | None,
     ) -> None:
         """
         Update an existing issue.
@@ -152,6 +156,11 @@ def register(main):
         KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
 
         At least one field must be specified to update.
+
+        --labels adds to existing labels (additive).
+        --remove-labels removes specific labels.
+        --replace-labels replaces all existing labels.
+        --replace-labels cannot be combined with --labels or --remove-labels.
         """
         command = "update"
         pretty = ctx.obj.get("pretty", False)
@@ -160,29 +169,48 @@ def register(main):
             client = get_client(ctx)
             key = extract_issue_key(key)
 
-            # Parse labels if provided
-            label_list = [l.strip() for l in labels.split(",")] if labels else None
+            # Parse labels
+            add_label_list = [l.strip() for l in labels.split(",")] if labels else None
+            remove_label_list = [l.strip() for l in remove_labels.split(",")] if remove_labels else None
+            replace_label_list = [l.strip() for l in replace_labels.split(",")] if replace_labels else None
 
-            # Check if any updates are requested
-            if all(v is None for v in [summary, description, assignee, priority, label_list]):
-                from ..errors import InvalidInputError, ErrorCode
+            # Conflict guard
+            if replace_label_list and (add_label_list or remove_label_list):
+                from ..errors import ErrorCode, InvalidInputError
                 raise InvalidInputError(
                     code=ErrorCode.INVALID_INPUT,
-                    message="No fields specified to update. Use --summary, --description, --assignee, --priority, or --labels.",
+                    message="--replace-labels cannot be combined with --labels or --remove-labels.",
+                )
+
+            # Check if any updates are requested
+            if all(v is None for v in [summary, description, assignee, priority, add_label_list, remove_label_list, replace_label_list]):
+                from ..errors import ErrorCode, InvalidInputError
+                raise InvalidInputError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message="No fields specified to update. Use --summary, --description, --assignee, --priority, --labels, --remove-labels, or --replace-labels.",
                 )
 
             # Get current issue state for comparison
             issue_before = client.get_issue(key, fields=["summary", "status", "assignee", "priority", "labels"])
 
-            # Perform update
-            client.update_issue(
-                key=key,
-                summary=summary,
-                description=description,
-                assignee=assignee,
-                priority=priority,
-                labels=label_list,
-            )
+            # Perform update (non-label fields + replace-labels)
+            if any(v is not None for v in [summary, description, assignee, priority, replace_label_list]):
+                client.update_issue(
+                    key=key,
+                    summary=summary,
+                    description=description,
+                    assignee=assignee,
+                    priority=priority,
+                    labels=replace_label_list,
+                )
+
+            # Additive labels via the update API (add operation)
+            if add_label_list:
+                client.add_labels(key, add_label_list)
+
+            # Remove labels
+            if remove_label_list:
+                client.remove_labels(key, remove_label_list)
 
             # Get updated issue
             issue_after = client.get_issue(key, fields=["summary", "status", "assignee", "priority", "labels"])
@@ -205,7 +233,7 @@ def register(main):
             if priority is not None:
                 update_data["updated_fields"].append("priority")
                 update_data["priority"] = issue_after.get("fields", {}).get("priority", {}).get("name")
-            if label_list is not None:
+            if add_label_list is not None or remove_label_list is not None or replace_label_list is not None:
                 update_data["updated_fields"].append("labels")
                 update_data["labels"] = issue_after.get("fields", {}).get("labels", [])
 
@@ -231,7 +259,8 @@ def register(main):
         """
         ctx.invoke(issue_update, key=key, assignee=assignee,
                    summary=None, description=None,
-                   priority=None, labels=None)
+                   priority=None, labels=None, remove_labels=None,
+                   replace_labels=None)
 
     @main.command("transitions")
     @click.argument("key")
@@ -268,7 +297,7 @@ def register(main):
                 transitions_data,
                 command,
                 next_actions=[
-                    f"jira transition {key} <ID> -- use an ID from the list above",
+                    f"jira transition {key} <NAME_OR_ID> -- use a transition name or ID from the list above",
                 ],
             )
             output_result(envelope, pretty)
@@ -281,15 +310,17 @@ def register(main):
 
     @main.command("transition")
     @click.argument("key")
-    @click.argument("transition_id")
+    @click.argument("transition_name_or_id")
     @click.option("--comment", help="Add a comment with the transition")
     @click.pass_context
-    def issue_transition(ctx: click.Context, key: str, transition_id: str, comment: str | None) -> None:
+    def issue_transition(ctx: click.Context, key: str, transition_name_or_id: str, comment: str | None) -> None:
         """
         Transition an issue to a new state.
 
         KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
-        TRANSITION_ID is the transition ID (use 'transitions' command to list available).
+        TRANSITION_NAME_OR_ID is the transition name (e.g., "Start Progress",
+        "In Progress") or numeric ID. Names are matched case-insensitively
+        against both transition names and target status names.
         """
         command = "transition"
         pretty = ctx.obj.get("pretty", False)
@@ -297,6 +328,31 @@ def register(main):
         try:
             client = get_client(ctx)
             key = extract_issue_key(key)
+
+            # Resolve name to ID if not purely numeric
+            transition_id = transition_name_or_id
+            if not transition_name_or_id.isdigit():
+                raw_transitions = client.get_transitions(key)
+                needle = transition_name_or_id.lower()
+                matched = None
+                for t in raw_transitions.get("transitions", []):
+                    if t.get("name", "").lower() == needle:
+                        matched = t
+                        break
+                    if t.get("to", {}).get("name", "").lower() == needle:
+                        matched = t
+                        # Don't break — prefer exact transition-name match
+                if matched is None:
+                    available = [
+                        f"  {t.get('id')}: {t.get('name')} -> {t.get('to', {}).get('name')}"
+                        for t in raw_transitions.get("transitions", [])
+                    ]
+                    from ..errors import ErrorCode, InvalidInputError
+                    raise InvalidInputError(
+                        code=ErrorCode.INVALID_INPUT,
+                        message=f"No transition matching '{transition_name_or_id}'. Available:\n" + "\n".join(available),
+                    )
+                transition_id = matched["id"]
 
             # Get current status before transition
             issue_before = client.get_issue(key, fields=["status"])

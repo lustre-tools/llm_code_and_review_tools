@@ -1090,6 +1090,98 @@ class TestCLIIssueTransition:
         data = json.loads(result.output)
         assert data["data"]["comment_added"] is True
 
+    @responses.activate
+    def test_transition_by_name(self, runner, mock_env):
+        """Should resolve transition name to ID (case-insensitive)."""
+        # Mock get transitions
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/transitions",
+            json={"transitions": [
+                {"id": "11", "name": "Start Progress", "to": {"name": "In Progress"}},
+                {"id": "21", "name": "Done", "to": {"name": "Done"}},
+            ]},
+            status=200,
+        )
+        # Mock get issue before
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"status": {"name": "Open"}}},
+            status=200,
+        )
+        # Mock transition
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/transitions",
+            status=204,
+        )
+        # Mock get issue after
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"status": {"name": "In Progress"}}},
+            status=200,
+        )
+
+        result = runner.invoke(main, ["--envelope", "transition", "PROJ-123", "start progress"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert data["data"]["status_after"] == "In Progress"
+
+    @responses.activate
+    def test_transition_by_target_status_name(self, runner, mock_env):
+        """Should match target status name when transition name doesn't match."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/transitions",
+            json={"transitions": [
+                {"id": "11", "name": "Start Progress", "to": {"name": "In Progress"}},
+            ]},
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"status": {"name": "Open"}}},
+            status=200,
+        )
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/transitions",
+            status=204,
+        )
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"status": {"name": "In Progress"}}},
+            status=200,
+        )
+
+        result = runner.invoke(main, ["--envelope", "transition", "PROJ-123", "In Progress"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+
+    @responses.activate
+    def test_transition_bad_name(self, runner, mock_env):
+        """Should error with helpful message for unknown transition name."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123/transitions",
+            json={"transitions": [
+                {"id": "11", "name": "Start Progress", "to": {"name": "In Progress"}},
+            ]},
+            status=200,
+        )
+
+        result = runner.invoke(main, ["--envelope", "transition", "PROJ-123", "Bogus"])
+        assert result.exit_code != 0
+        data = json.loads(result.output)
+        assert data["ok"] is False
+        assert "Bogus" in data["error"]["message"]
+
 
 class TestCLIIssueCreate:
     """Tests for 'jira create' command."""
@@ -1219,8 +1311,39 @@ class TestCLIIssueUpdate:
         assert "No fields specified" in data["error"]["message"]
 
     @responses.activate
-    def test_update_issue_labels(self, runner, mock_env):
-        """Should update issue labels."""
+    def test_update_issue_labels_additive(self, runner, mock_env):
+        """--labels should add labels (not replace) by default."""
+        # GET for current state
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"labels": ["old"]}},
+            status=200,
+        )
+        # PUT for add_labels (update API with "add" ops)
+        responses.add(
+            responses.PUT,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            status=204,
+        )
+        # GET for updated state
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"labels": ["old", "new", "labels"]}},
+            status=200,
+        )
+
+        result = runner.invoke(main, ["--envelope", "update", "PROJ-123", "--labels", "new,labels"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert "labels" in data["data"]["updated_fields"]
+        assert data["data"]["labels"] == ["old", "new", "labels"]
+
+    @responses.activate
+    def test_update_issue_replace_labels(self, runner, mock_env):
+        """--replace-labels should replace all existing labels."""
         responses.add(
             responses.GET,
             "https://jira.example.com/rest/api/2/issue/PROJ-123",
@@ -1239,7 +1362,7 @@ class TestCLIIssueUpdate:
             status=200,
         )
 
-        result = runner.invoke(main, ["--envelope", "update","PROJ-123", "--labels", "new,labels"])
+        result = runner.invoke(main, ["--envelope", "update", "PROJ-123", "--replace-labels", "new,labels"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["ok"] is True

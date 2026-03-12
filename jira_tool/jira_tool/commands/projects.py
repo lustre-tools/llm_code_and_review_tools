@@ -95,13 +95,16 @@ def register(main):
     @main.command("set-component")
     @click.argument("key")
     @click.argument("components", nargs=-1, required=True)
+    @click.option("--replace", is_flag=True, default=False,
+                  help="Replace all existing components instead of adding")
     @click.pass_context
-    def issue_set_component(ctx: click.Context, key: str, components: tuple[str, ...]) -> None:
+    def issue_set_component(ctx: click.Context, key: str, components: tuple[str, ...], replace: bool) -> None:
         """
-        Set components on an issue (replaces existing).
+        Add components to an issue (keeps existing).
 
         KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
-        COMPONENTS are the component names to set.
+        COMPONENTS are the component names to add.
+        Use --replace to replace all existing components.
         """
         command = "set-component"
         pretty = ctx.obj.get("pretty", False)
@@ -110,11 +113,49 @@ def register(main):
             client = get_client(ctx)
             key = extract_issue_key(key)
 
-            client.set_components(key, list(components))
+            if replace:
+                client.set_components(key, list(components))
+            else:
+                client.add_components(key, list(components))
 
             data = {
                 "issue_key": key,
                 "components": list(components),
+                "mode": "replace" if replace else "add",
+            }
+
+            envelope = success_response(data, command)
+            output_result(envelope, pretty)
+            sys.exit(ExitCode.SUCCESS)
+
+        except JiraToolError as e:
+            sys.exit(handle_error(e, command, pretty))
+        except ConfigError as e:
+            sys.exit(handle_error(e, command, pretty))
+
+    @main.command("remove-component")
+    @click.argument("key")
+    @click.argument("components", nargs=-1, required=True)
+    @click.pass_context
+    def issue_remove_component(ctx: click.Context, key: str, components: tuple[str, ...]) -> None:
+        """
+        Remove components from an issue.
+
+        KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
+        COMPONENTS are the component names to remove.
+        """
+        command = "remove-component"
+        pretty = ctx.obj.get("pretty", False)
+
+        try:
+            client = get_client(ctx)
+            key = extract_issue_key(key)
+
+            client.remove_components(key, list(components))
+
+            data = {
+                "issue_key": key,
+                "components_removed": list(components),
             }
 
             envelope = success_response(data, command)
@@ -170,13 +211,16 @@ def register(main):
     @main.command("set-fix-version")
     @click.argument("key")
     @click.argument("versions", nargs=-1, required=True)
+    @click.option("--replace", is_flag=True, default=False,
+                  help="Replace all existing fix versions instead of adding")
     @click.pass_context
-    def issue_set_fix_version(ctx: click.Context, key: str, versions: tuple[str, ...]) -> None:
+    def issue_set_fix_version(ctx: click.Context, key: str, versions: tuple[str, ...], replace: bool) -> None:
         """
-        Set fix versions on an issue (replaces existing).
+        Add fix versions to an issue (keeps existing).
 
         KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
-        VERSIONS are the version names to set.
+        VERSIONS are the version names to add.
+        Use --replace to replace all existing fix versions.
         """
         command = "set-fix-version"
         pretty = ctx.obj.get("pretty", False)
@@ -185,11 +229,49 @@ def register(main):
             client = get_client(ctx)
             key = extract_issue_key(key)
 
-            client.set_fix_versions(key, list(versions))
+            if replace:
+                client.set_fix_versions(key, list(versions))
+            else:
+                client.add_fix_versions(key, list(versions))
 
             data = {
                 "issue_key": key,
                 "fix_versions": list(versions),
+                "mode": "replace" if replace else "add",
+            }
+
+            envelope = success_response(data, command)
+            output_result(envelope, pretty)
+            sys.exit(ExitCode.SUCCESS)
+
+        except JiraToolError as e:
+            sys.exit(handle_error(e, command, pretty))
+        except ConfigError as e:
+            sys.exit(handle_error(e, command, pretty))
+
+    @main.command("remove-fix-version")
+    @click.argument("key")
+    @click.argument("versions", nargs=-1, required=True)
+    @click.pass_context
+    def issue_remove_fix_version(ctx: click.Context, key: str, versions: tuple[str, ...]) -> None:
+        """
+        Remove fix versions from an issue.
+
+        KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
+        VERSIONS are the version names to remove.
+        """
+        command = "remove-fix-version"
+        pretty = ctx.obj.get("pretty", False)
+
+        try:
+            client = get_client(ctx)
+            key = extract_issue_key(key)
+
+            client.remove_fix_versions(key, list(versions))
+
+            data = {
+                "issue_key": key,
+                "fix_versions_removed": list(versions),
             }
 
             envelope = success_response(data, command)
