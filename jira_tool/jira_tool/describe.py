@@ -11,7 +11,7 @@ def get_tool_description() -> ToolDescription:
     """Return the complete JIRA tool API description."""
     return ToolDescription(
         name="jira",
-        version="0.3.0",
+        version="0.4.0",
         description="JIRA CLI tool for LLM agents. Provides issue tracking operations with structured JSON output.",
         env_vars=[
             {"name": "JIRA_SERVER", "description": "JIRA server URL", "required": "true"},
@@ -327,19 +327,22 @@ def get_tool_description() -> ToolDescription:
             Command(
                 name="transition",
                 description="Transition an issue to a new status (accepts name or numeric ID)",
-                usage='jira transition <KEY> <NAME_OR_ID>',
+                usage='jira transition <KEY> <NAME_OR_ID> [--resolution TEXT]',
                 arguments=[
                     Argument(name="key", description="Issue key or JIRA URL", required=True),
                     Argument(name="transition_name_or_id", description="Transition name (case-insensitive) or numeric ID", required=True),
                     Argument(name="--comment", description="Add a comment with the transition"),
+                    Argument(name="--resolution", description="Resolution name to set during transition (e.g., Fixed, \"Won't Do\", Duplicate)"),
                 ],
                 examples=[
                     'jira transition PROJ-123 "Start Progress"',
                     'jira transition PROJ-123 "In Progress"',
                     "jira transition PROJ-123 31",
                     'jira transition PROJ-123 "Start Progress" --comment "Starting work"',
+                    'jira transition PROJ-123 "Done" --resolution Fixed',
+                    'jira transition PROJ-123 "Closed" --resolution "Won\'t Do"',
                 ],
-                output_fields=["issue_key", "transition_id", "status_before", "status_after", "comment_added"],
+                output_fields=["issue_key", "transition_id", "status_before", "status_after", "comment_added", "resolution"],
                 next_actions=["get"],
             ),
             Command(
@@ -368,23 +371,27 @@ def get_tool_description() -> ToolDescription:
             Command(
                 name="create",
                 description="Create a new issue",
-                usage="jira create --project <KEY> --type <TYPE> --summary <TEXT>",
+                usage="jira create --project <KEY> --type <TYPE> --summary <TEXT> [--labels L1,L2] [--epic EPIC-KEY]",
                 arguments=[
                     Argument(name="--project", description="Project key (e.g., PROJ)", required=True),
                     Argument(name="--type", description="Issue type (e.g., Bug, Task)", required=True),
                     Argument(name="--summary", description="Issue summary", required=True),
                     Argument(name="--description", description="Issue description"),
+                    Argument(name="--labels", description="Comma-separated labels to set on the new issue"),
+                    Argument(name="--epic", description="Epic issue key to add this issue to (e.g., PROJ-100). Custom field ID configurable via epic_link_field in ~/.jira-tool.json (default: customfield_10092)"),
                 ],
                 examples=[
                     'jira create --project PROJ --type Bug --summary "Login fails"',
+                    'jira create --project PROJ --type Task --summary "Audit" --labels "audit,security"',
+                    'jira create --project PROJ --type Task --summary "Sub-feature" --epic PROJ-100',
                 ],
-                output_fields=["key", "id", "self"],
+                output_fields=["key", "id", "self", "labels", "epic"],
                 next_actions=["get", "comment", "transition"],
             ),
             Command(
                 name="update",
                 description="Update fields on an existing issue",
-                usage="jira update <KEY> [--summary TEXT] [--assignee USER] ...",
+                usage="jira update <KEY> [--summary TEXT] [--assignee USER] [--epic EPIC-KEY] ...",
                 arguments=[
                     Argument(name="key", description="Issue key or JIRA URL", required=True),
                     Argument(name="--summary", description="New summary"),
@@ -394,9 +401,13 @@ def get_tool_description() -> ToolDescription:
                     Argument(name="--labels", description="Comma-separated labels to add (keeps existing)"),
                     Argument(name="--remove-labels", description="Comma-separated labels to remove"),
                     Argument(name="--replace-labels", description="Comma-separated labels that replace ALL existing labels (cannot combine with --labels or --remove-labels)"),
+                    Argument(name="--epic", description="Epic issue key to move this issue to (e.g., PROJ-100). Custom field ID configurable via epic_link_field in ~/.jira-tool.json (default: customfield_10092)"),
                 ],
-                examples=["jira update PROJ-123 --assignee jdoe --priority High"],
-                output_fields=["issue_key", "updated_fields"],
+                examples=[
+                    "jira update PROJ-123 --assignee jdoe --priority High",
+                    "jira update PROJ-123 --epic PROJ-100",
+                ],
+                output_fields=["issue_key", "updated_fields", "epic"],
                 next_actions=["get"],
             ),
             Command(

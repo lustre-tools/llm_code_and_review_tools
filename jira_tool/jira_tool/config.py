@@ -47,6 +47,7 @@ class JiraConfig:
 
     server: str
     token: str
+    extras: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
@@ -57,6 +58,12 @@ class JiraConfig:
 
         # Normalize server URL (remove trailing slash)
         self.server = self.server.rstrip("/")
+
+    def get_extra(self, key: str, default: Any = None) -> Any:
+        """Get an extra config value (anything beyond server/token)."""
+        if self.extras:
+            return self.extras.get(key, default)
+        return default
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "JiraConfig":
@@ -86,7 +93,7 @@ class JiraConfig:
         else:
             token = data.get("token", "")
 
-        return cls(server=server, token=token)
+        return cls(server=server, token=token, extras=data)
 
 
 def load_config(

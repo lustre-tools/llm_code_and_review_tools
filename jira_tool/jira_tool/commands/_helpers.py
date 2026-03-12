@@ -123,6 +123,7 @@ def get_client(ctx: click.Context) -> JiraClient:
         server_override=ctx.obj.get("server_override"),
         token_override=ctx.obj.get("token_override"),
     )
+    ctx.obj["config"] = config
     return JiraClient(config, debug=ctx.obj.get("debug", False))
 
 

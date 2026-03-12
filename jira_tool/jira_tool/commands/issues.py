@@ -94,12 +94,19 @@ def register(main):
     @click.option("--type", "issue_type", required=True, help="Issue type (e.g., Bug, Task)")
     @click.option("--summary", required=True, help="Issue summary")
     @click.option("--description", help="Issue description")
+    @click.option("--labels", help="Comma-separated labels to set on the new issue")
+    @click.option("--epic", help="Epic issue key (e.g., PROJ-100) to add this issue to")
     @click.pass_context
-    def issue_create(ctx: click.Context, project: str, issue_type: str, summary: str, description: str | None) -> None:
+    def issue_create(
+        ctx: click.Context, project: str, issue_type: str, summary: str,
+        description: str | None, labels: str | None, epic: str | None,
+    ) -> None:
         """
         Create a new issue.
 
         Requires --project, --type, and --summary options.
+        Use --labels to set labels at creation time.
+        Use --epic to add the issue to an epic.
         """
         command = "create"
         pretty = ctx.obj.get("pretty", False)
@@ -107,18 +114,31 @@ def register(main):
         try:
             client = get_client(ctx)
 
+            fields: dict[str, Any] = {}
+            if labels:
+                fields["labels"] = [l.strip() for l in labels.split(",")]
+            if epic:
+                config = ctx.obj.get("config")
+                epic_field = config.get_extra("epic_link_field", "customfield_10092") if config else "customfield_10092"
+                fields[epic_field] = extract_issue_key(epic)
+
             raw_issue = client.create_issue(
                 project_key=project,
                 issue_type=issue_type,
                 summary=summary,
                 description=description,
+                fields=fields if fields else None,
             )
 
-            create_data = {
+            create_data: dict[str, Any] = {
                 "key": raw_issue.get("key"),
                 "id": raw_issue.get("id"),
                 "self": raw_issue.get("self"),
             }
+            if labels:
+                create_data["labels"] = fields["labels"]
+            if epic:
+                create_data["epic"] = extract_issue_key(epic)
 
             envelope = success_response(create_data, command)
             output_result(envelope, pretty)
@@ -138,6 +158,7 @@ def register(main):
     @click.option("--labels", help="Comma-separated labels to add (keeps existing labels)")
     @click.option("--remove-labels", help="Comma-separated labels to remove")
     @click.option("--replace-labels", help="Comma-separated labels that replace ALL existing labels")
+    @click.option("--epic", help="Epic issue key to move this issue to (e.g., PROJ-100)")
     @click.pass_context
     def issue_update(
         ctx: click.Context,
@@ -149,6 +170,7 @@ def register(main):
         labels: str | None,
         remove_labels: str | None,
         replace_labels: str | None,
+        epic: str | None,
     ) -> None:
         """
         Update an existing issue.
@@ -161,6 +183,7 @@ def register(main):
         --remove-labels removes specific labels.
         --replace-labels replaces all existing labels.
         --replace-labels cannot be combined with --labels or --remove-labels.
+        --epic sets or changes the epic link.
         """
         command = "update"
         pretty = ctx.obj.get("pretty", False)
@@ -183,18 +206,25 @@ def register(main):
                 )
 
             # Check if any updates are requested
-            if all(v is None for v in [summary, description, assignee, priority, add_label_list, remove_label_list, replace_label_list]):
+            if all(v is None for v in [summary, description, assignee, priority, add_label_list, remove_label_list, replace_label_list, epic]):
                 from ..errors import ErrorCode, InvalidInputError
                 raise InvalidInputError(
                     code=ErrorCode.INVALID_INPUT,
-                    message="No fields specified to update. Use --summary, --description, --assignee, --priority, --labels, --remove-labels, or --replace-labels.",
+                    message="No fields specified to update. Use --summary, --description, --assignee, --priority, --labels, --remove-labels, --replace-labels, or --epic.",
                 )
+
+            # Build extra fields for the update call
+            extra_fields: dict[str, Any] = {}
+            if epic is not None:
+                config = ctx.obj.get("config")
+                epic_field = config.get_extra("epic_link_field", "customfield_10092") if config else "customfield_10092"
+                extra_fields[epic_field] = extract_issue_key(epic) if epic else None
 
             # Get current issue state for comparison
             issue_before = client.get_issue(key, fields=["summary", "status", "assignee", "priority", "labels"])
 
-            # Perform update (non-label fields + replace-labels)
-            if any(v is not None for v in [summary, description, assignee, priority, replace_label_list]):
+            # Perform update (non-label fields + replace-labels + epic)
+            if any(v is not None for v in [summary, description, assignee, priority, replace_label_list]) or extra_fields:
                 client.update_issue(
                     key=key,
                     summary=summary,
@@ -202,6 +232,7 @@ def register(main):
                     assignee=assignee,
                     priority=priority,
                     labels=replace_label_list,
+                    fields=extra_fields if extra_fields else None,
                 )
 
             # Additive labels via the update API (add operation)
@@ -236,6 +267,9 @@ def register(main):
             if add_label_list is not None or remove_label_list is not None or replace_label_list is not None:
                 update_data["updated_fields"].append("labels")
                 update_data["labels"] = issue_after.get("fields", {}).get("labels", [])
+            if epic is not None:
+                update_data["updated_fields"].append("epic")
+                update_data["epic"] = extract_issue_key(epic)
 
             envelope = success_response(update_data, command)
             output_result(envelope, pretty)
@@ -260,7 +294,7 @@ def register(main):
         ctx.invoke(issue_update, key=key, assignee=assignee,
                    summary=None, description=None,
                    priority=None, labels=None, remove_labels=None,
-                   replace_labels=None)
+                   replace_labels=None, epic=None)
 
     @main.command("transitions")
     @click.argument("key")
@@ -312,8 +346,9 @@ def register(main):
     @click.argument("key")
     @click.argument("transition_name_or_id")
     @click.option("--comment", help="Add a comment with the transition")
+    @click.option("--resolution", help="Resolution name (e.g., Fixed, \"Won't Do\", Duplicate)")
     @click.pass_context
-    def issue_transition(ctx: click.Context, key: str, transition_name_or_id: str, comment: str | None) -> None:
+    def issue_transition(ctx: click.Context, key: str, transition_name_or_id: str, comment: str | None, resolution: str | None) -> None:
         """
         Transition an issue to a new state.
 
@@ -321,6 +356,8 @@ def register(main):
         TRANSITION_NAME_OR_ID is the transition name (e.g., "Start Progress",
         "In Progress") or numeric ID. Names are matched case-insensitively
         against both transition names and target status names.
+
+        Use --resolution to set a resolution when closing (e.g., Fixed, "Won't Do").
         """
         command = "transition"
         pretty = ctx.obj.get("pretty", False)
@@ -354,24 +391,32 @@ def register(main):
                     )
                 transition_id = matched["id"]
 
+            # Build fields for the transition (e.g., resolution)
+            fields: dict[str, Any] | None = None
+            if resolution:
+                fields = {"resolution": {"name": resolution}}
+
             # Get current status before transition
             issue_before = client.get_issue(key, fields=["status"])
             status_before = issue_before.get("fields", {}).get("status", {}).get("name", "Unknown")
 
             # Perform transition
-            client.do_transition(key, transition_id, comment=comment)
+            client.do_transition(key, transition_id, comment=comment, fields=fields)
 
             # Get new status after transition
-            issue_after = client.get_issue(key, fields=["status"])
+            issue_after = client.get_issue(key, fields=["status", "resolution"])
             status_after = issue_after.get("fields", {}).get("status", {}).get("name", "Unknown")
 
-            transition_data = {
+            transition_data: dict[str, Any] = {
                 "issue_key": key,
                 "transition_id": transition_id,
                 "status_before": status_before,
                 "status_after": status_after,
                 "comment_added": comment is not None,
             }
+            if resolution:
+                res = issue_after.get("fields", {}).get("resolution")
+                transition_data["resolution"] = res.get("name") if res else resolution
 
             envelope = success_response(transition_data, command)
             output_result(envelope, pretty)
