@@ -478,12 +478,23 @@ def register(main):
     @click.argument("parent_key")
     @click.option("--summary", required=True, help="Subtask summary")
     @click.option("--description", default=None, help="Subtask description")
+    @click.option("--type", "subtask_type", default=None,
+                  help="Subtask issue type name (auto-detected from project if omitted)")
+    @click.option("--labels", help="Comma-separated labels to set on the subtask")
     @click.pass_context
-    def issue_create_subtask(ctx: click.Context, parent_key: str, summary: str, description: str | None) -> None:
+    def issue_create_subtask(
+        ctx: click.Context, parent_key: str, summary: str,
+        description: str | None, subtask_type: str | None,
+        labels: str | None,
+    ) -> None:
         """
         Create a subtask under a parent issue.
 
         PARENT_KEY is the parent issue key (e.g., PROJ-123).
+
+        The subtask issue type is auto-detected from the project's
+        available types (first type where subtask=true). Use --type
+        to override if the project has multiple subtask types.
         """
         command = "create-subtask"
         pretty = ctx.obj.get("pretty", False)
@@ -495,19 +506,39 @@ def register(main):
             # Get the parent's project key
             project_key = parent_key.rsplit("-", 1)[0]
 
+            # Auto-detect subtask type if not specified
+            if subtask_type is None:
+                issue_types = client.get_issue_types(project_key)
+                subtask_types = [t for t in issue_types if t.get("subtask")]
+                if not subtask_types:
+                    from ..errors import ErrorCode, InvalidInputError
+                    raise InvalidInputError(
+                        code=ErrorCode.INVALID_INPUT,
+                        message=f"No subtask issue types found for project {project_key}. "
+                                f"Use --type to specify one explicitly.",
+                    )
+                subtask_type = subtask_types[0]["name"]
+
+            fields: dict[str, Any] = {"parent": {"key": parent_key}}
+            if labels:
+                fields["labels"] = [l.strip() for l in labels.split(",")]
+
             result = client.create_issue(
                 project_key=project_key,
-                issue_type="Sub-task",
+                issue_type=subtask_type,
                 summary=summary,
                 description=description,
-                fields={"parent": {"key": parent_key}},
+                fields=fields,
             )
 
-            data = {
+            data: dict[str, Any] = {
                 "key": result.get("key"),
                 "id": result.get("id"),
                 "parent_key": parent_key,
+                "type": subtask_type,
             }
+            if labels:
+                data["labels"] = fields["labels"]
 
             envelope = success_response(data, command)
             output_result(envelope, pretty)

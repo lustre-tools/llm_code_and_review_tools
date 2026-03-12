@@ -280,15 +280,20 @@ def get_tool_description() -> ToolDescription:
             ),
             Command(
                 name="create-subtask",
-                description="Create a subtask under a parent issue",
-                usage="jira create-subtask <PARENT_KEY> --summary <TEXT>",
+                description="Create a subtask under a parent issue. Auto-detects the project's subtask issue type.",
+                usage="jira create-subtask <PARENT_KEY> --summary <TEXT> [--type <TYPE>] [--labels <L1,L2>]",
                 arguments=[
                     Argument(name="parent_key", description="Parent issue key", required=True),
                     Argument(name="--summary", description="Subtask summary", required=True),
                     Argument(name="--description", description="Subtask description"),
+                    Argument(name="--type", description="Subtask issue type name (auto-detected if omitted)"),
+                    Argument(name="--labels", description="Comma-separated labels"),
                 ],
-                examples=["jira create-subtask PROJ-123 --summary \"Implement widget\""],
-                output_fields=["key", "id", "parent_key"],
+                examples=[
+                    "jira create-subtask PROJ-123 --summary \"Implement widget\"",
+                    "jira create-subtask LU-10911 --summary \"Fix thing\" --type \"Technical task\"",
+                ],
+                output_fields=["key", "id", "parent_key", "type"],
                 next_actions=["get", "subtasks"],
             ),
             Command(
