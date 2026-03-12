@@ -371,18 +371,45 @@ def register(main):
             if not transition_name_or_id.isdigit():
                 raw_transitions = client.get_transitions(key)
                 needle = transition_name_or_id.lower()
+                transitions = raw_transitions.get("transitions", [])
+
+                # Priority: exact transition name > exact target status >
+                #           substring transition name > substring target status
                 matched = None
-                for t in raw_transitions.get("transitions", []):
+                for t in transitions:
                     if t.get("name", "").lower() == needle:
                         matched = t
                         break
                     if t.get("to", {}).get("name", "").lower() == needle:
                         matched = t
                         # Don't break — prefer exact transition-name match
+
+                # Fallback: substring match (e.g., "Close" matches "Close Issue" or "Closed")
+                if matched is None:
+                    substring_matches = []
+                    for t in transitions:
+                        t_name = t.get("name", "").lower()
+                        to_name = t.get("to", {}).get("name", "").lower()
+                        if needle in t_name or needle in to_name:
+                            substring_matches.append(t)
+                    if len(substring_matches) == 1:
+                        matched = substring_matches[0]
+                    elif len(substring_matches) > 1:
+                        # Ambiguous — show the matches
+                        options = [
+                            f"  {t.get('id')}: {t.get('name')} -> {t.get('to', {}).get('name')}"
+                            for t in substring_matches
+                        ]
+                        from ..errors import ErrorCode, InvalidInputError
+                        raise InvalidInputError(
+                            code=ErrorCode.INVALID_INPUT,
+                            message=f"Ambiguous match for '{transition_name_or_id}'. Did you mean:\n" + "\n".join(options),
+                        )
+
                 if matched is None:
                     available = [
                         f"  {t.get('id')}: {t.get('name')} -> {t.get('to', {}).get('name')}"
-                        for t in raw_transitions.get("transitions", [])
+                        for t in transitions
                     ]
                     from ..errors import ErrorCode, InvalidInputError
                     raise InvalidInputError(
