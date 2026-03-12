@@ -69,6 +69,7 @@ class CrashGroup(click.Group):
 
 
 @click.group(cls=CrashGroup)
+@click.version_option(package_name="crash-tool", prog_name="crash-tool")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output.")
 @click.option("--envelope", is_flag=True, help="Wrap output in full envelope.")
 @click.pass_context

@@ -82,6 +82,7 @@ class JsonErrorGroup(click.Group):
 # ── Main group ──────────────────────────────────────────────────────
 
 @click.group(cls=JsonErrorGroup)
+@click.version_option(package_name="jira-tool", prog_name="jira")
 @click.option("--server", envvar="JIRA_SERVER", help="JIRA server URL")
 @click.option("--token", envvar="JIRA_TOKEN", help="JIRA API token")
 @click.option("--config", "config_path", type=click.Path(), help="Config file path")

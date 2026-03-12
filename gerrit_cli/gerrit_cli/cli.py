@@ -178,11 +178,20 @@ def main():
     """Main entry point."""
     from .parsers import setup_parsers
 
+    from importlib.metadata import version as _pkg_version
+    try:
+        _ver = _pkg_version("gerrit-cli")
+    except Exception:
+        _ver = "unknown"
+
     parser = argparse.ArgumentParser(
         description="Extract and reply to Gerrit review comments. "
                     "Run 'gc describe' for machine-readable API documentation.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {_ver}",
     )
     parser.add_argument(
         "--envelope",

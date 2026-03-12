@@ -96,6 +96,7 @@ def _resolve_build(
 
 
 @click.group()
+@click.version_option(package_name="janitor-tool", prog_name="janitor")
 @click.option(
     "--envelope", is_flag=True,
     help="Include full response envelope",

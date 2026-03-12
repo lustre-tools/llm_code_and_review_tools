@@ -220,6 +220,7 @@ def _normalize_build(
 # ---- Commands ----
 
 @click.group()
+@click.version_option(package_name="jenkins-tool", prog_name="jenkins")
 @click.option("--envelope", is_flag=True, help="Include full response envelope (ok/data/meta wrapper)")
 @click.pass_context
 def main(ctx: click.Context, envelope: bool) -> None:

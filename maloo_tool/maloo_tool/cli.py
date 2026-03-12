@@ -57,6 +57,7 @@ def _error(
 
 
 @click.group()
+@click.version_option(package_name="maloo-tool", prog_name="maloo")
 @click.option("--envelope", is_flag=True, help="Include full response envelope (ok/data/meta wrapper)")
 @click.pass_context
 def main(ctx: click.Context, envelope: bool) -> None:
