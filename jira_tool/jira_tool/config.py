@@ -1,8 +1,9 @@
 """Configuration loading for JIRA tool."""
 
+import base64
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,11 @@ from dotenv import load_dotenv
 from .errors import ConfigError
 
 DEFAULT_CONFIG_PATH = Path.home() / ".jira-tool.json"
+
+# Valid auth types
+AUTH_TYPE_BEARER = "bearer"
+AUTH_TYPE_BASIC = "basic"
+VALID_AUTH_TYPES = {AUTH_TYPE_BEARER, AUTH_TYPE_BASIC}
 
 
 # Load .env file from standard locations (in priority order)
@@ -47,6 +53,8 @@ class JiraConfig:
 
     server: str
     token: str
+    auth_type: str = AUTH_TYPE_BEARER
+    email: str | None = None
     extras: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
@@ -55,6 +63,12 @@ class JiraConfig:
             raise ConfigError("Server URL is required")
         if not self.token:
             raise ConfigError("API token is required")
+        if self.auth_type not in VALID_AUTH_TYPES:
+            raise ConfigError(
+                f"Invalid auth type '{self.auth_type}'. Must be one of: {', '.join(sorted(VALID_AUTH_TYPES))}"
+            )
+        if self.auth_type == AUTH_TYPE_BASIC and not self.email:
+            raise ConfigError("Email is required for basic auth (JIRA Cloud)")
 
         # Normalize server URL (remove trailing slash)
         self.server = self.server.rstrip("/")
@@ -65,41 +79,112 @@ class JiraConfig:
             return self.extras.get(key, default)
         return default
 
+    def get_auth_header(self) -> str:
+        """Return the Authorization header value for this config."""
+        if self.auth_type == AUTH_TYPE_BASIC:
+            credentials = base64.b64encode(
+                f"{self.email}:{self.token}".encode()
+            ).decode()
+            return f"Basic {credentials}"
+        return f"Bearer {self.token}"
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "JiraConfig":
         """
         Create config from dictionary.
 
-        Expected format:
-        {
-            "server": "https://jira.example.com",
-            "auth": {
-                "type": "token",
-                "token": "your-api-token"
-            }
-        }
+        Supported formats:
 
-        Or simplified:
+        Flat (legacy):
         {
             "server": "https://jira.example.com",
             "token": "your-api-token"
         }
+
+        Nested auth:
+        {
+            "server": "https://jira.example.com",
+            "auth": {
+                "type": "bearer",
+                "token": "your-api-token"
+            }
+        }
+
+        Basic auth (JIRA Cloud):
+        {
+            "server": "https://myorg.atlassian.net",
+            "auth": {
+                "type": "basic",
+                "email": "user@example.com",
+                "token": "api-token"
+            }
+        }
         """
         server = data.get("server", "")
+        auth_type = AUTH_TYPE_BEARER
+        email = None
 
         # Handle both nested auth and flat token
         if "auth" in data and isinstance(data["auth"], dict):
-            token = data["auth"].get("token", "")
+            auth = data["auth"]
+            token = auth.get("token", "")
+            auth_type = auth.get("type", AUTH_TYPE_BEARER)
+            # Normalize legacy "token" type to "bearer"
+            if auth_type == "token":
+                auth_type = AUTH_TYPE_BEARER
+            email = auth.get("email")
         else:
             token = data.get("token", "")
 
-        return cls(server=server, token=token, extras=data)
+        return cls(
+            server=server,
+            token=token,
+            auth_type=auth_type,
+            email=email,
+            extras=data,
+        )
+
+
+def _resolve_instance(
+    config_data: dict[str, Any],
+    instance: str | None,
+) -> dict[str, Any]:
+    """Resolve a named instance from multi-instance config.
+
+    If the config has an "instances" key, look up the named instance
+    (or the default). Otherwise return config_data unchanged.
+    """
+    instances = config_data.get("instances")
+    if not instances or not isinstance(instances, dict):
+        return config_data
+
+    # Determine which instance to use
+    if instance is None:
+        instance = config_data.get("default")
+        if instance is None:
+            # If there's only one instance, use it
+            if len(instances) == 1:
+                instance = next(iter(instances))
+            else:
+                raise ConfigError(
+                    f"Multiple instances configured but no --instance specified and no 'default' set. "
+                    f"Available instances: {', '.join(sorted(instances.keys()))}"
+                )
+
+    if instance not in instances:
+        raise ConfigError(
+            f"Instance '{instance}' not found in config. "
+            f"Available instances: {', '.join(sorted(instances.keys()))}"
+        )
+
+    return instances[instance]
 
 
 def load_config(
     config_path: Path | str | None = None,
     server_override: str | None = None,
     token_override: str | None = None,
+    instance: str | None = None,
 ) -> JiraConfig:
     """
     Load configuration from file and environment variables.
@@ -107,12 +192,13 @@ def load_config(
     Priority (highest to lowest):
     1. Explicit overrides passed to this function
     2. Environment variables (JIRA_SERVER, JIRA_TOKEN)
-    3. Config file
+    3. Config file (with optional named instance)
 
     Args:
         config_path: Optional path to config file. Defaults to ~/.jira-tool.json
         server_override: Optional server URL override
         token_override: Optional token override
+        instance: Optional named instance from multi-instance config
 
     Returns:
         JiraConfig instance
@@ -144,20 +230,30 @@ def load_config(
                 details={"path": str(config_path)},
             ) from e
 
-    # Apply environment variable overrides
-    env_server = os.environ.get("JIRA_SERVER")
-    env_token = os.environ.get("JIRA_TOKEN")
+    # Resolve named instance if multi-instance config
+    config_data = _resolve_instance(config_data, instance)
 
-    if env_server:
-        config_data["server"] = env_server
-    if env_token:
-        config_data["token"] = env_token
+    # Apply environment variable overrides — but NOT when a named instance
+    # was explicitly selected, since the instance config should take precedence.
+    if not instance:
+        env_server = os.environ.get("JIRA_SERVER")
+        env_token = os.environ.get("JIRA_TOKEN")
+
+        if env_server:
+            config_data["server"] = env_server
+        if env_token:
+            config_data["token"] = env_token
+            # Also update nested auth token so from_dict picks it up
+            if "auth" in config_data and isinstance(config_data["auth"], dict):
+                config_data["auth"]["token"] = env_token
 
     # Apply explicit overrides
     if server_override:
         config_data["server"] = server_override
     if token_override:
         config_data["token"] = token_override
+        if "auth" in config_data and isinstance(config_data["auth"], dict):
+            config_data["auth"]["token"] = token_override
 
     # Validate we have required fields
     server = config_data.get("server", "")
@@ -200,5 +296,21 @@ def create_sample_config(path: Path | str | None = None) -> str:
     Returns:
         Sample config file content as string
     """
-    sample = {"server": "https://jira.example.com", "auth": {"type": "token", "token": "your-api-token-here"}}
+    sample = {
+        "instances": {
+            "onprem": {
+                "server": "https://jira.example.com",
+                "auth": {"type": "bearer", "token": "your-bearer-token-here"},
+            },
+            "cloud": {
+                "server": "https://myorg.atlassian.net",
+                "auth": {
+                    "type": "basic",
+                    "email": "user@example.com",
+                    "token": "your-api-token-here",
+                },
+            },
+        },
+        "default": "onprem",
+    }
     return json.dumps(sample, indent=2)

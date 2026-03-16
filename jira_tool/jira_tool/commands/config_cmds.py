@@ -34,13 +34,20 @@ def register(main):
                 config_path=ctx.obj.get("config_path"),
                 server_override=ctx.obj.get("server_override"),
                 token_override=ctx.obj.get("token_override"),
+                instance=ctx.obj.get("instance"),
             )
 
             config_data = {
                 "server": cfg.server,
+                "auth_type": cfg.auth_type,
                 "token": f"{cfg.token[:8]}...{cfg.token[-4:]}" if len(cfg.token) > 12 else "***",
                 "config_path": str(DEFAULT_CONFIG_PATH),
             }
+            if cfg.email:
+                config_data["email"] = cfg.email
+            instance = ctx.obj.get("instance")
+            if instance:
+                config_data["instance"] = instance
 
             envelope = success_response(config_data, command)
             output_result(envelope, pretty)

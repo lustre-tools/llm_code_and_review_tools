@@ -37,6 +37,8 @@ from .commands._helpers import (  # noqa: F401 – re-exported
 
 # ── Hoistable-flag support ──────────────────────────────────────────
 _HOISTABLE_FLAGS = {"--pretty", "--debug", "--envelope"}
+# Options that take a value and should be hoisted along with it
+_HOISTABLE_OPTIONS = {"--instance", "-I"}
 
 
 class JsonErrorGroup(click.Group):
@@ -52,12 +54,24 @@ class JsonErrorGroup(click.Group):
     """
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
-        # Pull hoistable flags out of wherever they appear and
-        # inject them at the front so Click's group-level parser sees them.
-        hoisted = []
-        remaining = []
-        for arg in args:
+        # Pull hoistable flags and options out of wherever they appear
+        # and inject them at the front so Click's group-level parser sees them.
+        hoisted: list[str] = []
+        remaining: list[str] = []
+        skip_next = False
+        for i, arg in enumerate(args):
+            if skip_next:
+                skip_next = False
+                continue
             if arg in _HOISTABLE_FLAGS:
+                hoisted.append(arg)
+            elif arg in _HOISTABLE_OPTIONS:
+                hoisted.append(arg)
+                # Grab the next arg as the option value
+                if i + 1 < len(args):
+                    hoisted.append(args[i + 1])
+                    skip_next = True
+            elif any(arg.startswith(f"{opt}=") for opt in _HOISTABLE_OPTIONS):
                 hoisted.append(arg)
             else:
                 remaining.append(arg)
@@ -83,16 +97,17 @@ class JsonErrorGroup(click.Group):
 
 @click.group(cls=JsonErrorGroup)
 @click.version_option(package_name="jira-tool", prog_name="jira")
-@click.option("--server", envvar="JIRA_SERVER", help="JIRA server URL")
-@click.option("--token", envvar="JIRA_TOKEN", help="JIRA API token")
+@click.option("--server", help="JIRA server URL (overrides config and env)")
+@click.option("--token", help="JIRA API token (overrides config and env)")
 @click.option("--config", "config_path", type=click.Path(), help="Config file path")
+@click.option("--instance", "-I", default=None, help="Named instance from config (e.g., 'cloud')")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
 @click.option("--envelope", is_flag=True, help="Include full response envelope (ok/data/meta wrapper)")
 @click.option("--debug", is_flag=True, help="Enable debug output to stderr")
 @click.pass_context
 def main(
     ctx: click.Context, server: str | None, token: str | None, config_path: str | None,
-    pretty: bool, envelope: bool, debug: bool,
+    instance: str | None, pretty: bool, envelope: bool, debug: bool,
 ) -> None:
     """
     JIRA CLI tool for LLM agents.
@@ -105,7 +120,11 @@ def main(
     Configuration priority:
     1. Command-line options (--server, --token)
     2. Environment variables (JIRA_SERVER, JIRA_TOKEN)
-    3. Config file (~/.jira-tool.json)
+    3. Config file (~/.jira-tool.json) with optional named instances
+
+    Multi-instance example:
+      jira get LU-20002                  # uses default instance
+      jira -I cloud get EX-13727         # uses 'cloud' instance
     """
     ctx.ensure_object(dict)
     ctx.obj["pretty"] = pretty
@@ -114,6 +133,7 @@ def main(
     ctx.obj["server_override"] = server
     ctx.obj["token_override"] = token
     ctx.obj["config_path"] = config_path
+    ctx.obj["instance"] = instance
 
 
 # ── Register all command modules ────────────────────────────────────

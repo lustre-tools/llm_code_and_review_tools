@@ -62,6 +62,19 @@ class TestClientInit:
         assert "Authorization" in client._session.headers
         assert client._session.headers["Authorization"] == "Bearer test-token"
 
+    def test_client_basic_auth_header(self):
+        """Should set Basic auth header for JIRA Cloud."""
+        import base64
+        cloud_config = JiraConfig(
+            server="https://myorg.atlassian.net",
+            token="api-token",
+            auth_type="basic",
+            email="user@example.com",
+        )
+        client = JiraClient(cloud_config)
+        expected = base64.b64encode(b"user@example.com:api-token").decode()
+        assert client._session.headers["Authorization"] == f"Basic {expected}"
+
 
 class TestBuildUrl:
     """Tests for URL building."""

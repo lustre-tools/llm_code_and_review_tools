@@ -1,5 +1,6 @@
 """Unit tests for configuration handling."""
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -8,8 +9,11 @@ from unittest.mock import patch
 import pytest
 
 from jira_tool.config import (
+    AUTH_TYPE_BASIC,
+    AUTH_TYPE_BEARER,
     JiraConfig,
     _load_env_file,
+    _resolve_instance,
     create_sample_config,
     load_config,
 )
@@ -27,6 +31,7 @@ class TestJiraConfig:
         )
         assert config.server == "https://jira.example.com"
         assert config.token == "test-token"
+        assert config.auth_type == AUTH_TYPE_BEARER
 
     def test_server_url_normalization(self):
         """Should strip trailing slash from server URL."""
@@ -56,6 +61,56 @@ class TestJiraConfig:
             JiraConfig(server="https://jira.example.com", token="")
         assert "API token is required" in str(exc_info.value)
 
+    def test_invalid_auth_type_raises_error(self):
+        """Should raise ConfigError for invalid auth type."""
+        with pytest.raises(ConfigError) as exc_info:
+            JiraConfig(
+                server="https://jira.example.com",
+                token="test-token",
+                auth_type="oauth",
+            )
+        assert "Invalid auth type" in str(exc_info.value)
+
+    def test_basic_auth_requires_email(self):
+        """Should raise ConfigError when basic auth has no email."""
+        with pytest.raises(ConfigError) as exc_info:
+            JiraConfig(
+                server="https://myorg.atlassian.net",
+                token="api-token",
+                auth_type="basic",
+            )
+        assert "Email is required" in str(exc_info.value)
+
+    def test_basic_auth_with_email(self):
+        """Should create config with basic auth."""
+        config = JiraConfig(
+            server="https://myorg.atlassian.net",
+            token="api-token",
+            auth_type="basic",
+            email="user@example.com",
+        )
+        assert config.auth_type == AUTH_TYPE_BASIC
+        assert config.email == "user@example.com"
+
+    def test_get_auth_header_bearer(self):
+        """Should return Bearer auth header."""
+        config = JiraConfig(
+            server="https://jira.example.com",
+            token="test-token",
+        )
+        assert config.get_auth_header() == "Bearer test-token"
+
+    def test_get_auth_header_basic(self):
+        """Should return Basic auth header with base64 email:token."""
+        config = JiraConfig(
+            server="https://myorg.atlassian.net",
+            token="api-token",
+            auth_type="basic",
+            email="user@example.com",
+        )
+        expected = base64.b64encode(b"user@example.com:api-token").decode()
+        assert config.get_auth_header() == f"Basic {expected}"
+
     def test_from_dict_flat_format(self):
         """Should parse flat config format."""
         data = {
@@ -65,6 +120,7 @@ class TestJiraConfig:
         config = JiraConfig.from_dict(data)
         assert config.server == "https://jira.example.com"
         assert config.token == "my-token"
+        assert config.auth_type == AUTH_TYPE_BEARER
 
     def test_from_dict_nested_auth_format(self):
         """Should parse nested auth config format."""
@@ -77,6 +133,105 @@ class TestJiraConfig:
         }
         config = JiraConfig.from_dict(data)
         assert config.token == "my-token"
+        # "token" type normalizes to "bearer"
+        assert config.auth_type == AUTH_TYPE_BEARER
+
+    def test_from_dict_bearer_auth(self):
+        """Should parse bearer auth config."""
+        data = {
+            "server": "https://jira.example.com",
+            "auth": {
+                "type": "bearer",
+                "token": "my-bearer-token",
+            },
+        }
+        config = JiraConfig.from_dict(data)
+        assert config.token == "my-bearer-token"
+        assert config.auth_type == AUTH_TYPE_BEARER
+
+    def test_from_dict_basic_auth(self):
+        """Should parse basic auth config for JIRA Cloud."""
+        data = {
+            "server": "https://myorg.atlassian.net",
+            "auth": {
+                "type": "basic",
+                "email": "user@example.com",
+                "token": "api-token",
+            },
+        }
+        config = JiraConfig.from_dict(data)
+        assert config.token == "api-token"
+        assert config.auth_type == AUTH_TYPE_BASIC
+        assert config.email == "user@example.com"
+
+
+class TestResolveInstance:
+    """Tests for _resolve_instance function."""
+
+    def test_no_instances_returns_data_unchanged(self):
+        """Non-multi-instance config should pass through."""
+        data = {"server": "https://jira.example.com", "token": "tok"}
+        assert _resolve_instance(data, None) is data
+
+    def test_named_instance_resolved(self):
+        """Should resolve named instance."""
+        data = {
+            "instances": {
+                "lu": {"server": "https://jira.whamcloud.com", "auth": {"type": "bearer", "token": "tok1"}},
+                "cloud": {"server": "https://myorg.atlassian.net", "auth": {"type": "basic", "email": "a@b.com", "token": "tok2"}},
+            },
+            "default": "lu",
+        }
+        result = _resolve_instance(data, "cloud")
+        assert result["server"] == "https://myorg.atlassian.net"
+        assert result["auth"]["type"] == "basic"
+
+    def test_default_instance_used_when_none_specified(self):
+        """Should use default when no instance specified."""
+        data = {
+            "instances": {
+                "lu": {"server": "https://jira.whamcloud.com", "auth": {"type": "bearer", "token": "tok1"}},
+                "cloud": {"server": "https://myorg.atlassian.net", "auth": {"type": "basic", "email": "a@b.com", "token": "tok2"}},
+            },
+            "default": "lu",
+        }
+        result = _resolve_instance(data, None)
+        assert result["server"] == "https://jira.whamcloud.com"
+
+    def test_single_instance_auto_selected(self):
+        """Should auto-select when only one instance exists."""
+        data = {
+            "instances": {
+                "only": {"server": "https://jira.example.com", "auth": {"type": "bearer", "token": "tok"}},
+            },
+        }
+        result = _resolve_instance(data, None)
+        assert result["server"] == "https://jira.example.com"
+
+    def test_missing_instance_raises_error(self):
+        """Should raise ConfigError for unknown instance name."""
+        data = {
+            "instances": {
+                "lu": {"server": "https://jira.whamcloud.com", "auth": {"type": "bearer", "token": "tok"}},
+            },
+            "default": "lu",
+        }
+        with pytest.raises(ConfigError) as exc_info:
+            _resolve_instance(data, "nonexistent")
+        assert "nonexistent" in str(exc_info.value)
+        assert "lu" in str(exc_info.value)
+
+    def test_no_default_multiple_instances_raises_error(self):
+        """Should raise ConfigError when multiple instances and no default."""
+        data = {
+            "instances": {
+                "a": {"server": "https://a.com", "auth": {"type": "bearer", "token": "t"}},
+                "b": {"server": "https://b.com", "auth": {"type": "bearer", "token": "t"}},
+            },
+        }
+        with pytest.raises(ConfigError) as exc_info:
+            _resolve_instance(data, None)
+        assert "no --instance specified" in str(exc_info.value)
 
 
 class TestLoadConfig:
@@ -221,6 +376,77 @@ class TestLoadConfig:
         assert config.server == "https://explicit.com"
         assert config.token == "env-token"  # Not overridden
 
+    def test_load_multi_instance_default(self, tmp_path, monkeypatch):
+        """Should load default instance from multi-instance config."""
+        monkeypatch.delenv("JIRA_SERVER", raising=False)
+        monkeypatch.delenv("JIRA_TOKEN", raising=False)
+
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({
+            "instances": {
+                "lu": {
+                    "server": "https://jira.whamcloud.com",
+                    "auth": {"type": "bearer", "token": "bearer-tok"},
+                },
+                "cloud": {
+                    "server": "https://myorg.atlassian.net",
+                    "auth": {"type": "basic", "email": "user@example.com", "token": "cloud-tok"},
+                },
+            },
+            "default": "lu",
+        }))
+
+        config = load_config(config_path=config_file)
+        assert config.server == "https://jira.whamcloud.com"
+        assert config.auth_type == AUTH_TYPE_BEARER
+        assert config.token == "bearer-tok"
+
+    def test_load_multi_instance_named(self, tmp_path, monkeypatch):
+        """Should load named instance from multi-instance config."""
+        monkeypatch.delenv("JIRA_SERVER", raising=False)
+        monkeypatch.delenv("JIRA_TOKEN", raising=False)
+
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({
+            "instances": {
+                "lu": {
+                    "server": "https://jira.whamcloud.com",
+                    "auth": {"type": "bearer", "token": "bearer-tok"},
+                },
+                "cloud": {
+                    "server": "https://myorg.atlassian.net",
+                    "auth": {"type": "basic", "email": "user@example.com", "token": "cloud-tok"},
+                },
+            },
+            "default": "lu",
+        }))
+
+        config = load_config(config_path=config_file, instance="cloud")
+        assert config.server == "https://myorg.atlassian.net"
+        assert config.auth_type == AUTH_TYPE_BASIC
+        assert config.email == "user@example.com"
+        assert config.token == "cloud-tok"
+
+    def test_env_overrides_instance_server(self, tmp_path, monkeypatch):
+        """Env vars should override even within a named instance."""
+        monkeypatch.setenv("JIRA_SERVER", "https://env-override.com")
+        monkeypatch.setenv("JIRA_TOKEN", "env-tok")
+
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({
+            "instances": {
+                "lu": {
+                    "server": "https://jira.whamcloud.com",
+                    "auth": {"type": "bearer", "token": "bearer-tok"},
+                },
+            },
+            "default": "lu",
+        }))
+
+        config = load_config(config_path=config_file)
+        assert config.server == "https://env-override.com"
+        assert config.token == "env-tok"
+
 
 class TestCreateSampleConfig:
     """Tests for create_sample_config function."""
@@ -229,15 +455,25 @@ class TestCreateSampleConfig:
         """Sample config should be valid JSON."""
         sample = create_sample_config()
         data = json.loads(sample)
-        assert "server" in data
-        assert "auth" in data
+        assert "instances" in data
+        assert "default" in data
 
     def test_has_placeholder_values(self):
         """Sample config should have placeholder values."""
         sample = create_sample_config()
         data = json.loads(sample)
-        assert "example.com" in data["server"]
-        assert "token" in data["auth"]["type"]
+        assert "onprem" in data["instances"]
+        assert "cloud" in data["instances"]
+        assert data["instances"]["cloud"]["auth"]["type"] == "basic"
+        assert data["instances"]["onprem"]["auth"]["type"] == "bearer"
+
+    def test_has_both_auth_types(self):
+        """Sample config should demonstrate both auth types."""
+        sample = create_sample_config()
+        data = json.loads(sample)
+        assert data["instances"]["onprem"]["auth"]["type"] == "bearer"
+        assert data["instances"]["cloud"]["auth"]["type"] == "basic"
+        assert "email" in data["instances"]["cloud"]["auth"]
 
 
 class TestLoadEnvFile:

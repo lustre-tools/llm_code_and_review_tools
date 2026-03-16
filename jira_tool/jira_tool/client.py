@@ -60,11 +60,10 @@ class JiraClient:
         self.debug = debug
         self._session = requests.Session()
 
-        # Set up authentication header
-        # JIRA uses Bearer token auth for API tokens
+        # Set up authentication header based on auth type
         self._session.headers.update(
             {
-                "Authorization": f"Bearer {config.token}",
+                "Authorization": config.get_auth_header(),
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             }
@@ -1303,3 +1302,92 @@ class JiraClient:
         if last_error is not None:
             raise last_error
         raise RuntimeError("Unexpected state in retry loop")
+
+    # ── Filter operations ──────────────────────────────────────────
+
+    def get_filter(self, filter_id: str | int) -> dict[str, Any]:
+        """Get a single saved filter by ID."""
+        return self._request("GET", f"filter/{filter_id}", context=f"filter {filter_id}")
+
+    def get_favourite_filters(self) -> list[dict[str, Any]]:
+        """Get the current user's favourite (starred) filters."""
+        return self._request("GET", "filter/favourite", context="favourite filters")
+
+    def search_filters(
+        self,
+        filter_name: str | None = None,
+        owner: str | None = None,
+        max_results: int = 100,
+        start_at: int = 0,
+    ) -> dict[str, Any]:
+        """Search for filters by name and/or owner.
+
+        On JIRA Server, 'owner' is the username.
+        On JIRA Cloud, use 'accountId' instead — pass it as owner.
+
+        Args:
+            filter_name: Optional filter name substring to match
+            owner: Optional owner username (Server) or accountId (Cloud)
+            max_results: Maximum results to return
+            start_at: Pagination offset
+
+        Returns:
+            Dict with 'values' list and pagination info
+        """
+        params: dict[str, Any] = {
+            "maxResults": max_results,
+            "startAt": start_at,
+            "expand": "description,owner,jql,sharePermissions",
+        }
+        if filter_name:
+            params["filterName"] = filter_name
+        if owner:
+            params["accountId"] = owner
+        return self._request("GET", "filter/search", params=params, context="filter search")
+
+    def get_my_filters(self, max_results: int = 100) -> list[dict[str, Any]]:
+        """Get all filters owned by the current user.
+
+        Paginates automatically to collect all results.
+        """
+        all_filters: list[dict[str, Any]] = []
+        start_at = 0
+
+        while True:
+            result = self.search_filters(max_results=max_results, start_at=start_at)
+            values = result.get("values", [])
+            all_filters.extend(values)
+
+            total = result.get("total", len(all_filters))
+            if len(all_filters) >= total or not values:
+                break
+            start_at += len(values)
+
+        return all_filters
+
+    def create_filter(
+        self,
+        name: str,
+        jql: str,
+        description: str = "",
+        favourite: bool = False,
+    ) -> dict[str, Any]:
+        """Create a new saved filter.
+
+        Args:
+            name: Filter name
+            jql: JQL query string
+            description: Optional description
+            favourite: Whether to mark as favourite
+
+        Returns:
+            Created filter data
+        """
+        data: dict[str, Any] = {
+            "name": name,
+            "jql": jql,
+            "favourite": favourite,
+        }
+        if description:
+            data["description"] = description
+        return self._request("POST", "filter", json_data=data, context=f"create filter '{name}'")
