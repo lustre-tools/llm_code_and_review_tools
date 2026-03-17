@@ -42,6 +42,54 @@ def _text_to_adf(text: str) -> dict[str, Any]:
         {"type": "paragraph", "content": [{"type": "text", "text": ""}]}
     ]}
 
+
+def _adf_to_text(adf: Any) -> str:
+    """Convert Atlassian Document Format (ADF) to plain text.
+
+    Cloud v3 API returns ADF dicts for description and comment body
+    fields. This extracts readable text, preserving paragraph breaks.
+    Returns the input unchanged if it's already a string or None.
+    """
+    if adf is None:
+        return None
+    if isinstance(adf, str):
+        return adf
+    if not isinstance(adf, dict) or adf.get("type") != "doc":
+        return str(adf)
+
+    def _extract(node: Any) -> str:
+        if isinstance(node, str):
+            return node
+        if not isinstance(node, dict):
+            return ""
+        node_type = node.get("type", "")
+        if node_type == "text":
+            return node.get("text", "")
+        if node_type == "hardBreak":
+            return "\n"
+        if node_type == "mention":
+            return node.get("attrs", {}).get("text", "")
+        if node_type == "emoji":
+            return node.get("attrs", {}).get("shortName", "")
+        # Recurse into children
+        children = node.get("content", [])
+        text = "".join(_extract(child) for child in children)
+        # Add paragraph/heading separators
+        if node_type in ("paragraph", "heading", "blockquote",
+                         "codeBlock", "mediaGroup"):
+            text += "\n"
+        if node_type == "listItem":
+            text = "- " + text
+        return text
+
+    parts = [_extract(block) for block in adf.get("content", [])]
+    # Join and clean up trailing whitespace per line, collapse triple+ newlines
+    result = "\n".join(parts).strip()
+    while "\n\n\n" in result:
+        result = result.replace("\n\n\n", "\n\n")
+    return result
+
+
 # Default retry configuration
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_BACKOFF = 1.0  # Base delay in seconds

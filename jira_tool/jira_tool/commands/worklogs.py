@@ -6,6 +6,7 @@ import click
 
 from ..envelope import success_response
 from ..errors import ConfigError, ExitCode, JiraToolError
+from ..client import _adf_to_text
 from ._helpers import (
     extract_issue_key,
     get_client,
@@ -46,7 +47,7 @@ def register(main):
                     "author": author.get("displayName"),
                     "time_spent": wl.get("timeSpent"),
                     "time_spent_seconds": wl.get("timeSpentSeconds"),
-                    "comment": wl.get("comment"),
+                    "comment": _adf_to_text(wl.get("comment")),
                     "started": wl.get("started"),
                     "created": wl.get("created"),
                     "updated": wl.get("updated"),
@@ -99,7 +100,7 @@ def register(main):
                     "id": raw_worklog.get("id"),
                     "time_spent": raw_worklog.get("timeSpent"),
                     "time_spent_seconds": raw_worklog.get("timeSpentSeconds"),
-                    "comment": raw_worklog.get("comment"),
+                    "comment": _adf_to_text(raw_worklog.get("comment")),
                     "started": raw_worklog.get("started"),
                 },
             }

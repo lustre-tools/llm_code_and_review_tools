@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import click
 
-from ..client import JiraClient
+from ..client import JiraClient, _adf_to_text
 from ..config import DEFAULT_CONFIG_PATH, JiraConfig, load_config
 from ..envelope import error_response, error_response_from_dict, format_json, success_response
 from ..errors import ConfigError, ErrorCode, ExitCode, JiraToolError
@@ -163,6 +163,49 @@ def _parse_visibility(value: str) -> dict[str, str]:
     return {"type": vis_type, "value": vis_value}
 
 
+def resolve_cloud_user(client: "JiraClient", identifier: str) -> str:
+    """Resolve a display name or email to an accountId on Cloud.
+
+    If the identifier already looks like a Cloud accountId, returns it
+    unchanged. Otherwise searches for the user and resolves to accountId.
+
+    Args:
+        client: JiraClient instance (must be Cloud)
+        identifier: Display name, email, or accountId
+
+    Returns:
+        Cloud accountId string
+
+    Raises:
+        InvalidInputError: If the identifier can't be resolved uniquely
+    """
+    import re
+    # accountIds look like "712020:b43984b4-..." or hex UUIDs
+    if re.match(r'^[a-f0-9]+[:\-]', identifier, re.IGNORECASE):
+        return identifier
+
+    users = client.search_users(identifier, max_results=5)
+    matches = [
+        u for u in users
+        if u.get("displayName", "").lower() == identifier.lower()
+        or u.get("emailAddress", "").lower() == identifier.lower()
+    ]
+    if not matches:
+        # Fallback: use first result if only one
+        matches = users[:1] if len(users) == 1 else []
+    if not matches:
+        from ..errors import ErrorCode, InvalidInputError
+        names = [u.get("displayName", "?") for u in users]
+        raise InvalidInputError(
+            code=ErrorCode.INVALID_INPUT,
+            message=(
+                f"Could not resolve user '{identifier}' to a unique Cloud user. "
+                f"Matches: {names}. Use an exact display name or accountId."
+            ),
+        )
+    return matches[0].get("accountId")
+
+
 def _normalize_issue(raw_issue: dict[str, Any]) -> dict[str, Any]:
     """Normalize JIRA issue to agent-friendly format."""
     fields = raw_issue.get("fields", {})
@@ -210,7 +253,7 @@ def _normalize_issue(raw_issue: dict[str, Any]) -> dict[str, Any]:
         "id": raw_issue.get("id"),
         "self": raw_issue.get("self"),
         "summary": fields.get("summary"),
-        "description": fields.get("description"),
+        "description": _adf_to_text(fields.get("description")),
         "status": status_name,
         "priority": priority_name,
         "issue_type": issue_type_name,
@@ -240,7 +283,7 @@ def _normalize_comment(raw_comment: dict[str, Any]) -> dict[str, Any]:
 
     result = {
         "id": raw_comment.get("id"),
-        "body": raw_comment.get("body"),
+        "body": _adf_to_text(raw_comment.get("body")),
         "author": author.get("displayName"),
         "author_email": author.get("emailAddress"),
         "created": raw_comment.get("created"),
@@ -283,9 +326,9 @@ def _normalize_comments(raw_comments: dict[str, Any], summary_only: bool = False
                 "id": c.get("id"),
                 "author": c.get("author", {}).get("displayName"),
                 "created": c.get("created"),
-                "body_preview": (c.get("body", "")[:100] + "...")
-                if len(c.get("body", "")) > 100
-                else c.get("body", ""),
+                "body_preview": (lambda t: (t[:100] + "...") if len(t) > 100 else t)(
+                    _adf_to_text(c.get("body", "")) or ""
+                ),
             }
             for c in comments
         ]

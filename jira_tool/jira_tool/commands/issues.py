@@ -16,6 +16,7 @@ from ._helpers import (
     handle_error,
     output_field,
     output_result,
+    resolve_cloud_user,
 )
 
 
@@ -224,6 +225,10 @@ def register(main):
                 config = ctx.obj.get("config")
                 epic_field = config.get_extra("epic_link_field", "customfield_10092") if config else "customfield_10092"
                 extra_fields[epic_field] = extract_issue_key(epic) if epic else None
+
+            # On Cloud, resolve display names/emails to accountIds for assignee
+            if assignee and client.config.is_cloud and assignee != "":
+                assignee = resolve_cloud_user(client, assignee)
 
             # Get current issue state for comparison
             issue_before = client.get_issue(key, fields=["summary", "status", "assignee", "priority", "labels"])

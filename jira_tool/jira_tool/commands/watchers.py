@@ -11,6 +11,7 @@ from ._helpers import (
     get_client,
     handle_error,
     output_result,
+    resolve_cloud_user,
 )
 
 
@@ -98,6 +99,10 @@ def register(main):
                         message="Could not determine current user. Please specify --user.",
                     )
 
+            # On Cloud, resolve display names to accountIds
+            if client.config.is_cloud and user:
+                user = resolve_cloud_user(client, user)
+
             client.add_watcher(key, user)
 
             watch_data = {
@@ -147,6 +152,10 @@ def register(main):
                         code=ErrorCode.INVALID_INPUT,
                         message="Could not determine current user. Please specify --user.",
                     )
+
+            # On Cloud, resolve display names to accountIds
+            if client.config.is_cloud and user:
+                user = resolve_cloud_user(client, user)
 
             client.remove_watcher(key, user)
 

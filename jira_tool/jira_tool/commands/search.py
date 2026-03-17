@@ -80,10 +80,37 @@ def register(main):
             client = get_client(ctx)
 
             field_list = fields.split(",") if fields else None
-            raw_results = client.search_issues(jql, fields=field_list, start_at=offset, max_results=limit)
+
+            # Cloud v3 uses token-based pagination (no startAt/offset)
+            is_cloud = client.config.is_cloud
+            all_issues: list[dict] = []
+            next_token = None
+
+            if is_cloud:
+                # Paginate with nextPageToken to collect up to `limit` results
+                remaining = limit
+                while remaining > 0:
+                    page_size = min(remaining, 100)
+                    raw_results = client.search_issues(
+                        jql, fields=field_list,
+                        max_results=page_size,
+                        next_page_token=next_token,
+                    )
+                    page_issues = raw_results.get("issues", [])
+                    all_issues.extend(page_issues)
+                    remaining -= len(page_issues)
+                    next_token = raw_results.get("nextPageToken")
+                    if raw_results.get("isLast", True) or not page_issues or not next_token:
+                        break
+            else:
+                raw_results = client.search_issues(
+                    jql, fields=field_list,
+                    start_at=offset, max_results=limit,
+                )
+                all_issues = raw_results.get("issues", [])
 
             # Normalize results
-            issues = [_normalize_issue(issue) for issue in raw_results.get("issues", [])]
+            issues = [_normalize_issue(issue) for issue in all_issues]
 
             # If --output specified, output that field from each issue
             if output_field_name:
@@ -93,16 +120,23 @@ def register(main):
                         click.echo(str(value))
                 sys.exit(ExitCode.SUCCESS)
 
-            search_data = {
+            search_data: dict = {
                 "jql": jql,
                 "issues": issues,
                 "pagination": {
-                    "offset": raw_results.get("startAt", offset),
-                    "limit": raw_results.get("maxResults", limit),
-                    "returned": len(raw_results.get("issues", [])),
-                    "total": raw_results.get("total", 0),
+                    "offset": raw_results.get("startAt", offset) if not is_cloud else 0,
+                    "limit": limit,
+                    "returned": len(issues),
+                    "total": raw_results.get("total", len(issues)),
                 },
             }
+
+            # Expose Cloud pagination token so callers can fetch more
+            if is_cloud and next_token:
+                search_data["pagination"]["next_page_token"] = next_token
+                search_data["pagination"]["has_more"] = True
+            elif is_cloud:
+                search_data["pagination"]["has_more"] = False
 
             envelope = success_response(
                 search_data,
