@@ -7,7 +7,7 @@ simple functional API for patch series operations.
 
 from typing import Optional
 
-from .tmux_integration import RebaseManager
+from .rebase_manager import RebaseManager
 
 
 def work_on_patch(url: str, change_number: int) -> tuple[bool, str]:

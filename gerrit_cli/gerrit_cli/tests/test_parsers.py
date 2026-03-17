@@ -109,6 +109,8 @@ class TestParserHandlerIntegration:
             'series_info': MagicMock(),
             'watch': MagicMock(),
             'set_topic': MagicMock(),
+            'hashtag': MagicMock(),
+            'related': MagicMock(),
             'restore': MagicMock(),
             'rebase': MagicMock(),
             'vote': MagicMock(),

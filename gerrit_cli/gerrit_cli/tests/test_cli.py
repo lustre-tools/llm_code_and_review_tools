@@ -1124,24 +1124,11 @@ class TestCmdSeriesStatus:
 class TestCmdInteractive:
     """Tests for cmd_interactive function."""
 
-    def test_interactive_vim_mode(self):
-        """Test interactive with --vim flag."""
-        from gerrit_cli.cli import cmd_interactive
-        args = argparse.Namespace(
-            url="https://example.com/12345",
-            vim=True,
-        )
-
-        with patch('gerrit_cli.cli.run_interactive_vim') as mock_vim:
-            cmd_interactive(args)
-            mock_vim.assert_called_once_with("https://example.com/12345")
-
     def test_interactive_default_mode(self):
-        """Test interactive without --vim flag."""
+        """Test interactive runs interactive session."""
         from gerrit_cli.cli import cmd_interactive
         args = argparse.Namespace(
             url="https://example.com/12345",
-            vim=False,
         )
 
         with patch('gerrit_cli.cli.run_interactive') as mock_run:
@@ -1153,7 +1140,6 @@ class TestCmdInteractive:
         from gerrit_cli.cli import cmd_interactive
         args = argparse.Namespace(
             url="https://example.com/12345",
-            vim=False,
         )
 
         with patch('gerrit_cli.cli.run_interactive') as mock_run:
@@ -1168,7 +1154,6 @@ class TestCmdInteractive:
         from gerrit_cli.cli import cmd_interactive
         args = argparse.Namespace(
             url="https://example.com/12345",
-            vim=False,
         )
 
         with patch('gerrit_cli.cli.run_interactive') as mock_run:

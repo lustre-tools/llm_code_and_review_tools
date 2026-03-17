@@ -2,7 +2,7 @@
 
 This module is a backward-compatibility facade. The canonical code now
 lives in:
-  - tmux_integration.py  — RebaseManager class
+  - rebase_manager.py    — RebaseManager class
   - patch_workflow.py     — module-level orchestration functions
   - session.py            — RebaseSession, SessionManager, LastURLManager
 
@@ -10,8 +10,8 @@ All public names are re-exported here so that existing ``from
 gerrit_cli.rebase import ...`` statements continue to work.
 """
 
-# Re-export the RebaseManager class (canonical: tmux_integration.py)
-from .tmux_integration import RebaseManager  # noqa: F401
+# Re-export the RebaseManager class (canonical: rebase_manager.py)
+from .rebase_manager import RebaseManager  # noqa: F401
 
 # Re-export session types (canonical: session.py) — some callers import
 # RebaseSession from rebase rather than from session directly.

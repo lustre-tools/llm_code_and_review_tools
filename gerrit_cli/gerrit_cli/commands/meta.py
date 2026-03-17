@@ -440,7 +440,6 @@ an array of objects with thread_index, message, and optionally mark_resolved.
         "summary": "Interactive mode for reviewing comments",
         "description": """
 Review and reply to comments in an interactive terminal interface.
-Use --vim for a vim-based interface with tmux.
 """,
         "examples": [
             {
@@ -450,10 +449,6 @@ Use --vim for a vim-based interface with tmux.
             {
                 "command": "gc i URL",
                 "description": "Short alias for interactive",
-            },
-            {
-                "command": "gc interactive --vim URL",
-                "description": "Use vim-based interface",
             },
         ],
         "related": ["comments", "review-series"],
