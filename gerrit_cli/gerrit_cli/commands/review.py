@@ -223,10 +223,7 @@ def cmd_interactive(args):
     """Run interactive mode for reviewing series comments."""
     cli = _cli()
     try:
-        if args.vim:
-            cli.run_interactive_vim(args.url)
-        else:
-            cli.run_interactive(args.url)
+        cli.run_interactive(args.url)
     except KeyboardInterrupt:
         print("\n\nInterrupted by user")
         sys.exit(0)

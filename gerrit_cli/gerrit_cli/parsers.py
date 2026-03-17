@@ -331,11 +331,6 @@ def add_interactive_parser(subparsers):
         description="Review and reply to comments interactively",
     )
     parser.add_argument("url", help="Gerrit change URL or number")
-    parser.add_argument(
-        "--vim",
-        action="store_true",
-        help="Use vim-based interactive mode with tmux",
-    )
     return parser
 
 

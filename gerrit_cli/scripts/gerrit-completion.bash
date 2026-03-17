@@ -26,7 +26,6 @@ _gerrit_completions() {
     local review_opts="--json -j --changes-only -c --full-content --post-comments"
     local review_series_opts="--json -j --urls-only -u --numbers-only -n --include-abandoned -a --no-prompt --no-checkout"
     local series_comments_opts="--json -j --all -a --no-context --context-lines -c"
-    local interactive_opts="--vim"
     local series_status_opts="--json -j"
     local work_on_patch_opts=""
     local next_patch_opts="--with-comments -c"
@@ -78,9 +77,6 @@ _gerrit_completions() {
             ;;
         series-comments)
             COMPREPLY=($(compgen -W "$series_comments_opts" -- "$cur"))
-            ;;
-        interactive)
-            COMPREPLY=($(compgen -W "$interactive_opts" -- "$cur"))
             ;;
         series-status)
             COMPREPLY=($(compgen -W "$series_status_opts" -- "$cur"))

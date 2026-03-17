@@ -40,7 +40,6 @@ from .errors import ExitCode
 from .client import GerritCommentsClient  # noqa: F401
 from .extractor import extract_comments  # noqa: F401
 from .interactive import run_interactive  # noqa: F401
-from .interactive_vim import run_interactive_vim  # noqa: F401
 from .rebase import (  # noqa: F401
     RebaseManager,
     abort_patch,
