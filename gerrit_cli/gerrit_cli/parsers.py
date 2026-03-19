@@ -916,6 +916,46 @@ def add_ack_parser(subparsers):
     return parser
 
 
+def add_graph_parser(subparsers):
+    """Add the 'graph' subcommand parser."""
+    parser = subparsers.add_parser(
+        "graph",
+        help="Visualize the full DAG of related changes as an interactive HTML graph",
+        description="Build and display an interactive graph of ALL related changes "
+                    "for a Gerrit patch series. Unlike series-status which traces a "
+                    "single linear chain, this shows the complete topology including "
+                    "branches, abandoned forks, and stale patchsets. Opens an HTML "
+                    "file with vis.js visualization.",
+    )
+    parser.add_argument("url", help="Gerrit change URL or number (any patch in the series)")
+    parser.add_argument(
+        "--output", "-o",
+        default=None,
+        help="Output HTML file path (default: temp file)",
+    )
+    parser.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Don't open the HTML file in a browser (just save it)",
+    )
+    parser.add_argument(
+        "--skip-ci-details",
+        action="store_true",
+        help="Skip fetching CI links (faster, fewer API calls)",
+    )
+    parser.add_argument(
+        "--comments",
+        action="store_true",
+        help="Fetch detailed inline comments per change (slow, adds ~30s for large series)",
+    )
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
 def add_describe_parser(subparsers):
     """Add the 'describe' subcommand parser."""
     parser = subparsers.add_parser(
@@ -1284,6 +1324,9 @@ def setup_parsers(subparsers, handlers):
     if 'sashiko_review' in handlers:
         add_sashiko_review_parser(subparsers).set_defaults(
             func=handlers['sashiko_review'])
+
+    # Visualization
+    add_graph_parser(subparsers).set_defaults(func=handlers['graph'])
 
     # Self-description (LLM discoverability)
     add_describe_parser(subparsers).set_defaults(func=handlers['describe'])

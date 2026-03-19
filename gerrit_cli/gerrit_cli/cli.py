@@ -29,7 +29,7 @@ import argparse
 import sys
 
 from .envelope import error_response_from_dict, format_json
-from .errors import ExitCode
+from .errors import ErrorCode, ExitCode
 
 # ---------------------------------------------------------------------------
 # Import names that tests patch via patch('gerrit_cli.cli.X').
@@ -150,6 +150,40 @@ cmd_describe = _cmd_meta.cmd_describe
 
 cmd_continue_reintegration = _cmd_reintegration.cmd_continue_reintegration
 cmd_skip_reintegration = _cmd_reintegration.cmd_skip_reintegration
+
+
+def cmd_graph(args):
+    """Build and display an interactive DAG of related changes."""
+    from .graph import build_graph, generate_html, save_and_open
+
+    pretty = getattr(args, "pretty", False)
+    try:
+        base_url, change_number = GerritCommentsClient.parse_gerrit_url(args.url)
+        client = GerritCommentsClient()
+        skip_details = getattr(args, "skip_ci_details", False)
+        fetch_comments = getattr(args, "comments", False)
+        graph_data = build_graph(
+            client, change_number, base_url,
+            fetch_details=not skip_details,
+            fetch_comments=fetch_comments,
+        )
+
+        html_content = generate_html(graph_data)
+        output_path = getattr(args, "output", None)
+        saved_path = save_and_open(html_content, output_path)
+
+        no_open = getattr(args, "no_open", False)
+        if not no_open:
+            import webbrowser
+            webbrowser.open(f"file://{saved_path}")
+
+        result = graph_data["stats"]
+        result["html_path"] = saved_path
+        result["anchor"] = change_number
+        output_success(result, "graph", pretty)
+
+    except Exception as e:
+        sys.exit(output_error(ErrorCode.GENERAL_ERROR, str(e), "graph", pretty))
 
 
 def cmd_sashiko_review(args):
@@ -278,6 +312,7 @@ def main():
         'examples': cmd_examples,
         'done': cmd_done,
         'ack': cmd_ack,
+        'graph': cmd_graph,
         'describe': cmd_describe,
         'sashiko_review': cmd_sashiko_review,
     }
