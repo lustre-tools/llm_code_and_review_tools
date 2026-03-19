@@ -576,10 +576,12 @@ body.light .sbadge-ABANDONED { background: #8b949e; color: #fff; }
     <h1 id="title">Gerrit Series Graph</h1>
     <div class="stats" id="stats"></div>
     <div class="legend">
+        <div class="legend-item"><span class="legend-dot" style="background:#238636"></span> Ready</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#1f6feb"></span> Pending</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#b62324"></span> Issues</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#238636;border:2px solid #3fb950"></span> Merged</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#484f58"></span> Abandoned</div>
         <div class="legend-item"><span class="legend-dot" style="background:#f85149"></span> Anchor</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#1f6feb"></span> NEW</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#238636"></span> MERGED</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#484f58"></span> ABANDONED</div>
         <div class="legend-item"><span class="legend-dot" style="background:#d29922"></span> Stale edge</div>
     </div>
 </div>
