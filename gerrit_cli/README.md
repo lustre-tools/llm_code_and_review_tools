@@ -181,18 +181,32 @@ gc graph 61962 -o series.html
 
 # Generate without opening browser
 gc graph 61962 --no-open
+
+# Include detailed inline comments (slower, fetches per-change)
+gc graph 61962 --comments
+
+# Skip CI link fetching for faster generation
+gc graph 61962 --skip-ci-details
 ```
 
 The generated HTML is self-contained (uses vis.js from CDN) and includes:
 
 - **Vertical tree layout** growing upward from the anchor change
+- **Review health coloring**: green (verified OK + 2 non-author CR +1s),
+  red (any verified -1 or CR veto), blue (pending)
+- **Review status line** on each node: verified voters (J:+1 M:-1) and
+  code review summary (CR: 3x(+1))
+- **Unresolved comment count** on nodes (from batch query, no extra calls)
 - **Edge labels** showing which patchset each dependency goes through
-  (e.g., `ps57`). Stale edges show `ps53→57` in orange with dashed lines
+  (e.g., `ps57`). Stale edges show `ps53->57` in orange with dashed lines
 - **Click-to-re-anchor**: click any node to make it the new starting point;
   the tree re-layouts with that node as the root
 - **Filters**: toggle abandoned/stale branches on/off
-- **Side panel**: click a node to see full details, chain of
-  dependents/dependencies, and a "Re-anchor here" button
+- **Side panel**: click a node to see full details including:
+  - Review health badge, all verified voters with clickable Jenkins/Maloo links
+  - Code review votes with reviewer names (author votes dimmed)
+  - Unresolved comments list with clickable links to Gerrit (with `--comments`)
+  - Chain of dependents/dependencies, and a "Re-anchor here" button
 - **Dark/Light mode**: toggle with the "Light" button
 - **Keyboard shortcuts**: `F` = fit to screen, `Z` = focus/zoom to selected
   node, `R` = reset to initial anchor
