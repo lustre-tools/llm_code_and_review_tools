@@ -160,7 +160,11 @@ def cmd_graph(args):
     try:
         base_url, change_number = GerritCommentsClient.parse_gerrit_url(args.url)
         client = GerritCommentsClient()
-        graph_data = build_graph(client, change_number, base_url)
+        skip_details = getattr(args, "skip_details", False)
+        graph_data = build_graph(
+            client, change_number, base_url,
+            fetch_details=not skip_details,
+        )
 
         html_content = generate_html(graph_data)
         output_path = getattr(args, "output", None)

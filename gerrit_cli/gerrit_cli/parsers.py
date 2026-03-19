@@ -939,6 +939,11 @@ def add_graph_parser(subparsers):
         help="Don't open the HTML file in a browser (just save it)",
     )
     parser.add_argument(
+        "--skip-details",
+        action="store_true",
+        help="Skip fetching CI links and comments (faster, fewer API calls)",
+    )
+    parser.add_argument(
         "--pretty", "-p",
         action="store_true",
         help="Pretty-print JSON output",

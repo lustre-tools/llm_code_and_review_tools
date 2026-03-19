@@ -38,7 +38,50 @@ def _empty_review() -> dict[str, Any]:
         "cr_rejected": False,    # has -2
         "cr_rejected_by": "",
         "cr_veto": False,        # any CR vote <= -1
+        "jenkins_url": "",       # link to Jenkins build
+        "maloo_url": "",         # link to Maloo test results
     }
+
+
+def _extract_ci_links(
+    messages: list[dict[str, Any]], patchset: int
+) -> dict[str, str]:
+    """Extract Jenkins build URL and Maloo results URL from change messages.
+
+    Only looks at messages for the given patchset number.
+    """
+    import re
+
+    jenkins_url = ""
+    maloo_url = ""
+
+    for msg in messages:
+        if msg.get("_revision_number", 0) != patchset:
+            continue
+        text = msg.get("message", "")
+
+        # Jenkins: look for build.whamcloud.com URL
+        if not jenkins_url:
+            m = re.search(
+                r"(https?://build\.whamcloud\.com/job/[^/]+/\d+/?)", text
+            )
+            if m:
+                jenkins_url = m.group(1)
+
+        # Maloo: look for "sessions will be run for Build NNNNN"
+        # to construct the results overview link
+        if not maloo_url:
+            m = re.search(
+                r"sessions will be run for Build (\d+)", text
+            )
+            if m:
+                build_num = m.group(1)
+                maloo_url = (
+                    f"https://testing.whamcloud.com/test_sessions/related"
+                    f"?jobs=lustre-reviews&builds={build_num}#redirect"
+                )
+
+    return {"jenkins_url": jenkins_url, "maloo_url": maloo_url}
 
 
 def _parse_labels(labels: dict[str, Any]) -> dict[str, Any]:
@@ -91,8 +134,14 @@ def build_graph(
     change_number: int,
     base_url: str,
     progress: bool = True,
+    fetch_details: bool = True,
 ) -> dict[str, Any]:
     """Build the full series graph with stale branch information.
+
+    Args:
+        fetch_details: If True, fetch CI links and comments from change
+            messages (slower, requires extra API calls). If False, skip
+            message fetching for faster graph generation.
 
     Returns a dict ready to be embedded as JSON in the HTML template.
     """
@@ -183,6 +232,42 @@ def build_graph(
     # 3b. Attach review info to nodes
     for cn, node in nodes.items():
         node["review"] = labels_by_cn.get(cn, _empty_review())
+
+    # 3c. Fetch messages for non-abandoned changes to extract Jenkins/Maloo links
+    active_cns = sorted(
+        cn for cn, node in nodes.items() if node["status"] != "ABANDONED"
+    )
+    if fetch_details and active_cns:
+        if progress:
+            print(f"Fetching CI links ({len(active_cns)} active changes)...",
+                  end="", file=sys.stderr, flush=True)
+        msg_batches = [
+            active_cns[i:i + 20] for i in range(0, len(active_cns), 20)
+        ]
+        for batch in msg_batches:
+            query = " OR ".join(f"change:{cn}" for cn in batch)
+            try:
+                result = client.rest.get(
+                    f"/changes/?q={quote(query, safe=':+ ')}&o=MESSAGES&n=500"
+                )
+                for change in result:
+                    cn = change.get("_number", 0)
+                    if cn not in nodes:
+                        continue
+                    latest_ps = nodes[cn]["current_patchset"]
+                    links = _extract_ci_links(
+                        change.get("messages", []), latest_ps
+                    )
+                    nodes[cn]["review"]["jenkins_url"] = links.get(
+                        "jenkins_url", ""
+                    )
+                    nodes[cn]["review"]["maloo_url"] = links.get(
+                        "maloo_url", ""
+                    )
+            except Exception:
+                pass
+        if progress:
+            print(" done.", file=sys.stderr)
 
     # 4. Build edges by resolving parent commits
     edges: list[dict[str, Any]] = []
@@ -1027,21 +1112,33 @@ function renderReviewPanel(node) {
         ? '<span style="color:#f85149;font-weight:700">\u2717 Issues</span>'
         : '<span style="color:#8b949e">Pending</span>';
 
-    // Verified section — show ALL voters
+    // Verified section — show ALL voters with CI links
     const vVotes = rv.verified_votes || [];
+    const jenkinsUrl = rv.jenkins_url || '';
+    const malooUrl = rv.maloo_url || '';
+
     let verifiedHtml = '';
     if (vVotes.length === 0) {
         verifiedHtml = '<div style="color:#8b949e;font-size:13px">No verified votes</div>';
     } else {
         verifiedHtml = '<div style="margin:2px 0">';
         for (const v of vVotes) {
+            // Add link for Jenkins/Maloo if available, with descriptive label
+            let nameHtml = esc(v.name);
+            const nl = v.name.toLowerCase();
+            if (/jenkins/i.test(nl) && jenkinsUrl) {
+                nameHtml = `<a href="${jenkinsUrl}" target="_blank">Jenkins Build</a>`;
+            } else if (/maloo/i.test(nl) && malooUrl) {
+                nameHtml = `<a href="${malooUrl}" target="_blank">Maloo Test Results</a>`;
+            }
             verifiedHtml += `<div style="font-size:13px;margin:1px 0">
                 ${reviewIcon(v.value)}
-                <span style="color:var(--text)">${esc(v.name)}</span>
+                <span style="color:var(--text)">${nameHtml}</span>
             </div>`;
         }
         verifiedHtml += '</div>';
     }
+
 
     // Code-Review section
     const crVotes = rv.cr_votes || [];
