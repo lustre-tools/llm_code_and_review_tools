@@ -46,11 +46,12 @@ def register(main):
             client = get_client(ctx)
             key = extract_issue_key(key)
 
-            if fetch_all:
-                limit = 1000  # JIRA max
-
             order_by = "created" if oldest_first else "-created"
-            raw_comments = client.get_comments(key, start_at=offset, max_results=limit, order_by=order_by)
+
+            if fetch_all:
+                raw_comments = client.get_all_comments(key, order_by=order_by)
+            else:
+                raw_comments = client.get_comments(key, start_at=offset, max_results=limit, order_by=order_by)
 
             # Build response data
             comments_data = _normalize_comments(raw_comments, summary_only=summary_only)

@@ -331,6 +331,12 @@ class JiraClient:
                     jira_errors.append(f"{field}: {msg}")
 
         error_detail = "; ".join(jira_errors) if jira_errors else ""
+        # Fallback: include raw body when no structured errors extracted
+        if not error_detail and isinstance(body, dict) and body:
+            raw = str(body)
+            if len(raw) > 500:
+                raw = raw[:500] + "..."
+            error_detail = raw
 
         if response.status_code == 401:
             raise AuthError(
@@ -672,6 +678,46 @@ class JiraClient:
             "orderBy": order_by,
         }
         return self._request("GET", f"issue/{key}/comment", params=params, context=key)
+
+    def get_all_comments(
+        self,
+        key: str,
+        order_by: str = "created",
+        page_size: int = 100,
+    ) -> dict[str, Any]:
+        """
+        Get ALL comments for an issue, paginating through the full set.
+
+        Args:
+            key: Issue key
+            order_by: Sort order (default: "created" for oldest first, use "-created" for newest first)
+            page_size: Number of comments per API request (max 100 for Cloud)
+
+        Returns:
+            Comments data with all comments collected
+        """
+        all_comments: list[dict[str, Any]] = []
+        start_at = 0
+        total = None
+
+        while True:
+            page = self.get_comments(key, start_at=start_at, max_results=page_size, order_by=order_by)
+            comments = page.get("comments", [])
+            all_comments.extend(comments)
+
+            if total is None:
+                total = page.get("total", len(comments))
+
+            start_at += len(comments)
+            if not comments or start_at >= total:
+                break
+
+        return {
+            "maxResults": len(all_comments),
+            "total": total if total is not None else len(all_comments),
+            "startAt": 0,
+            "comments": all_comments,
+        }
 
     def add_comment(
         self,

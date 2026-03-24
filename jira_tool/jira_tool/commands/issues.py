@@ -27,10 +27,10 @@ def register(main):
     @click.argument("key")
     @click.option("--fields", help="Comma-separated list of fields to return")
     @click.option("--output", "output_field_name", help="Output only this field (plain text, no JSON envelope)")
-    @click.option("--comments", "include_comments", is_flag=True, default=False,
-                  help="Include first 5 comments inline")
+    @click.option("--comments", "include_comments", default=None, type=int,
+                  help="Include N comments inline (e.g. --comments 5, --comments 50)")
     @click.pass_context
-    def issue_get(ctx: click.Context, key: str, fields: str | None, output_field_name: str | None, include_comments: bool) -> None:
+    def issue_get(ctx: click.Context, key: str, fields: str | None, output_field_name: str | None, include_comments: int | None) -> None:
         """
         Get issue details.
 
@@ -38,7 +38,7 @@ def register(main):
 
         Returns issue summary, description, status, and other core fields.
 
-        Use --comments to include comments inline (default: 5).
+        Use --comments N to include N comments inline (e.g. --comments 5).
         Use --output to extract a single field (e.g., --output key, --output status).
         """
         command = "get"
@@ -61,7 +61,7 @@ def register(main):
 
             # If --comments specified, fetch and inline comments
             if include_comments:
-                raw_comments = client.get_comments(key, start_at=0, max_results=5, order_by="-created")
+                raw_comments = client.get_comments(key, start_at=0, max_results=include_comments, order_by="-created")
                 comments_data = _normalize_comments(raw_comments)
                 issue_data["comments"] = comments_data.get("comments", [])
                 issue_data["total_comments"] = comments_data.get("total_comments", 0)
@@ -75,7 +75,7 @@ def register(main):
             ]
             if not include_comments:
                 # Suggest --comments if they didn't use it
-                next_actions.insert(0, f"jira get {issue_key} --comments")
+                next_actions.insert(0, f"jira get {issue_key} --comments 5")
 
             envelope = success_response(
                 issue_data,
