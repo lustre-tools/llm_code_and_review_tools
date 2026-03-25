@@ -345,6 +345,16 @@ def build_graph(
         ticket_match = re.match(r"(LU-\d+)", subject)
         ticket = ticket_match.group(1) if ticket_match else ""
 
+        # Construct anonymous checkout ref
+        ref = f"refs/changes/{cn % 100:02d}/{cn}/{latest}"
+        # Extract host from base_url for SSH (e.g., review.whamcloud.com)
+        from urllib.parse import urlparse
+        parsed = urlparse(base_url)
+        checkout_cmd = (
+            f"git fetch {base_url}/fs/lustre-release {ref}"
+            f" && git checkout FETCH_HEAD"
+        )
+
         nodes[cn] = {
             "id": cn,
             "subject": subject,
@@ -353,6 +363,9 @@ def build_graph(
             "author": author_info.get("name", "Unknown"),
             "url": f"{base_url}/c/fs/lustre-release/+/{cn}",
             "ticket": ticket,
+            "topic": "",
+            "hashtags": [],
+            "checkout_cmd": checkout_cmd,
         }
         commit_to_cn[commit_hash] = cn
         raw_entries.append({
@@ -394,6 +407,10 @@ def build_graph(
                 comment_count_by_cn[cn] = change.get(
                     "unresolved_comment_count", 0
                 )
+                # Topic and hashtags (free from batch query)
+                if cn in nodes:
+                    nodes[cn]["topic"] = change.get("topic", "")
+                    nodes[cn]["hashtags"] = change.get("hashtags", [])
         except Exception as e:
             if progress:
                 print(f" (batch {batch_idx} error: {e})", end="",
@@ -1440,6 +1457,10 @@ function renderCommentsPanel(node) {
         html += '</div>';
     }
 
+    if (comments.length > 0) {
+        html += '<div style="color:var(--text-muted);font-size:10px;font-style:italic;margin-top:4px">Note: Gerrit API comment resolution tracking is unreliable; listed comments may not match exactly.</div>';
+    }
+
     html += '</div></div>';
     return html;
 }
@@ -1504,6 +1525,7 @@ function showNodeInfo(id) {
                 <span class="sbadge sbadge-${node.status}">${node.status}</span>
                 ${staleTag}
                 &nbsp; ps${node.current_patchset}
+                ${node.checkout_cmd ? `<button onclick="navigator.clipboard.writeText('${node.checkout_cmd.replace(/'/g, "\\'")}');this.textContent='\u2713';setTimeout(()=>this.textContent='Checkout',1500)" style="cursor:pointer;font-size:11px;background:none;border:1px solid var(--border);border-radius:4px;padding:1px 8px;color:var(--accent);margin-left:6px" title="Copy checkout command to clipboard">Checkout</button>` : ''}
             </div>
         </div>
         <div class="field">
@@ -1516,8 +1538,16 @@ function showNodeInfo(id) {
         </div>
         <div class="field">
             <div class="fl">Ticket</div>
-            <div class="fv">${node.ticket || '—'}</div>
+            <div class="fv">${node.ticket || '\u2014'}</div>
         </div>
+        ${node.topic ? `<div class="field">
+            <div class="fl">Topic</div>
+            <div class="fv">${esc(node.topic)}</div>
+        </div>` : ''}
+        ${(node.hashtags && node.hashtags.length > 0) ? `<div class="field">
+            <div class="fl">Hashtags</div>
+            <div class="fv">${node.hashtags.map(h => '<span style="background:var(--bg-inset);padding:1px 6px;border-radius:3px;font-size:12px;margin-right:4px">' + esc(h) + '</span>').join('')}</div>
+        </div>` : ''}
         ${renderReviewPanel(node)}
         ${staleIncoming.length > 0 ? `
         <div class="field">
