@@ -120,6 +120,24 @@ def register(main):
                         click.echo(str(value))
                 sys.exit(ExitCode.SUCCESS)
 
+            # Compute total: Cloud v3 API doesn't reliably return a total
+            # count across pages. After pagination, raw_results holds the
+            # *last* page — its "total" is just that page's size (set by
+            # the client.py setdefault fallback).  Use the collected count
+            # when we fetched everything, otherwise leave unknown.
+            if is_cloud:
+                if next_token:
+                    # We hit the limit before exhausting results — true
+                    # total is unknown.  Report collected count as a floor.
+                    total = len(issues)
+                    total_complete = False
+                else:
+                    total = len(issues)
+                    total_complete = True
+            else:
+                total = raw_results.get("total", len(issues))
+                total_complete = True
+
             search_data: dict = {
                 "jql": jql,
                 "issues": issues,
@@ -127,9 +145,11 @@ def register(main):
                     "offset": raw_results.get("startAt", offset) if not is_cloud else 0,
                     "limit": limit,
                     "returned": len(issues),
-                    "total": raw_results.get("total", len(issues)),
+                    "total": total,
                 },
             }
+            if not total_complete:
+                search_data["pagination"]["total_is_lower_bound"] = True
 
             # Expose Cloud pagination token so callers can fetch more
             if is_cloud and next_token:
