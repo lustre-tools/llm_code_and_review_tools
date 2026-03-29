@@ -133,7 +133,7 @@ def get_devices_json(prog, obd_addr=None):
         try:
             type_ptr = obd.obd_type.value_()
             if type_ptr != 0:
-                dev_type = obd.obd_type[0].typ_name.string_().decode(errors="replace")
+                dev_type = obd.obd_type[0].typ_kobj.name.string_().decode(errors="replace")
         except (drgn.FaultError, AttributeError):
             pass
 

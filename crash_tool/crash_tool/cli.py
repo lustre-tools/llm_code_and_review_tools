@@ -16,7 +16,7 @@ from llm_tool_common import (
     success_response,
 )
 
-from .session import CommandResult, SessionResult, run_session
+from .session import CommandResult, SessionResult, run_drgn_triage, run_session
 
 TOOL_NAME = "crash-tool"
 
@@ -287,6 +287,7 @@ def recipes(
     recipe_def = available[recipe]
     commands = recipe_def["commands"]
     needs_mods = recipe_def.get("needs_modules", False)
+    use_drgn = recipe_def.get("use_drgn", False)
 
     if needs_mods and not mod_dir:
         envelope = error_response_from_dict(
@@ -297,6 +298,35 @@ def recipes(
         )
         click.echo(format_json(envelope, pretty=pretty, full_envelope=full_env))
         sys.exit(2)
+
+    if use_drgn and not (vmcore and vmlinux):
+        envelope = error_response_from_dict(
+            code="INVALID_INPUT",
+            message=f"Recipe '{recipe}' requires --vmcore and --vmlinux",
+            tool=TOOL_NAME,
+            command="recipes",
+        )
+        click.echo(format_json(envelope, pretty=pretty, full_envelope=full_env))
+        sys.exit(2)
+
+    drgn_only = recipe_def.get("drgn_only", False)
+
+    # For drgn-only recipes, skip crash entirely
+    if drgn_only:
+        drgn_result = run_drgn_triage(
+            vmcore=vmcore,
+            vmlinux=vmlinux,
+            mod_dir=mod_dir,
+            timeout=timeout,
+        )
+        data = {
+            "recipe": recipe,
+            "description": recipe_def["description"],
+            **drgn_result,
+        }
+        envelope = success_response(data, tool=TOOL_NAME, command="recipes")
+        click.echo(format_json(envelope, pretty=pretty, full_envelope=full_env))
+        return
 
     try:
         sr = run_session(
@@ -322,6 +352,17 @@ def recipes(
         "description": recipe_def["description"],
         **_format_session(sr),
     }
+
+    # Run drgn triage for recipes that request it
+    if use_drgn:
+        drgn_result = run_drgn_triage(
+            vmcore=vmcore,
+            vmlinux=vmlinux,
+            mod_dir=mod_dir,
+            timeout=timeout,
+        )
+        data["drgn_triage"] = drgn_result
+
     envelope = success_response(data, tool=TOOL_NAME, command="recipes")
     click.echo(format_json(envelope, pretty=pretty, full_envelope=full_env))
 
@@ -353,22 +394,15 @@ def _get_recipes() -> dict[str, dict[str, Any]]:
             ],
         },
         "lustre": {
-            "description": "Lustre OBD devices, imports, and LDLM lock state (requires --mod-dir)",
+            "description": "Lustre triage via drgn (requires --mod-dir)",
             "needs_modules": True,
-            "commands": [
-                # Module verification
-                'mod | grep -i "lustre\\|lnet\\|ko2iblnd\\|ldiskfs\\|libcfs\\|osc\\|mdc\\|lov\\|lmv\\|obdclass\\|ptlrpc\\|fid\\|fld\\|mgc"',
-                # OBD device count and active devices
-                "sym obd_devs",
-                # Panic task backtrace with Lustre symbols
-                "bt",
-                # All tasks in UN (uninterruptible sleep) state
-                'ps | grep " UN "',
-                # Backtraces of hung tasks
-                "foreach UN bt",
-                # Kernel log tail with timestamps
-                "log -T | tail -80",
-            ],
+            "use_drgn": True,
+            "drgn_only": True,
+            "commands": [],
+            # drgn triage provides everything: overview, backtrace,
+            # OBD devices, LDLM locks, dk log, kernel log, RPCs,
+            # stack trace grouping, D-state analysis, OSC stats,
+            # and diagnosis hints.
         },
         "io": {
             "description": "Block I/O state and hung task detection",

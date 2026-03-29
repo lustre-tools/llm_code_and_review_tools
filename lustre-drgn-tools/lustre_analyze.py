@@ -247,13 +247,13 @@ def _obd_is_set_up(obd) -> bool:
     try:
         import drgn
         prog = obd.prog_
-        obdf_val = prog.constant("OBDF_SET_UP")
-        flags_addr = obd.obd_flags.address_of_()
+        bit = int(prog.constant("OBDF_SET_UP"))
+        flags_addr = obd.obd_flags.address_of_().value_()
         word = drgn.Object(
             prog, "unsigned long",
-            address=flags_addr.value_() + (obdf_val // 64) * 8,
+            address=flags_addr + (bit // 64) * 8,
         )
-        return bool(word & (1 << (obdf_val % 64)))
+        return bool(word.value_() & (1 << (bit % 64)))
     except (LookupError, AttributeError, Exception):
         return False
 
@@ -261,33 +261,22 @@ def _obd_is_set_up(obd) -> bool:
 def analyze_obd_devices(prog: "drgn.Program") -> dict[str, Any]:
     """List active OBD devices."""
     import drgn
+    try:
+        from . import lustre_helpers as lh
+    except ImportError:
+        import lustre_helpers as lh
 
     try:
-        sym = prog.symbol("obd_devs")
-    except LookupError:
+        obd_list = lh.get_obd_devices(prog)
+    except (KeyError, LookupError):
         return {
             "analysis": "obd_devices",
             "error": "obd_devs symbol not found (obdclass not loaded?)",
         }
 
-    # obd_devs is a static array of struct obd_device* pointers
-    max_devs = 8192
-    arr = drgn.Object(
-        prog,
-        prog.type("struct obd_device *[8192]"),
-        address=sym.address,
-    )
-
     devices = []
-    for i in range(max_devs):
+    for i, obd in obd_list:
         try:
-            ptr = arr[i].value_()
-            if ptr == 0 or ptr < 0xffff000000000000:
-                continue
-            obd = drgn.Object(prog, "struct obd_device", address=ptr)
-            # Validate obd_magic (0xAB5CD6EF)
-            if obd.obd_magic.value_() != 0xAB5CD6EF:
-                continue
             name = obd.obd_name.string_().decode(errors="replace")
             uuid = obd.obd_uuid.uuid.string_().decode(errors="replace")
             dev_type = ""
@@ -295,7 +284,7 @@ def analyze_obd_devices(prog: "drgn.Program") -> dict[str, Any]:
                 type_ptr = obd.obd_type.value_()
                 if type_ptr != 0:
                     typ = obd.obd_type[0]
-                    dev_type = typ.typ_name.string_().decode(errors="replace")
+                    dev_type = typ.typ_kobj.name.string_().decode(errors="replace")
             except (drgn.FaultError, AttributeError):
                 pass
 

@@ -116,32 +116,49 @@ OBD_DEVICE_MAGIC = 0xAB5CD6EF
 
 
 def get_obd_devices(prog: drgn.Program) -> list:
-    """Return list of (index, obd_device Object) for all active devices."""
+    """Return list of (index, obd_device Object) for all active devices.
+
+    obd_devs is an xarray (since Lustre moved from a flat array).
+    Falls back to flat array iteration for older Lustre versions.
+    """
+    try:
+        obd_devs_obj = prog["obd_devs"]
+    except (KeyError, LookupError):
+        return []
+
+    # Try xarray iteration (current Lustre)
+    type_str = str(obd_devs_obj.type_)
+    if "xarray" in type_str:
+        from drgn.helpers.linux.xarray import xa_for_each
+        devices = []
+        for index, entry in xa_for_each(obd_devs_obj.address_of_()):
+            try:
+                obd = drgn.cast("struct obd_device *", entry)
+                if obd.obd_magic.value_() != OBD_DEVICE_MAGIC:
+                    continue
+                devices.append((index, obd[0]))
+            except (drgn.FaultError, drgn.ObjectAbsentError):
+                continue
+        return devices
+
+    # Fallback: flat array (older Lustre)
     sym = prog.symbol("obd_devs")
     arr = drgn.Object(
-        prog,
-        prog.type("struct obd_device *[8192]"),
+        prog, prog.type("struct obd_device *[8192]"),
         address=sym.address,
     )
-
     devices = []
     for i in range(8192):
         try:
             ptr = arr[i].value_()
-            if ptr == 0:
-                continue
-            # Validate pointer is in kernel address space
-            if ptr < 0xffff000000000000:
+            if ptr == 0 or ptr < 0xffff000000000000:
                 continue
             obd = drgn.Object(prog, "struct obd_device", address=ptr)
-            # Validate obd_magic to confirm this is a real device
-            magic = obd.obd_magic.value_()
-            if magic != OBD_DEVICE_MAGIC:
+            if obd.obd_magic.value_() != OBD_DEVICE_MAGIC:
                 continue
             devices.append((i, obd))
         except (drgn.FaultError, drgn.ObjectAbsentError):
             continue
-
     return devices
 
 

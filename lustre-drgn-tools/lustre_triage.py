@@ -387,6 +387,22 @@ def run_triage(prog, verbose=False):
     except Exception as e:
         report["dk_log"] = {"error": str(e)}
 
+    # 8b. Kernel log (printk) tail
+    try:
+        from drgn.helpers.linux.printk import get_printk_records
+        records = list(get_printk_records(prog))
+        tail = records[-80:]
+        report["kernel_log"] = {
+            "total_records": len(records),
+            "showing_last": len(tail),
+            "lines": [
+                f"[{r.timestamp / 1e9:.6f}] {r.text.decode(errors='replace')}"
+                for r in tail
+            ],
+        }
+    except Exception as e:
+        report["kernel_log"] = {"error": str(e)}
+
     # 9. Diagnosis
     hints = []
     if "backtrace" in report and "error" not in report["backtrace"]:

@@ -5,12 +5,15 @@ output, and tearing down cleanly.  All output is captured and
 returned as structured data — no interactive terminal required.
 """
 
+import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 # Sentinel used to delimit command output boundaries.
@@ -231,3 +234,66 @@ def _detect_error(output: str) -> str:
         if m:
             return msg
     return ""
+
+
+def _find_drgn_tools_dir() -> str | None:
+    """Locate the lustre-drgn-tools directory."""
+    candidates = [
+        Path.home() / "llm_code_and_review_tools" / "lustre-drgn-tools",
+        Path(__file__).parent.parent.parent / "lustre-drgn-tools",
+    ]
+    for p in candidates:
+        if (p / "lustre_triage.py").exists():
+            return str(p)
+    return None
+
+
+def run_drgn_triage(
+    vmcore: str,
+    vmlinux: str,
+    mod_dir: str | None = None,
+    timeout: int = 120,
+) -> dict:
+    """Run lustre_triage.py and return parsed JSON result.
+
+    Returns a dict with the triage output, or an error dict.
+    """
+    tools_dir = _find_drgn_tools_dir()
+    if not tools_dir:
+        return {"error": "lustre-drgn-tools not found"}
+
+    script = os.path.join(tools_dir, "lustre_triage.py")
+    argv = [
+        sys.executable, script,
+        "--vmcore", vmcore,
+        "--vmlinux", vmlinux,
+    ]
+    if mod_dir:
+        argv.extend(["--mod-dir", mod_dir])
+
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": f"drgn triage timed out after {timeout}s"}
+    except Exception as e:
+        return {"error": str(e)}
+
+    if proc.returncode != 0:
+        # Try to parse partial output; fall back to error
+        stderr = proc.stderr.strip()
+        if proc.stdout.strip():
+            try:
+                return json.loads(proc.stdout)
+            except json.JSONDecodeError:
+                pass
+        return {"error": f"drgn triage failed (rc={proc.returncode})", "stderr": stderr}
+
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {"error": "drgn triage returned invalid JSON", "raw": proc.stdout[:500]}
