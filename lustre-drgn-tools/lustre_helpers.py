@@ -112,6 +112,9 @@ def nid2str(nid) -> str:
 # ── OBD device access ────────────────────────────────────────
 
 
+OBD_DEVICE_MAGIC = 0xAB5CD6EF
+
+
 def get_obd_devices(prog: drgn.Program) -> list:
     """Return list of (index, obd_device Object) for all active devices."""
     sym = prog.symbol("obd_devs")
@@ -127,9 +130,14 @@ def get_obd_devices(prog: drgn.Program) -> list:
             ptr = arr[i].value_()
             if ptr == 0:
                 continue
+            # Validate pointer is in kernel address space
+            if ptr < 0xffff000000000000:
+                continue
             obd = drgn.Object(prog, "struct obd_device", address=ptr)
-            # Validate by reading obd_name -- skip if memory is absent
-            obd.obd_name.string_()
+            # Validate obd_magic to confirm this is a real device
+            magic = obd.obd_magic.value_()
+            if magic != OBD_DEVICE_MAGIC:
+                continue
             devices.append((i, obd))
         except (drgn.FaultError, drgn.ObjectAbsentError):
             continue

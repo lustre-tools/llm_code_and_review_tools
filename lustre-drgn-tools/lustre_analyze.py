@@ -44,9 +44,16 @@ def load_program(
 
     debug_files = [vmlinux]
     if mod_dir:
-        debug_files += glob.glob(
+        all_ko = glob.glob(
             os.path.join(mod_dir, "**", "*.ko"), recursive=True
         )
+        # Filter out build artifacts and test modules
+        debug_files += [
+            ko for ko in all_ko
+            if "kconftest" not in ko
+            and "/conftest.ko" not in ko
+            and "/kunit/" not in ko
+        ]
     if debug_dir:
         debug_files += glob.glob(
             os.path.join(debug_dir, "**", "*.debug"), recursive=True
@@ -275,9 +282,12 @@ def analyze_obd_devices(prog: "drgn.Program") -> dict[str, Any]:
     for i in range(max_devs):
         try:
             ptr = arr[i].value_()
-            if ptr == 0:
+            if ptr == 0 or ptr < 0xffff000000000000:
                 continue
             obd = drgn.Object(prog, "struct obd_device", address=ptr)
+            # Validate obd_magic (0xAB5CD6EF)
+            if obd.obd_magic.value_() != 0xAB5CD6EF:
+                continue
             name = obd.obd_name.string_().decode(errors="replace")
             uuid = obd.obd_uuid.uuid.string_().decode(errors="replace")
             dev_type = ""

@@ -19,7 +19,6 @@ try:
     from . import lustre_helpers as lh
 except ImportError:
     import lustre_helpers as lh
-    import lustre_helpers as lh
 
 
 # ── RPC phases ───────────────────────────────────────────────
