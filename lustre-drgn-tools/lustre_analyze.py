@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """Lustre vmcore analysis using drgn.
 
 Provides deep, structured analysis of Lustre crash dumps that
@@ -229,6 +230,27 @@ def analyze_locals(prog: "drgn.Program") -> dict[str, Any]:
     }
 
 
+def _obd_is_set_up(obd) -> bool:
+    """Check if OBD device is set up, handling both old and new layouts."""
+    try:
+        return bool(obd.obd_set_up)
+    except AttributeError:
+        pass
+    # New layout: OBDF_SET_UP bit in obd_flags bitmap
+    try:
+        import drgn
+        prog = obd.prog_
+        obdf_val = prog.constant("OBDF_SET_UP")
+        flags_addr = obd.obd_flags.address_of_()
+        word = drgn.Object(
+            prog, "unsigned long",
+            address=flags_addr.value_() + (obdf_val // 64) * 8,
+        )
+        return bool(word & (1 << (obdf_val % 64)))
+    except (LookupError, AttributeError, Exception):
+        return False
+
+
 def analyze_obd_devices(prog: "drgn.Program") -> dict[str, Any]:
     """List active OBD devices."""
     import drgn
@@ -272,7 +294,7 @@ def analyze_obd_devices(prog: "drgn.Program") -> dict[str, Any]:
                 "name": name,
                 "uuid": uuid,
                 "type": dev_type,
-                "active": bool(obd.obd_set_up),
+                "active": _obd_is_set_up(obd),
             })
         except (drgn.FaultError, drgn.ObjectAbsentError):
             continue

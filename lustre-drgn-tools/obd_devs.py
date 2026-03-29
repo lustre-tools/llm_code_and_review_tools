@@ -65,8 +65,8 @@ def get_import_info(obd):
         if not imp.imp_invalid.value_():
             conn_ptr = imp.imp_connection.value_()
             if conn_ptr != 0:
-                nid_val = imp.imp_connection[0].c_peer.nid.value_()
-                result["nid"] = lh.nid2str(nid_val)
+                nid_obj = imp.imp_connection[0].c_peer.nid
+                result["nid"] = lh.nid2str(nid_obj)
     except (drgn.FaultError, AttributeError):
         pass
 
@@ -121,8 +121,12 @@ def get_devices_json(prog, obd_addr=None):
         obd_list = lh.get_obd_devices(prog)
 
     for idx, obd in obd_list:
-        name = lh.obd_name(obd)
-        uuid = lh.obd_uuid(obd)
+        try:
+            name = lh.obd_name(obd)
+            uuid = lh.obd_uuid(obd)
+        except (drgn.FaultError, drgn.ObjectAbsentError):
+            continue
+
         info = get_import_info(obd)
 
         dev_type = ""

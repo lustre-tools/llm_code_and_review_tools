@@ -47,8 +47,44 @@ def lnet_netnum(net: int) -> int:
     return net & 0xFFFF
 
 
-def nid2str(nid: int) -> str:
-    """Convert a numeric NID to a string like '10.0.0.1@o2ib0'."""
+def nid2str(nid) -> str:
+    """Convert a NID to a string like '10.0.0.1@tcp0'.
+
+    Accepts either:
+    - int: legacy lnet_nid_t (64-bit packed value)
+    - drgn Object: struct lnet_nid (new large-NID format)
+    """
+    lnd_names = {
+        SOCKLND: "tcp",
+        O2IBLND: "o2ib",
+        PTLLND: "ptl",
+        GNILND: "gni",
+        KFILND: "kfi",
+    }
+
+    # Handle drgn Object (struct lnet_nid)
+    if not isinstance(nid, int):
+        try:
+            nid_type = int(nid.nid_type)
+            # nid_num is __be16, read raw bytes
+            nid_num = int(nid.nid_num)
+            # nid_addr[0] is __be32 with the IPv4 address
+            addr_be = int(nid.nid_addr[0])
+            ip = "{}.{}.{}.{}".format(
+                (addr_be >> 24) & 0xFF,
+                (addr_be >> 16) & 0xFF,
+                (addr_be >> 8) & 0xFF,
+                addr_be & 0xFF,
+            )
+            name = lnd_names.get(nid_type, f"unknown{nid_type}")
+            s = f"{ip}@{name}"
+            if nid_num != 0:
+                s += str(nid_num)
+            return s
+        except Exception:
+            return "?"
+
+    # Legacy int path
     if nid == LNET_NID_ANY:
         return "LNET_NID_ANY"
 
@@ -63,14 +99,6 @@ def nid2str(nid: int) -> str:
         (addr >> 8) & 0xFF,
         addr & 0xFF,
     )
-
-    lnd_names = {
-        SOCKLND: "tcp",
-        O2IBLND: "o2ib",
-        PTLLND: "ptl",
-        GNILND: "gni",
-        KFILND: "kfi",
-    }
 
     if lnd in lnd_names:
         s = f"{ip}@{lnd_names[lnd]}" if lnd in (SOCKLND, O2IBLND) else f"{addr}@{lnd_names[lnd]}"
@@ -100,8 +128,10 @@ def get_obd_devices(prog: drgn.Program) -> list:
             if ptr == 0:
                 continue
             obd = drgn.Object(prog, "struct obd_device", address=ptr)
+            # Validate by reading obd_name -- skip if memory is absent
+            obd.obd_name.string_()
             devices.append((i, obd))
-        except drgn.FaultError:
+        except (drgn.FaultError, drgn.ObjectAbsentError):
             continue
 
     return devices
