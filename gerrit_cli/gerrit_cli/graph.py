@@ -889,8 +889,22 @@ function computeLayout(anchorId) {
 
         if (kids.length === 0) return level;
 
-        // Separate main chain child from side branches
-        const mainKid = kids.find(k => mainChain.has(k));
+        // Separate main chain child from side branches.
+        // If no child is on the global main chain, elect the best local
+        // candidate (prefer non-stale edge, then most descendants) so the
+        // dominant branch continues straight up instead of going sideways.
+        let mainKid = kids.find(k => mainChain.has(k));
+        if (!mainKid && kids.length > 1) {
+            const sorted = kids.slice().sort((a, b) => {
+                const ea = edgeMap[id + '->' + a];
+                const eb = edgeMap[id + '->' + b];
+                const sa = ea && ea.is_stale ? 1 : 0;
+                const sb = eb && eb.is_stale ? 1 : 0;
+                if (sa !== sb) return sa - sb;
+                return countDesc(b) - countDesc(a);
+            });
+            mainKid = sorted[0];
+        }
         const sideKids = kids.filter(k => k !== mainKid).sort((a, b) => a - b);
 
         if (kids.length === 1) {
