@@ -407,10 +407,11 @@ def build_graph(
                 comment_count_by_cn[cn] = change.get(
                     "unresolved_comment_count", 0
                 )
-                # Topic and hashtags (free from batch query)
+                # Topic, hashtags, and updated timestamp (free from batch query)
                 if cn in nodes:
                     nodes[cn]["topic"] = change.get("topic", "")
                     nodes[cn]["hashtags"] = change.get("hashtags", [])
+                    nodes[cn]["updated"] = change.get("updated", "")
         except Exception as e:
             if progress:
                 print(f" (batch {batch_idx} error: {e})", end="",
@@ -1550,6 +1551,10 @@ function showNodeInfo(id) {
             <div class="fl">Author</div>
             <div class="fv">${esc(node.author)}</div>
         </div>
+        ${node.updated ? `<div class="field">
+            <div class="fl">Updated</div>
+            <div class="fv">${formatGerritDate(node.updated)}</div>
+        </div>` : ''}
         <div class="field">
             <div class="fl">Ticket</div>
             <div class="fv">${node.ticket || '\u2014'}</div>
@@ -1618,6 +1623,16 @@ function esc(s) {
     const d = document.createElement('div');
     d.textContent = s;
     return d.innerHTML;
+}
+
+function formatGerritDate(s) {
+    // Gerrit format: "2025-06-15 14:30:00.000000000"
+    if (!s) return '';
+    const iso = s.replace(' ', 'T').replace(/\..*$/, '') + 'Z';
+    const d = new Date(iso);
+    if (isNaN(d)) return esc(s);
+    return d.toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' })
+        + ' ' + d.toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit' });
 }
 
 // ─── INTERACTION ───
