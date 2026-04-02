@@ -79,19 +79,27 @@ def main(ctx: click.Context, pretty: bool, envelope: bool) -> None:
     Two backends, one CLI:
 
     \b
-    crash binary (Red Hat crash utility):
-      Generic kernel analysis -- backtraces, memory stats,
-      process lists, block I/O state. Used by 'run', 'script',
-      and the overview/backtrace/memory/io recipes.
+    drgn (via lustre-drgn-tools) -- PREFERRED:
+      Programmatic access to all kernel data structures with
+      full type information. Used for Lustre analysis (OBD
+      devices, LDLM locks, dk log, RPC queues, OSC stats)
+      and capable of any generic kernel analysis too. drgn
+      has built-in helpers for tasks, stacks, memory, slab
+      caches, block devices, dmesg, and more.
+      Used by: 'recipes lustre'
 
     \b
-    drgn (via lustre-drgn-tools):
-      Typed traversal of Lustre kernel data structures -- OBD
-      devices, LDLM locks, dk log, RPC queues, OSC stats,
-      D-state analysis. Used by the 'lustre' recipe.
+    crash binary (Red Hat crash utility) -- LEGACY:
+      Interactive crash dump tool with built-in commands.
+      The overview/backtrace/memory/io recipes still use it,
+      but everything they do can also be done with drgn.
+      Useful for ad-hoc one-off queries if you already know
+      crash commands.
+      Used by: 'run', 'script', other recipes
 
-    Use 'recipes lustre' for Lustre-specific analysis.
-    Use 'run' or other recipes for generic kernel analysis.
+    Start with 'recipes lustre' for Lustre problems.
+    The crash-binary recipes remain available but are not
+    required -- drgn is strictly more capable.
     """
     ctx.ensure_object(dict)
     ctx.obj["pretty"] = pretty

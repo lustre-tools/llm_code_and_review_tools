@@ -1,62 +1,43 @@
 # crash-tool
 
 Non-interactive crash dump analysis CLI for LLM agents.
-Structured JSON output from two complementary backends:
+Structured JSON output.
 
 ## Two Backends
 
-**crash binary** (Red Hat crash utility) -- generic kernel
-analysis. Backtraces, memory stats, process lists, block I/O
-state. Good for "what happened to the kernel?" questions.
+**drgn** (via lustre-drgn-tools) -- **preferred**. Programmatic
+access to all kernel data structures with full type info. Has
+built-in helpers for tasks, stacks, memory, slab caches, block
+devices, dmesg, and more -- plus Lustre-specific analysis (OBD
+devices, LDLM locks, dk log, RPC queues, OSC stats, D-state
+analysis, diagnosis hints).
+
+- `crash-tool recipes lustre --vmcore ... --vmlinux ... --mod-dir ...`
+
+**crash binary** (Red Hat crash utility) -- **legacy**. The
+overview/backtrace/memory/io recipes still use it, and `run`
+lets you send arbitrary crash commands. Everything the crash
+recipes do can also be done with drgn -- these recipes exist
+for convenience if you already know crash commands.
 
 - `crash-tool run "bt -a" "log" --vmcore /path/to/vmcore`
 - `crash-tool recipes overview --vmcore ... --vmlinux ...`
 
-**drgn** (via lustre-drgn-tools) -- typed traversal of Lustre
-kernel data structures. OBD devices, LDLM locks, dk log, RPC
-queues, OSC grant stats, D-state analysis, diagnosis hints.
-Good for "what happened to Lustre?" questions.
+## Usage
 
-- `crash-tool recipes lustre --vmcore ... --vmlinux ... --mod-dir ...`
-
-## When to Use Which
-
-| Question | Backend | Command |
-|----------|---------|---------|
-| System overview, panic message | crash | `recipes overview` |
-| All CPU backtraces | crash | `recipes backtrace` |
-| Memory/slab stats | crash | `recipes memory` |
-| Hung tasks, block I/O | crash | `recipes io` |
-| Lustre full triage | drgn | `recipes lustre` |
-| Ad-hoc crash commands | crash | `run "cmd1" "cmd2"` |
-
-For Lustre problems, start with `recipes lustre` -- it runs
-a comprehensive triage that covers OBD devices, locks, RPCs,
-dk log, kernel log, stack traces, and diagnosis hints in one
-shot. Fall back to crash recipes or `run` for generic kernel
-analysis that drgn scripts don't cover.
-
-## Recipes
+Start with `recipes lustre` for Lustre problems -- it runs a
+comprehensive triage in one shot. The crash-binary recipes
+remain available but are not required.
 
 ```bash
 crash-tool recipes                    # list available
-crash-tool recipes overview           # generic kernel overview
 crash-tool recipes lustre \           # Lustre triage (drgn)
     --vmcore /path/to/vmcore \
     --vmlinux /path/to/vmlinux \
     --mod-dir /path/to/lustre/build
-```
-
-## Ad-hoc Commands
-
-```bash
-crash-tool run "bt -a" "log" \
-    --vmcore /path/to/vmcore \
-    --vmlinux /path/to/vmlinux
-
-crash-tool run --mod-dir /path/to/kos "sym obd_devs"
-
-crash-tool script commands.txt --vmcore ...
+crash-tool recipes overview           # generic kernel (crash)
+crash-tool run "bt -a" "log"          # ad-hoc crash commands
+crash-tool script commands.txt        # commands from file
 ```
 
 ## Install
@@ -65,5 +46,6 @@ crash-tool script commands.txt --vmcore ...
 pip install -e .
 ```
 
-Requires the `crash` binary for non-drgn commands, and
-`lustre-drgn-tools` (with drgn) for the lustre recipe.
+Requires `lustre-drgn-tools` with drgn for the lustre recipe.
+The crash binary is only needed for the legacy recipes and
+`run`/`script` commands.
