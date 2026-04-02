@@ -91,3 +91,7 @@ Without them, you'll get kernel-only analysis.
 ```
 
 Supports Rocky/RHEL 8+, Ubuntu/Debian, and macOS. Works on x86_64 and aarch64.
+
+## License
+
+BSD 2-Clause. See [LICENSE](LICENSE).
