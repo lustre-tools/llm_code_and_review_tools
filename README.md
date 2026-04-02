@@ -13,10 +13,20 @@ CI, issue tracking, and crash analysis systems.
 | **Jenkins** | `jenkins` | Jenkins build server -- build status, console logs, retriggers |
 | **Janitor** | `janitor` | Gerrit Janitor test results (separate from Maloo/enforced CI) |
 | **Crash Tool** | `crash-tool` | Non-interactive crash dump analysis with structured JSON output |
-| **Patch Shepherd** | `gerrit watch` | Monitor patch series through CI and review |
-| **lustre-drgn-tools** | `lustre_triage.py` etc. | drgn-based Lustre vmcore analysis (submodule) |
 
 Shared utilities live in `llm_tool_common/`.
+
+### Bundled submodules
+
+- **lustre-drgn-tools** -- drgn-based Lustre vmcore analysis
+  (`lustre_triage.py`, `obd_devs.py`, `ldlm_dumplocks.py`, etc.).
+  Separate repo bundled as a git submodule. Requires drgn;
+  run `lustre-drgn-tools/install-drgn.sh` to set up.
+
+### Beta / experimental
+
+- **patch_shepherd** -- automated patch series monitoring
+  (`gerrit watch`). Not yet suitable for general use.
 
 ## Install
 
@@ -121,7 +131,6 @@ Verify: `jenkins build <any-build-url>`
 |------|-------|
 | Janitor | Uses Gerrit credentials (no extra config) |
 | Crash Tool | No auth required |
-| lustre-drgn-tools | Requires drgn; run `lustre-drgn-tools/install-drgn.sh` |
 
 ## Output Format
 
@@ -146,7 +155,7 @@ llm_code_and_review_tools/
 ├── jenkins_tool/        # Jenkins build server CLI
 ├── janitor_tool/        # Gerrit Janitor results CLI
 ├── crash_tool/          # Crash dump analysis CLI
-├── patch_shepherd/      # Patch series monitoring
+├── patch_shepherd/      # Patch series monitoring (beta)
 ├── lustre-drgn-tools/   # drgn vmcore analysis (submodule)
 ├── llm_tool_common/     # Shared utilities
 ├── install.sh           # Unified installer
