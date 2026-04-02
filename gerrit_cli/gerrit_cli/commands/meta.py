@@ -565,7 +565,7 @@ def cmd_search(args):
                 "status": change.get("status", ""),
                 "owner": owner.get("name", owner.get("email", "")),
                 "updated": change.get("updated", ""),
-                "url": f"{client.rest.url}/#/c/{change.get('_number')}/",
+                "url": client.format_change_url(change.get("project", ""), change.get("_number")),
             }
             if change.get("topic"):
                 entry["topic"] = change["topic"]
