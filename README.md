@@ -34,10 +34,12 @@ Environment variables per tool:
 
 | Tool | Variables |
 |------|-----------|
-| jira | `JIRA_SERVER`, `JIRA_TOKEN` |
+| jira | `JIRA_SERVER`, `JIRA_TOKEN` (on-prem); `JIRA_CLOUD_SERVER`, `JIRA_CLOUD_EMAIL`, `JIRA_CLOUD_TOKEN`, `JIRA_CLOUD_PROJECTS` (cloud) |
 | gerrit | `GERRIT_URL`, `GERRIT_USER`, `GERRIT_PASS` |
 | jenkins | `JENKINS_URL`, `JENKINS_USER`, `JENKINS_TOKEN` |
 | maloo | `MALOO_USER`, `MALOO_PASS` |
+
+Cloud routing: projects listed in `JIRA_CLOUD_PROJECTS` (comma-separated) are automatically routed to the Atlassian Cloud instance. All other projects use the on-prem server. See `jira_tool/` README for multi-instance config via `~/.jira-tool.json`.
 
 ## Output Format
 
