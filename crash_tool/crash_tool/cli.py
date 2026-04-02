@@ -76,8 +76,22 @@ class CrashGroup(click.Group):
 def main(ctx: click.Context, pretty: bool, envelope: bool) -> None:
     """Non-interactive crash dump analysis for LLM agents.
 
-    Wraps the crash utility with structured JSON output and
-    per-command result separation.
+    Two backends, one CLI:
+
+    \b
+    crash binary (Red Hat crash utility):
+      Generic kernel analysis -- backtraces, memory stats,
+      process lists, block I/O state. Used by 'run', 'script',
+      and the overview/backtrace/memory/io recipes.
+
+    \b
+    drgn (via lustre-drgn-tools):
+      Typed traversal of Lustre kernel data structures -- OBD
+      devices, LDLM locks, dk log, RPC queues, OSC stats,
+      D-state analysis. Used by the 'lustre' recipe.
+
+    Use 'recipes lustre' for Lustre-specific analysis.
+    Use 'run' or other recipes for generic kernel analysis.
     """
     ctx.ensure_object(dict)
     ctx.obj["pretty"] = pretty
