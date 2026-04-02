@@ -102,16 +102,23 @@ install_tools() {
     $PYTHON -m pip install -q -e "$SCRIPT_DIR/janitor_tool"
     echo -e "${GREEN}✓${NC} janitor installed"
 
-    # Install lustre-drgn-tools (if submodule present and drgn available)
+    # Install drgn + lustre-drgn-tools
     if [[ -d "$SCRIPT_DIR/lustre-drgn-tools" ]]; then
         echo ""
-        echo "Installing lustre-drgn-tools..."
+        echo "Installing drgn and lustre-drgn-tools..."
         if $PYTHON -c "import drgn" 2>/dev/null; then
-            echo -e "${GREEN}✓${NC} lustre-drgn-tools ready (drgn available)"
+            echo -e "${GREEN}✓${NC} drgn already installed"
         else
-            echo -e "${YELLOW}!${NC} lustre-drgn-tools: drgn not installed"
-            echo "    Run: lustre-drgn-tools/install-drgn.sh"
+            echo "  Installing drgn..."
+            if [[ -x "$SCRIPT_DIR/lustre-drgn-tools/install-drgn.sh" ]]; then
+                "$SCRIPT_DIR/lustre-drgn-tools/install-drgn.sh"
+                echo -e "${GREEN}✓${NC} drgn installed"
+            else
+                $PYTHON -m pip install -q drgn
+                echo -e "${GREEN}✓${NC} drgn installed via pip"
+            fi
         fi
+        echo -e "${GREEN}✓${NC} lustre-drgn-tools ready"
     fi
 
     # Install beads (bd)

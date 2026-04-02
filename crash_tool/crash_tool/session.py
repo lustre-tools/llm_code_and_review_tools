@@ -248,28 +248,35 @@ def _find_drgn_tools_dir() -> str | None:
     return None
 
 
-def run_drgn_triage(
+def _run_drgn_script(
+    script: str,
     vmcore: str,
     vmlinux: str,
     mod_dir: str | None = None,
+    extra_args: list[str] | None = None,
     timeout: int = 120,
 ) -> dict:
-    """Run lustre_triage.py and return parsed JSON result.
+    """Run a drgn script and return parsed JSON result.
 
-    Returns a dict with the triage output, or an error dict.
+    Returns a dict with the script output, or an error dict.
     """
     tools_dir = _find_drgn_tools_dir()
     if not tools_dir:
         return {"error": "lustre-drgn-tools not found"}
 
-    script = os.path.join(tools_dir, "lustre_triage.py")
+    script_path = os.path.join(tools_dir, script)
+    if not os.path.exists(script_path):
+        return {"error": f"{script} not found in {tools_dir}"}
+
     argv = [
-        sys.executable, script,
+        sys.executable, script_path,
         "--vmcore", vmcore,
         "--vmlinux", vmlinux,
     ]
     if mod_dir:
         argv.extend(["--mod-dir", mod_dir])
+    if extra_args:
+        argv.extend(extra_args)
 
     try:
         proc = subprocess.run(
@@ -279,7 +286,7 @@ def run_drgn_triage(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        return {"error": f"drgn triage timed out after {timeout}s"}
+        return {"error": f"drgn script timed out after {timeout}s"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -291,9 +298,36 @@ def run_drgn_triage(
                 return json.loads(proc.stdout)
             except json.JSONDecodeError:
                 pass
-        return {"error": f"drgn triage failed (rc={proc.returncode})", "stderr": stderr}
+        return {"error": f"drgn script failed (rc={proc.returncode})", "stderr": stderr}
 
     try:
         return json.loads(proc.stdout)
     except json.JSONDecodeError:
-        return {"error": "drgn triage returned invalid JSON", "raw": proc.stdout[:500]}
+        return {"error": "drgn script returned invalid JSON", "raw": proc.stdout[:500]}
+
+
+def run_drgn_triage(
+    vmcore: str,
+    vmlinux: str,
+    mod_dir: str | None = None,
+    timeout: int = 120,
+) -> dict:
+    """Run lustre_triage.py and return parsed JSON result."""
+    return _run_drgn_script(
+        "lustre_triage.py", vmcore, vmlinux,
+        mod_dir=mod_dir, timeout=timeout,
+    )
+
+
+def run_drgn_kernel_triage(
+    vmcore: str,
+    vmlinux: str,
+    analyses: list[str] | None = None,
+    timeout: int = 120,
+) -> dict:
+    """Run kernel_triage.py and return parsed JSON result."""
+    extra = analyses if analyses else ["all"]
+    return _run_drgn_script(
+        "kernel_triage.py", vmcore, vmlinux,
+        extra_args=extra, timeout=timeout,
+    )
