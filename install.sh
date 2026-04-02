@@ -114,12 +114,6 @@ install_tools() {
         fi
     fi
 
-    # Install claude_images
-    echo ""
-    echo "Installing claude-images..."
-    $PYTHON -m pip install -q -e "$SCRIPT_DIR/claude_images"
-    echo -e "${GREEN}✓${NC} claude-images installed"
-
     # Install beads (bd)
     echo ""
     echo "Installing beads (bd)..."
@@ -147,7 +141,6 @@ install_tools() {
     echo "  jenkins         - Jenkins build server"
     echo "  crash-tool      - Non-interactive crash dump analysis"
     echo "  janitor         - Gerrit Janitor test results"
-    echo "  claude-images   - Extract images from Claude Code conversations"
     echo "  bd              - Beads task tracking"
     echo ""
     echo "Verify installation:"
@@ -157,7 +150,6 @@ install_tools() {
     echo "  jenkins --help"
     echo "  crash-tool --help"
     echo "  janitor --help"
-    echo "  claude-images --help"
     echo "  bd --help"
     echo ""
     echo "Configuration:"
@@ -196,9 +188,6 @@ uninstall_tools() {
 
     echo "Uninstalling janitor-tool..."
     $PYTHON -m pip uninstall -y janitor-tool 2>/dev/null || true
-
-    echo "Uninstalling claude-images..."
-    $PYTHON -m pip uninstall -y claude-images 2>/dev/null || true
 
     echo "Uninstalling llm-tool-common..."
     $PYTHON -m pip uninstall -y llm-tool-common 2>/dev/null || true

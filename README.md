@@ -1,119 +1,90 @@
 # LLM Code and Review Tools
 
-CLI tools designed for LLM agents to interact with code review and issue tracking systems.
+CLI tools designed for LLM agents to interact with code review,
+CI, issue tracking, and crash analysis systems.
 
 ## Tools
 
-| Tool | Purpose | Directory |
-|------|---------|-----------|
-| **jira** | JIRA issue tracking | [jira_tool/](jira_tool/) |
-| **gerrit-cli** / **gc** | Gerrit code review | [gerrit_cli/](gerrit_cli/) |
-| **jenkins** | Jenkins build server | [jenkins_tool/](jenkins_tool/) |
-| **maloo** | Lustre CI test results | [maloo_tool/](maloo_tool/) |
+| Tool | Command | Purpose |
+|------|---------|---------|
+| **Gerrit CLI** | `gerrit` / `gc` | Gerrit code review -- comments, replies, reviewer management, patch series, Maloo triage |
+| **JIRA** | `jira` | JIRA issue tracking -- get, search, comment, create, transition |
+| **Maloo** | `maloo` | Lustre CI test results -- failures, retests, bug linking |
+| **Jenkins** | `jenkins` | Jenkins build server -- build status, console logs, retriggers |
+| **Janitor** | `janitor` | Gerrit Janitor test results (separate from Maloo/enforced CI) |
+| **Crash Tool** | `crash-tool` | Non-interactive crash dump analysis with structured JSON output |
+| **Patch Shepherd** | `gerrit watch` | Monitor patch series through CI and review |
+| **lustre-drgn-tools** | `lustre_triage.py` etc. | drgn-based Lustre vmcore analysis (submodule) |
 
-For agent usage instructions, see [docs/TOOL_USAGE.md](docs/TOOL_USAGE.md).
+Shared utilities live in `llm_tool_common/`.
 
-## Design Philosophy
-
-- **Structured JSON output** with consistent envelope (`ok`, `data`/`error`, `meta`) — use `--pretty` for formatted output
-- **Deterministic behavior** - same input produces same output shape
-- **Context-aware pagination** - built-in limits to avoid overwhelming LLM context windows
-- **Explicit inputs** - no implicit defaults, fail fast with clear error codes
-
-## Quick Start
+## Install
 
 ```bash
-# Install all tools
-cd /shared/llm_code_and_review_tools
-./install.sh
+./install.sh            # install all tools
+./install.sh --uninstall
 ```
 
-Per-tool install: `cd <tool_dir> && pip install -e .`
+Per-tool: `cd <tool_dir> && pip install -e .`
 
-Environment variables per tool:
+Requires Python 3.9+.
 
-| Tool | Variables |
-|------|-----------|
-| jira | `JIRA_SERVER`, `JIRA_TOKEN` (on-prem); `JIRA_CLOUD_SERVER`, `JIRA_CLOUD_EMAIL`, `JIRA_CLOUD_TOKEN`, `JIRA_CLOUD_PROJECTS` (cloud) |
-| gerrit | `GERRIT_URL`, `GERRIT_USER`, `GERRIT_PASS` |
-| jenkins | `JENKINS_URL`, `JENKINS_USER`, `JENKINS_TOKEN` |
-| maloo | `MALOO_USER`, `MALOO_PASS` |
+## Configuration
 
-Cloud routing: projects listed in `JIRA_CLOUD_PROJECTS` (comma-separated) are automatically routed to the Atlassian Cloud instance. All other projects use the on-prem server. See `jira_tool/` README for multi-instance config via `~/.jira-tool.json`.
+Tools are configured via environment variables or config files:
+
+| Tool | Environment Variables | Config File |
+|------|----------------------|-------------|
+| JIRA | `JIRA_SERVER`, `JIRA_TOKEN` (on-prem); `JIRA_CLOUD_SERVER`, `JIRA_CLOUD_EMAIL`, `JIRA_CLOUD_TOKEN`, `JIRA_CLOUD_PROJECTS` (cloud) | `~/.jira-tool.json` |
+| Gerrit | `GERRIT_URL`, `GERRIT_USER`, `GERRIT_PASS` | `~/.config/gerrit-cli/` |
+| Maloo | `MALOO_USER`, `MALOO_PASS` | -- |
+| Jenkins | `JENKINS_URL`, `JENKINS_USER`, `JENKINS_TOKEN` | -- |
+| Janitor | -- | Uses Gerrit credentials |
+| Crash Tool | -- | No auth required |
+
+JIRA supports multiple instances. Projects listed in
+`JIRA_CLOUD_PROJECTS` (comma-separated) route to Atlassian Cloud;
+all others use the on-prem server. See `jira_tool/` for details.
 
 ## Output Format
 
-All tools use a standard JSON response envelope:
+All tools output raw JSON by default (no envelope). Use `--envelope`
+for the full `{ok, data, meta}` wrapper. Use `--pretty` for
+human-readable formatted output.
 
 ```json
-{"ok": true, "data": {...}, "meta": {"tool": "jira", "command": "issue.get", "timestamp": "2024-01-15T10:30:00Z"}}
+{"ok": true, "data": {...}, "meta": {"tool": "jira", "command": "issue.get"}}
 ```
 
-Exit codes: 0=success, 1=general, 2=auth, 3=not found, 4=invalid input, 5=network.
-
----
+Exit codes: 0=success, 1=general error, 2=auth, 3=not found,
+4=invalid input, 5=network.
 
 ## Project Structure
 
 ```
 llm_code_and_review_tools/
-├── jira_tool/           # JIRA CLI tool
-├── gerrit_cli/          # Gerrit review tool
-├── jenkins_tool/        # Jenkins build tool
-├── maloo_tool/          # Maloo CI results tool
+├── gerrit_cli/          # Gerrit code review CLI
+├── jira_tool/           # JIRA issue tracking CLI
+├── maloo_tool/          # Maloo CI results CLI
+├── jenkins_tool/        # Jenkins build server CLI
+├── janitor_tool/        # Gerrit Janitor results CLI
+├── crash_tool/          # Crash dump analysis CLI
+├── patch_shepherd/      # Patch series monitoring
+├── lustre-drgn-tools/   # drgn vmcore analysis (submodule)
 ├── llm_tool_common/     # Shared utilities
-├── docs/                # Agent usage documentation
-└── .beads/              # Issue tracking database
+├── install.sh           # Unified installer
+└── pyproject.toml       # Test configuration
 ```
-
-## Issue Tracking with Beads
-
-This project uses **beads** (`bd`) for issue tracking. Issues are prefixed with `jira-`.
-
-**IMPORTANT**: This repo uses a separate `beads-sync` branch (configured in `.beads/config.yaml`) to keep beads metadata commits out of the main git history. Do NOT comment out the `sync-branch` setting.
-
-| Command | Action |
-|---------|--------|
-| `bd ready` | Find unblocked work |
-| `bd show <id>` | View issue details |
-| `bd update <id> --status in_progress` | Claim work |
-| `bd close <id>` | Complete work |
-| `bd sync` | Export to JSONL, commit to beads-sync branch |
-
-**Claiming a bead (full sequence):**
-```bash
-bd ready                              # Find available work
-bd update <id> --status in_progress   # Claim locally
-bd sync                               # Commit to beads-sync branch
-git push origin beads-sync            # Push immediately!
-```
-
-Only after `git push` succeeds is the bead truly claimed. Without pushing, another worker may claim the same bead.
-
-**Do NOT use** `bd edit` — it opens an editor which blocks agents.
-Run `bd prime` after context compaction or new session.
 
 ## Development
 
 ```bash
-pip install -e .                      # Install in development mode
-pytest                                # Run all tests
-pytest --cov=jira_tool --cov=gerrit_cli  # With coverage
+pip install -e .          # Install in dev mode
+pytest                    # Run all tests
 ```
 
-Code style: dataclasses, type hints, functions under ~60 lines, tests for all new functionality.
-
-## Session Close Protocol
-
-Before ending a work session:
-
-1. `git status` — check what changed
-2. `git add <files>` && `git commit -m "..."`
-3. `bd sync` — sync beads database
-4. `git push origin HEAD` — push code changes (MANDATORY)
-5. `git push origin beads-sync` — push beads metadata (MANDATORY)
-
-Work is NOT complete until both pushes succeed.
+Code style: dataclasses, type hints, functions under ~60 lines,
+tests for new functionality. See CLAUDE.md for agent instructions.
 
 ## License
 
