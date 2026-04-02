@@ -117,4 +117,4 @@ Work is NOT complete until both pushes succeed.
 
 ## License
 
-MIT
+BSD 2-Clause. See [LICENSE](LICENSE).
