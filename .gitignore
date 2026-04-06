@@ -32,4 +32,5 @@ venv/
 
 # Runtime state
 .gerrit-cli/
+.claude/
 
