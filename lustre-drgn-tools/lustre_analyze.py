@@ -237,8 +237,12 @@ def analyze_locals(prog: "drgn.Program") -> dict[str, Any]:
     }
 
 
-def _obd_is_set_up(obd) -> bool:
-    """Check if OBD device is set up, handling both old and new layouts."""
+def _obd_is_set_up(obd: "drgn.Object") -> bool:
+    """Check if OBD device is set up, handling both old and new layouts.
+
+    Handles both the old bitfield layout (obd.obd_set_up) and the
+    newer DECLARE_BITMAP layout (test_bit(OBDF_SET_UP, obd.obd_flags)).
+    """
     try:
         return bool(obd.obd_set_up)
     except AttributeError:
