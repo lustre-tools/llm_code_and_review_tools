@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Weekly report: open customer tickets → linked LU tickets → Gerrit patches → release tags.
+"""Daily report: open customer tickets → linked LU tickets → Gerrit patches → release tags.
 
 Walks the chain end-to-end and emits a Markdown report. Caches LU patch lookups
 and per-commit tag lookups in /tmp to make re-runs cheap.
 
 Usage:
-    python3 weekly_patch_report.py [filter_id] [--limit N] [--out FILE] [--no-cache]
+    python3 daily_patch_report.py [filter_id] [--limit N] [--out FILE] [--no-cache]
 
 Default filter is 44763 ("DDN open cases").
 """
@@ -23,7 +23,7 @@ from pathlib import Path
 
 WORKERS = 8
 
-CACHE_FILE = Path("/tmp/weekly_patch_report_cache.json")
+CACHE_FILE = Path("/tmp/daily_patch_report_cache.json")
 GERRIT_ENV = Path.home() / ".config" / "gerrit-cli" / ".env"
 LU_RE = re.compile(r"\bLU-\d+\b")
 
@@ -453,7 +453,7 @@ def render_slack(report, filter_name, top_n=15, excluded=0):
         buckets[entry["bucket"]].append(entry)
 
     lines = [
-        f":rotating_light: *Weekly Patch Status — {filter_name}*",
+        f":rotating_light: *Daily Patch Status — {filter_name}*",
         f"_{today}_",
         "",
         "*Summary:*",
@@ -552,7 +552,7 @@ def send_slack(text, token, channel):
 def render_markdown(report, filter_name, excluded=0):
     today = datetime.now().strftime("%Y-%m-%d")
     out = [
-        f"# Weekly Patch Report — {filter_name}",
+        f"# Daily Patch Report — {filter_name}",
         f"_Generated {today}_",
         "",
         f"**Tickets with linked LU tickets:** {len(report)} _(excluded {excluded} with no LU refs)_",
