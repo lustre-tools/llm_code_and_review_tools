@@ -26,6 +26,13 @@ WORKERS = 8
 CACHE_FILE = Path("/tmp/daily_patch_report_cache.json")
 GERRIT_ENV = Path.home() / ".config" / "gerrit-cli" / ".env"
 LU_RE = re.compile(r"\bLU-\d+\b")
+# Match GitHub PR URLs: https://github.com/whamcloud/<repo>/pull/<number>
+GH_PR_RE = re.compile(r"https?://github\.com/whamcloud/([^/]+)/pull/(\d+)")
+# Match short PR refs like "whamcloud/<repo>#<number>" or "<repo>#<number>"
+GH_PR_SHORT_RE = re.compile(r"\b(?:whamcloud/)?(\w[\w.-]+)#(\d+)\b")
+
+# GitHub token for whamcloud org (ipoddubnyy24)
+GH_TOKEN = os.environ.get("GH_WHAMCLOUD_TOKEN", "")
 
 # Local lustre-release clones — used for fast `git tag --contains` lookups
 # instead of the slow Gerrit `commits/{sha}/in` REST endpoint.
@@ -118,8 +125,27 @@ def jira_cloud(*args):
     return json.loads(result.stdout)
 
 
-def fetch_filter_issues(filter_id, limit=None):
-    args = ["search", f"filter = {filter_id}"]
+def fetch_filter_issues(filter_id, limit=None, since_date=None):
+    """Fetch issues from a JIRA filter, optionally overriding the date range.
+
+    since_date: if given, appends 'AND created >= "YYYY-MM-DD"' to the JQL.
+                This overrides whatever date constraint the saved filter has.
+    """
+    if since_date:
+        # Fetch the filter's JQL so we can augment it
+        filt = jira_cloud("filter", "get", filter_id) or {}
+        base_jql = filt.get("jql", f"filter = {filter_id}")
+        # Strip any existing 'created >= ...' clause so we can replace it
+        base_jql = re.sub(r"\s+AND\s+created\s*>=\s*[^\s]+", "", base_jql, flags=re.IGNORECASE)
+        # Insert the date clause before ORDER BY (if present)
+        order_match = re.search(r"\s+ORDER\s+BY\s+", base_jql, flags=re.IGNORECASE)
+        if order_match:
+            jql = f'{base_jql[:order_match.start()]} AND created >= "{since_date}"{base_jql[order_match.start():]}'
+        else:
+            jql = f'{base_jql} AND created >= "{since_date}"'
+        args = ["search", jql]
+    else:
+        args = ["search", f"filter = {filter_id}"]
     if limit:
         args += ["--limit", str(limit)]
     else:
@@ -144,19 +170,20 @@ def _adf_to_text(node):
     return ""
 
 
-def extract_lu_refs(issue_key):
-    """Find LU-XXXX references via a single REST call.
+def extract_refs(issue_key):
+    """Find LU-XXXX and GitHub PR references via a single REST call.
 
     Pulls description, comments, and issue links in one round trip.
+    Returns (lu_refs: list[str], gh_pr_refs: list[tuple(repo, number)]).
     """
     data = jira_rest(
         f"/rest/api/3/issue/{issue_key}"
         "?fields=description,issuelinks,comment&expand=renderedFields"
     )
     if not data:
-        return []
+        return [], []
 
-    refs = set()
+    lu_refs = set()
     fields = data.get("fields", {}) or {}
 
     # Issue links
@@ -165,23 +192,26 @@ def extract_lu_refs(issue_key):
             issue = link.get(side) or {}
             key = issue.get("key", "")
             if key.startswith("LU-"):
-                refs.add(key)
+                lu_refs.add(key)
 
     # Description (use rendered HTML for clean text)
     rendered = data.get("renderedFields", {}) or {}
     desc = rendered.get("description", "") or _adf_to_text(fields.get("description", ""))
-    refs.update(LU_RE.findall(desc))
+    lu_refs.update(LU_RE.findall(desc))
 
     # Comments (paginated by default — fetch additional pages if needed)
     comment_data = fields.get("comment", {}) or {}
     comments = comment_data.get("comments", []) or []
     total = comment_data.get("total", len(comments))
 
+    all_comments_text = ""
     for c in comments:
         body = c.get("body", "")
         if isinstance(body, (dict, list)):
             body = _adf_to_text(body)
-        refs.update(LU_RE.findall(body or ""))
+        body = body or ""
+        lu_refs.update(LU_RE.findall(body))
+        all_comments_text += " " + body
 
     # If there are more comments than returned in the first page, paginate
     if len(comments) < total:
@@ -197,10 +227,15 @@ def extract_lu_refs(issue_key):
                 body = c.get("body", "")
                 if isinstance(body, (dict, list)):
                     body = _adf_to_text(body)
-                refs.update(LU_RE.findall(body or ""))
+                body = body or ""
+                lu_refs.update(LU_RE.findall(body))
+                all_comments_text += " " + body
             start += len(page_comments)
 
-    return sorted(refs)
+    # Extract GitHub PR refs from description + comments
+    gh_pr_refs = extract_gh_prs(desc, all_comments_text) if GH_TOKEN else []
+
+    return sorted(lu_refs), gh_pr_refs
 
 
 # ---------- gerrit ----------
@@ -314,6 +349,95 @@ def get_commit_tags(commit, project, cache):
     tags = data.get("tags", [])
     cache["commit_tags"][commit] = tags
     return tags
+
+
+# ---------- github ----------
+
+# Known whamcloud repos (to filter false positive short refs like EX#12345)
+WHAMCLOUD_REPOS = {
+    "exascaler-management-framework",
+    "lustrefs-exporter",
+    "crashai",
+    "exascaler-lustre-release",
+    "lustre-event-exporter",
+    "exascaler-test",
+    "exa-tooling",
+    "nvmesh-kernel",
+}
+
+
+def gh_api(path):
+    """GET a GitHub API endpoint using the whamcloud token."""
+    if not GH_TOKEN:
+        return None
+    result = subprocess.run(
+        [
+            "curl", "-s",
+            "-H", f"Authorization: Bearer {GH_TOKEN}",
+            "-H", "Accept: application/vnd.github+json",
+            f"https://api.github.com{path}",
+        ],
+        capture_output=True, text=True,
+    )
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def get_gh_pr(repo, number, cache):
+    """Fetch a GitHub PR. Returns a dict with number, repo, title, state, url, base."""
+    cache_key = f"gh:{repo}#{number}"
+    if cache_key in cache.get("gh_prs", {}):
+        return cache["gh_prs"][cache_key]
+
+    if "gh_prs" not in cache:
+        cache["gh_prs"] = {}
+
+    data = gh_api(f"/repos/whamcloud/{repo}/pulls/{number}")
+    if not data or data.get("message"):
+        cache["gh_prs"][cache_key] = None
+        return None
+
+    pr = {
+        "repo": repo,
+        "number": int(number),
+        "title": data.get("title", ""),
+        "state": data.get("state", ""),
+        "merged": data.get("merged", False),
+        "draft": data.get("draft", False),
+        "base": data.get("base", {}).get("ref", ""),
+        "url": data.get("html_url", ""),
+    }
+    if pr["merged"]:
+        pr["state"] = "merged"
+    elif pr["draft"]:
+        pr["state"] = "draft"
+    cache["gh_prs"][cache_key] = pr
+    return pr
+
+
+def extract_gh_prs(desc, comments_text):
+    """Find GitHub PR references in text. Returns list of (repo, number) tuples."""
+    refs = set()
+
+    # Full URLs
+    for m in GH_PR_RE.finditer(desc):
+        refs.add((m.group(1), m.group(2)))
+    for m in GH_PR_RE.finditer(comments_text):
+        refs.add((m.group(1), m.group(2)))
+
+    # Short refs — only if repo is a known whamcloud repo
+    for m in GH_PR_SHORT_RE.finditer(desc):
+        repo = m.group(1)
+        if repo in WHAMCLOUD_REPOS:
+            refs.add((repo, m.group(2)))
+    for m in GH_PR_SHORT_RE.finditer(comments_text):
+        repo = m.group(1)
+        if repo in WHAMCLOUD_REPOS:
+            refs.add((repo, m.group(2)))
+
+    return sorted(refs)
 
 
 def first_release_tag(tags):
@@ -515,6 +639,15 @@ def render_slack(report, filter_name, top_n=15, excluded=0):
             lu_url = f"https://jira.whamcloud.com/browse/{lu_key}"
             lines.append(f"   • <{lu_url}|{lu_key}>: {' / '.join(parts)}")
 
+        # GitHub PRs
+        for pr in entry.get("gh_prs", []):
+            state_icon = {"merged": "✓", "closed": "✗", "open": "◯", "draft": "◑"}.get(pr["state"], "?")
+            base = f" → {pr['base']}" if pr.get("base") else ""
+            lines.append(
+                f"   • GH <{pr['url']}|{pr['repo']}#{pr['number']}> "
+                f"{state_icon}{pr['state']}{base}: {pr['title'][:60]}"
+            )
+
     if len(actionable) > top_n:
         lines.append("")
         lines.append(f"_+{len(actionable) - top_n} more not shown — see full report._")
@@ -582,8 +715,8 @@ def render_markdown(report, filter_name, excluded=0):
             out.append(f"_{summary}_  ")
             out.append(f"Assignee: {assignee}")
             out.append("")
-            if not entry["lu_patches"]:
-                out.append("No LU references found in links/description/comments")
+            if not entry["lu_patches"] and not entry.get("gh_prs"):
+                out.append("No LU references or GitHub PRs found")
             else:
                 for lu_key, patches in entry["lu_patches"].items():
                     out.append(f"- **[{lu_key}](https://jira.whamcloud.com/browse/{lu_key})**:")
@@ -592,6 +725,76 @@ def render_markdown(report, filter_name, excluded=0):
                     else:
                         for p in patches:
                             out.append(patch_summary_line(p, entry["_cache_ref"]))
+                for pr in entry.get("gh_prs", []):
+                    state_label = {"merged": "MERGED", "closed": "CLOSED", "open": "OPEN", "draft": "DRAFT"}.get(pr["state"], pr["state"])
+                    base = f" (base: {pr['base']})" if pr.get("base") else ""
+                    out.append(f"- **GitHub PR [{pr['repo']}#{pr['number']}]({pr['url']})** — {state_label}{base}")
+                    out.append(f"  - {pr['title']}")
+            out.append("")
+        out.append("")
+
+    return "\n".join(out)
+
+
+def render_text(report, filter_name, excluded=0):
+    """Plain-text report (no markdown formatting)."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    out = [
+        f"Daily Patch Report -- {filter_name}",
+        f"Generated {today}",
+        "",
+        f"Tickets with linked LU tickets: {len(report)} (excluded {excluded} with no refs)",
+        "",
+    ]
+
+    buckets = defaultdict(list)
+    for entry in report:
+        buckets[entry["bucket"]].append(entry)
+
+    for bucket in ["Partially landed", "In review", "Released", "No patches"]:
+        if bucket not in buckets:
+            continue
+        items = buckets[bucket]
+        out.append(f"=== {bucket} ({len(items)}) ===")
+        out.append("")
+        for entry in items:
+            key = entry["key"]
+            summary = entry["summary"][:100]
+            prio = entry["priority"]
+            status = entry["status"]
+            assignee = entry["assignee"] or "Unassigned"
+            out.append(f"{key} [{prio}] {status} -- {assignee}")
+            out.append(f"  {summary}")
+            out.append(f"  https://ime-ddn.atlassian.net/browse/{key}")
+            out.append("")
+            if not entry["lu_patches"] and not entry.get("gh_prs"):
+                out.append("  No LU references or GitHub PRs found")
+            else:
+                for lu_key, patches in entry["lu_patches"].items():
+                    out.append(f"  {lu_key} (https://jira.whamcloud.com/browse/{lu_key}):")
+                    if not patches:
+                        out.append(f"    No Gerrit patches found")
+                    else:
+                        for p in patches:
+                            n = p["number"]
+                            branch = BRANCH_LABELS.get(p["branch"], p["branch"])
+                            status_str = p["status"]
+                            if status_str == "MERGED":
+                                tag = p.get("_first_tag")
+                                if tag:
+                                    status_str = f"MERGED -> {tag}"
+                                else:
+                                    status_str = "MERGED (no tag)"
+                            out.append(
+                                f"    {branch}: {n} {status_str}"
+                                f"  https://review.whamcloud.com/c/fs/lustre-release/+/{n}"
+                            )
+                for pr in entry.get("gh_prs", []):
+                    state_label = {"merged": "MERGED", "closed": "CLOSED", "open": "OPEN", "draft": "DRAFT"}.get(pr["state"], pr["state"])
+                    base = f" (base: {pr['base']})" if pr.get("base") else ""
+                    out.append(f"  GitHub PR {pr['repo']}#{pr['number']} -- {state_label}{base}")
+                    out.append(f"    {pr['title']}")
+                    out.append(f"    {pr['url']}")
             out.append("")
         out.append("")
 
@@ -616,6 +819,11 @@ def main():
                     help="Slack channel/user ID (default: env SLACK_CHANNEL or U07B3LABTAT)")
     ap.add_argument("--slack-top", type=int, default=15,
                     help="Number of top actionable tickets to show in Slack mode (default: 15)")
+    ap.add_argument("--text", action="store_true",
+                    help="Output plain text instead of markdown")
+    ap.add_argument("--date", type=str, default=None,
+                    help="Start date (YYYYMMDD) — only include tickets created on or after this date. "
+                         "Overrides the filter's default 6-month window.")
     args = ap.parse_args()
 
     cache = {"lu_patches": {}, "commit_tags": {}} if args.no_cache else load_cache()
@@ -623,22 +831,48 @@ def main():
     filter_info = jira_cloud("filter", "get", args.filter_id) or {}
     filter_name = filter_info.get("name", f"Filter {args.filter_id}")
 
+    # Parse --date into YYYY-MM-DD for JQL
+    since_date = None
+    if args.date:
+        try:
+            since_date = datetime.strptime(args.date, "%Y%m%d").strftime("%Y-%m-%d")
+        except ValueError:
+            print(f"Invalid --date format: {args.date!r} (expected YYYYMMDD)", file=sys.stderr, flush=True)
+            sys.exit(1)
+        print(f"Date filter: created >= {since_date}", file=sys.stderr, flush=True)
+
     print(f"Fetching tickets from filter {args.filter_id} ({filter_name})...", file=sys.stderr, flush=True)
-    issues = fetch_filter_issues(args.filter_id, args.limit)
+    issues = fetch_filter_issues(args.filter_id, args.limit, since_date=since_date)
     print(f"Got {len(issues)} tickets", file=sys.stderr, flush=True)
 
-    # Phase 1: extract LU refs from each ticket in parallel
-    print(f"Phase 1: extracting LU refs from {len(issues)} tickets ({WORKERS} workers)...",
+    # Phase 1: extract LU refs and GitHub PR refs from each ticket in parallel
+    print(f"Phase 1: extracting refs from {len(issues)} tickets ({WORKERS} workers)...",
           file=sys.stderr, flush=True)
     ticket_lus = {}
+    ticket_gh_prs = {}
     with ThreadPoolExecutor(max_workers=WORKERS) as ex:
-        future_map = {ex.submit(extract_lu_refs, i["key"]): i for i in issues}
+        future_map = {ex.submit(extract_refs, i["key"]): i for i in issues}
         for n, fut in enumerate(as_completed(future_map), 1):
             issue = future_map[fut]
-            lu_refs = fut.result() or []
-            ticket_lus[issue["key"]] = lu_refs
+            lu_refs, gh_pr_refs = fut.result()
+            ticket_lus[issue["key"]] = lu_refs or []
+            ticket_gh_prs[issue["key"]] = gh_pr_refs or []
             if n % 10 == 0 or n == len(issues):
                 print(f"  [{n}/{len(issues)}] extracted", file=sys.stderr, flush=True)
+
+    # Phase 1b: fetch GitHub PRs in parallel
+    all_gh_refs = sorted({ref for refs in ticket_gh_prs.values() for ref in refs})
+    if all_gh_refs and GH_TOKEN:
+        if "gh_prs" not in cache:
+            cache["gh_prs"] = {}
+        uncached = [(r, n) for r, n in all_gh_refs if f"gh:{r}#{n}" not in cache.get("gh_prs", {})]
+        if uncached:
+            print(f"Phase 1b: fetching {len(uncached)} GitHub PRs...", file=sys.stderr, flush=True)
+            with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+                futures = [ex.submit(get_gh_pr, r, n, cache) for r, n in uncached]
+                for _ in as_completed(futures):
+                    pass
+            save_cache(cache)
 
     # Phase 2: fetch patches for all unique LU refs in parallel
     all_lus = sorted({lu for refs in ticket_lus.values() for lu in refs})
@@ -667,15 +901,16 @@ def main():
                 print(f"  [{n}/{len(unique_commits)}] commits done", file=sys.stderr, flush=True)
     save_cache(cache)
 
-    # Phase 4: assemble the report (skip tickets with no LU references)
+    # Phase 4: assemble the report (skip tickets with no LU refs AND no GitHub PRs)
     print(f"Phase 4: assembling report...", file=sys.stderr, flush=True)
     report = []
-    skipped_no_lu = 0
+    skipped = 0
     for issue in issues:
         key = issue.get("key", "?")
         lu_refs = ticket_lus.get(key, [])
-        if not lu_refs:
-            skipped_no_lu += 1
+        gh_refs = ticket_gh_prs.get(key, [])
+        if not lu_refs and not gh_refs:
+            skipped += 1
             continue
         lu_patches = {lu: cache["lu_patches"].get(lu, []) for lu in lu_refs}
 
@@ -686,6 +921,13 @@ def main():
                     tags = cache["commit_tags"].get(p.get("commit", ""), [])
                     p["_first_tag"] = first_release_tag(tags)
 
+        # Resolve GitHub PRs
+        gh_prs = []
+        for repo, number in gh_refs:
+            pr = cache.get("gh_prs", {}).get(f"gh:{repo}#{number}")
+            if pr:
+                gh_prs.append(pr)
+
         entry = {
             "key": key,
             "summary": issue.get("summary", ""),
@@ -694,19 +936,20 @@ def main():
             "assignee": issue.get("assignee"),
             "lu_refs": lu_refs,
             "lu_patches": lu_patches,
+            "gh_prs": gh_prs,
             "_cache_ref": cache,
         }
         entry["bucket"] = status_bucket(lu_patches)
         report.append(entry)
 
-    print(f"Excluded {skipped_no_lu} tickets with no LU references", file=sys.stderr, flush=True)
+    print(f"Excluded {skipped} tickets with no linked patches/PRs", file=sys.stderr, flush=True)
 
     if args.slack:
         token = os.environ.get("SLACK_BOT_TOKEN", "")
         if not token:
             print("SLACK_BOT_TOKEN env var not set", file=sys.stderr, flush=True)
             sys.exit(1)
-        msg = render_slack(report, filter_name, top_n=args.slack_top, excluded=skipped_no_lu)
+        msg = render_slack(report, filter_name, top_n=args.slack_top, excluded=skipped)
         ok = send_slack(msg, token, args.slack_channel)
         if not ok:
             sys.exit(1)
@@ -714,12 +957,15 @@ def main():
         if args.out:
             Path(args.out).write_text(msg)
     else:
-        md = render_markdown(report, filter_name, excluded=skipped_no_lu)
+        if args.text:
+            output = render_text(report, filter_name, excluded=skipped)
+        else:
+            output = render_markdown(report, filter_name, excluded=skipped)
         if args.out:
-            Path(args.out).write_text(md)
+            Path(args.out).write_text(output)
             print(f"Wrote report to {args.out}", file=sys.stderr, flush=True)
         else:
-            print(md)
+            print(output)
 
 
 if __name__ == "__main__":

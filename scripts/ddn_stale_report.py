@@ -71,21 +71,28 @@ def build_message(issues):
 
 
 def send_slack(text):
+    import tempfile
     payload = json.dumps({
         "channel": SLACK_CHANNEL,
         "text": text,
         "mrkdwn": True,
     })
-    result = subprocess.run(
-        [
-            "curl", "-s", "-X", "POST",
-            "-H", f"Authorization: Bearer {SLACK_TOKEN}",
-            "-H", "Content-Type: application/json",
-            "-d", payload,
-            "https://slack.com/api/chat.postMessage",
-        ],
-        capture_output=True, text=True,
-    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        f.write(payload)
+        tmp_path = f.name
+    try:
+        result = subprocess.run(
+            [
+                "curl", "-s", "-X", "POST",
+                "-H", f"Authorization: Bearer {SLACK_TOKEN}",
+                "-H", "Content-Type: application/json",
+                "-d", f"@{tmp_path}",
+                "https://slack.com/api/chat.postMessage",
+            ],
+            capture_output=True, text=True,
+        )
+    finally:
+        os.unlink(tmp_path)
     resp = json.loads(result.stdout)
     if not resp.get("ok"):
         print(f"Slack error: {resp.get('error')}", file=sys.stderr)
