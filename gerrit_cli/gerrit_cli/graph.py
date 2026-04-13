@@ -1230,7 +1230,6 @@ body.light .sbadge-ABANDONED { background: #8b949e; color: #fff; }
         <span style="color:var(--text-muted);font-weight:600;margin-left:8px">Edges:</span>
         <div class="legend-item"><span class="legend-dot" style="background:#d29922"></span> Stale</div>
     </div>
-    <div id="generated-at" style="position:absolute;left:50%;transform:translateX(-50%);font-size:16px;font-weight:600;color:var(--text);pointer-events:none"></div>
 </div>
 
 <div class="controls">
@@ -1242,6 +1241,7 @@ body.light .sbadge-ABANDONED { background: #8b949e; color: #fff; }
     <button id="btn-panel">Panel</button>
     <button id="btn-theme">Light</button>
     <button id="btn-help">?</button>
+    <div id="generated-at" style="margin-left:auto;font-size:12px;font-weight:500;color:var(--text-muted)"></div>
 </div>
 
 <div class="help-overlay hidden" id="help-overlay" onclick="if(event.target===this)this.classList.add('hidden')">
