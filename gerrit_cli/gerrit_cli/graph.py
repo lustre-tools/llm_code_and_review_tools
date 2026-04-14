@@ -2418,31 +2418,21 @@ network.on('doubleClick', function(params) {
     }
 });
 
-// Middle-click (double) opens in background tab
-let middleClickTimer = null;
+// Single middle-click opens the patch in a background tab
 container.addEventListener('auxclick', function(e) {
     if (e.button !== 1) return; // middle button only
     e.preventDefault();
-    if (middleClickTimer) {
-        // Double middle-click
-        clearTimeout(middleClickTimer);
-        middleClickTimer = null;
-        const pos = network.DOMtoCanvas({ x: e.offsetX, y: e.offsetY });
-        const nodeId = network.getNodeAt({ x: e.offsetX, y: e.offsetY });
-        const node = nodeId != null ? nodeMap[nodeId] : null;
-        if (node) {
-            // Open in background: create a link with no focus
-            const a = document.createElement('a');
-            a.href = node.url;
-            a.target = '_blank';
-            a.rel = 'noopener';
-            // Simulate Ctrl+click to hint background tab
-            const evt = new MouseEvent('click', { ctrlKey: true, metaKey: true, bubbles: true });
-            a.dispatchEvent(evt);
-        }
-    } else {
-        middleClickTimer = setTimeout(() => { middleClickTimer = null; }, 400);
-    }
+    const nodeId = network.getNodeAt({ x: e.offsetX, y: e.offsetY });
+    const node = nodeId != null ? nodeMap[nodeId] : null;
+    if (!node) return;
+    // Open in background: create a link and dispatch a Ctrl/Meta click
+    // so the browser treats it as a background-tab open.
+    const a = document.createElement('a');
+    a.href = node.url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    const evt = new MouseEvent('click', { ctrlKey: true, metaKey: true, bubbles: true });
+    a.dispatchEvent(evt);
 });
 // Prevent middle-click auto-scroll
 container.addEventListener('mousedown', function(e) {
