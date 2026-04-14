@@ -294,27 +294,29 @@ def _make_node(
     cn: int, subject: str, status: str, latest: int,
     author: str, base_url: str, ticket: str = "",
     topic: str = "", hashtags: list[str] | None = None,
-    updated: str = "",
+    updated: str = "", is_wip: bool = False,
+    project: str = "fs/lustre-release",
 ) -> dict[str, Any]:
     """Create a node dict for the graph."""
     if not ticket:
         m = re.match(r"(LU-\d+)", subject)
         ticket = m.group(1) if m else ""
     ref = f"refs/changes/{cn % 100:02d}/{cn}/{latest}"
-    fetch_cmd = f"git fetch {base_url}/fs/lustre-release {ref}"
+    fetch_cmd = f"git fetch {base_url}/{project} {ref}"
     return {
         "id": cn,
         "subject": subject,
         "status": status,
         "current_patchset": latest,
         "author": author,
-        "url": f"{base_url}/c/fs/lustre-release/+/{cn}",
+        "url": f"{base_url}/c/{project}/+/{cn}",
         "ticket": ticket,
         "topic": topic,
         "hashtags": hashtags or [],
         "checkout_cmd": f"{fetch_cmd} && git checkout FETCH_HEAD",
         "cherrypick_cmd": f"{fetch_cmd} && git cherry-pick FETCH_HEAD",
         "updated": updated,
+        "is_wip": is_wip,
     }
 
 
@@ -337,10 +339,11 @@ def _collect_revisions(
 
 
 def _update_node_meta(node: dict[str, Any], change: dict[str, Any]) -> None:
-    """Copy topic/hashtags/updated from a change payload onto a node."""
+    """Copy topic/hashtags/updated/wip-flag from a change payload onto a node."""
     node["topic"] = change.get("topic", "")
     node["hashtags"] = change.get("hashtags", [])
     node["updated"] = change.get("updated", "")
+    node["is_wip"] = bool(change.get("work_in_progress", False))
 
 
 def _break_cycles(edges: list[dict[str, Any]]) -> int:
@@ -428,7 +431,16 @@ def build_graph(
     """
     if fetch_comments:
         fetch_details = True
-    # 1. Fetch related changes
+    # 1. Resolve the project for this change so we can build correct
+    #    URLs and fetch refs (different repos like fs/lustre-release vs
+    #    ex/lustre-release live on the same Gerrit host).
+    try:
+        anchor_change = client.rest.get(f"/changes/{change_number}")
+        project = anchor_change.get("project", "fs/lustre-release")
+    except Exception:
+        project = "fs/lustre-release"
+
+    # 2. Fetch related changes
     if progress:
         print("Fetching related changes...", end="", file=sys.stderr, flush=True)
     response = client.rest.get(
@@ -458,6 +470,7 @@ def build_graph(
         nodes[cn] = _make_node(
             cn, subject, status, latest,
             author_info.get("name", "Unknown"), base_url,
+            project=project,
         )
         commit_to_cn[commit_hash] = cn
         raw_entries.append({
@@ -566,6 +579,8 @@ def build_graph(
                             topic=change.get("topic", ""),
                             hashtags=change.get("hashtags", []),
                             updated=change.get("updated", ""),
+                            is_wip=bool(change.get("work_in_progress", False)),
+                            project=change.get("project", project),
                         )
             except Exception:
                 pass
@@ -779,6 +794,7 @@ def build_graph(
                 author = ci.get("author", {}).get("name", "Unknown")
                 group_nodes[cn] = _make_node(
                     cn, subject, status, latest, author, base_url,
+                    project=project,
                 )
                 group_raw.append({
                     "cn": cn,
@@ -809,6 +825,8 @@ def build_graph(
                         topic=ch.get("topic", ""),
                         hashtags=ch.get("hashtags", []),
                         updated=ch.get("updated", ""),
+                        is_wip=bool(ch.get("work_in_progress", False)),
+                        project=ch.get("project", project),
                     )
                 else:
                     continue
@@ -1227,6 +1245,7 @@ body.light .sbadge-ABANDONED { background: #8b949e; color: #fff; }
         <div class="legend-item"><span class="legend-dot" style="background:#6e40c9"></span> Merged</div>
         <div class="legend-item"><span class="legend-dot" style="background:#484f58"></span> Abandoned</div>
         <div class="legend-item"><span class="legend-dot" style="background:transparent;border:2px solid #c9d1d9"></span> Topic/hashtag series</div>
+        <div class="legend-item"><span class="legend-dot" style="background:transparent;border:2px dashed #c9d1d9"></span> 🚧 WIP</div>
         <span style="color:var(--text-muted);font-weight:600;margin-left:8px">Edges:</span>
         <div class="legend-item"><span class="legend-dot" style="background:#d29922"></span> Stale</div>
     </div>
@@ -1989,7 +2008,10 @@ function renderGraph() {
             reviewLine = `\n${vStr}| CR: ${crStr}${ccStr}`;
         }
 
-        let label = `#${node.id}\n${shortSubject}${reviewLine}`;
+        // WIP marker: prefix the label with 🚧 so it's unmistakable
+        // even at low zoom. Combined with the dashed border below.
+        const wipPrefix = node.is_wip ? '\u{1f6a7} ' : '';
+        let label = `${wipPrefix}#${node.id}\n${shortSubject}${reviewLine}`;
 
         visNodes.push({
             id: id,
@@ -2007,7 +2029,12 @@ function renderGraph() {
                 size: 12,
                 face: 'monospace',
             },
-            borderWidth: isAnchor ? 4 : (isSeparate ? 3 : (isMain ? 2 : 1)),
+            // WIP nodes get a dashed border (vis.js native) — pattern
+            // reads as "non-final" and never collides with the solid
+            // colored borders that encode review state. Only attach
+            // shapeProperties when WIP so non-WIP nodes use defaults.
+            ...(node.is_wip ? { shapeProperties: { borderDashes: [6, 4] } } : {}),
+            borderWidth: isAnchor ? 4 : (node.is_wip ? 3 : (isSeparate ? 3 : (isMain ? 2 : 1))),
             opacity: opacity,
             // Custom data for click handler
             _isAnchor: isAnchor,
@@ -2290,6 +2317,7 @@ function showNodeInfo(id) {
             <div class="fv">
                 <a href="${node.url}" target="_blank">#${node.id}</a>
                 <span class="sbadge sbadge-${node.status}">${node.status}</span>
+                ${node.is_wip ? '<span class="stale-tag" style="background:#7a1a1a;color:#f85149;border-color:#f85149">WIP</span>' : ''}
                 ${staleTag}
                 &nbsp; ps${node.current_patchset}
                 ${node.checkout_cmd ? `<button onclick="navigator.clipboard.writeText('${node.checkout_cmd.replace(/'/g, "\\'")}');this.textContent='\u2713';setTimeout(()=>this.textContent='Checkout',1500)" style="cursor:pointer;font-size:11px;background:none;border:1px solid var(--border);border-radius:4px;padding:1px 8px;color:var(--accent);margin-left:6px" title="Copy checkout command to clipboard">Checkout</button>` : ''}
