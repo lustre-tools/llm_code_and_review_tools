@@ -1352,14 +1352,32 @@ let mainChain = new Set();
 let selectedNodeId = null;
 
 // ─── MAIN CHAIN COMPUTATION ───
+//
+// Cross-group edges (stale edges from the main series into separate
+// topic/hashtag groups, and vice versa) exist as visual hints but must
+// not participate in main-chain selection. If we follow them, a node
+// in the main series can inherit an inflated descendant count from a
+// separate series — making the walker pick an abandoned side branch
+// over the real chain. All descendant/active computations below stay
+// within the starting node's series_group.
+function _groupOf(id) {
+    const n = nodeMap[id];
+    return n ? (n.series_group || 0) : 0;
+}
+
 const activeDescCache = {};
 function hasActiveDescendant(id) {
     if (activeDescCache[id] !== undefined) return activeDescCache[id];
     const n = nodeMap[id];
-    if (n && n.status !== 'ABANDONED') { activeDescCache[id] = true; return true; }
+    if (!n) { activeDescCache[id] = false; return false; }
+    if (n.status !== 'ABANDONED') { activeDescCache[id] = true; return true; }
+    const myGroup = n.series_group || 0;
     const kids = childrenOf[id] || [];
     for (const k of kids) {
-        if (nodeMap[k] && hasActiveDescendant(k)) {
+        const kn = nodeMap[k];
+        if (!kn) continue;
+        if ((kn.series_group || 0) !== myGroup) continue; // don't cross groups
+        if (hasActiveDescendant(k)) {
             activeDescCache[id] = true;
             return true;
         }
@@ -1372,14 +1390,21 @@ function computeMainChain(anchorId) {
     const chain = new Set();
     chain.add(anchorId);
 
+    const anchorGroup = _groupOf(anchorId);
+
     // Walk upward: pick best child at each step. Do NOT filter out abandoned
     // children — we want to walk through abandoned patches if there are still
     // active patches above them. Trailing abandoned tails are trimmed below.
+    // Stay within the anchor's series group so cross-group stale edges don't
+    // derail the walk.
     let cursor = anchorId;
     const upward = [];
     const seen = new Set([anchorId]);
     while (true) {
-        const kids = (childrenOf[cursor] || []).filter(k => nodeMap[k] && !seen.has(k));
+        const kids = (childrenOf[cursor] || []).filter(k => {
+            if (!nodeMap[k] || seen.has(k)) return false;
+            return _groupOf(k) === anchorGroup;
+        });
         if (kids.length === 0) break;
         // Prefer: branch that leads to an active patch, then the branch
         // with the most descendants (the dominant real chain), and finally
@@ -1427,8 +1452,15 @@ const descCache = {};
 function countDesc(id) {
     if (descCache[id] !== undefined) return descCache[id];
     let count = 0;
+    const myGroup = _groupOf(id);
     (childrenOf[id] || []).forEach(c => {
-        if (nodeMap[c]) { count += 1 + countDesc(c); }
+        const cn = nodeMap[c];
+        if (!cn) return;
+        // Don't count descendants that belong to a different series
+        // group — cross-group stale edges would otherwise inflate the
+        // count with unrelated history and skew main-chain selection.
+        if ((cn.series_group || 0) !== myGroup) return;
+        count += 1 + countDesc(c);
     });
     descCache[id] = count;
     return count;
@@ -1895,28 +1927,6 @@ function renderGraph() {
     }
     markActiveUp(currentAnchor);
 
-    // Identify groups that are "merged" into the main tree: if any
-    // node in a group has a cross-group edge to a group 0 node, the
-    // whole group is considered merged (it's pulled into the main
-    // tree via that connection).
-    const mergedGroupIds = new Set();
-    for (const e of G.edges) {
-        const fromNode = nodeMap[e.from];
-        const toNode = nodeMap[e.to];
-        if (!fromNode || !toNode) continue;
-        const fg = fromNode.series_group || 0;
-        const tg = toNode.series_group || 0;
-        if (fg === 0 && tg > 0) mergedGroupIds.add(tg);
-        else if (tg === 0 && fg > 0) mergedGroupIds.add(fg);
-    }
-    const mergedGroupNodes = new Set();
-    for (const n of G.nodes) {
-        if ((n.series_group || 0) > 0
-                && mergedGroupIds.has(n.series_group)) {
-            mergedGroupNodes.add(n.id);
-        }
-    }
-
     // Build vis.js nodes
     const visNodes = [];
     const visEdges = [];
@@ -1929,10 +1939,12 @@ function renderGraph() {
         const isAnchor = id === currentAnchor;
         const isMain = mainChain.has(id);
         const isAbove = activeUp.has(id);
-        // A group node that has a cross-group edge to the main tree
-        // is considered "merged" into main — don't mark as separate.
-        const isSeparate = (node.series_group || 0) > 0
-            && !mergedGroupNodes.has(id);
+        // Any node in a non-zero series_group is a separate-series
+        // member: it gets its own distinctive border and is never
+        // dimmed or treated as base-chain context. Cross-group edges
+        // are informational only — they don't make a separate series
+        // "part of" the main chain.
+        const isSeparate = (node.series_group || 0) > 0;
         // Separate-group nodes aren't part of the base chain — color by status.
         const isBase = !isAbove && !isAnchor && !isSeparate;
 
@@ -1958,8 +1970,10 @@ function renderGraph() {
             colors = Object.assign({}, colors, { border: '#c9d1d9' });
         }
 
-        // If not on main chain and above anchor, slightly dim
-        const opacity = (isAbove && !isMain && !isAnchor) ? 0.7 : 1.0;
+        // If not on main chain and above anchor, slightly dim.
+        // Separate-series nodes are never dimmed — they render at full
+        // intensity with their own distinctive border.
+        const opacity = (isAbove && !isMain && !isAnchor && !isSeparate) ? 0.7 : 1.0;
 
         const shortSubject = node.subject.length > 50
             ? node.subject.substring(0, 47) + '...'
