@@ -868,22 +868,68 @@ function styleForEdge(edge, edgeId, flags, C) {
     };
 }
 
+// ─── RENDER HELPERS ───
+
+// Nodes reachable from `anchor` by walking children that are also
+// in `positions`. "Active subtree" — used by render to decide whether
+// an edge points into base-chain history or into live descendants.
+function computeActiveUp(positions, anchor) {
+    const activeUp = new Set();
+    const stack = [anchor];
+    while (stack.length > 0) {
+        const id = stack.pop();
+        if (activeUp.has(id)) continue;
+        activeUp.add(id);
+        for (const c of (childrenOf[id] || [])) {
+            if (positions[c]) stack.push(c);
+        }
+    }
+    return activeUp;
+}
+
+// Historical-parent suppression: a patch can have multiple incoming
+// edges because its first-parent changed across rebases. By default
+// we keep one best incoming edge per child — non-stale first,
+// otherwise highest parent_patchset. Edges whose endpoints aren't
+// visible in the current layout are excluded from the ranking so the
+// child doesn't become orphaned if the truly-current parent isn't
+// rendered in this graph. Returns a {child id -> Set<from id>} map.
+// Empty when "Show historical parents" is on — everything passes
+// through unchanged.
+function computeHistoricalSuppression(positions) {
+    const keptSources = {};
+    if (document.getElementById('chk-history').checked) return keptSources;
+
+    const byChild = {};
+    for (const e of G.edges) {
+        if (!positions[e.from] || !positions[e.to]) continue;
+        // Dedupe by from-node so each distinct parent is ranked once.
+        (byChild[e.to] = byChild[e.to] || {})[e.from] = e;
+    }
+    for (const child in byChild) {
+        const uniq = Object.values(byChild[child]);
+        uniq.sort((a, b) => {
+            const sa = a.is_stale ? 1 : 0;
+            const sb = b.is_stale ? 1 : 0;
+            if (sa !== sb) return sa - sb;
+            if (b.parent_patchset !== a.parent_patchset) {
+                return b.parent_patchset - a.parent_patchset;
+            }
+            if (b.parent_latest !== a.parent_latest) {
+                return b.parent_latest - a.parent_latest;
+            }
+            return a.from - b.from;
+        });
+        keptSources[child] = new Set([uniq[0].from]);
+    }
+    return keptSources;
+}
+
 // ─── RENDER ───
 function renderGraph() {
     const positions = computeLayout(currentAnchor);
-
-    // Determine which nodes are in the "active subtree" (reachable from anchor going up)
-    const activeUp = new Set();
-    function markActiveUp(id) {
-        activeUp.add(id);
-        (childrenOf[id] || []).forEach(c => {
-            if (positions[c]) markActiveUp(c);
-        });
-    }
-    markActiveUp(currentAnchor);
-
-
-
+    const activeUp = computeActiveUp(positions, currentAnchor);
+    const keptSources = computeHistoricalSuppression(positions);
     const C = getColors();
 
     // Build vis.js nodes
@@ -913,58 +959,13 @@ function renderGraph() {
         }, pos, C));
     }
 
-    // Historical-parent suppression: a patch can have multiple
-    // incoming edges because its first-parent changed across rebases.
-    // Only the "current" dependency is usually meaningful, so by
-    // default we keep one best incoming edge per child:
-    //   - prefer a non-stale edge (the dependency still current)
-    //   - otherwise the edge with the highest parent_patchset
-    // Edges whose endpoints aren't visible in the current layout are
-    // excluded from the ranking — if the truly-current parent isn't
-    // rendered in this graph, we fall back to the most recent
-    // historical parent that IS visible so the child doesn't end up
-    // visually orphaned. A toggle restores the rest.
-    // Build a per-child set of "kept" from-node ids (not a set of
-    // edges, because G.edges can contain duplicate entries with the
-    // same from→to pair — suppressing by string key would then match
-    // the edge we meant to keep too). We then drop any edge whose
-    // from-node is not in keptSources for that child.
-    const showHistory = document.getElementById('chk-history').checked;
-    const keptSources = {};  // child id -> Set<from id>
-    if (!showHistory) {
-        const byChild = {};
-        for (const e of G.edges) {
-            if (!positions[e.from] || !positions[e.to]) continue;
-            // Dedupe by from-node so we rank each parent once.
-            (byChild[e.to] = byChild[e.to] || {})[e.from] = e;
-        }
-        for (const child in byChild) {
-            const uniq = Object.values(byChild[child]);
-            uniq.sort((a, b) => {
-                const sa = a.is_stale ? 1 : 0;
-                const sb = b.is_stale ? 1 : 0;
-                if (sa !== sb) return sa - sb;
-                if (b.parent_patchset !== a.parent_patchset) {
-                    return b.parent_patchset - a.parent_patchset;
-                }
-                if (b.parent_latest !== a.parent_latest) {
-                    return b.parent_latest - a.parent_latest;
-                }
-                return a.from - b.from;
-            });
-            keptSources[child] = new Set([uniq[0].from]);
-        }
-    }
-
     // Build vis.js edges. G.edges is already deduped in the Python
     // builder, so each (from, to) pair appears at most once.
     let edgeIdx = 0;
     for (const edge of G.edges) {
         if (!positions[edge.from] || !positions[edge.to]) continue;
-        if (!showHistory) {
-            const ks = keptSources[edge.to];
-            if (ks && !ks.has(edge.from)) continue;
-        }
+        const ks = keptSources[edge.to];
+        if (ks && !ks.has(edge.from)) continue;
 
         const isMainEdge = mainChain.has(edge.from) && mainChain.has(edge.to);
         // "Base" = edge leads into historical chain below the anchor.
@@ -1340,43 +1341,73 @@ container.addEventListener('mousedown', function(e) {
 });
 
 // ─── CONTROLS ───
-function onFilterChange() {
-    renderGraph();
-    if (selectedNodeId !== null) { showNodeInfo(selectedNodeId); }
-}
-document.getElementById('chk-abandoned').addEventListener('change', onFilterChange);
-document.getElementById('chk-history').addEventListener('change', onFilterChange);
-document.getElementById('btn-reset').addEventListener('click', function() {
-    currentAnchor = ANCHOR_INIT;
-    renderGraph();
-    showDefaultInfo();
-});
-document.getElementById('btn-fit').addEventListener('click', function() {
-    network.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
-});
-document.getElementById('btn-focus').addEventListener('click', function() {
-    const target = selectedNodeId !== null ? selectedNodeId : currentAnchor;
-    network.focus(target, {
-        scale: 1.5,
-        animation: { duration: 400, easingFunction: 'easeInOutQuad' },
-    });
-});
+// Every user-initiated action routes through this `actions` object
+// so button clicks and keyboard shortcuts share the same
+// implementation. Adding a new entry point (command palette,
+// programmatic control, etc.) becomes a one-line call.
+const actions = {
+    refresh() {
+        renderGraph();
+        if (selectedNodeId !== null) showNodeInfo(selectedNodeId);
+    },
+    resetAnchor() {
+        currentAnchor = ANCHOR_INIT;
+        renderGraph();
+        showDefaultInfo();
+    },
+    fit() {
+        network.fit({
+            animation: { duration: 400, easingFunction: 'easeInOutQuad' },
+        });
+    },
+    focusSelection() {
+        const target = selectedNodeId !== null ? selectedNodeId : currentAnchor;
+        network.focus(target, {
+            scale: 1.5,
+            animation: { duration: 400, easingFunction: 'easeInOutQuad' },
+        });
+    },
+    zoom(factor) {
+        const scale = network.getScale();
+        network.moveTo({
+            scale: scale * factor,
+            animation: { duration: 200, easingFunction: 'easeInOutQuad' },
+        });
+    },
+    togglePanel() {
+        document.getElementById('panel').classList.toggle('hidden');
+        setTimeout(() => network.redraw(), 100);
+    },
+    toggleHelp() {
+        document.getElementById('help-overlay').classList.toggle('hidden');
+    },
+    toggleTheme() {
+        document.body.classList.toggle('light');
+        document.getElementById('btn-theme').textContent =
+            isLight() ? 'Dark' : 'Light';
+        renderLegend();
+        this.refresh();
+    },
+    closeOverlaysOrSelection() {
+        const help = document.getElementById('help-overlay');
+        if (!help.classList.contains('hidden')) {
+            help.classList.add('hidden');
+        } else {
+            network.unselectAll();
+            showDefaultInfo();
+        }
+    },
+};
+
+document.getElementById('chk-abandoned').addEventListener('change', () => actions.refresh());
+document.getElementById('chk-history').addEventListener('change', () => actions.refresh());
+document.getElementById('btn-reset').addEventListener('click', () => actions.resetAnchor());
+document.getElementById('btn-fit').addEventListener('click', () => actions.fit());
+document.getElementById('btn-focus').addEventListener('click', () => actions.focusSelection());
 document.getElementById('btn-search').addEventListener('click', openSearch);
-document.getElementById('btn-panel').addEventListener('click', function() {
-    document.getElementById('panel').classList.toggle('hidden');
-    setTimeout(() => network.redraw(), 100);
-});
-document.getElementById('btn-help').addEventListener('click', function() {
-    document.getElementById('help-overlay').classList.toggle('hidden');
-});
-document.getElementById('btn-theme').addEventListener('click', function() {
-    document.body.classList.toggle('light');
-    const btn = document.getElementById('btn-theme');
-    btn.textContent = isLight() ? 'Dark' : 'Light';
-    renderLegend();
-    renderGraph();
-    if (selectedNodeId !== null) { showNodeInfo(selectedNodeId); }
-});
+document.getElementById('btn-panel').addEventListener('click', () => actions.togglePanel());
+document.getElementById('btn-help').addEventListener('click', () => actions.toggleHelp());
+document.getElementById('btn-theme').addEventListener('click', () => actions.toggleTheme());
 
 // Keyboard
 document.addEventListener('keydown', function(e) {
@@ -1387,35 +1418,14 @@ document.addEventListener('keydown', function(e) {
         return;
     }
     if (e.target.tagName === 'INPUT') return;
-    if (e.key === 'f' || e.key === 'F') {
-        network.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
-    } else if (e.key === 'r' || e.key === 'R') {
-        currentAnchor = ANCHOR_INIT;
-        renderGraph();
-        showDefaultInfo();
-    } else if (e.key === 'z' || e.key === 'Z') {
-        const target = selectedNodeId !== null ? selectedNodeId : currentAnchor;
-        network.focus(target, {
-            scale: 1.5,
-            animation: { duration: 400, easingFunction: 'easeInOutQuad' },
-        });
-    } else if (e.key === '+' || e.key === '=') {
-        const scale = network.getScale();
-        network.moveTo({ scale: scale * 1.3, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
-    } else if (e.key === '-') {
-        const scale = network.getScale();
-        network.moveTo({ scale: scale / 1.3, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
-    } else if (e.key === '?') {
-        document.getElementById('help-overlay').classList.toggle('hidden');
-    } else if (e.key === 'Escape') {
-        const help = document.getElementById('help-overlay');
-        if (!help.classList.contains('hidden')) {
-            help.classList.add('hidden');
-        } else {
-            network.unselectAll();
-            showDefaultInfo();
-        }
-    }
+    const k = e.key;
+    if (k === 'f' || k === 'F') actions.fit();
+    else if (k === 'r' || k === 'R') actions.resetAnchor();
+    else if (k === 'z' || k === 'Z') actions.focusSelection();
+    else if (k === '+' || k === '=') actions.zoom(1.3);
+    else if (k === '-') actions.zoom(1 / 1.3);
+    else if (k === '?') actions.toggleHelp();
+    else if (k === 'Escape') actions.closeOverlaysOrSelection();
 });
 
 // ─── PANEL RESIZE DRAG ───
