@@ -14,21 +14,7 @@
 <div class="topbar">
     <h1 id="title">Gerrit Series Graph</h1>
     <div class="stats" id="stats"></div>
-    <div class="legend">
-        <span style="color:var(--text-muted);font-weight:600">Nodes:</span>
-        <div class="legend-item"><span class="legend-dot" style="background:#238636"></span> Ready</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#1f6feb"></span> Pending</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#7a1a1a"></span> CR Veto</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#d32f2f"></span> Maloo</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#c47f17"></span> Jenkins</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#9b2d6e"></span> Other -1</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#6e40c9"></span> Merged</div>
-        <div class="legend-item"><span class="legend-dot" style="background:#484f58"></span> Abandoned</div>
-        <div class="legend-item"><span class="legend-dot" style="background:transparent;border:2px solid #c9d1d9"></span> Topic/hashtag series</div>
-        <div class="legend-item"><span class="legend-dot" style="background:transparent;border:2px dashed #c9d1d9"></span> 🚧 WIP</div>
-        <span style="color:var(--text-muted);font-weight:600;margin-left:8px">Edges:</span>
-        <div class="legend-item"><span class="legend-dot" style="background:#d29922"></span> Stale</div>
-    </div>
+    <div class="legend" id="legend"><!-- rendered from the palette in graph.js --></div>
 </div>
 
 <div class="controls">

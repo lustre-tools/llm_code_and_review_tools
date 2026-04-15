@@ -37,6 +37,9 @@ if (G.generated_at) {
     document.getElementById('generated-at').textContent = 'Generated: ' + G.generated_at;
 }
 
+// Build the legend from the palette. Re-rendered on theme toggle.
+renderLegend();
+
 // ─── STATE ───
 let currentAnchor = ANCHOR_INIT;
 let mainChain = new Set();
@@ -608,6 +611,50 @@ function getColors() {
         edgeFontStale: '#d29922',
         edgeStroke: light ? '#ffffff' : '#0d1117',
     };
+}
+
+// ─── LEGEND ───
+// Rendered from the same palette as the graph so a color tweak in
+// getColors() updates the legend automatically. Must be called
+// whenever the palette might have changed (init + theme toggle).
+function legendItems() {
+    const C = getColors();
+    const separateBorder = '#c9d1d9';
+    return [
+        { kind: 'group', label: 'Nodes' },
+        { kind: 'fill', label: 'Ready',       color: C.REVIEW_GOOD.bg },
+        { kind: 'fill', label: 'Pending',     color: C.STATUS.NEW.bg },
+        { kind: 'fill', label: 'CR Veto',     color: C.REVIEW_BAD_VETO.bg },
+        { kind: 'fill', label: 'Maloo',       color: C.REVIEW_BAD_MALOO.bg },
+        { kind: 'fill', label: 'Jenkins',     color: C.REVIEW_BAD_JENKINS.bg },
+        { kind: 'fill', label: 'Other -1',    color: C.REVIEW_BAD_OTHER.bg },
+        { kind: 'fill', label: 'Merged',      color: C.STATUS.MERGED.bg },
+        { kind: 'fill', label: 'Abandoned',   color: C.STATUS.ABANDONED.bg },
+        { kind: 'border', label: 'Topic/hashtag series', color: separateBorder },
+        { kind: 'border', label: '🚧 WIP',   color: separateBorder, dashed: true },
+        { kind: 'group', label: 'Edges', marginLeft: '8px' },
+        { kind: 'fill', label: 'Stale',       color: C.edgeStale },
+    ];
+}
+
+function renderLegend() {
+    const container = document.getElementById('legend');
+    if (!container) return;
+    container.innerHTML = legendItems().map(item => {
+        if (item.kind === 'group') {
+            const ml = item.marginLeft ? `margin-left:${item.marginLeft}` : '';
+            return `<span style="color:var(--text-muted);font-weight:600;${ml}">${item.label}:</span>`;
+        }
+        if (item.kind === 'border') {
+            const style = item.dashed ? 'dashed' : 'solid';
+            return `<div class="legend-item"><span class="legend-dot"`
+                + ` style="background:transparent;border:2px ${style} ${item.color}"></span>`
+                + ` ${item.label}</div>`;
+        }
+        // kind === 'fill'
+        return `<div class="legend-item"><span class="legend-dot"`
+            + ` style="background:${item.color}"></span> ${item.label}</div>`;
+    }).join('');
 }
 
 // ─── REVIEW HEALTH ───
@@ -1326,6 +1373,7 @@ document.getElementById('btn-theme').addEventListener('click', function() {
     document.body.classList.toggle('light');
     const btn = document.getElementById('btn-theme');
     btn.textContent = isLight() ? 'Dark' : 'Light';
+    renderLegend();
     renderGraph();
     if (selectedNodeId !== null) { showNodeInfo(selectedNodeId); }
 });
