@@ -47,6 +47,15 @@ renderLegend();
 // this node on screen" case without touching layout.
 const currentAnchor = G.anchor;
 let mainChain = new Set();
+// Nodes placed as historical base-chain context (below the anchor
+// in the linear parentOf walk). renderGraph dims these.
+let baseChainSet = new Set();
+// Main-series nodes that the normal upward/base-chain walks never
+// reached and ended up in the synthetic "unplaced" column. They're
+// conceptually a separate cluster even though their series_group is
+// 0, so renderGraph gives them the distinctive separate-series
+// border.
+let isolatedMainSet = new Set();
 let selectedNodeId = null;
 
 // ─── MAIN CHAIN COMPUTATION ───
@@ -333,7 +342,10 @@ function _layoutUpwardFromAnchor(ctx) {
 // Step 2: place the base chain below the anchor. Each base node is
 // pushed far enough down that its upward side branches don't
 // overlap the previous node's area. Mirrors the upward layout logic
-// where the main-chain child is pushed past side branches.
+// where the main-chain child is pushed past side branches. Every
+// node placed by this helper is recorded in the module-level
+// baseChainSet so renderGraph can dim only real base-chain history,
+// not e.g. unreachable ancestors glued in by the fallback layout.
 function _layoutBaseChain(ctx) {
     const positions = ctx.positions;
     let cursor = parentOf[ctx.anchorId];
@@ -344,6 +356,7 @@ function _layoutBaseChain(ctx) {
             cursor = parentOf[cursor];
             continue;
         }
+        baseChainSet.add(cursor);
 
         // Pre-compute how tall this node's side branches will be so
         // the node can be placed far enough below the previous one
@@ -449,13 +462,17 @@ function _layoutGroupFixup(ctx, groups) {
             let neighborDir = 0;
             for (const e of G.edges) {
                 if (e.to === id && positions[e.from]) {
+                    // id is a child of e.from — children sit above
+                    // their parents (y decreases going up).
                     neighborPos = positions[e.from];
-                    neighborDir = 1;  // child goes up
+                    neighborDir = -1;
                     break;
                 }
                 if (e.from === id && positions[e.to]) {
+                    // id is a parent of e.to — parents sit below
+                    // their children.
                     neighborPos = positions[e.to];
-                    neighborDir = -1;  // parent goes down
+                    neighborDir = 1;
                     break;
                 }
             }
@@ -514,6 +531,87 @@ function _layoutSeparateGroups(ctx) {
     _layoutGroupFixup(ctx, groups);
 }
 
+// Place main-series nodes that the upward walk + base chain never
+// reached. These are typically ancestors that live on a
+// non-direct parent branch or side nodes that only connect back to
+// main via a stale edge from some non-anchor node. Treat them like
+// a synthetic disconnected group: BFS from the set's own roots so
+// oldest nodes sit at level 0 and children grow upward from there,
+// matching how both the main tree and disconnected separate groups
+// are laid out. The column starts at the far right of everything
+// already placed.
+function _layoutUnplacedMainSeries(ctx) {
+    const positions = ctx.positions;
+    const unplaced = new Set();
+    for (const n of G.nodes) {
+        if (positions[n.id] !== undefined) continue;
+        if (!nodeVisible(n.id)) continue;
+        if ((n.series_group || 0) !== 0) continue;
+        unplaced.add(n.id);
+    }
+    if (unplaced.size === 0) return;
+
+    // Build a child map restricted to the unplaced set so BFS stays
+    // within it. Non-unplaced edges are ignored for the layout, but
+    // the edges themselves still render normally (they'll fly over
+    // from the main tree into the column).
+    const parentIn = new Set();
+    const childrenInSet = {};
+    for (const id of unplaced) childrenInSet[id] = [];
+    for (const e of G.edges) {
+        if (!unplaced.has(e.from) || !unplaced.has(e.to)) continue;
+        parentIn.add(e.to);
+        childrenInSet[e.from].push(e.to);
+    }
+
+    // Roots = unplaced nodes with no parent *within the set*.
+    const roots = [...unplaced].filter(id => !parentIn.has(id));
+    const levels = {};
+    const queue = [];
+    for (const r of roots) {
+        levels[r] = 0;
+        queue.push(r);
+    }
+    while (queue.length > 0) {
+        const n = queue.shift();
+        for (const c of (childrenInSet[n] || [])) {
+            if (!(c in levels)) {
+                levels[c] = levels[n] + 1;
+                queue.push(c);
+            }
+        }
+    }
+    // Any leftover (cycle remnant or fully-disconnected member)
+    // gets level 0 so it still lands on the baseline.
+    for (const id of unplaced) {
+        if (!(id in levels)) levels[id] = 0;
+    }
+
+    // Arrange the column at the far right of everything placed so
+    // far. Members at the same BFS level are spaced horizontally
+    // instead of stacking so they don't overlap.
+    let mainMaxX = 0;
+    for (const pos of Object.values(positions)) {
+        mainMaxX = Math.max(mainMaxX, pos.x);
+    }
+    const columnX = mainMaxX + NODE_W * 2;
+
+    const levelBuckets = {};
+    for (const id of unplaced) {
+        (levelBuckets[levels[id]] = levelBuckets[levels[id]] || []).push(id);
+    }
+    for (const lv in levelBuckets) {
+        const ids = levelBuckets[lv].sort((a, b) => a - b);
+        for (let i = 0; i < ids.length; i++) {
+            positions[ids[i]] = {
+                x: columnX + i * NODE_W,
+                y: -parseInt(lv) * LEVEL_H,
+            };
+            isolatedMainSet.add(ids[i]);
+        }
+    }
+}
+
 // Step 4: any nodes that ended up at exactly the same (x, y) — e.g.
 // because two fixup passes chose the same slot — get shifted right
 // until they find an empty coordinate.
@@ -543,6 +641,8 @@ function _resolveCollisions(ctx) {
 // into vis.js.
 function computeLayout(anchorId) {
     mainChain = computeMainChain(anchorId);
+    baseChainSet = new Set();
+    isolatedMainSet = new Set();
     const ctx = {
         anchorId,
         positions: {},
@@ -552,6 +652,7 @@ function computeLayout(anchorId) {
     _layoutUpwardFromAnchor(ctx);
     _layoutBaseChain(ctx);
     _layoutSeparateGroups(ctx);
+    _layoutUnplacedMainSeries(ctx);
     _resolveCollisions(ctx);
     return ctx.positions;
 }
@@ -952,11 +1053,20 @@ function renderGraph() {
         // member. Cross-group edges are informational only — they
         // don't make a separate series "part of" the main chain.
         const isSeparate = (node.series_group || 0) > 0;
-        // Separate-group nodes aren't part of the base chain.
-        const isBase = !isAbove && !isAnchor && !isSeparate;
-        // Separate-group nodes that the upward walk didn't reach are
-        // the ones rendered with the distinctive border.
-        const isStandaloneSeparate = isSeparate && !isAbove;
+        // Base chain = nodes actually placed by _layoutBaseChain
+        // (the linear parentOf walk below the anchor). Any other
+        // node outside activeUp — e.g. an unreachable ancestor glued
+        // in by the fallback layout — is NOT base chain and should
+        // render with its real status color, not dimmed.
+        const isBase = baseChainSet.has(id);
+        // Separate-series border: applied to
+        //   - topic/hashtag-group nodes the upward walk didn't reach
+        //     (so the group is visually distinct from main), AND
+        //   - main-series nodes that fell through into the
+        //     _layoutUnplacedMainSeries column (they're effectively a
+        //     separate cluster even though their series_group is 0).
+        const isStandaloneSeparate =
+            (isSeparate && !isAbove) || isolatedMainSet.has(id);
 
         visNodes.push(styleForNode(node, {
             isAnchor, isMain, isAbove, isSeparate, isBase, isStandaloneSeparate,
@@ -972,14 +1082,10 @@ function renderGraph() {
         if (ks && !ks.has(edge.from)) continue;
 
         const isMainEdge = mainChain.has(edge.from) && mainChain.has(edge.to);
-        // "Base" = edge leads into historical chain below the anchor.
-        // Separate-group nodes aren't part of the base chain even if
-        // they weren't reached by the upward walk — they're positioned
-        // via the separate-groups layout and should render in the
-        // normal palette, not the dim one.
-        const toNode = nodeMap[edge.to];
-        const toSeparate = toNode && (toNode.series_group || 0) > 0;
-        const isBase = !activeUp.has(edge.to) && !toSeparate;
+        // "Base" = edge points INTO a historical base-chain node —
+        // matches the node-side isBase check so edge and endpoint
+        // colors agree.
+        const isBase = baseChainSet.has(edge.to);
 
         visEdges.push(styleForEdge(edge, edgeIdx, { isMainEdge, isBase }, C));
         edgeIdx++;

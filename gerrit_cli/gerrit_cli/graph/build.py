@@ -110,16 +110,22 @@ def _fetch_related(ctx: BuildContext) -> list[dict[str, Any]]:
 
 def _parse_related_entries(
     ctx: BuildContext, entries: list[dict[str, Any]],
-) -> None:
+) -> int:
     """Turn /related entries into nodes + raw_entries (the skeleton
-    used later to build the core chain edges)."""
+    used later to build the core chain edges). Changes already in
+    ctx.nodes are skipped so this helper is safe to call repeatedly
+    with overlapping results (see _expand_via_related_fanout).
+    Returns the number of genuinely new changes added."""
+    added = 0
     for entry in entries:
+        cn = entry.get("_change_number", 0)
+        if not cn or cn in ctx.nodes:
+            continue
         ci = entry.get("commit", {})
         commit_hash = ci.get("commit", "")
         parents = ci.get("parents", [])
         parent_hash = parents[0].get("commit", "") if parents else ""
         author_info = ci.get("author", {})
-        cn = entry.get("_change_number", 0)
         ps = entry.get("_revision_number", 0)
         latest = entry.get("_current_revision_number", 0)
         status = entry.get("status", "UNKNOWN")
@@ -137,6 +143,44 @@ def _parse_related_entries(
             "ps": ps,
             "latest": latest,
         })
+        added += 1
+    return added
+
+
+def _expand_via_related_fanout(ctx: BuildContext) -> None:
+    """Gerrit's /related is asymmetric: the chain Gerrit returns when
+    queried from the anchor may omit side branches that are visible
+    only from other changes in the series (e.g. a descendant patch
+    whose own /related includes the anchor, but whose change number
+    never shows up in the anchor's /related).
+
+    Fix by calling /related on every change in the initial set and
+    merging any new members back in — a single pass, only over the
+    anchor's own /related members. We deliberately do NOT recurse
+    into newly-discovered nodes: each extra level of recursion would
+    bridge into unrelated historical series via old shared commits
+    (e.g. a change that shares an ancestor with one of our nodes
+    would pull in its entire sibling series). The single pass is
+    enough to patch Gerrit's asymmetry without leaking history."""
+    pending = sorted(ctx.nodes.keys())
+    if not pending:
+        return
+    ctx.log(
+        f"Expanding via /related fan-out ({len(pending)} to probe)...",
+        end="",
+    )
+    added_total = 0
+    for cn in pending:
+        try:
+            resp = ctx.client.rest.get(
+                f"/changes/{cn}/revisions/current/related"
+            )
+        except Exception:
+            continue
+        added_total += _parse_related_entries(
+            ctx, resp.get("changes", [])
+        )
+    ctx.log(f" +{added_total} new.")
 
 
 def _fetch_revisions_batch(
@@ -787,6 +831,7 @@ def build_graph(
     _resolve_project(ctx)
     entries = _fetch_related(ctx)
     _parse_related_entries(ctx, entries)
+    _expand_via_related_fanout(ctx)
     _fetch_initial_revisions(ctx)
     _discover_missing_nodes(ctx)
     _filter_merged_ancestors(ctx)
