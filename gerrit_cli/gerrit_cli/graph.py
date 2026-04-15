@@ -1929,6 +1929,7 @@ function renderGraph() {
     markActiveUp(currentAnchor);
 
 
+
     // Build vis.js nodes
     const visNodes = [];
     const visEdges = [];
@@ -1966,9 +1967,15 @@ function renderGraph() {
             colors = C.STATUS[node.status] || C.STATUS.NEW;
         }
 
-        // Separate-series nodes: distinctive light-grey border so
-        // they're visually obvious as a different series.
-        if (isSeparate) {
+        // Separate-series border: applied per-node. A separate-group
+        // node that the main upward walk actually reached (activeUp)
+        // is a "bridge" visually stitched into the main tree and
+        // renders without the border. All other separate-group nodes
+        // — those positioned by the separate-groups fallback layout —
+        // keep the distinctive grey border so viewers can tell them
+        // apart from the main series at a glance.
+        const isStandaloneSeparate = isSeparate && !isAbove;
+        if (isStandaloneSeparate) {
             colors = Object.assign({}, colors, { border: '#c9d1d9' });
         }
 
@@ -2050,7 +2057,7 @@ function renderGraph() {
             // colored borders that encode review state. Only attach
             // shapeProperties when WIP so non-WIP nodes use defaults.
             ...(node.is_wip ? { shapeProperties: { borderDashes: [6, 4] } } : {}),
-            borderWidth: isAnchor ? 4 : (node.is_wip ? 3 : (isSeparate ? 3 : (isMain ? 2 : 1))),
+            borderWidth: isAnchor ? 4 : (node.is_wip ? 3 : (isStandaloneSeparate ? 3 : (isMain ? 2 : 1))),
             opacity: opacity,
             // Custom data for click handler
             _isAnchor: isAnchor,
