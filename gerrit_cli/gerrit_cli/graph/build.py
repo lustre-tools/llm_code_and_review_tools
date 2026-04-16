@@ -16,6 +16,7 @@ function passed state through locals, but with explicit boundaries and
 each step now readable on its own."""
 
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -36,6 +37,144 @@ _BATCH_SIZE = 50
 _BATCH_SIZE_WITH_COMMITS = 10
 _DISCOVERY_BATCH_SIZE = 30
 _MESSAGES_BATCH_SIZE = 20
+
+# Number of pipeline phases printed by build_graph. Must match the
+# number of `logger.start(...)` calls in build_graph so the [N/total]
+# prefix counts correctly.
+_TOTAL_PHASES = 8
+
+
+# ─── Phase logger ───────────────────────────────────────────────────────
+
+
+class PhaseLogger:
+    """Pretty phase-by-phase progress printer.
+
+    Usage:
+        logger.header("gerrit-cli graph / 63677")
+        logger.start("Fetching /related")
+        ... work ...
+        logger.done("35 changes")
+        ...
+        logger.summary("93 nodes · 88 edges · 6 separate series")
+
+    On a tty: colored label, dot-filled alignment, and `\\r` overwrite
+    so an "in-progress" line becomes the final line when done. On a
+    non-tty: plain one-line-per-phase output that's safe to redirect
+    or pipe. When `enabled=False`, all methods are no-ops."""
+
+    LABEL_WIDTH = 42  # target column where the result column starts
+
+    def __init__(self, total: int, *, enabled: bool = True) -> None:
+        self.total = total
+        self.enabled = enabled
+        self.is_tty = enabled and sys.stderr.isatty()
+        self.n = 0
+        self.t_overall = time.monotonic()
+        self.t_phase = 0.0
+        self.label = ""
+        # ANSI styles (only when color makes sense).
+        if self.is_tty:
+            self.c_cyan = "\033[36m"
+            self.c_green = "\033[32m"
+            self.c_yellow = "\033[33m"
+            self.c_dim = "\033[2m"
+            self.c_bold = "\033[1m"
+            self.c_reset = "\033[0m"
+        else:
+            self.c_cyan = self.c_green = self.c_yellow = ""
+            self.c_dim = self.c_bold = self.c_reset = ""
+
+    # ── internals ────────────────────────────────────────────────────
+
+    def _fmt_label(self) -> str:
+        pad = max(3, self.LABEL_WIDTH - len(self.label))
+        dots = self.c_dim + ("." * pad) + self.c_reset
+        return f"{self.c_cyan}{self.label}{self.c_reset} {dots}"
+
+    def _prefix(self) -> str:
+        return f"[{self.n:>2}/{self.total}]"
+
+    def _overwrite(self, text: str, newline: bool) -> None:
+        if self.is_tty:
+            sys.stderr.write("\r\033[K" + text + ("\n" if newline else ""))
+            sys.stderr.flush()
+        elif newline:
+            sys.stderr.write(text + "\n")
+            sys.stderr.flush()
+
+    # ── public API ───────────────────────────────────────────────────
+
+    def header(self, text: str) -> None:
+        if not self.enabled:
+            return
+        sys.stderr.write(f"\n{self.c_bold}{text}{self.c_reset}\n\n")
+        sys.stderr.flush()
+
+    def start(self, label: str) -> None:
+        if not self.enabled:
+            return
+        self.n += 1
+        self.t_phase = time.monotonic()
+        self.label = label
+        self._overwrite(
+            f"{self._prefix()}    ·    {self._fmt_label()} running",
+            newline=False,
+        )
+
+    def done(self, result: str) -> None:
+        if not self.enabled:
+            return
+        elapsed = time.monotonic() - self.t_phase
+        elapsed_str = f"{elapsed:>5.1f}s"
+        self._overwrite(
+            f"{self._prefix()} {elapsed_str} {self._fmt_label()} {result}",
+            newline=True,
+        )
+
+    def note(self, text: str) -> None:
+        """Print a sub-step note (e.g. batch-N/M) while a phase is
+        running. On a tty the current "running" line is overwritten
+        with the note, then restored by the next start/done call.
+        On a non-tty these become plain dimmed lines."""
+        if not self.enabled:
+            return
+        styled = f"{self.c_dim}    · {text}{self.c_reset}"
+        if self.is_tty:
+            # Overwrite the running line with the note, then re-draw
+            # the running line so the phase is still visible.
+            sys.stderr.write("\r\033[K" + styled + "\n")
+            sys.stderr.write(
+                f"{self._prefix()}    ·    {self._fmt_label()} running"
+            )
+            sys.stderr.flush()
+        else:
+            sys.stderr.write(styled + "\n")
+            sys.stderr.flush()
+
+    def warn(self, text: str) -> None:
+        if not self.enabled:
+            return
+        styled = f"{self.c_yellow}    ⚠ {text}{self.c_reset}"
+        if self.is_tty:
+            sys.stderr.write("\r\033[K" + styled + "\n")
+            sys.stderr.write(
+                f"{self._prefix()}    ·    {self._fmt_label()} running"
+            )
+            sys.stderr.flush()
+        else:
+            sys.stderr.write(styled + "\n")
+            sys.stderr.flush()
+
+    def summary(self, text: str) -> None:
+        if not self.enabled:
+            return
+        elapsed = time.monotonic() - self.t_overall
+        sys.stderr.write(
+            f"\n{self.c_green}✓{self.c_reset} {text} "
+            f"{self.c_dim}· {elapsed:.1f}s total{self.c_reset}\n"
+        )
+        sys.stderr.flush()
 
 
 # ─── Build context ──────────────────────────────────────────────────────
@@ -59,6 +198,7 @@ class BuildContext:
     include_hashtag: bool
     extra_topics: list[str]
     extra_hashtags: list[str]
+    logger: "PhaseLogger | None" = None
 
     # Resolved from the anchor change during step 1.
     project: str = _DEFAULT_PROJECT
@@ -79,8 +219,13 @@ class BuildContext:
     separate_groups: list[dict[str, Any]] = field(default_factory=list)
 
     def log(self, msg: str, end: str = "\n") -> None:
+        """Legacy plain-text logger retained for places that don't
+        fit the phase model (e.g. per-batch error reports)."""
         if self.progress:
-            print(msg, end=end, file=sys.stderr, flush=True)
+            if self.logger is not None:
+                self.logger.note(msg)
+            else:
+                print(msg, end=end, file=sys.stderr, flush=True)
 
 
 # ─── Step helpers ───────────────────────────────────────────────────────
@@ -99,13 +244,10 @@ def _resolve_project(ctx: BuildContext) -> None:
 
 def _fetch_related(ctx: BuildContext) -> list[dict[str, Any]]:
     """Fetch the Gerrit /related entries for the anchor change."""
-    ctx.log("Fetching related changes...", end="")
     response = ctx.client.rest.get(
         f"/changes/{ctx.change_number}/revisions/current/related"
     )
-    entries = response.get("changes", [])
-    ctx.log(f" {len(entries)} found.")
-    return entries
+    return response.get("changes", [])
 
 
 def _parse_related_entries(
@@ -147,7 +289,7 @@ def _parse_related_entries(
     return added
 
 
-def _expand_via_related_fanout(ctx: BuildContext) -> None:
+def _expand_via_related_fanout(ctx: BuildContext) -> int:
     """Gerrit's /related is asymmetric: the chain Gerrit returns when
     queried from the anchor may omit side branches that are visible
     only from other changes in the series (e.g. a descendant patch
@@ -161,14 +303,12 @@ def _expand_via_related_fanout(ctx: BuildContext) -> None:
     bridge into unrelated historical series via old shared commits
     (e.g. a change that shares an ancestor with one of our nodes
     would pull in its entire sibling series). The single pass is
-    enough to patch Gerrit's asymmetry without leaking history."""
+    enough to patch Gerrit's asymmetry without leaking history.
+
+    Returns the number of newly-added changes."""
     pending = sorted(ctx.nodes.keys())
     if not pending:
-        return
-    ctx.log(
-        f"Expanding via /related fan-out ({len(pending)} to probe)...",
-        end="",
-    )
+        return 0
     added_total = 0
     for cn in pending:
         try:
@@ -180,7 +320,7 @@ def _expand_via_related_fanout(ctx: BuildContext) -> None:
         added_total += _parse_related_entries(
             ctx, resp.get("changes", [])
         )
-    ctx.log(f" +{added_total} new.")
+    return added_total
 
 
 def _fetch_revisions_batch(
@@ -228,28 +368,25 @@ def _fetch_initial_revisions(ctx: BuildContext) -> None:
     parent-commit collection enabled so stale branches can be
     reconstructed later."""
     all_cns = sorted(ctx.nodes.keys())
-    ctx.log(
-        f"Fetching revision history ({len(all_cns)} changes)...", end=""
-    )
     _fetch_revisions_batch(ctx, all_cns, collect_parents=True)
-    ctx.log(f" {len(ctx.commit_to_change_ps)} commits mapped.")
 
 
-def _discover_missing_nodes(ctx: BuildContext) -> None:
+def _discover_missing_nodes(ctx: BuildContext) -> int:
     """Find changes that an old-patchset parent commit refers to but
     that weren't returned by /related. Search Gerrit for each such
     commit, pull the owning change in, and fetch its revisions so
     one more level of connections can be resolved.
 
     Operates only on the parent commits already collected from the
-    initial /related set, so it stays bounded."""
+    initial /related set, so it stays bounded. Returns the number of
+    newly-discovered changes."""
     unresolved: set[str] = set()
     for _child_hash, parent_hash in ctx.revision_parents.items():
         if parent_hash and parent_hash not in ctx.commit_to_change_ps:
             unresolved.add(parent_hash)
 
     if not unresolved:
-        return
+        return 0
 
     discovered_cns: set[int] = set()
     unresolved_list = sorted(unresolved)
@@ -283,21 +420,16 @@ def _discover_missing_nodes(ctx: BuildContext) -> None:
             pass
 
     if not discovered_cns:
-        return
+        return 0
 
-    ctx.log(
-        f"Discovered {len(discovered_cns)} additional changes"
-        " via old patchset parents...",
-        end="",
-    )
     _fetch_revisions_batch(ctx, sorted(discovered_cns))
-    ctx.log(f" {len(ctx.commit_to_change_ps)} total commits mapped.")
+    return len(discovered_cns)
 
 
-def _filter_merged_ancestors(ctx: BuildContext) -> None:
+def _filter_merged_ancestors(ctx: BuildContext) -> int:
     """Drop discovered changes that are already MERGED — those are
     git ancestors on lustre-master, not part of the actual patch
-    series we care about."""
+    series we care about. Returns the number of removed changes."""
     related_set = {e["cn"] for e in ctx.raw_entries}
     merged_discovered = [
         cn for cn in ctx.nodes
@@ -305,8 +437,7 @@ def _filter_merged_ancestors(ctx: BuildContext) -> None:
     ]
     for cn in merged_discovered:
         del ctx.nodes[cn]
-    if merged_discovered:
-        ctx.log(f"  (filtered {len(merged_discovered)} merged ancestors)")
+    return len(merged_discovered)
 
 
 def _attach_review_info(ctx: BuildContext) -> None:
@@ -318,22 +449,19 @@ def _attach_review_info(ctx: BuildContext) -> None:
         node["review"] = review
 
 
-def _fetch_ci_and_comments(ctx: BuildContext) -> None:
+def _fetch_ci_and_comments(ctx: BuildContext) -> int:
     """Attach CI links (from change messages) and, when requested,
     detailed unresolved comments. Only non-abandoned changes are
-    queried — abandoned patches carry no useful extra detail."""
+    queried — abandoned patches carry no useful extra detail.
+    Returns the number of active changes that were processed."""
     if not ctx.fetch_details:
-        return
+        return 0
     active_cns = sorted(
         cn for cn, node in ctx.nodes.items()
         if node["status"] != "ABANDONED"
     )
     if not active_cns:
-        return
-
-    ctx.log(
-        f"Fetching details ({len(active_cns)} active changes)...", end="",
-    )
+        return 0
 
     # Batch-fetch messages for CI links.
     msg_batches = [
@@ -367,9 +495,6 @@ def _fetch_ci_and_comments(ctx: BuildContext) -> None:
     # confidence-ranked thread analysis capped at
     # unresolved_comment_count.
     if ctx.fetch_comments:
-        ctx.log(
-            f"\nFetching comments ({len(active_cns)} changes)...", end="",
-        )
         for cn in active_cns:
             try:
                 expected = ctx.nodes[cn]["review"].get("unresolved_count", -1)
@@ -379,13 +504,14 @@ def _fetch_ci_and_comments(ctx: BuildContext) -> None:
             except Exception:
                 pass
 
-    ctx.log(" done.")
+    return len(active_cns)
 
 
-def _build_main_edges(ctx: BuildContext) -> None:
+def _build_main_edges(ctx: BuildContext) -> int:
     """Produce edges for the main series from raw_entries (the
     guaranteed chain) and revision_parents (stale branches from old
-    patchsets). Cycles get removed as a final step."""
+    patchsets). Cycles get removed as a final step. Returns the
+    number of cycle edges removed."""
 
     def add_edge(parent_cn: int, child_cn: int, parent_ps: int) -> None:
         if parent_cn == child_cn:
@@ -431,9 +557,7 @@ def _build_main_edges(ctx: BuildContext) -> None:
             continue
         add_edge(parent_cn, child_cn, parent_ps)
 
-    removed = _break_cycles(ctx.edges)
-    if removed:
-        ctx.log(f"  (removed {removed} edges to break cycles)")
+    return _break_cycles(ctx.edges)
 
 
 def _tag_main_group(ctx: BuildContext) -> None:
@@ -729,20 +853,13 @@ def _expand_separate_series(ctx: BuildContext) -> None:
             ]
         except Exception:
             seed_cns = []
-        if seed_cns:
+        if seed_cns and ctx.logger is not None:
             n_new = sum(1 for c in seed_cns if c not in ctx.nodes)
-            ctx.log(
-                f"Searching {label}: {len(seed_cns)} matches"
-                f" ({n_new} outside main series)..."
+            ctx.logger.note(
+                f"{label}: {len(seed_cns)} matches"
+                f" ({n_new} outside main series)"
             )
         _build_separate_group(ctx, seed_cns, label)
-
-    if ctx.separate_groups:
-        total = sum(len(g["node_ids"]) for g in ctx.separate_groups)
-        ctx.log(
-            f"Built {len(ctx.separate_groups)} separate series"
-            f" ({total} nodes total)."
-        )
 
 
 # ─── Output assembly ────────────────────────────────────────────────────
@@ -815,6 +932,7 @@ def build_graph(
 
     Returns a dict ready to be embedded as JSON in the HTML template.
     """
+    logger = PhaseLogger(total=_TOTAL_PHASES, enabled=progress)
     ctx = BuildContext(
         client=client,
         change_number=change_number,
@@ -826,18 +944,76 @@ def build_graph(
         include_hashtag=include_hashtag,
         extra_topics=list(extra_topics or []),
         extra_hashtags=list(extra_hashtags or []),
+        logger=logger,
     )
 
+    logger.header(f"gerrit-cli graph / #{change_number}")
+
+    logger.start("Resolving project")
     _resolve_project(ctx)
+    logger.done(ctx.project)
+
+    logger.start(f"/related(#{change_number})")
     entries = _fetch_related(ctx)
     _parse_related_entries(ctx, entries)
-    _expand_via_related_fanout(ctx)
+    logger.done(f"{len(entries)} changes")
+
+    logger.start("Fan-out over initial set")
+    fanout_added = _expand_via_related_fanout(ctx)
+    logger.done(
+        f"+{fanout_added} new (total {len(ctx.nodes)})"
+        if fanout_added
+        else f"no new changes (total {len(ctx.nodes)})"
+    )
+
+    logger.start(f"Revision history ({len(ctx.nodes)} changes)")
     _fetch_initial_revisions(ctx)
-    _discover_missing_nodes(ctx)
-    _filter_merged_ancestors(ctx)
+    logger.done(f"{len(ctx.commit_to_change_ps)} commits mapped")
+
+    logger.start("Discovering missing parent commits")
+    discovered = _discover_missing_nodes(ctx)
+    filtered = _filter_merged_ancestors(ctx)
+    parts = []
+    if discovered:
+        parts.append(f"+{discovered} discovered")
+    if filtered:
+        parts.append(f"{filtered} ancestors filtered")
+    logger.done(", ".join(parts) if parts else "nothing new")
+
     _attach_review_info(ctx)
-    _fetch_ci_and_comments(ctx)
-    _build_main_edges(ctx)
+
+    logger.start("Fetching CI details")
+    active = _fetch_ci_and_comments(ctx)
+    if not ctx.fetch_details:
+        logger.done("skipped (--skip-ci-details)")
+    elif active == 0:
+        logger.done("no active changes")
+    elif ctx.fetch_comments:
+        logger.done(f"{active} changes (with inline comments)")
+    else:
+        logger.done(f"{active} active changes")
+
+    logger.start("Building main edges")
+    cycles_removed = _build_main_edges(ctx)
     _tag_main_group(ctx)
+    cycle_note = f", {cycles_removed} cycle edges removed" if cycles_removed else ""
+    logger.done(f"{len(ctx.edges)} edges{cycle_note}")
+
+    logger.start("Topic/hashtag expansion")
     _expand_separate_series(ctx)
-    return _assemble_payload(ctx)
+    if ctx.separate_groups:
+        sep_total = sum(len(g["node_ids"]) for g in ctx.separate_groups)
+        logger.done(
+            f"{len(ctx.separate_groups)} groups, {sep_total} nodes"
+        )
+    else:
+        logger.done("none")
+
+    payload = _assemble_payload(ctx)
+    stats = payload["stats"]
+    logger.summary(
+        f"{stats['node_count']} nodes · "
+        f"{stats['edge_count']} edges · "
+        f"{stats['separate_group_count']} separate groups"
+    )
+    return payload
