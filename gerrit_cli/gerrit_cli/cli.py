@@ -169,6 +169,7 @@ def cmd_graph(args):
         extra_topics = [t.strip() for t in extra_topics_raw.split(",") if t.strip()]
         extra_hashtags = [h.strip() for h in extra_hashtags_raw.split(",") if h.strip()]
         cross_project_branch = getattr(args, "cross_project", False)
+        name = getattr(args, "name", None)
         graph_data = build_graph(
             client, change_number, base_url,
             fetch_details=not skip_details,
@@ -178,6 +179,7 @@ def cmd_graph(args):
             extra_topics=extra_topics,
             extra_hashtags=extra_hashtags,
             cross_project_branch=cross_project_branch,
+            name=name,
         )
 
         html_content = generate_html(graph_data)

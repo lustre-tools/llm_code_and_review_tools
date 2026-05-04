@@ -74,6 +74,18 @@ if (G.generated_at) {
     document.getElementById('generated-at').textContent = 'Generated: ' + G.generated_at;
 }
 
+// Set the browser tab title and the topbar h1 from G.name when the
+// build was invoked with --name; otherwise fall back to the change
+// number. Both are updated again in renderGraph(); we set them here
+// too so they're correct before the first render.
+if (G.name) {
+    document.title = G.name;
+    document.getElementById('title').textContent = G.name;
+} else {
+    document.title = `Series Graph — #${G.anchor}`;
+    document.getElementById('title').textContent = `Series Graph — #${G.anchor}`;
+}
+
 // Build the legend from the palette. Re-rendered on theme toggle.
 renderLegend();
 
@@ -1159,9 +1171,13 @@ function renderGraph() {
     nodesDS.add(visNodes);
     edgesDS.add(visEdges);
 
-    // Update title
-    document.getElementById('title').textContent =
-        `Series Graph — #${currentAnchor}`;
+    // Update title. If the build was given an explicit --name, it
+    // becomes the headline; otherwise fall back to the anchor change
+    // number. Either way the anchor is still in the URL on every
+    // node so it's never lost.
+    document.getElementById('title').textContent = G.name
+        ? G.name
+        : `Series Graph — #${currentAnchor}`;
 
     // Fit after render
     setTimeout(() => {

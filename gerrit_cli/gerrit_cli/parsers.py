@@ -985,6 +985,15 @@ def add_graph_parser(subparsers):
              "from another repo.",
     )
     parser.add_argument(
+        "--name",
+        default=None,
+        metavar="LABEL",
+        help="Display LABEL in the graph title (top-left and browser "
+             "tab) instead of the anchor change number. Useful for "
+             "naming a series — e.g. 'PCC read-only' instead of "
+             "'#38305'.",
+    )
+    parser.add_argument(
         "--pretty", "-p",
         action="store_true",
         help="Pretty-print JSON output",

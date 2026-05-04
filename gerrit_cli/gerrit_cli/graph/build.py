@@ -968,6 +968,7 @@ def build_graph(
     extra_topics: list[str] | None = None,
     extra_hashtags: list[str] | None = None,
     cross_project_branch: bool = False,
+    name: str | None = None,
 ) -> dict[str, Any]:
     """Build the full series graph with stale branch information.
 
@@ -1069,6 +1070,8 @@ def build_graph(
         logger.done("none")
 
     payload = _assemble_payload(ctx)
+    if name:
+        payload["name"] = name
     stats = payload["stats"]
     logger.summary(
         f"{stats['node_count']} nodes · "
