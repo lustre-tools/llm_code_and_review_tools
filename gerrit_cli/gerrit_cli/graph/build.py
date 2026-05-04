@@ -198,10 +198,17 @@ class BuildContext:
     include_hashtag: bool
     extra_topics: list[str]
     extra_hashtags: list[str]
+    # When False (the default), search-based expansion (topic/hashtag
+    # and commit-parent discovery) is restricted to changes in the
+    # same project AND branch as the anchor. When True, results from
+    # any project/branch on the same Gerrit host are pulled in
+    # (the original permissive behavior).
+    cross_project_branch: bool = False
     logger: "PhaseLogger | None" = None
 
     # Resolved from the anchor change during step 1.
     project: str = _DEFAULT_PROJECT
+    branch: str = "master"
 
     # Accumulated during the pipeline.
     nodes: dict[int, dict[str, Any]] = field(default_factory=dict)
@@ -231,15 +238,37 @@ class BuildContext:
 # ─── Step helpers ───────────────────────────────────────────────────────
 
 
+def _matches_anchor_scope(
+    ctx: BuildContext, change: dict[str, Any],
+) -> bool:
+    """Return True if a Gerrit change payload is in the same project
+    AND branch as the anchor — used to gate search-based expansion
+    (topic / hashtag / commit-parent discovery) so untrusted callers
+    don't pull in patches from other repos or branches that the user
+    might not want to expose. Bypassed when ctx.cross_project_branch
+    is True."""
+    if ctx.cross_project_branch:
+        return True
+    if change.get("project") != ctx.project:
+        return False
+    if change.get("branch") != ctx.branch:
+        return False
+    return True
+
+
 def _resolve_project(ctx: BuildContext) -> None:
-    """Resolve the Gerrit project for the anchor change so URLs and
-    git-fetch refs are built for the right repo (fs/lustre-release,
-    ex/lustre-release, …)."""
+    """Resolve the Gerrit project AND branch for the anchor change.
+    The project drives URLs and git-fetch refs; the branch is used
+    (together with the project) to scope search-based expansion to
+    the same upstream as the anchor unless `cross_project_branch`
+    is set."""
     try:
         anchor = ctx.client.rest.get(f"/changes/{ctx.change_number}")
         ctx.project = anchor.get("project", _DEFAULT_PROJECT)
+        ctx.branch = anchor.get("branch", "master")
     except Exception:
         ctx.project = _DEFAULT_PROJECT
+        ctx.branch = "master"
 
 
 def _fetch_related(ctx: BuildContext) -> list[dict[str, Any]]:
@@ -273,10 +302,16 @@ def _parse_related_entries(
         status = entry.get("status", "UNKNOWN")
         subject = ci.get("subject", "")
 
+        # /related entries don't include a branch field; assume the
+        # anchor's branch (Gerrit's /related is commit-graph based,
+        # so cross-branch entries here would be highly unusual). The
+        # bulk revision fetch later will overwrite if Gerrit returns
+        # something different.
         ctx.nodes[cn] = _make_node(
             cn, subject, status, latest,
             author_info.get("name", "Unknown"), ctx.base_url,
             project=ctx.project,
+            branch=ctx.branch,
         )
         ctx.raw_entries.append({
             "cn": cn,
@@ -402,20 +437,24 @@ def _discover_missing_nodes(ctx: BuildContext) -> int:
             )
             for change in result:
                 cn = change.get("_number", 0)
-                if cn and cn not in ctx.nodes:
-                    discovered_cns.add(cn)
-                    ctx.nodes[cn] = _make_node(
-                        cn, change.get("subject", ""),
-                        change.get("status", "UNKNOWN"),
-                        change.get("_current_revision_number", 1),
-                        change.get("owner", {}).get("name", "Unknown"),
-                        ctx.base_url,
-                        topic=change.get("topic", ""),
-                        hashtags=change.get("hashtags", []),
-                        updated=change.get("updated", ""),
-                        is_wip=bool(change.get("work_in_progress", False)),
-                        project=change.get("project", ctx.project),
-                    )
+                if not cn or cn in ctx.nodes:
+                    continue
+                if not _matches_anchor_scope(ctx, change):
+                    continue
+                discovered_cns.add(cn)
+                ctx.nodes[cn] = _make_node(
+                    cn, change.get("subject", ""),
+                    change.get("status", "UNKNOWN"),
+                    change.get("_current_revision_number", 1),
+                    change.get("owner", {}).get("name", "Unknown"),
+                    ctx.base_url,
+                    topic=change.get("topic", ""),
+                    hashtags=change.get("hashtags", []),
+                    updated=change.get("updated", ""),
+                    is_wip=bool(change.get("work_in_progress", False)),
+                    project=change.get("project", ctx.project),
+                    branch=change.get("branch", ctx.branch),
+                )
         except Exception:
             pass
 
@@ -690,6 +729,7 @@ def _fetch_group_seed_related(
         group_nodes[cn] = _make_node(
             cn, subject, status, latest, author, ctx.base_url,
             project=ctx.project,
+            branch=ctx.branch,
         )
         group_raw.append({
             "cn": cn,
@@ -728,6 +768,7 @@ def _fetch_single_change(
         updated=ch.get("updated", ""),
         is_wip=bool(ch.get("work_in_progress", False)),
         project=ch.get("project", ctx.project),
+        branch=ch.get("branch", ctx.branch),
     )
 
 
@@ -840,24 +881,36 @@ def _group_cross_edges(
 
 def _expand_separate_series(ctx: BuildContext) -> None:
     """Run topic/hashtag expansion and build one separate group per
-    matching series."""
+    matching series. Search results are filtered to the anchor's
+    project + branch unless cross_project_branch is set; this keeps
+    sensitive patches from other repos / branches out of a graph
+    built from a public-facing change."""
     search_labels = _collect_search_labels(ctx)
     for query, label in search_labels:
         try:
             result = ctx.client.rest.get(
                 f"/changes/?q={quote(query, safe=':+ ')}&n=500"
             )
-            seed_cns = [
-                ch.get("_number", 0) for ch in result
-                if ch.get("_number")
-            ]
         except Exception:
-            seed_cns = []
-        if seed_cns and ctx.logger is not None:
+            result = []
+        in_scope = [ch for ch in result if _matches_anchor_scope(ctx, ch)]
+        seed_cns = [
+            ch.get("_number", 0) for ch in in_scope
+            if ch.get("_number")
+        ]
+        if result and ctx.logger is not None:
+            total = sum(1 for ch in result if ch.get("_number"))
             n_new = sum(1 for c in seed_cns if c not in ctx.nodes)
+            dropped = total - len(seed_cns)
+            scope_note = ""
+            if dropped:
+                scope_note = (
+                    f", {dropped} dropped (other project/branch — pass"
+                    f" --cross-project to include)"
+                )
             ctx.logger.note(
-                f"{label}: {len(seed_cns)} matches"
-                f" ({n_new} outside main series)"
+                f"{label}: {total} matches"
+                f" ({n_new} outside main series{scope_note})"
             )
         _build_separate_group(ctx, seed_cns, label)
 
@@ -914,6 +967,7 @@ def build_graph(
     include_hashtag: bool = True,
     extra_topics: list[str] | None = None,
     extra_hashtags: list[str] | None = None,
+    cross_project_branch: bool = False,
 ) -> dict[str, Any]:
     """Build the full series graph with stale branch information.
 
@@ -929,6 +983,10 @@ def build_graph(
         include_hashtag: Same as include_topic but for hashtags.
         extra_topics: Additional topic names to search for and include.
         extra_hashtags: Additional hashtag names to search for and include.
+        cross_project_branch: When False (the default), search-based
+            expansion (topic/hashtag/commit-parent discovery) is
+            scoped to the anchor's project AND branch. Set True to
+            include results from any project/branch on the same host.
 
     Returns a dict ready to be embedded as JSON in the HTML template.
     """
@@ -944,6 +1002,7 @@ def build_graph(
         include_hashtag=include_hashtag,
         extra_topics=list(extra_topics or []),
         extra_hashtags=list(extra_hashtags or []),
+        cross_project_branch=cross_project_branch,
         logger=logger,
     )
 

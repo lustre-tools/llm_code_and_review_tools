@@ -1377,6 +1377,14 @@ function showNodeInfo(id) {
             <div class="fl">Author</div>
             <div class="fv">${esc(node.author)}</div>
         </div>
+        ${(node.project || node.branch) ? `<div class="field">
+            <div class="fl">Repo &middot; Branch</div>
+            <div class="fv">
+                <code style="font-size:12px">${esc(node.project || '?')}</code>
+                <span style="color:var(--text-muted)"> &middot; </span>
+                <code style="font-size:12px">${esc(node.branch || '?')}</code>
+            </div>
+        </div>` : ''}
         ${node.updated ? `<div class="field">
             <div class="fl">Updated</div>
             <div class="fv">${formatGerritDate(node.updated)}</div>

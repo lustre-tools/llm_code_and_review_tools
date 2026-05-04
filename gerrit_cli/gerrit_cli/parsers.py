@@ -975,6 +975,16 @@ def add_graph_parser(subparsers):
              "(beyond the anchor's own hashtags)",
     )
     parser.add_argument(
+        "--cross-project",
+        action="store_true",
+        help="Allow search-based expansion (topic, hashtag, "
+             "commit-parent discovery) to pull in changes from "
+             "OTHER projects/branches on the same Gerrit host. "
+             "Default: results are scoped to the anchor's project + "
+             "branch so a public-facing graph doesn't leak patches "
+             "from another repo.",
+    )
+    parser.add_argument(
         "--pretty", "-p",
         action="store_true",
         help="Pretty-print JSON output",

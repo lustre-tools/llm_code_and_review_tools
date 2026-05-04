@@ -14,6 +14,7 @@ def _make_node(
     topic: str = "", hashtags: list[str] | None = None,
     updated: str = "", is_wip: bool = False,
     project: str = "fs/lustre-release",
+    branch: str = "",
 ) -> dict[str, Any]:
     """Create a node dict for the graph."""
     if not ticket:
@@ -35,12 +36,20 @@ def _make_node(
         "cherrypick_cmd": f"{fetch_cmd} && git cherry-pick FETCH_HEAD",
         "updated": updated,
         "is_wip": is_wip,
+        "project": project,
+        "branch": branch,
     }
 
 
 def _update_node_meta(node: dict[str, Any], change: dict[str, Any]) -> None:
-    """Copy topic/hashtags/updated/wip-flag from a change payload onto a node."""
+    """Copy topic/hashtags/updated/wip/project/branch from a change
+    payload onto a node. /related entries don't carry branch, so the
+    bulk revision fetch is where this info lands."""
     node["topic"] = change.get("topic", "")
     node["hashtags"] = change.get("hashtags", [])
     node["updated"] = change.get("updated", "")
     node["is_wip"] = bool(change.get("work_in_progress", False))
+    if change.get("project"):
+        node["project"] = change["project"]
+    if change.get("branch"):
+        node["branch"] = change["branch"]
