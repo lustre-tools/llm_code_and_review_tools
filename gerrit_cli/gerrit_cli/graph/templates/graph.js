@@ -23,14 +23,52 @@ G.edges.forEach(e => {
 });
 
 // ─── STATS BAR ───
+// In-flight badge breaks down NEW changes by review health so a
+// single glance tells you "X ready to land, Y blocked on Maloo,
+// …" without having to scan the graph node-by-node.
 const sc = G.stats.status_counts;
-document.getElementById('stats').innerHTML = [
-    ['NEW', sc.NEW || 0, 'badge-new'],
-    ['MERGED', sc.MERGED || 0, 'badge-merged'],
-    ['ABANDONED', sc.ABANDONED || 0, 'badge-abandoned'],
-    ['Stale edges', G.stats.stale_edge_count || 0, 'badge-stale'],
-].map(([l, c, cls]) => `<span class="badge ${cls}">${l}: ${c}</span>`).join('')
-    + `<span style="color:#8b949e;font-size:11px">${G.stats.node_count} changes</span>`;
+const inflight = sc.NEW || 0;
+const health = { ready: 0, pending: 0, veto: 0, maloo: 0, jenkins: 0, other: 0 };
+for (const n of G.nodes) {
+    if (n.status !== 'NEW') continue;
+    const h = reviewHealth(n);
+    if      (h === 'good')        health.ready++;
+    else if (h === 'bad_veto')    health.veto++;
+    else if (h === 'bad_maloo')   health.maloo++;
+    else if (h === 'bad_jenkins') health.jenkins++;
+    else if (h === 'bad_other')   health.other++;
+    else                          health.pending++;
+}
+// Render the in-flight breakdown as a row of small "chips" — a
+// colored bullet (matching the legend dot for that health) plus
+// count + label. Sits OUTSIDE the blue In-flight badge so the
+// badge stays visually self-contained.
+const healthChips = [];
+const chip = (n, label, color) => {
+    if (!n) return;
+    healthChips.push(
+        '<span class="health-chip" title="' + n + ' ' + label + '">'
+      + '<span class="health-dot" style="background:' + color + '"></span>'
+      + '<b>' + n + '</b> ' + label
+      + '</span>'
+    );
+};
+chip(health.ready,   'ready',   '#3fb950');
+chip(health.pending, 'pending', '#58a6ff');
+chip(health.veto,    'CR veto', '#f85149');
+chip(health.maloo,   'Maloo',   '#f85149');
+chip(health.jenkins, 'Jenkins', '#e8a020');
+chip(health.other,   'other -1','#d63384');
+const breakdown = healthChips.length
+    ? '<span class="health-breakdown">' + healthChips.join('') + '</span>'
+    : '';
+
+document.getElementById('stats').innerHTML =
+    `<span class="badge badge-new">In-flight: ${inflight}</span>`
+  + breakdown
+  + `<span class="badge badge-merged">MERGED: ${sc.MERGED || 0}</span>`
+  + `<span class="badge badge-abandoned">ABANDONED: ${sc.ABANDONED || 0}</span>`
+  + `<span style="color:#8b949e;font-size:11px">${G.stats.node_count} changes</span>`;
 
 if (G.generated_at) {
     document.getElementById('generated-at').textContent = 'Generated: ' + G.generated_at;

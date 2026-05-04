@@ -40,6 +40,22 @@ body {
 body.light .badge-abandoned { background: #8b949e; color: #fff; }
 .badge-stale { background: #d29922; color: #000; }
 
+/* In-flight breakdown — sits next to the blue In-flight badge as a
+   row of chips, each a colored bullet + count + label. */
+.health-breakdown {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-size: 11px; color: var(--text-muted);
+    padding: 2px 4px;
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    margin: 0 2px;
+}
+.health-chip { display: inline-flex; align-items: center; gap: 4px; }
+.health-chip b { color: var(--text); font-weight: 600; }
+.health-dot {
+    width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+}
+
 .controls {
     background: var(--bg-surface); padding: 6px 16px;
     display: flex; align-items: center; gap: 12px;
