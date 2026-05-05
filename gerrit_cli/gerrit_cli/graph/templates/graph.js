@@ -833,6 +833,7 @@ function legendItems() {
         { kind: 'fill', label: 'Merged',      color: C.STATUS.MERGED.bg },
         { kind: 'fill', label: 'Abandoned',   color: C.STATUS.ABANDONED.bg },
         { kind: 'border', label: '🚧 WIP',   color: '#c9d1d9', dashed: true },
+        { kind: 'border', label: 'master-next (queued)', color: C.STATUS.MERGED.border },
         { kind: 'group', label: 'Edges', marginLeft: '8px' },
         { kind: 'fill', label: 'Stale',       color: C.edgeStale },
     ];
@@ -966,7 +967,18 @@ function nodeBaseColors(node, flags, C) {
 
 // Full vis.js node options for a rendered node.
 function styleForNode(node, flags, position, C) {
-    const colors = nodeBaseColors(node, flags, C);
+    let colors = nodeBaseColors(node, flags, C);
+
+    // master-next override: a patch tagged "master-next" is queued
+    // for the next master merge and is treated as effectively
+    // merged. Apply only the MERGED border color (not the fill) so
+    // its actual review state still shows through. Doesn't change
+    // borderWidth or other geometry.
+    if ((node.hashtags || []).includes('master-next')) {
+        colors = Object.assign({}, colors, {
+            border: C.STATUS.MERGED.border,
+        });
+    }
 
     // Non-main nodes above the anchor dim slightly. Separate-series
     // nodes are never dimmed — they render at full intensity.
