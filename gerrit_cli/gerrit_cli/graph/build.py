@@ -38,6 +38,14 @@ _BATCH_SIZE_WITH_COMMITS = 10
 _DISCOVERY_BATCH_SIZE = 30
 _MESSAGES_BATCH_SIZE = 20
 
+# Hashtags that are conventional/lifecycle markers rather than
+# series identifiers. Even when the anchor carries them, they're
+# skipped by the auto-derived hashtag fanout — every patch queued
+# for the next master merge has "master-next", so using it as a
+# series identifier would pull in hundreds of unrelated changes.
+# Users can still force-include them with `--include-hashtag`.
+_LIFECYCLE_HASHTAGS = frozenset({"master-next"})
+
 # Number of pipeline phases printed by build_graph. Must match the
 # number of `logger.start(...)` calls in build_graph so the [N/total]
 # prefix counts correctly.
@@ -627,7 +635,14 @@ def _collect_search_labels(
 
     hashtags: list[str] = []
     if ctx.include_hashtag:
-        hashtags.extend(anchor_hashtags)
+        # Drop lifecycle markers (e.g. "master-next") from the auto-
+        # derived list — they're carried by every patch queued for
+        # the next merge and would pull in unrelated series.
+        hashtags.extend(
+            h for h in anchor_hashtags if h not in _LIFECYCLE_HASHTAGS
+        )
+    # User-supplied --include-hashtag still wins; opting in to
+    # "master-next" explicitly is allowed.
     hashtags.extend(ctx.extra_hashtags)
 
     search_labels: list[tuple[str, str]] = []
