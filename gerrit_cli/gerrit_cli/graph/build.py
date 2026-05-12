@@ -791,7 +791,12 @@ def _fetch_group_revisions(
     ctx: BuildContext, group_nodes: dict[int, dict[str, Any]],
 ) -> tuple[dict[str, tuple[int, int]], dict[str, str]]:
     """Fetch revisions + commits for a group so per-group commit
-    maps can be built for internal and cross-group edge detection."""
+    maps can be built for internal and cross-group edge detection.
+
+    Also contributes to the global ctx.commit_to_change_ps and
+    ctx.revision_parents so the chain-builder for separate groups
+    (which runs after all groups are processed) can look up commit
+    relationships across the entire separate-group pool."""
     group_ctps: dict[str, tuple[int, int]] = {}
     group_rev_parents: dict[str, str] = {}
     try:
@@ -811,6 +816,11 @@ def _fetch_group_revisions(
                     "unresolved_comment_count", 0
                 )
                 group_nodes[cn]["review"] = lbl
+        # Merge into the global maps so the chain-builder for
+        # separate groups (running after all groups are processed)
+        # can resolve commit hashes across the whole pool.
+        ctx.commit_to_change_ps.update(group_ctps)
+        ctx.revision_parents.update(group_rev_parents)
     except Exception:
         pass
     return group_ctps, group_rev_parents
@@ -894,6 +904,90 @@ def _group_cross_edges(
     return out
 
 
+def _build_separate_chains(ctx: BuildContext) -> list[list[int]]:
+    """Build forward-walked chains across ALL separate-group nodes.
+
+    Algorithm (per user specification):
+
+    1. Pool every separate-group member (series_group > 0) into a
+       single set of candidates.
+    2. Start a chain with the OLDEST unused candidate. Oldest =
+       lowest change_number.
+    3. From the cursor, find the next patch: any unused candidate
+       whose patchsets — examined NEWEST-FIRST — has a parent
+       commit hash that resolves to one of the cursor's commits
+       (across any of the cursor's patchsets). Preferring newer
+       patchsets means in-flight relationships are picked up first;
+       falling back to older patchsets recovers merged-to-merged
+       chains where the latest patchset is a cherry-pick to master
+       (whose parent is a master commit not in our pool) but
+       earlier patchsets still point at the in-pool predecessor.
+    4. Append the next patch to the chain, advance the cursor,
+       repeat step 3 until no candidate matches.
+    5. Start a new chain from the next-oldest unused candidate.
+       Continue until every candidate is in some chain (possibly
+       as a singleton).
+
+    Returns a list of chains; each chain is a list of cns ordered
+    oldest → newest. Singletons appear as 1-element chains."""
+    sep_nodes = {
+        cn: node for cn, node in ctx.nodes.items()
+        if (node.get("series_group") or 0) > 0
+    }
+    if not sep_nodes:
+        return []
+
+    # Per-member commit set (every patchset commit hash this member
+    # has ever produced) and per-member patchsets sorted newest →
+    # oldest as (ps, commit_hash, parent_commit_hash) tuples.
+    member_commits: dict[int, set[str]] = {cn: set() for cn in sep_nodes}
+    member_revs: dict[int, list[tuple[int, str, str]]] = {
+        cn: [] for cn in sep_nodes
+    }
+    for h, (cn, ps) in ctx.commit_to_change_ps.items():
+        if cn not in member_commits:
+            continue
+        member_commits[cn].add(h)
+        parent_h = ctx.revision_parents.get(h, "")
+        member_revs[cn].append((ps, h, parent_h))
+    for cn in member_revs:
+        member_revs[cn].sort(reverse=True)  # newest patchset first
+
+    chains: list[list[int]] = []
+    used: set[int] = set()
+    sorted_cns = sorted(sep_nodes.keys())  # oldest (lowest cn) first
+
+    while True:
+        root = next((c for c in sorted_cns if c not in used), None)
+        if root is None:
+            break
+        chain = [root]
+        used.add(root)
+        cursor = root
+        while True:
+            cursor_commits = member_commits[cursor]
+            next_patch = None
+            for cand in sorted_cns:
+                if cand in used:
+                    continue
+                # Examine candidate's patchsets newest-first; if any
+                # has a parent commit in cursor's commit set, this
+                # candidate follows the cursor in the chain.
+                for _ps, _h, parent_h in member_revs[cand]:
+                    if parent_h and parent_h in cursor_commits:
+                        next_patch = cand
+                        break
+                if next_patch is not None:
+                    break
+            if next_patch is None:
+                break
+            chain.append(next_patch)
+            used.add(next_patch)
+            cursor = next_patch
+        chains.append(chain)
+    return chains
+
+
 def _expand_separate_series(ctx: BuildContext) -> None:
     """Run topic/hashtag expansion and build one separate group per
     matching series. Search results are filtered to the anchor's
@@ -949,12 +1043,18 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
         "%Y-%m-%d %I:%M:%S %p %Z"
     )
 
+    chains = _build_separate_chains(ctx)
     return {
         "anchor": ctx.change_number,
         "base_url": ctx.base_url,
         "nodes": list(ctx.nodes.values()),
         "edges": ctx.edges,
         "separate_groups": ctx.separate_groups,
+        # Forward-walked chains across all separate-group nodes
+        # (oldest → newest). Used by the JS layout to render
+        # separate groups as vertical columns rooted at their
+        # oldest member.
+        "separate_chains": chains,
         "generated_at": generated_at,
         "stats": {
             "node_count": len(ctx.nodes),
@@ -963,6 +1063,7 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
             "stale_edge_count": stale_edges,
             "tickets": tickets,
             "separate_group_count": len(ctx.separate_groups),
+            "separate_chain_count": len(chains),
             "generated_at": generated_at,
         },
     }

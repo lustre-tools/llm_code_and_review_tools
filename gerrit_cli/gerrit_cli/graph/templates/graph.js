@@ -478,157 +478,159 @@ function _layoutBaseChain(ctx) {
     }
 }
 
-// Step 3a: for a fully-disconnected separate group (no cross-group
-// edges into main), place its members as a vertical column at
-// `fallbackX`, one level per BFS distance from any root. Returns the
-// next free X for the caller to use.
-function _layoutDisconnectedGroup(ctx, group, visibleIds, fallbackX) {
-    const positions = ctx.positions;
-    const visibleSet = new Set(visibleIds);
-    const groupParent = {};
-    const groupChildren = {};
-    for (const id of visibleIds) groupChildren[id] = [];
-    // Walk only edges whose endpoints are BOTH visible. Filtering by
-    // group_set alone (the group's full node list) lets edges from a
-    // hidden member into a visible one slip through, which then
-    // crashes on groupChildren[e.from].push because e.from is hidden
-    // and never got an entry in groupChildren.
-    for (const e of G.edges) {
-        if (!visibleSet.has(e.from) || !visibleSet.has(e.to)) continue;
-        groupParent[e.to] = e.from;
-        groupChildren[e.from].push(e.to);
-    }
-    const roots = visibleIds.filter(id => !groupParent[id]);
-    const levels = {};
-    const bfsQ = [];
-    for (const r of roots) {
-        levels[r] = 0;
-        bfsQ.push(r);
-    }
-    while (bfsQ.length > 0) {
-        const n = bfsQ.shift();
-        for (const c of (groupChildren[n] || [])) {
-            if (!(c in levels)) {
-                levels[c] = levels[n] + 1;
-                bfsQ.push(c);
-            }
-        }
-    }
-    for (const id of visibleIds) {
-        if (!(id in levels)) levels[id] = 0;
-    }
-
-    // Bucket by BFS level so multiple roots / same-level nodes get
-    // spread horizontally instead of stacking. Without this, two
-    // level-0 roots collide at (fallbackX, 0) and the
-    // collision-resolver shifts them right — but by then the next
-    // group has already been positioned `NODE_W * 1.5` away, so the
-    // overflow bleeds into it.
-    const buckets = {};
-    let maxBucketSize = 1;
-    for (const id of visibleIds) {
-        const lv = levels[id];
-        (buckets[lv] = buckets[lv] || []).push(id);
-        if (buckets[lv].length > maxBucketSize) {
-            maxBucketSize = buckets[lv].length;
-        }
-    }
-    for (const lv in buckets) {
-        const ids = buckets[lv].sort((a, b) => a - b);
-        for (let i = 0; i < ids.length; i++) {
-            positions[ids[i]] = {
-                x: fallbackX + i * NODE_W,
-                y: -parseInt(lv) * LEVEL_H,
-            };
-        }
-    }
-    // Reserve enough horizontal space for the widest level so the
-    // next group starts past this one's right edge.
-    return fallbackX + Math.max(1, maxBucketSize) * NODE_W + NODE_W * 0.5;
-}
-
-// Step 3b: stray group members that weren't placed by either
-// _layoutTree (cross-group edge not reaching them) or the
-// disconnected-column fallback. Glue them next to a placed same-
-// group neighbor, shifting right until the spot is free.
-function _layoutGroupFixup(ctx, groups) {
-    const positions = ctx.positions;
-    for (const group of groups) {
-        for (const id of group.node_ids) {
-            if (positions[id] !== undefined) continue;
-            if (!nodeVisible(id)) continue;
-
-            let neighborPos = null;
-            let neighborDir = 0;
-            for (const e of G.edges) {
-                if (e.to === id && positions[e.from]) {
-                    // id is a child of e.from — children sit above
-                    // their parents (y decreases going up).
-                    neighborPos = positions[e.from];
-                    neighborDir = -1;
-                    break;
-                }
-                if (e.from === id && positions[e.to]) {
-                    // id is a parent of e.to — parents sit below
-                    // their children.
-                    neighborPos = positions[e.to];
-                    neighborDir = 1;
-                    break;
-                }
-            }
-            if (!neighborPos) continue;
-
-            let px = neighborPos.x;
-            const py = neighborPos.y + neighborDir * LEVEL_H;
-            let tries = 0;
-            while (tries < 20) {
-                let occupied = false;
-                for (const p of Object.values(positions)) {
-                    if (Math.abs(p.x - px) < NODE_W * 0.9
-                            && Math.abs(p.y - py) < LEVEL_H * 0.6) {
-                        occupied = true;
-                        break;
-                    }
-                }
-                if (!occupied) break;
-                px += NODE_W;
-                tries++;
-            }
-            positions[id] = { x: px, y: py };
-        }
-    }
-}
-
-// Step 3: lay out separate-series groups. Groups that had at least
-// one node pulled in by _layoutTree via a cross-group edge are left
-// mostly alone (the fixup handles any stragglers); truly
-// disconnected groups get their own column at the far right.
+// Step 3: lay out separate-series groups as forward-walked chains.
+//
+// Python provides G.separate_chains: a list of chains, each chain
+// being a list of cns ordered OLDEST → NEWEST. The chain is built
+// by starting at the oldest unused separate-group node and walking
+// forward: for each candidate, look at its NEWEST patchset's
+// parent commit hash and ask "is that hash any patchset of the
+// current cursor?" If yes, that candidate follows the cursor.
+// Continue until nothing follows. New chain starts from the next
+// oldest unused node.
+//
+// Layout: each chain is a single vertical column, oldest at the
+// bottom, newest at the top. If the chain has a cross-group edge
+// to a placed main node, the column is anchored DIRECTLY ABOVE
+// that node so the dependency relationship is visually obvious.
+// Otherwise the column sits in a far-right shelf.
+//
+// Single-element chains (no following patches found) are placed
+// the same way — each gets its own column.
 function _layoutSeparateGroups(ctx) {
     const positions = ctx.positions;
-    const groups = G.separate_groups || [];
-    if (groups.length === 0) return;
+    const chains = G.separate_chains || [];
+    if (chains.length === 0) {
+        _layoutSeparateFixup(ctx);
+        return;
+    }
 
+    // Classify each chain: anchored (has a placed main neighbor)
+    // vs disconnected (no cross-group edge to anything placed).
+    const anchored = [];     // { chain, anchor }
+    const disconnected = []; // chain
+    for (const rawChain of chains) {
+        const chain = rawChain.filter(id => nodeVisible(id));
+        if (chain.length === 0) continue;
+        // Skip if any member was already placed by a previous phase.
+        if (chain.some(id => positions[id] !== undefined)) continue;
+        const anchor = _findChainAnchor(chain, positions);
+        if (anchor) anchored.push({ chain, anchor });
+        else disconnected.push(chain);
+    }
+
+    // Anchored chains: sort by anchor x so they place left-to-right
+    // in spatial order. Monotonic column allocator avoids overlap.
+    anchored.sort((a, b) => {
+        if (a.anchor.x !== b.anchor.x) return a.anchor.x - b.anchor.x;
+        return a.chain[0] - b.chain[0];
+    });
+    let lastRight = -Infinity;
+    for (const item of anchored) {
+        const baseX = Math.max(item.anchor.x, lastRight + NODE_W);
+        const baseY = item.anchor.y - LEVEL_H;
+        _placeChainColumn(ctx, item.chain, baseX, baseY);
+        lastRight = Math.max(lastRight, baseX);
+    }
+
+    // Disconnected chains: far-right shelf starting past the main
+    // tree and any anchored columns we just placed.
     let mainMaxX = 0;
     for (const pos of Object.values(positions)) {
         mainMaxX = Math.max(mainMaxX, pos.x);
     }
-    let fallbackX = mainMaxX + NODE_W * 2;
-
-    for (const group of groups) {
-        const visibleIds = group.node_ids.filter(id => nodeVisible(id));
-        if (visibleIds.length === 0) continue;
-
-        const alreadyPlaced = visibleIds.some(
-            id => positions[id] !== undefined
-        );
-        if (alreadyPlaced) continue;
-
-        fallbackX = _layoutDisconnectedGroup(
-            ctx, group, visibleIds, fallbackX
-        );
+    let shelfX = Math.max(mainMaxX, lastRight) + NODE_W * 2;
+    for (const chain of disconnected) {
+        _placeChainColumn(ctx, chain, shelfX, 0);
+        shelfX += NODE_W;
     }
 
-    _layoutGroupFixup(ctx, groups);
+    _layoutSeparateFixup(ctx);
+}
+
+// Find a placed main-tree neighbor for any node in the chain.
+// Prefers non-stale edges (live dependencies are stronger context)
+// and the rightmost x among ties (so this chain lands past
+// leftward-anchored chains naturally). Returns null if no chain
+// member touches any placed node.
+function _findChainAnchor(chain, positions) {
+    const chainSet = new Set(chain);
+    let best = null;
+    for (const e of G.edges) {
+        const fromIs = chainSet.has(e.from);
+        const toIs = chainSet.has(e.to);
+        if (fromIs === toIs) continue;
+        const anchorId = fromIs ? e.to : e.from;
+        const anchorPos = positions[anchorId];
+        if (!anchorPos) continue;
+        const cand = {
+            x: anchorPos.x, y: anchorPos.y,
+            isStale: !!e.is_stale,
+        };
+        if (!best) { best = cand; continue; }
+        if (best.isStale !== cand.isStale) {
+            if (!cand.isStale) best = cand;
+            continue;
+        }
+        if (cand.x > best.x) best = cand;
+    }
+    return best;
+}
+
+// Place a chain (oldest → newest) as a single vertical column
+// starting at (baseX, baseY) and growing upward.
+function _placeChainColumn(ctx, chain, baseX, baseY) {
+    const positions = ctx.positions;
+    for (let i = 0; i < chain.length; i++) {
+        positions[chain[i]] = { x: baseX, y: baseY - i * LEVEL_H };
+    }
+}
+
+// Stragglers: any separate-group member not placed by the chain
+// pass (e.g. cross-group edge already pulled it into the main
+// tree, or it was filtered as hidden then revealed). Glue them
+// near any placed neighbor.
+function _layoutSeparateFixup(ctx) {
+    const positions = ctx.positions;
+    for (const node of G.nodes) {
+        const id = node.id;
+        if ((node.series_group || 0) === 0) continue;
+        if (positions[id] !== undefined) continue;
+        if (!nodeVisible(id)) continue;
+
+        let neighborPos = null;
+        let neighborDir = 0;
+        for (const e of G.edges) {
+            if (e.to === id && positions[e.from]) {
+                neighborPos = positions[e.from];
+                neighborDir = -1;  // child sits above parent
+                break;
+            }
+            if (e.from === id && positions[e.to]) {
+                neighborPos = positions[e.to];
+                neighborDir = 1;  // parent sits below child
+                break;
+            }
+        }
+        if (!neighborPos) continue;
+        let px = neighborPos.x;
+        const py = neighborPos.y + neighborDir * LEVEL_H;
+        let tries = 0;
+        while (tries < 20) {
+            let occupied = false;
+            for (const p of Object.values(positions)) {
+                if (Math.abs(p.x - px) < NODE_W * 0.9
+                        && Math.abs(p.y - py) < LEVEL_H * 0.6) {
+                    occupied = true;
+                    break;
+                }
+            }
+            if (!occupied) break;
+            px += NODE_W;
+            tries++;
+        }
+        positions[id] = { x: px, y: py };
+    }
 }
 
 // Place main-series nodes that the upward walk + base chain never
@@ -749,8 +751,11 @@ function computeLayout(anchorId) {
     };
     _layoutUpwardFromAnchor(ctx);
     _layoutBaseChain(ctx);
-    _layoutSeparateGroups(ctx);
+    // Unplaced-main BEFORE separate groups so the chain anchor
+    // lookup can find every placed main neighbor (including main
+    // ancestors that fell off the linear base chain).
     _layoutUnplacedMainSeries(ctx);
+    _layoutSeparateGroups(ctx);
     _resolveCollisions(ctx);
     return ctx.positions;
 }
