@@ -126,6 +126,15 @@ function showAbandonedEnabled() {
     return document.getElementById('chk-abandoned').checked;
 }
 
+// "Show merged" is checked by default. The toggle is applied at
+// render time only — layout, edges, and traversal all keep merged
+// nodes in scope so an in-flight node sitting on top of a merged
+// predecessor stays correctly positioned and connected when the
+// merged node is just visually elided.
+function showMergedEnabled() {
+    return document.getElementById('chk-merged').checked;
+}
+
 function nodeVisible(id) {
     const n = nodeMap[id];
     if (!n) return false;
@@ -1135,6 +1144,13 @@ function renderGraph() {
     const activeUp = computeActiveUp(positions, currentAnchor);
     const keptSources = computeHistoricalSuppression(positions);
     const C = getColors();
+    // Final render-time filter for the "Show merged" toggle. Layout
+    // and edges are already computed against the full node set; we
+    // just drop merged nodes and any edge touching them from the
+    // datasets the user sees. In-flight chains that traversed a
+    // merged predecessor keep their positions, so unhiding restores
+    // the previous view exactly.
+    const hideMerged = !showMergedEnabled();
 
     // Build vis.js nodes
     const visNodes = [];
@@ -1144,6 +1160,7 @@ function renderGraph() {
         const id = parseInt(idStr);
         const node = nodeMap[id];
         if (!node) continue;
+        if (hideMerged && node.status === 'MERGED') continue;
 
         const isAnchor = id === currentAnchor;
         const isMain = mainChain.has(id);
@@ -1171,6 +1188,12 @@ function renderGraph() {
         if (!positions[edge.from] || !positions[edge.to]) continue;
         const ks = keptSources[edge.to];
         if (ks && !ks.has(edge.from)) continue;
+        if (hideMerged) {
+            const fn = nodeMap[edge.from];
+            const tn = nodeMap[edge.to];
+            if ((fn && fn.status === 'MERGED')
+                    || (tn && tn.status === 'MERGED')) continue;
+        }
 
         const isMainEdge = mainChain.has(edge.from) && mainChain.has(edge.to);
         // "Base" = edge points INTO a historical base-chain node —
@@ -1608,6 +1631,7 @@ const actions = {
 };
 
 document.getElementById('chk-abandoned').addEventListener('change', () => actions.refresh());
+document.getElementById('chk-merged').addEventListener('change', () => actions.refresh());
 document.getElementById('chk-history').addEventListener('change', () => actions.refresh());
 document.getElementById('btn-fit').addEventListener('click', () => actions.fit());
 document.getElementById('btn-focus').addEventListener('click', () => actions.focusSelection());
