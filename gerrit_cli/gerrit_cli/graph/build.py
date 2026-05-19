@@ -555,10 +555,31 @@ def _fetch_ci_and_comments(ctx: BuildContext) -> int:
 
 
 def _build_main_edges(ctx: BuildContext) -> int:
-    """Produce edges for the main series from raw_entries (the
-    guaranteed chain) and revision_parents (stale branches from old
-    patchsets). Cycles get removed as a final step. Returns the
-    number of cycle edges removed."""
+    """Produce edges for the main series.
+
+    For each node, the primary edge to its parent is derived from
+    the CURRENT patchset's parent commit (via revision_parents),
+    not from /related's view. /related is anchor-dependent: when
+    queried from a merged anchor, it returns the patchset
+    relationship that was current at merge time, so an in-flight
+    descendant that has since been reordered shows a stale parent.
+    Using the current patchset's parent makes the chain
+    anchor-independent — the layout is identical regardless of
+    which change in the series is the anchor.
+
+    The /related view is kept as a fallback for nodes whose
+    revisions weren't fetched. revision_parents (all patchsets'
+    parent commits) still drives discovered-node and stale-edge
+    detection in the second pass. Cycles get removed as a final
+    step. Returns the number of cycle edges removed."""
+
+    # Reverse-index commit_to_change_ps to find each node's current
+    # commit hash. We need this to look up the current patchset's
+    # parent in revision_parents.
+    cn_current_commit: dict[int, str] = {}
+    for h, (cn, ps) in ctx.commit_to_change_ps.items():
+        if cn in ctx.nodes and ps == ctx.nodes[cn].get("current_patchset"):
+            cn_current_commit[cn] = h
 
     def add_edge(parent_cn: int, child_cn: int, parent_ps: int) -> None:
         if parent_cn == child_cn:
@@ -578,13 +599,40 @@ def _build_main_edges(ctx: BuildContext) -> int:
             "is_stale": parent_ps < parent_latest,
         })
 
-    # Edges from /related entries (the core chain).
+    # One primary parent edge per node, derived from the node's
+    # current patchset. raw_entries is iterated only to enumerate
+    # the relevant cns. When the current-patchset parent maps to a
+    # change that isn't in our node pool — typically an in-flight
+    # node rebased onto a master commit owned by a filtered-out
+    # merged-ancestor change — fall back to the /related historical
+    # view so the boundary link to a merged ancestor that IS in
+    # the pool is preserved as a stale edge. Without the fallback,
+    # a merged change in the chain (head OR mid-series) whose
+    # in-flight follower has since rebased away would be silently
+    # orphaned from its own series.
+    def _resolve(commit_hash: str) -> tuple[int, int] | None:
+        info = ctx.commit_to_change_ps.get(commit_hash)
+        if not info or info[0] not in ctx.nodes:
+            return None
+        return info
+
+    processed: set[int] = set()
     for entry in ctx.raw_entries:
-        parent_commit = entry["parent_commit"]
-        if not parent_commit or parent_commit not in ctx.commit_to_change_ps:
+        cn = entry["cn"]
+        if cn in processed:
             continue
-        parent_cn, parent_ps = ctx.commit_to_change_ps[parent_commit]
-        add_edge(parent_cn, entry["cn"], parent_ps)
+        processed.add(cn)
+        current_h = cn_current_commit.get(cn)
+        parent_commit = (
+            ctx.revision_parents.get(current_h, "") if current_h else ""
+        )
+        resolved = _resolve(parent_commit)
+        if resolved is None:
+            resolved = _resolve(entry["parent_commit"])
+        if resolved is None:
+            continue
+        parent_cn, parent_ps = resolved
+        add_edge(parent_cn, cn, parent_ps)
 
     # Edges from revision parents — only where at least one endpoint
     # is a discovered change (not in the /related set). This hooks
