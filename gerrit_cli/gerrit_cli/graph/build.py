@@ -496,16 +496,24 @@ def _attach_review_info(ctx: BuildContext) -> None:
         node["review"] = review
 
 
-def _fetch_ci_and_comments(ctx: BuildContext) -> int:
+def _fetch_ci_and_comments(
+    ctx: BuildContext, cns: list[int] | None = None,
+) -> int:
     """Attach CI links (from change messages) and, when requested,
     detailed unresolved comments. Only non-abandoned changes are
     queried — abandoned patches carry no useful extra detail.
+
+    When `cns` is None, every active node is processed (the main
+    pass). Pass an explicit cn list to backfill a subset — used for
+    separate-group nodes, which are added to ctx.nodes after the
+    main pass and would otherwise have no Jenkins/Maloo links.
     Returns the number of active changes that were processed."""
     if not ctx.fetch_details:
         return 0
+    candidates = ctx.nodes.keys() if cns is None else cns
     active_cns = sorted(
-        cn for cn, node in ctx.nodes.items()
-        if node["status"] != "ABANDONED"
+        cn for cn in candidates
+        if cn in ctx.nodes and ctx.nodes[cn]["status"] != "ABANDONED"
     )
     if not active_cns:
         return 0
@@ -1230,6 +1238,13 @@ def build_graph(
         logger.done(
             f"{len(ctx.separate_groups)} groups, {sep_total} nodes"
         )
+        # Separate-group nodes are added after the main CI pass, so
+        # backfill their Jenkins/Maloo links (and inline comments
+        # when requested) the same way main-series nodes get them.
+        sep_cns = [
+            cn for g in ctx.separate_groups for cn in g["node_ids"]
+        ]
+        _fetch_ci_and_comments(ctx, sep_cns)
     else:
         logger.done("none")
 
