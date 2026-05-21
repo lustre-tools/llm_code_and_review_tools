@@ -28,6 +28,11 @@ def _make_node(
         "status": status,
         "current_patchset": latest,
         "author": author,
+        # Change owner (uploader) name. Distinct from `author` (the
+        # git commit author): Gerrit's self-approval rule keys off
+        # the owner, so the review-health logic must too. Backfilled
+        # from the change payload in _update_node_meta; "" until then.
+        "owner": "",
         "url": f"{base_url}/c/{project}/+/{cn}",
         "ticket": ticket,
         "topic": topic,
@@ -49,6 +54,9 @@ def _update_node_meta(node: dict[str, Any], change: dict[str, Any]) -> None:
     node["hashtags"] = change.get("hashtags", [])
     node["updated"] = change.get("updated", "")
     node["is_wip"] = bool(change.get("work_in_progress", False))
+    owner_name = change.get("owner", {}).get("name", "")
+    if owner_name:
+        node["owner"] = owner_name
     if change.get("project"):
         node["project"] = change["project"]
     if change.get("branch"):

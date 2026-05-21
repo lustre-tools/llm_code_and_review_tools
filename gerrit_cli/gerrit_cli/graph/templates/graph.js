@@ -873,6 +873,11 @@ function renderLegend() {
     }).join('');
 }
 
+// Automated Gerrit voters — their CR votes (typically -1 from CI
+// or style checks) are tagged "(bot)" in the panel rather than
+// "(reviewer)".
+const BOT_VOTERS = new Set(['Lustre Gerrit Janitor', 'wc-checkpatch']);
+
 // ─── REVIEW HEALTH ───
 // Returns: 'good', 'pending', or a specific failure type:
 //   'bad_veto'    — CR -1/-2 (highest priority)
@@ -896,13 +901,18 @@ function reviewHealth(node) {
         return 'bad_other';
     }
 
-    // Good: verified passed AND >= 2 non-author CR +1s
+    // Good: verified passed AND >= 2 CR +1s that don't come from
+    // the change owner. Only the OWNER's self-vote is excluded —
+    // Gerrit's self-approval rule keys off the owner, not the git
+    // author. A reviewer who happens to be the commit author (owner
+    // uploaded someone else's patch) still counts. Fall back to the
+    // git author only if owner is missing (node never enriched).
     if (rv.verified_pass) {
-        const author = node.author || '';
-        const nonAuthorPlus = (rv.cr_votes || []).filter(
-            v => v.value > 0 && v.name !== author
+        const owner = node.owner || node.author || '';
+        const nonOwnerPlus = (rv.cr_votes || []).filter(
+            v => v.value > 0 && v.name !== owner
         ).length;
-        if (nonAuthorPlus >= 2) return 'good';
+        if (nonOwnerPlus >= 2) return 'good';
     }
 
     return 'pending';
@@ -1289,6 +1299,7 @@ function renderReviewPanel(node) {
 
     // Code-Review section
     const crVotes = rv.cr_votes || [];
+    const owner = node.owner || '';
     const author = node.author || '';
     let crHtml = '';
     if (rv.cr_rejected) {
@@ -1302,11 +1313,21 @@ function renderReviewPanel(node) {
         for (const v of crVotes) {
             const color = v.value > 0 ? '#3fb950' : '#f85149';
             const sign = v.value > 0 ? '+' : '';
-            const isAuthor = v.name === author;
-            const authorTag = isAuthor ? ' <span style="color:var(--text-muted);font-size:11px">(author)</span>' : '';
-            crHtml += `<div style="font-size:13px;margin:1px 0${isAuthor ? ';opacity:0.6' : ''}">
+            // Role tag: the owner's own vote is the only one that
+            // doesn't count toward approval, so it's the only one
+            // dimmed. The git author (when not the owner) and plain
+            // reviewers are labelled too, but their votes count.
+            // Automated voters (CI/style bots) are tagged "(bot)".
+            const isOwner = owner && v.name === owner;
+            const isAuthor = !isOwner && author && v.name === author;
+            let role = 'reviewer';
+            if (isOwner) role = 'owner';
+            else if (isAuthor) role = 'author';
+            else if (BOT_VOTERS.has(v.name)) role = 'bot';
+            const roleTag = ` <span style="color:var(--text-muted);font-size:11px">(${role})</span>`;
+            crHtml += `<div style="font-size:13px;margin:1px 0${isOwner ? ';opacity:0.6' : ''}">
                 <span style="color:${color};font-weight:600">${sign}${v.value}</span>
-                <span style="color:var(--text)">${esc(v.name)}</span>${authorTag}
+                <span style="color:var(--text)">${esc(v.name)}</span>${roleTag}
             </div>`;
         }
         crHtml += '</div>';
