@@ -27,41 +27,63 @@ def _empty_review() -> dict[str, Any]:
     }
 
 
+_JENKINS_URL_RE = re.compile(
+    r"https?://build\.whamcloud\.com/job/([^/]+)/(\d+)/?"
+)
+_MALOO_DIRECT_RE = re.compile(
+    r"https?://testing\.whamcloud\.com/test_sessions/related"
+    r"\?jobs=[^&\s]+&builds=\d+#redirect"
+)
+_MALOO_BUILD_RE = re.compile(r"sessions will be run for Build (\d+)")
+
+
 def _extract_ci_links(
     messages: list[dict[str, Any]], patchset: int
 ) -> dict[str, str]:
     """Extract Jenkins build URL and Maloo results URL from change messages.
 
-    Only looks at messages for the given patchset number.
+    Only looks at messages for the given patchset number. The Maloo URL
+    must reflect whichever Jenkins job ran the build (e.g.
+    `lustre-reviews` for fs/lustre-release, `lustre-b_es-reviews` for
+    ex/lustre-release on b_es branches). The Maloo bot's own message
+    contains the fully-formed URL with the right `jobs=` parameter, so
+    we prefer to extract it verbatim. If only the "Build NNNNN" line is
+    present (older message format), we reconstruct the URL using the
+    Jenkins job name captured from a Jenkins build link on the same
+    patchset, falling back to `lustre-reviews` only when no Jenkins URL
+    was seen at all.
     """
     jenkins_url = ""
     maloo_url = ""
+    jenkins_job = ""
+    pending_maloo_build = ""
 
     for msg in messages:
         if msg.get("_revision_number", 0) != patchset:
             continue
         text = msg.get("message", "")
 
-        # Jenkins: look for build.whamcloud.com URL
         if not jenkins_url:
-            m = re.search(
-                r"(https?://build\.whamcloud\.com/job/[^/]+/\d+/?)", text
-            )
+            m = _JENKINS_URL_RE.search(text)
             if m:
-                jenkins_url = m.group(1)
+                jenkins_url = m.group(0)
+                jenkins_job = m.group(1)
 
-        # Maloo: look for "sessions will be run for Build NNNNN"
-        # to construct the results overview link
         if not maloo_url:
-            m = re.search(
-                r"sessions will be run for Build (\d+)", text
-            )
+            m = _MALOO_DIRECT_RE.search(text)
             if m:
-                build_num = m.group(1)
-                maloo_url = (
-                    f"https://testing.whamcloud.com/test_sessions/related"
-                    f"?jobs=lustre-reviews&builds={build_num}#redirect"
-                )
+                maloo_url = m.group(0)
+            elif not pending_maloo_build:
+                m = _MALOO_BUILD_RE.search(text)
+                if m:
+                    pending_maloo_build = m.group(1)
+
+    if not maloo_url and pending_maloo_build:
+        job = jenkins_job or "lustre-reviews"
+        maloo_url = (
+            f"https://testing.whamcloud.com/test_sessions/related"
+            f"?jobs={job}&builds={pending_maloo_build}#redirect"
+        )
 
     return {"jenkins_url": jenkins_url, "maloo_url": maloo_url}
 
