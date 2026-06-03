@@ -28,6 +28,7 @@ from .nodes import _make_node, _update_node_meta
 from .review import (
     _empty_review,
     _extract_ci_links,
+    _extract_cr_history,
     _extract_unresolved_comments,
     _parse_labels,
 )
@@ -518,7 +519,10 @@ def _fetch_ci_and_comments(
     if not active_cns:
         return 0
 
-    # Batch-fetch messages for CI links.
+    # Batch-fetch messages for CI links and prior-patchset
+    # Code-Review history. DETAILED_ACCOUNTS ensures message
+    # authors carry a name we can match against owner/author and
+    # the bot exclusion list.
     msg_batches = [
         active_cns[i:i + _MESSAGES_BATCH_SIZE]
         for i in range(0, len(active_cns), _MESSAGES_BATCH_SIZE)
@@ -527,21 +531,24 @@ def _fetch_ci_and_comments(
         query = " OR ".join(f"change:{cn}" for cn in batch)
         try:
             result = ctx.client.rest.get(
-                f"/changes/?q={quote(query, safe=':+ ')}&o=MESSAGES&n=500"
+                f"/changes/?q={quote(query, safe=':+ ')}"
+                "&o=MESSAGES&o=DETAILED_ACCOUNTS&n=500"
             )
             for change in result:
                 cn = change.get("_number", 0)
                 if cn not in ctx.nodes:
                     continue
                 latest_ps = ctx.nodes[cn]["current_patchset"]
-                links = _extract_ci_links(
-                    change.get("messages", []), latest_ps
-                )
+                msgs = change.get("messages", [])
+                links = _extract_ci_links(msgs, latest_ps)
                 ctx.nodes[cn]["review"]["jenkins_url"] = links.get(
                     "jenkins_url", ""
                 )
                 ctx.nodes[cn]["review"]["maloo_url"] = links.get(
                     "maloo_url", ""
+                )
+                ctx.nodes[cn]["review"]["cr_history"] = (
+                    _extract_cr_history(msgs, latest_ps)
                 )
         except Exception:
             pass

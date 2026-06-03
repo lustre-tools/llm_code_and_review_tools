@@ -1347,20 +1347,76 @@ function renderReviewPanel(node) {
         <div class="fl">Code Review</div>
         <div class="fv">${crHtml}</div>
     </div>
-    ${renderCommentsPanel(node)}`;
+    ${renderCommentsPanel(node)}
+    ${renderPreviousReviewsPanel(node)}`;
+}
+
+// Pre-current-patchset Code-Review actions by human reviewers.
+// We get the raw chronological event list from Python; here we
+// reduce it to the latest action per voter and discard anyone
+// whose latest action was a reset (value === 0) — they retracted
+// their opinion, so they have no "previous review" still standing.
+//
+// Useful when an author keeps uploading new patchsets: shows what
+// each reviewer thought of an earlier revision, even when the
+// reviewer hasn't (yet) voted again on the current patchset.
+//
+// Always rendered (with a "None" placeholder when empty) so the
+// section provides predictable visual separation from the Code
+// Review block above. Vote rows render at lower opacity to make
+// it obvious at a glance that these are NOT the current votes.
+function renderPreviousReviewsPanel(node) {
+    const rv = node.review || {};
+    const history = rv.cr_history || [];
+
+    // history is in chronological order; the LAST entry per voter
+    // is their most recent action. Reset actions (value === 0)
+    // mean the voter retracted, so they drop out.
+    const lastByName = new Map();
+    for (const h of history) lastByName.set(h.name, h);
+    const entries = [...lastByName.values()].filter(h => h.value !== 0);
+
+    let body;
+    if (entries.length === 0) {
+        body = '<div style="color:var(--text-muted);font-size:13px">None</div>';
+    } else {
+        entries.sort((a, b) => (b.ps - a.ps) || a.name.localeCompare(b.name));
+        const owner = node.owner || '';
+        const author = node.author || '';
+        body = '';
+        for (const e of entries) {
+            const isOwner = owner && e.name === owner;
+            const isAuthor = !isOwner && author && e.name === author;
+            let role = 'reviewer';
+            if (isOwner) role = 'owner';
+            else if (isAuthor) role = 'author';
+            const color = e.value > 0 ? '#3fb950' : '#f85149';
+            const sign = e.value > 0 ? '+' : '';
+            body += `<div style="font-size:13px;margin:1px 0;opacity:0.6">
+                <span style="color:${color};font-weight:600">${sign}${e.value}</span>
+                <span style="color:var(--text)">${esc(e.name)}</span>
+                <span style="color:var(--text-muted);font-size:11px"> (${role}) — patch set ${e.ps}</span>
+            </div>`;
+        }
+    }
+    return `<div class="field">
+        <div class="fl">Review History (older patchsets)</div>
+        <div class="fv">${body}</div>
+    </div>`;
 }
 
 function renderCommentsPanel(node) {
     const rv = node.review || {};
     const count = rv.unresolved_count || 0;
     const comments = rv.unresolved_comments || [];
-    if (count === 0 && comments.length === 0) return '';
 
     let html = `<div class="field">
         <div class="fl">Unresolved Comments (${count})</div>
         <div class="fv">`;
 
-    if (comments.length === 0) {
+    if (count === 0 && comments.length === 0) {
+        html += '<div style="color:var(--text-muted);font-size:13px">None</div>';
+    } else if (comments.length === 0) {
         html += `<div style="color:#8b949e;font-size:13px">${count} unresolved (details not fetched)</div>`;
     } else {
         const currentPs = node.current_patchset;
