@@ -77,6 +77,12 @@ def _extract_ci_links(
     Jenkins job name captured from a Jenkins build link on the same
     patchset, falling back to `lustre-reviews` only when no Jenkins URL
     was seen at all.
+
+    Reviewers can request a retest mid-patchset, which produces a
+    second pair of Jenkins+Maloo bot messages on the SAME patchset.
+    The newer run is what people actually care about, so we keep
+    overwriting and end on whichever match comes last in chronological
+    order (Gerrit returns messages oldest-first).
     """
     jenkins_url = ""
     maloo_url = ""
@@ -88,20 +94,23 @@ def _extract_ci_links(
             continue
         text = msg.get("message", "")
 
-        if not jenkins_url:
-            m = _JENKINS_URL_RE.search(text)
-            if m:
-                jenkins_url = m.group(0)
-                jenkins_job = m.group(1)
+        m = _JENKINS_URL_RE.search(text)
+        if m:
+            jenkins_url = m.group(0)
+            jenkins_job = m.group(1)
 
-        if not maloo_url:
-            m = _MALOO_DIRECT_RE.search(text)
+        # Maloo state is reset to whichever signal this message
+        # carries, so an older direct URL or build-num doesn't bleed
+        # through into a newer retest's run.
+        m = _MALOO_DIRECT_RE.search(text)
+        if m:
+            maloo_url = m.group(0)
+            pending_maloo_build = ""
+        else:
+            m = _MALOO_BUILD_RE.search(text)
             if m:
-                maloo_url = m.group(0)
-            elif not pending_maloo_build:
-                m = _MALOO_BUILD_RE.search(text)
-                if m:
-                    pending_maloo_build = m.group(1)
+                pending_maloo_build = m.group(1)
+                maloo_url = ""
 
     if not maloo_url and pending_maloo_build:
         job = jenkins_job or "lustre-reviews"
