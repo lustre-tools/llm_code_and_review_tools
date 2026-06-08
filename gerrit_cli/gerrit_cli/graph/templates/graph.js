@@ -901,13 +901,30 @@ function reviewHealth(node) {
         return 'bad_other';
     }
 
-    // Good: verified passed AND >= 2 CR +1s that don't come from
-    // the change owner. Only the OWNER's self-vote is excluded —
-    // Gerrit's self-approval rule keys off the owner, not the git
-    // author. A reviewer who happens to be the commit author (owner
-    // uploaded someone else's patch) still counts. Fall back to the
-    // git author only if owner is missing (node never enriched).
+    // Good: BOTH Jenkins +1 and Maloo +1 AND >= 2 CR +1s that
+    // don't come from the change owner.
+    //
+    // verified_pass alone ("at least one +1, no -1") is not
+    // sufficient: when a CI run simply doesn't fire, it leaves
+    // no vote at all (not a -1), so a single Jenkins +1 with
+    // Maloo silent would silently pass that check. A patch can
+    // only land when both CIs have voted +1, so both must be
+    // present before we paint the node green.
+    //
+    // CR side: only the OWNER's self-vote is excluded —
+    // Gerrit's self-approval rule keys off the owner, not the
+    // git author. A reviewer who happens to be the commit
+    // author still counts. Fall back to author only if owner is
+    // missing (node never enriched).
     if (rv.verified_pass) {
+        const passers = new Set(
+            (rv.verified_votes || [])
+                .filter(v => v.value > 0)
+                .map(v => v.name.toLowerCase())
+        );
+        if (!passers.has('jenkins') || !passers.has('maloo')) {
+            return 'pending';
+        }
         const owner = node.owner || node.author || '';
         const nonOwnerPlus = (rv.cr_votes || []).filter(
             v => v.value > 0 && v.name !== owner
