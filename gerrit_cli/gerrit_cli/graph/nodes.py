@@ -33,6 +33,10 @@ def _make_node(
         # the owner, so the review-health logic must too. Backfilled
         # from the change payload in _update_node_meta; "" until then.
         "owner": "",
+        # Latest patchset's commit SHA. Backfilled from the change
+        # payload's `current_revision` field during the bulk
+        # revision fetch — until then, "".
+        "current_commit": "",
         "url": f"{base_url}/c/{project}/+/{cn}",
         "ticket": ticket,
         "topic": topic,
@@ -57,6 +61,9 @@ def _update_node_meta(node: dict[str, Any], change: dict[str, Any]) -> None:
     owner_name = change.get("owner", {}).get("name", "")
     if owner_name:
         node["owner"] = owner_name
+    current_commit = change.get("current_revision", "")
+    if current_commit:
+        node["current_commit"] = current_commit
     if change.get("project"):
         node["project"] = change["project"]
     if change.get("branch"):

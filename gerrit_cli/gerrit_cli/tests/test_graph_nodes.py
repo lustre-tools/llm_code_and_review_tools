@@ -20,9 +20,9 @@ class TestMakeNodeShape:
         )
         for key in [
             "id", "subject", "status", "current_patchset", "author",
-            "owner", "url", "ticket", "topic", "hashtags",
-            "checkout_cmd", "cherrypick_cmd", "updated", "is_wip",
-            "project", "branch",
+            "owner", "current_commit", "url", "ticket", "topic",
+            "hashtags", "checkout_cmd", "cherrypick_cmd", "updated",
+            "is_wip", "project", "branch",
         ]:
             assert key in node, f"missing key {key!r}"
 
@@ -36,6 +36,16 @@ class TestMakeNodeShape:
             base_url="https://x",
         )
         assert node["owner"] == ""
+
+    def test_current_commit_defaults_to_empty_string(self):
+        """The latest patchset's SHA is only known after the bulk
+        revision fetch returns it. Default must be "" so the JS
+        "Commit hash" button hides itself until the data lands."""
+        node = _make_node(
+            cn=1, subject="S", status="NEW", latest=1, author="A",
+            base_url="https://x",
+        )
+        assert node["current_commit"] == ""
 
 
 class TestMakeNodeTicketExtraction:
@@ -119,6 +129,34 @@ class TestUpdateNodeMetaOwnerBackfill:
             "topic": "", "hashtags": [], "updated": "",
         })
         assert node["owner"] == "Marc Vef"
+
+    def test_backfills_current_commit_from_change_payload(self):
+        """The bulk revision fetch's response includes
+        `current_revision` (the latest patchset's SHA) — copy it
+        onto the node so the panel's "Commit hash" button has
+        something to put on the clipboard."""
+        node = _make_node(
+            cn=1, subject="S", status="NEW", latest=1, author="A",
+            base_url="https://x",
+        )
+        _update_node_meta(node, {
+            "current_revision": "abc123def456",
+            "topic": "", "hashtags": [], "updated": "",
+        })
+        assert node["current_commit"] == "abc123def456"
+
+    def test_missing_current_revision_leaves_prior_value_intact(self):
+        """Partial payload (no current_revision) must not wipe out
+        a previously-set commit hash."""
+        node = _make_node(
+            cn=1, subject="S", status="NEW", latest=1, author="A",
+            base_url="https://x",
+        )
+        node["current_commit"] = "abc123"
+        _update_node_meta(node, {
+            "topic": "", "hashtags": [], "updated": "",
+        })
+        assert node["current_commit"] == "abc123"
 
 
 class TestUpdateNodeMetaCopiesFields:
