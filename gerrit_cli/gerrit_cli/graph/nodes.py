@@ -7,6 +7,14 @@ topic/hashtag/status/review info as more Gerrit data arrives."""
 import re
 from typing import Any
 
+# `Lustre-change:` trailer in the commit message is the marker for a
+# backport (patch on a release branch that mirrors a master change).
+# Matches patch_status's is_backport rule — see
+# patch_status/classify.py for the canonical definition.
+_LUSTRE_CHANGE_TRAILER_RE = re.compile(
+    r"^Lustre-change:\s*\S+\s*$", re.MULTILINE
+)
+
 
 def _make_node(
     cn: int, subject: str, status: str, latest: int,
@@ -37,6 +45,13 @@ def _make_node(
         # payload's `current_revision` field during the bulk
         # revision fetch — until then, "".
         "current_commit": "",
+        # True when this is a backport of a master change — the
+        # commit message carries a `Lustre-change:` trailer
+        # pointing back at the master change. Backports only
+        # need >= 1 non-owner CR +1 to be Ready (vs >= 2 for
+        # native patches). Detected in _update_node_meta once
+        # ALL_COMMITS message text is available.
+        "is_backport": False,
         "url": f"{base_url}/c/{project}/+/{cn}",
         "ticket": ticket,
         "topic": topic,
@@ -64,6 +79,16 @@ def _update_node_meta(node: dict[str, Any], change: dict[str, Any]) -> None:
     current_commit = change.get("current_revision", "")
     if current_commit:
         node["current_commit"] = current_commit
+        # Backport detection requires the commit message, which
+        # arrives with the ALL_COMMITS option. The current
+        # revision's commit body is checked for a Lustre-change
+        # trailer; everything else is a native patch.
+        rev = (change.get("revisions") or {}).get(current_commit) or {}
+        message = (rev.get("commit") or {}).get("message") or ""
+        if message:
+            node["is_backport"] = bool(
+                _LUSTRE_CHANGE_TRAILER_RE.search(message)
+            )
     if change.get("project"):
         node["project"] = change["project"]
     if change.get("branch"):

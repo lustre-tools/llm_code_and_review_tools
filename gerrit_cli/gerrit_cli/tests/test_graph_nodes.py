@@ -20,9 +20,9 @@ class TestMakeNodeShape:
         )
         for key in [
             "id", "subject", "status", "current_patchset", "author",
-            "owner", "current_commit", "url", "ticket", "topic",
-            "hashtags", "checkout_cmd", "cherrypick_cmd", "updated",
-            "is_wip", "project", "branch",
+            "owner", "current_commit", "is_backport", "url", "ticket",
+            "topic", "hashtags", "checkout_cmd", "cherrypick_cmd",
+            "updated", "is_wip", "project", "branch",
         ]:
             assert key in node, f"missing key {key!r}"
 
@@ -157,6 +157,102 @@ class TestUpdateNodeMetaOwnerBackfill:
             "topic": "", "hashtags": [], "updated": "",
         })
         assert node["current_commit"] == "abc123"
+
+
+def _payload_with_message(rev_hash, message):
+    """Build a change payload shaped like the ALL_REVISIONS +
+    ALL_COMMITS response — the only field that matters for these
+    tests is the current revision's commit message."""
+    return {
+        "current_revision": rev_hash,
+        "revisions": {
+            rev_hash: {
+                "_number": 1,
+                "commit": {"message": message},
+            },
+        },
+    }
+
+
+class TestUpdateNodeMetaBackportDetection:
+    """The `is_backport` flag drives a different ready-to-land
+    rule on the JS side (1 reviewer +1 instead of 2). Detection
+    mirrors patch_status: any commit-message trailer of the form
+    `Lustre-change: <url>` means the patch is a backport."""
+
+    def test_lustre_change_trailer_marks_node_as_backport(self):
+        node = _make_node(
+            cn=1, subject="S", status="NEW", latest=1, author="A",
+            base_url="https://x",
+        )
+        message = (
+            "LU-19921 osd: foo bar\n\n"
+            "Backport of master change.\n\n"
+            "Lustre-change: https://review.whamcloud.com/12345\n"
+            "Lustre-commit: abc123def456\n"
+            "Change-Id: I12345\n"
+            "Signed-off-by: Marc Vef <mvef@ddn.com>\n"
+        )
+        _update_node_meta(node, _payload_with_message("rev1", message))
+        assert node["is_backport"] is True
+
+    def test_message_without_trailer_is_native_patch(self):
+        node = _make_node(
+            cn=1, subject="S", status="NEW", latest=1, author="A",
+            base_url="https://x",
+        )
+        message = (
+            "LU-19921 osd: foo bar\n\n"
+            "Some change description.\n\n"
+            "Change-Id: I12345\n"
+            "Signed-off-by: Marc Vef <mvef@ddn.com>\n"
+        )
+        _update_node_meta(node, _payload_with_message("rev1", message))
+        assert node["is_backport"] is False
+
+    def test_lustre_commit_tbd_still_counts_as_backport(self):
+        """When the master change hasn't merged yet, the trailer
+        carries `Lustre-commit: TBD`. The Lustre-change trailer
+        alone is the marker — matches patch_status's rule."""
+        node = _make_node(
+            cn=1, subject="S", status="NEW", latest=1, author="A",
+            base_url="https://x",
+        )
+        message = (
+            "LU-19921 osd: foo bar\n\n"
+            "Lustre-change: https://review.whamcloud.com/12345\n"
+            "Lustre-commit: TBD\n"
+            "Change-Id: I12345\n"
+        )
+        _update_node_meta(node, _payload_with_message("rev1", message))
+        assert node["is_backport"] is True
+
+    def test_inline_mention_of_lustre_change_does_not_count(self):
+        """The trailer must be its own line — a casual reference
+        to "Lustre-change:" inside prose shouldn't trip the
+        detector."""
+        node = _make_node(
+            cn=1, subject="S", status="NEW", latest=1, author="A",
+            base_url="https://x",
+        )
+        message = (
+            "Note: the Lustre-change: prefix is also used by "
+            "backports.\n\n"
+            "Change-Id: I12345\n"
+        )
+        _update_node_meta(node, _payload_with_message("rev1", message))
+        assert node["is_backport"] is False
+
+    def test_no_message_leaves_default(self):
+        """A payload without revisions/commit info (e.g. the
+        slim discovered-nodes fetch) leaves is_backport at its
+        default False — we don't crash, we just don't know."""
+        node = _make_node(
+            cn=1, subject="S", status="NEW", latest=1, author="A",
+            base_url="https://x",
+        )
+        _update_node_meta(node, {})
+        assert node["is_backport"] is False
 
 
 class TestUpdateNodeMetaCopiesFields:

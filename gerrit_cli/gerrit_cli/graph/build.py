@@ -42,10 +42,11 @@ _MESSAGES_BATCH_SIZE = 20
 # Hashtags that are conventional/lifecycle markers rather than
 # series identifiers. Even when the anchor carries them, they're
 # skipped by the auto-derived hashtag fanout — every patch queued
-# for the next master merge has "master-next", so using it as a
-# series identifier would pull in hundreds of unrelated changes.
+# for the next master merge has "master-next", and "mw" is the
+# equivalent marker for the b_es backport queue. Using either as
+# a series identifier would pull in hundreds of unrelated changes.
 # Users can still force-include them with `--include-hashtag`.
-_LIFECYCLE_HASHTAGS = frozenset({"master-next"})
+_LIFECYCLE_HASHTAGS = frozenset({"master-next", "mw"})
 
 # Number of pipeline phases printed by build_graph. Must match the
 # number of `logger.start(...)` calls in build_graph so the [N/total]

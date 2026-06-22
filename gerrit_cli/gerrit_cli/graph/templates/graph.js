@@ -901,8 +901,11 @@ function reviewHealth(node) {
         return 'bad_other';
     }
 
-    // Good: BOTH Jenkins +1 and Maloo +1 AND >= 2 CR +1s that
-    // don't come from the change owner.
+    // Good: BOTH Jenkins +1 and Maloo +1 AND enough non-owner
+    // CR +1s. The CR threshold depends on whether the patch is a
+    // backport — backports of a master change only need 1
+    // reviewer +1, native patches need 2 (matches patch_status's
+    // rule; see patch_status/classify.py).
     //
     // verified_pass alone ("at least one +1, no -1") is not
     // sufficient: when a CI run simply doesn't fire, it leaves
@@ -929,7 +932,8 @@ function reviewHealth(node) {
         const nonOwnerPlus = (rv.cr_votes || []).filter(
             v => v.value > 0 && v.name !== owner
         ).length;
-        if (nonOwnerPlus >= 2) return 'good';
+        const required = node.is_backport ? 1 : 2;
+        if (nonOwnerPlus >= required) return 'good';
     }
 
     return 'pending';
@@ -1520,6 +1524,13 @@ function showNodeInfo(id) {
                 ${node.current_commit ? `<button onclick="navigator.clipboard.writeText('${node.current_commit}');const o=this.textContent;this.innerHTML='<span style=\\'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;font-size:11px\\'>\u2713</span>';setTimeout(()=>this.textContent=o,1500)" style="cursor:pointer;font-family:monospace;font-size:12px;background:none;border:1px solid var(--border);border-radius:4px;padding:1px 6px;color:var(--accent);margin-left:6px;display:inline-block;min-width:65px;text-align:center" title="Click to copy full SHA: ${node.current_commit}">${node.current_commit.substring(0, 7)}</button>` : ''}
             </div>
         </div>
+        ${node.is_backport ? `<div class="field">
+            <div class="fl">Type</div>
+            <div class="fv">
+                <span class="stale-tag" style="background:#1f6f6f;color:#fff">BACKPORT</span>
+                <span style="color:var(--text-muted);font-size:11px;margin-left:6px">only needs 1 reviewer +1 to be Ready</span>
+            </div>
+        </div>` : ''}
         <div class="field">
             <div class="fl">Subject</div>
             <div class="fv">${esc(node.subject)}</div>
@@ -1540,10 +1551,6 @@ function showNodeInfo(id) {
             <div class="fl">Updated</div>
             <div class="fv">${formatGerritDate(node.updated)}</div>
         </div>` : ''}
-        <div class="field">
-            <div class="fl">Ticket</div>
-            <div class="fv">${node.ticket || '\u2014'}</div>
-        </div>
         ${node.topic ? `<div class="field">
             <div class="fl">Topic</div>
             <div class="fv">${esc(node.topic)}</div>
