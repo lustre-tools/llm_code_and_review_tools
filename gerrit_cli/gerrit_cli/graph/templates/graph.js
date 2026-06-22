@@ -397,13 +397,44 @@ function _layoutTree(ctx, id, x, level, dir) {
         rightX += w * NODE_W;
     }
 
-    // Place main-chain child past the outermost side branch so
-    // nothing overlaps with it.
+    // Push main-chain child past side branches ONLY when its own
+    // subtree has inner side branches. The push protects against
+    // collisions like (parent's left side branch S1 ↘ chain growing
+    // up at S1.x) vs (mainKid's own left branch L ↘ placed at
+    // parent.x - NODE_W = S1.x) at the same Y level. A pure-chain
+    // mainKid (every node has ≤ 1 visible child all the way down)
+    // never produces an inner left/right branch, so there's no
+    // collision risk and we can place it directly at level+dir.
+    // This is what eliminates the vertical gaps when a tall stale
+    // side branch coexists with a simple straight-up current chain
+    // — e.g. 62689→62316→64620→65921 sits next to 62852's 17-deep
+    // stale subtree without being shoved 18 levels above.
     if (mainKid) {
-        const mainLevel = extremeSideLevel + dir;
-        return _layoutTree(ctx, mainKid, x, mainLevel, dir);
+        const mainLevel = _isChainSubtree(ctx, mainKid)
+            ? level + dir
+            : extremeSideLevel + dir;
+        const top = _layoutTree(ctx, mainKid, x, mainLevel, dir);
+        updateExtreme(top);
     }
     return extremeSideLevel;
+}
+
+// True when every visible descendant of `id` has at most one
+// visible child — i.e., the subtree is one vertical line with no
+// horizontal branching. Used by _layoutTree to decide whether the
+// main-chain push above side branches is actually needed.
+function _isChainSubtree(ctx, id) {
+    let cur = id;
+    // Safety bound to prevent runaway in case of an unexpected
+    // cycle that wasn't caught by _break_cycles.
+    for (let i = 0; i < 500; i++) {
+        const kids = (childrenOf[cur] || [])
+            .filter(k => _layoutShouldShow(ctx, k));
+        if (kids.length === 0) return true;
+        if (kids.length > 1) return false;
+        cur = kids[0];
+    }
+    return false;
 }
 
 // Step 1: place the anchor and everything reachable from it via
