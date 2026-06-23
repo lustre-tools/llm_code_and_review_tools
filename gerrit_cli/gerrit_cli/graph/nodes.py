@@ -52,6 +52,19 @@ def _make_node(
         # native patches). Detected in _update_node_meta once
         # ALL_COMMITS message text is available.
         "is_backport": False,
+        # Submission timestamp on master, MERGED changes only —
+        # used to lay out the merged "trunk" in chronological
+        # order. Backfilled from `submitted` in the change
+        # payload; "" until then (and "" for non-MERGED nodes).
+        "submitted": "",
+        # ISO timestamp of when the CURRENT patchset was uploaded.
+        # Used as a proxy for the "logical base time" of an
+        # in-flight patch — the most recent merged trunk node
+        # whose `submitted` is at or before this time is the
+        # plausible master ancestor we connect the in-flight
+        # patch to. Backfilled from the revisions payload's
+        # `created` field on the current revision.
+        "current_ps_created": "",
         "url": f"{base_url}/c/{project}/+/{cn}",
         "ticket": ticket,
         "topic": topic,
@@ -79,6 +92,14 @@ def _update_node_meta(node: dict[str, Any], change: dict[str, Any]) -> None:
     current_commit = change.get("current_revision", "")
     if current_commit:
         node["current_commit"] = current_commit
+        # /related's `_current_revision_number` can be stale (Gerrit
+        # caches that view); update from the bulk revision payload
+        # so `current_patchset` matches `current_commit`.
+        rev_for_ps = (change.get("revisions") or {}).get(current_commit)
+        if rev_for_ps:
+            ps_num = rev_for_ps.get("_number", 0)
+            if ps_num:
+                node["current_patchset"] = ps_num
         # Backport detection requires the commit message, which
         # arrives with the ALL_COMMITS option. The current
         # revision's commit body is checked for a Lustre-change
@@ -89,6 +110,12 @@ def _update_node_meta(node: dict[str, Any], change: dict[str, Any]) -> None:
             node["is_backport"] = bool(
                 _LUSTRE_CHANGE_TRAILER_RE.search(message)
             )
+        created = rev.get("created", "")
+        if created:
+            node["current_ps_created"] = created
+    submitted = change.get("submitted", "")
+    if submitted:
+        node["submitted"] = submitted
     if change.get("project"):
         node["project"] = change["project"]
     if change.get("branch"):

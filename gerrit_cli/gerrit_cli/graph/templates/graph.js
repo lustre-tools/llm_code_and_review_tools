@@ -100,6 +100,12 @@ let mainChain = new Set();
 // Nodes placed as historical base-chain context (below the anchor
 // in the linear parentOf walk). renderGraph dims these.
 let baseChainSet = new Set();
+// Set of every merged-trunk node id. Used by _layoutTree to reserve
+// the x=0 column for trunk-only "continuation" steps: when a trunk
+// node's only continuation forward is another trunk node, that
+// stays at x=0; any in-flight kid of a trunk node always branches
+// off to the side instead of trying to inherit the trunk column.
+const trunkSet = new Set(G.merged_trunk || []);
 let selectedNodeId = null;
 
 // ─── MAIN CHAIN COMPUTATION ───
@@ -311,57 +317,120 @@ function _subtreeHeight(ctx, id) {
     return maxH + 1;
 }
 
+// Pick the child of `parentId` that should continue straight up
+// the current column. Selection is a multi-key sort:
+//   1. Already-placed children win — when a merged trunk node sits
+//      directly above a parent, the trunk path stays at x=0 and
+//      in-flight siblings get routed to the sides.
+//   2. Quality class 0 (current edge + has descendants) beats
+//      class 1 (stale or leaf).
+//   3. Membership in the global main chain.
+//   4. More descendants wins.
+//   5. Non-stale edge wins.
+// All other kids end up as side-kids (sorted by cn for stable
+// alternation in _layoutTree).
+//
+// Trunk-parent rule: when the parent is itself a merged trunk
+// node, only ANOTHER trunk kid is allowed to continue the column
+// upward — in-flight kids of a trunk node always branch off to
+// the side. Returns null when the parent is a trunk node with no
+// trunk-kid candidates: the caller routes every kid as a side.
+function _pickMainKid(ctx, parentId, kids) {
+    if (kids.length === 0) return null;
+    const positions = ctx.positions;
+    const parentInTrunk = trunkSet.has(parentId);
+    const candidates = parentInTrunk
+        ? kids.filter(k => trunkSet.has(k))
+        : kids;
+    if (candidates.length === 0) return null;
+    const sorted = candidates.slice().sort((a, b) => {
+        const placedA = positions[a] ? 0 : 1;
+        const placedB = positions[b] ? 0 : 1;
+        if (placedA !== placedB) return placedA - placedB;
+
+        const ma = mainChain.has(a) ? 0 : 1;
+        const mb = mainChain.has(b) ? 0 : 1;
+
+        const ea = edgeMap[parentId + '->' + a];
+        const eb = edgeMap[parentId + '->' + b];
+        const staleA = ea && ea.is_stale ? 1 : 0;
+        const staleB = eb && eb.is_stale ? 1 : 0;
+        const descA = countDesc(a);
+        const descB = countDesc(b);
+
+        const classA = (staleA === 0 && descA > 0) ? 0 : 1;
+        const classB = (staleB === 0 && descB > 0) ? 0 : 1;
+        if (classA !== classB) return classA - classB;
+
+        if (ma !== mb) return ma - mb;
+        if (descA !== descB) return descB - descA;
+        return staleA - staleB;
+    });
+    return sorted[0];
+}
+
+// Either record (x, level) for `id` if it isn't placed yet, or
+// reuse its existing position. Returns the (x, level) the rest of
+// _layoutTree should use for child placement. Pulled out so the
+// "skip if placed" path is one obvious line in the caller.
+function _enterLayoutFrame(ctx, id, x, level) {
+    const placed = ctx.positions[id];
+    if (placed) {
+        return { x: placed.x, level: -placed.y / LEVEL_H };
+    }
+    _placeNode(ctx, id, x, -level * LEVEL_H);
+    return { x, level };
+}
+
+// Single point through which all node positions are recorded, so we
+// can preserve INSERTION order alongside ctx.positions. JS object
+// iteration walks numeric keys in ascending number order regardless
+// of when they were added, so _resolveCollisions could never tell
+// which node "claimed" a coordinate first. ctx.placementOrder gives
+// us the right tie-break: when two nodes land on the same (x, y),
+// the one placed first wins.
+function _placeNode(ctx, id, x, y) {
+    if (ctx.positions[id] === undefined) {
+        (ctx.placementOrder = ctx.placementOrder || []).push(id);
+    }
+    ctx.positions[id] = { x, y };
+}
+
 // Recursively place a subtree rooted at `id`. `dir` is +1 when
 // children grow up (negative y) and -1 when they grow down. Returns
 // the outermost level used by the subtree so callers can chain
 // placements without overlap.
+//
+// When `id` is already placed by an earlier phase (typically a
+// merged trunk node from _layoutMergedTrunk), we keep its position
+// and continue walking its children — that's how in-flight
+// descendants of trunk nodes get reached.
 function _layoutTree(ctx, id, x, level, dir) {
-    const positions = ctx.positions;
-    if (positions[id]) return level;
-    positions[id] = { x, y: -level * LEVEL_H };
+    const frame = _enterLayoutFrame(ctx, id, x, level);
+    x = frame.x; level = frame.level;
 
-    const kids = (childrenOf[id] || [])
-        .filter(k => _layoutShouldShow(ctx, k))
-        .filter(k => !positions[k]);
+    const kidsAll = (childrenOf[id] || [])
+        .filter(k => _layoutShouldShow(ctx, k));
+    if (kidsAll.length === 0) return level;
 
-    if (kids.length === 0) return level;
+    const mainKid = _pickMainKid(ctx, id, kidsAll);
 
-    // Pick the child that continues straight up. Same quality-
-    // class rule as computeMainChain: a non-stale child with any
-    // descendants (class 0) always beats a stale or dead-end one
-    // (class 1); within a class, prefer more descendants. The
-    // global main chain is used as a tie-break so coordinated main-
-    // chain nodes line up exactly, but the ranking is applied to
-    // all children so that off-main subtrees still grow up along
-    // their own current branch.
-    let mainKid = null;
-    if (kids.length > 0) {
-        const sorted = kids.slice().sort((a, b) => {
-            const ma = mainChain.has(a) ? 0 : 1;
-            const mb = mainChain.has(b) ? 0 : 1;
-
-            const ea = edgeMap[id + '->' + a];
-            const eb = edgeMap[id + '->' + b];
-            const staleA = ea && ea.is_stale ? 1 : 0;
-            const staleB = eb && eb.is_stale ? 1 : 0;
-            const descA = countDesc(a);
-            const descB = countDesc(b);
-
-            const classA = (staleA === 0 && descA > 0) ? 0 : 1;
-            const classB = (staleB === 0 && descB > 0) ? 0 : 1;
-            if (classA !== classB) return classA - classB;
-
-            if (ma !== mb) return ma - mb;
-            if (descA !== descB) return descB - descA;
-            return staleA - staleB;
-        });
-        mainKid = sorted[0];
+    // Single child: usually continue straight up via that kid.
+    // Exception: when the parent is a trunk node and its only kid
+    // is in-flight, _pickMainKid returns null — the in-flight kid
+    // must branch OFF the trunk column instead of taking it over.
+    // Fall through to the side-branch path below.
+    if (kidsAll.length === 1 && mainKid !== null) {
+        return _layoutTree(ctx, kidsAll[0], x, level + dir, dir);
     }
-    const sideKids = kids.filter(k => k !== mainKid).sort((a, b) => a - b);
-
-    if (kids.length === 1) {
-        return _layoutTree(ctx, kids[0], x, level + dir, dir);
-    }
+    // Side kids exclude mainKid AND any already-placed kids.
+    // Already-placed non-main kids (e.g. a second merged trunk
+    // node on a fork) are walked into afterwards purely to
+    // descend into THEIR children — they don't consume a side
+    // slot of this parent.
+    const sideKids = kidsAll
+        .filter(k => k !== mainKid && !ctx.positions[k])
+        .sort((a, b) => a - b);
 
     // Place side branches first, alternating left and right.
     const leftKids = [];
@@ -377,6 +446,11 @@ function _layoutTree(ctx, id, x, level, dir) {
             : Math.min(extremeSideLevel, l);
     };
 
+    // Side branches start one row above the parent. _layoutMergedTrunk
+    // packs trunk rows with a `branchH + 1` gap, so a side subtree
+    // tall enough to need extra space already has it — the side kid
+    // can step in full LEVEL_H units without colliding with the next
+    // trunk row.
     let leftX = x - NODE_W;
     for (const kid of leftKids) {
         const w = _subtreeWidth(ctx, kid);
@@ -416,6 +490,20 @@ function _layoutTree(ctx, id, x, level, dir) {
         const top = _layoutTree(ctx, mainKid, x, mainLevel, dir);
         updateExtreme(top);
     }
+
+    // Any kids that were already placed but didn't become mainKid
+    // (e.g., a second merged trunk node attached to the same
+    // parent — unusual, but possible on a fork) still need to be
+    // descended into so their in-flight descendants get reached.
+    // The recursion uses the kid's existing (x, level) and skips
+    // re-positioning.
+    for (const k of kidsAll) {
+        if (k === mainKid) continue;
+        if (sideKids.includes(k)) continue;
+        if (!ctx.positions[k]) continue;
+        const top = _layoutTree(ctx, k, 0, 0, dir);
+        updateExtreme(top);
+    }
     return extremeSideLevel;
 }
 
@@ -437,86 +525,23 @@ function _isChainSubtree(ctx, id) {
     return false;
 }
 
-// Step 1: place the anchor and everything reachable from it via
-// childrenOf (growing upward, negative y).
+// Step 1: place in-flight descendants of the anchor by walking
+// _layoutTree from the anchor upward. The anchor itself is
+// expected to already be positioned by _layoutAnchorColumn, and
+// _layoutTree's "already placed → keep position, walk children"
+// path means we naturally descend into the trunk too — any
+// newer-merged trunk node above the anchor has its in-flight
+// kids placed by the same recursive walk.
 function _layoutUpwardFromAnchor(ctx) {
-    const positions = ctx.positions;
-    positions[ctx.anchorId] = { x: 0, y: 0 };
-
-    const upKids = (childrenOf[ctx.anchorId] || [])
-        .filter(k => _layoutShouldShow(ctx, k))
-        .filter(k => !positions[k]);
-    if (upKids.length === 0) return;
-
-    // layoutTree re-positions the anchor at the same coords when
-    // called with positions cleared, so clear → call → it's back.
-    delete positions[ctx.anchorId];
     _layoutTree(ctx, ctx.anchorId, 0, 0, 1);
 }
 
-// Step 2: place the base chain below the anchor. Each base node is
-// pushed far enough down that its upward side branches don't
-// overlap the previous node's area. Mirrors the upward layout logic
-// where the main-chain child is pushed past side branches. Every
-// node placed by this helper is recorded in the module-level
-// baseChainSet so renderGraph can dim only real base-chain history,
-// not e.g. unreachable ancestors glued in by the fallback layout.
-function _layoutBaseChain(ctx) {
-    const positions = ctx.positions;
-    let cursor = parentOf[ctx.anchorId];
-    let prevNodeLevel = 0; // anchor is at level 0
-
-    while (cursor && nodeMap[cursor] && !positions[cursor]) {
-        if (!_layoutShouldShow(ctx, cursor) && cursor != ctx.anchorId) {
-            cursor = parentOf[cursor];
-            continue;
-        }
-        baseChainSet.add(cursor);
-
-        // Pre-compute how tall this node's side branches will be so
-        // the node can be placed far enough below the previous one
-        // that the branches (which grow UP branchH levels) don't
-        // overlap.
-        const sideKids = (childrenOf[cursor] || [])
-            .filter(k => _layoutShouldShow(ctx, k))
-            .filter(k => k != ctx.anchorId && !mainChain.has(k));
-        let branchH = 0;
-        for (const sk of sideKids) {
-            branchH = Math.max(branchH, _subtreeHeight(ctx, sk));
-        }
-
-        const nodeLevel = prevNodeLevel - Math.max(1, branchH + 1);
-        positions[cursor] = { x: 0, y: -nodeLevel * LEVEL_H };
-
-        // Lay out the side branches growing upward from this base node.
-        if (sideKids.length > 0) {
-            const kids = sideKids.filter(k => !positions[k]);
-            kids.sort((a, b) => a - b);
-            let leftX = -NODE_W;
-            let rightX = NODE_W;
-            for (let bi = 0; bi < kids.length; bi++) {
-                const bk = kids[bi];
-                const w = _subtreeWidth(ctx, bk);
-                if (bi % 2 === 0) {
-                    _layoutTree(
-                        ctx, bk, rightX + (w - 1) * NODE_W / 2,
-                        nodeLevel + 1, 1
-                    );
-                    rightX += w * NODE_W;
-                } else {
-                    _layoutTree(
-                        ctx, bk, leftX - (w - 1) * NODE_W / 2,
-                        nodeLevel + 1, 1
-                    );
-                    leftX -= w * NODE_W;
-                }
-            }
-        }
-
-        prevNodeLevel = nodeLevel;
-        cursor = parentOf[cursor];
-    }
-}
+// _layoutBaseChain was the pre-trunk way of placing ancestors
+// (walked parentOf, spaced via subtree-height). Its job is split
+// between _layoutAnchorColumn (in-flight ancestors), _layoutMergedTrunk
+// (merged ancestors in chronological order), and
+// _layoutTrunkSideBranches (their side branches). The old helper
+// has no callers left.
 
 // Step 3: lay out separate-series groups as forward-walked chains.
 //
@@ -620,9 +645,8 @@ function _findChainAnchor(chain, positions) {
 // Place a chain (oldest → newest) as a single vertical column
 // starting at (baseX, baseY) and growing upward.
 function _placeChainColumn(ctx, chain, baseX, baseY) {
-    const positions = ctx.positions;
     for (let i = 0; i < chain.length; i++) {
-        positions[chain[i]] = { x: baseX, y: baseY - i * LEVEL_H };
+        _placeNode(ctx, chain[i], baseX, baseY - i * LEVEL_H);
     }
 }
 
@@ -669,7 +693,7 @@ function _layoutSeparateFixup(ctx) {
             px += NODE_W;
             tries++;
         }
-        positions[id] = { x: px, y: py };
+        _placeNode(ctx, id, px, py);
     }
 }
 
@@ -745,10 +769,11 @@ function _layoutUnplacedMainSeries(ctx) {
     for (const lv in levelBuckets) {
         const ids = levelBuckets[lv].sort((a, b) => a - b);
         for (let i = 0; i < ids.length; i++) {
-            positions[ids[i]] = {
-                x: columnX + i * NODE_W,
-                y: -parseInt(lv) * LEVEL_H,
-            };
+            _placeNode(
+                ctx, ids[i],
+                columnX + i * NODE_W,
+                -parseInt(lv) * LEVEL_H,
+            );
         }
     }
 }
@@ -756,24 +781,193 @@ function _layoutUnplacedMainSeries(ctx) {
 // Step 4: any nodes that ended up at exactly the same (x, y) — e.g.
 // because two fixup passes chose the same slot — get shifted right
 // until they find an empty coordinate.
+//
+// Iteration uses ctx.placementOrder (insertion order) rather than
+// Object.entries — JS objects with numeric keys iterate by ASCENDING
+// NUMBER regardless of insertion order, which previously let a
+// later-placed but lower-cn node steal the slot from an earlier-
+// placed one. The earliest placement wins.
+//
+// Non-trunk nodes also can never be shifted INTO the x=0 column —
+// that column belongs to the merged trunk, and dumping an in-flight
+// side branch there visually merges it with the trunk row.
 function _resolveCollisions(ctx) {
     const positions = ctx.positions;
+    const order = ctx.placementOrder || [];
     const occupied = new Map();
-    for (const [idStr, pos] of Object.entries(positions)) {
+    for (const id of order) {
+        const pos = positions[id];
+        if (!pos) continue;
+        const isTrunk = trunkSet.has(id);
         const key = pos.x + ',' + pos.y;
         if (!occupied.has(key)) {
-            occupied.set(key, idStr);
+            occupied.set(key, id);
             continue;
         }
         let px = pos.x + NODE_W;
         let tries = 0;
         while (tries < 30) {
-            if (!occupied.has(px + ',' + pos.y)) break;
+            const blockedByTrunkColumn = !isTrunk && px === 0;
+            if (!occupied.has(px + ',' + pos.y) && !blockedByTrunkColumn) {
+                break;
+            }
             px += NODE_W;
             tries++;
         }
-        positions[idStr] = { x: px, y: pos.y };
-        occupied.set(px + ',' + pos.y, idStr);
+        positions[id] = { x: px, y: pos.y };
+        occupied.set(px + ',' + pos.y, id);
+    }
+}
+
+// Step 0a: place the anchor (y=0) and any in-flight ancestors of
+// the anchor (walked via parentOf) on the central x=0 column.
+// Stops at the first merged ancestor — those belong to the trunk
+// and get placed in _layoutMergedTrunk.
+//
+// Returns the bottom-most level used (a negative or zero number
+// in our convention: y=0 is the anchor, y=N*LEVEL_H below is
+// level=-N). The trunk uses that level to know where to start
+// stacking older merged nodes BELOW the in-flight ancestors.
+function _layoutAnchorColumn(ctx) {
+    const positions = ctx.positions;
+    const anchor = ctx.anchorId;
+    _placeNode(ctx, anchor, 0, 0);
+    baseChainSet.add(anchor);
+
+    let belowLevel = 0;
+    let cur = parentOf[anchor];
+    const seen = new Set();
+    while (cur && nodeMap[cur] && !seen.has(cur)) {
+        seen.add(cur);
+        if (nodeMap[cur].status === 'MERGED') break;
+        if (!_layoutShouldShow(ctx, cur)) {
+            cur = parentOf[cur];
+            continue;
+        }
+        belowLevel -= 1;
+        _placeNode(ctx, cur, 0, -belowLevel * LEVEL_H);
+        baseChainSet.add(cur);
+        cur = parentOf[cur];
+    }
+    return belowLevel;
+}
+
+// Step 0b: lay out the merged trunk. Every MERGED node sits at
+// x=0 in chronological order (submitted ASC). The anchor is
+// pinned at y=0 even when itself merged; newer merged sit above
+// (negative y), older merged sit below the in-flight ancestor
+// chain (positive y, starting one level below `belowAnchorLevel`).
+//
+// Spacing between adjacent trunk rows is NOT uniform: each trunk
+// node X gets a gap above it equal to `1 + max(_subtreeHeight of
+// X's in-flight side branches)`. That makes room for X's side
+// subtree to grow up without colliding y with the next merged
+// patch — mirrors what the retired _layoutBaseChain did via
+// `Math.max(1, branchH + 1)`. Trunk nodes with no in-flight side
+// branches still pack tight (gap = 1 row).
+//
+// G.merged_trunk is the server-built list (oldest first).
+function _layoutMergedTrunk(ctx, belowAnchorLevel) {
+    const anchor = ctx.anchorId;
+    const trunk = (G.merged_trunk || []).filter(id => nodeVisible(id));
+    if (trunk.length === 0) return;
+    const anchorIdx = trunk.indexOf(anchor);
+
+    // Number of vertical slots a trunk node needs ABOVE itself for
+    // its in-flight side branches. Trunk-kid edges don't consume
+    // slots (those run along the trunk column). STALE edges to
+    // side kids are also skipped — a stale-reached subtree is
+    // historical noise that gets drawn in its own column; the
+    // main trunk shouldn't bloat itself reserving rows for it.
+    // This is the same logic that kept the upward main chain
+    // tight in _layoutTree (the chain-mainKid skip-push rule).
+    function trunkSpacing(id) {
+        const sideKids = (childrenOf[id] || [])
+            .filter(k => _layoutShouldShow(ctx, k))
+            .filter(k => !trunkSet.has(k))
+            .filter(k => {
+                const e = edgeMap[id + '->' + k];
+                return !(e && e.is_stale);
+            });
+        let h = 0;
+        for (const sk of sideKids) h = Math.max(h, _subtreeHeight(ctx, sk));
+        return Math.max(1, h + 1);
+    }
+
+    if (anchorIdx >= 0) {
+        baseChainSet.add(anchor);
+        // Above anchor: each newer trunk node sits a "spacing" gap
+        // above the trunk node just below it (or above the anchor
+        // for trunk[anchorIdx+1]).
+        let y = 0;
+        for (let i = anchorIdx + 1; i < trunk.length; i++) {
+            const below = (i === anchorIdx + 1) ? anchor : trunk[i - 1];
+            y -= trunkSpacing(below) * LEVEL_H;
+            _placeNode(ctx, trunk[i], 0, y);
+            baseChainSet.add(trunk[i]);
+        }
+        // Below anchor: the in-flight ancestor chain (if any) ends
+        // at y = -belowAnchorLevel * LEVEL_H. The first older trunk
+        // sits a gap further down to leave room for ITS side branches.
+        const inflightBottomY = -belowAnchorLevel * LEVEL_H;
+        y = inflightBottomY;
+        for (let i = anchorIdx - 1; i >= 0; i--) {
+            y += trunkSpacing(trunk[i]) * LEVEL_H;
+            _placeNode(ctx, trunk[i], 0, y);
+            baseChainSet.add(trunk[i]);
+        }
+    } else {
+        // Anchor not in trunk: entire trunk below the in-flight chain.
+        const inflightBottomY = -belowAnchorLevel * LEVEL_H;
+        let y = inflightBottomY;
+        for (let i = trunk.length - 1; i >= 0; i--) {
+            y += trunkSpacing(trunk[i]) * LEVEL_H;
+            _placeNode(ctx, trunk[i], 0, y);
+            baseChainSet.add(trunk[i]);
+        }
+    }
+}
+
+// Step 0c: surface in-flight side branches that hang off any trunk
+// node. _layoutUpwardFromAnchor reaches most of them by descending
+// through anchor's child chain, but the walk stops at any hidden
+// node (e.g., an abandoned change in the middle of the chain) —
+// every trunk node beyond that point and its in-flight kids would
+// otherwise be left for the generic fallback. This pass walks the
+// trunk explicitly and places each trunk node's unplaced visible
+// kids as side branches, alternating left and right of the trunk
+// column with one level of upward offset.
+function _layoutTrunkSideBranches(ctx) {
+    const positions = ctx.positions;
+    const trunk = (G.merged_trunk || []).filter(id => nodeVisible(id));
+    for (const id of trunk) {
+        const pos = positions[id];
+        if (!pos) continue;
+        const level = Math.round(-pos.y / LEVEL_H);
+        const unplaced = (childrenOf[id] || [])
+            .filter(k => _layoutShouldShow(ctx, k))
+            .filter(k => !positions[k])
+            .sort((a, b) => a - b);
+        if (unplaced.length === 0) continue;
+        // One row above the trunk node — _layoutMergedTrunk already
+        // reserved enough rows above this trunk node for the kid's
+        // subtree height.
+        const sideStart = level + 1;
+        let leftX = pos.x - NODE_W;
+        let rightX = pos.x + NODE_W;
+        for (let i = 0; i < unplaced.length; i++) {
+            const kid = unplaced[i];
+            const w = _subtreeWidth(ctx, kid);
+            if (i % 2 === 0) {
+                _layoutTree(ctx, kid,
+                    rightX + (w - 1) * NODE_W / 2, sideStart, 1);
+                rightX += w * NODE_W;
+            } else {
+                _layoutTree(ctx, kid,
+                    leftX - (w - 1) * NODE_W / 2, sideStart, 1);
+                leftX -= w * NODE_W;
+            }
+        }
     }
 }
 
@@ -786,14 +980,45 @@ function computeLayout(anchorId) {
     const ctx = {
         anchorId,
         positions: {},
+        // Insertion-order array of node ids, parallel to `positions`.
+        // _resolveCollisions consults this so the earliest placement
+        // wins a contested slot (JS object iteration sorts numeric
+        // keys by ascending number — useless for "who got there
+        // first" decisions).
+        placementOrder: [],
         widthCache: {},
         heightCache: {},
     };
+    // Layout phases in dependency order. Each phase owns one
+    // placement task and is safe to read in isolation.
+    //
+    //  1. _layoutAnchorColumn  — anchor at (0,0) plus any
+    //                            in-flight ancestors stacked
+    //                            below it on the x=0 column.
+    //  2. _layoutMergedTrunk   — every MERGED node at x=0 in
+    //                            chronological (submitted) order;
+    //                            newer above anchor, older below
+    //                            the in-flight ancestor chain.
+    //                            Anchor if merged keeps y=0.
+    //  3. _layoutUpwardFromAnchor — in-flight descendants of the
+    //                            anchor. _layoutTree walks past
+    //                            already-placed trunk nodes so
+    //                            their in-flight side branches
+    //                            get reached on the same walk.
+    //  4. _layoutTrunkSideBranches — side branches of trunk nodes
+    //                            BELOW the anchor (not reachable
+    //                            from the descendant walk).
+    //  5. _layoutUnplacedMainSeries — stragglers that no phase
+    //                            placed (defensive).
+    //  6. _layoutSeparateGroups — only IN-FLIGHT groups remain;
+    //                            merged members were promoted to
+    //                            the trunk on the Python side.
+    //  7. _resolveCollisions   — final pass to nudge exact-coord
+    //                            overlaps right.
+    const belowLevel = _layoutAnchorColumn(ctx);
+    _layoutMergedTrunk(ctx, belowLevel);
     _layoutUpwardFromAnchor(ctx);
-    _layoutBaseChain(ctx);
-    // Unplaced-main BEFORE separate groups so the chain anchor
-    // lookup can find every placed main neighbor (including main
-    // ancestors that fell off the linear base chain).
+    _layoutTrunkSideBranches(ctx);
     _layoutUnplacedMainSeries(ctx);
     _layoutSeparateGroups(ctx);
     _resolveCollisions(ctx);
@@ -878,6 +1103,7 @@ function legendItems() {
         { kind: 'fill', label: 'Merged',      color: C.STATUS.MERGED.bg },
         { kind: 'fill', label: 'Abandoned',   color: C.STATUS.ABANDONED.bg },
         { kind: 'border', label: '🚧 WIP',   color: '#c9d1d9', dashed: true },
+        { kind: 'border', label: 'Anchor',   color: C.HIGHLIGHT.border, thick: true },
         { kind: 'border', label: 'master-next (queued)', color: C.STATUS.MERGED.border },
         { kind: 'group', label: 'Edges', marginLeft: '8px' },
         { kind: 'fill', label: 'Stale',       color: C.edgeStale },
@@ -894,8 +1120,9 @@ function renderLegend() {
         }
         if (item.kind === 'border') {
             const style = item.dashed ? 'dashed' : 'solid';
+            const width = item.thick ? 3 : 2;
             return `<div class="legend-item"><span class="legend-dot"`
-                + ` style="background:transparent;border:2px ${style} ${item.color}"></span>`
+                + ` style="background:transparent;border:${width}px ${style} ${item.color}"></span>`
                 + ` ${item.label}</div>`;
         }
         // kind === 'fill'
@@ -1027,8 +1254,16 @@ function nodeLabel(node) {
 }
 
 // Pick the base color palette for a node. Returns { bg, border, font }.
+//
+// Status colors are used for every node — merged nodes stay
+// purple wherever they sit (including down in the trunk), in-flight
+// nodes follow their review health, and abandoned use the muted
+// grey. The pre-trunk layout used to override this with a dim
+// palette for "below the anchor" nodes, but the trunk's
+// chronological column already conveys "history" through position;
+// dimming on top of that just hid the merged → in-flight color
+// distinction the user relies on.
 function nodeBaseColors(node, flags, C) {
-    if (flags.isBase) return C.DIM;
     if (node.status === 'NEW') {
         const health = reviewHealth(node);
         if (health === 'bad_veto') return C.REVIEW_BAD_VETO;
@@ -1053,6 +1288,17 @@ function styleForNode(node, flags, position, C) {
     if ((node.hashtags || []).includes('master-next')) {
         colors = Object.assign({}, colors, {
             border: C.STATUS.MERGED.border,
+        });
+    }
+
+    // Anchor highlight: the user's focal node always carries the
+    // selection-highlight border color so it stands out from the
+    // rest of the trunk and chain. Combined with the thicker
+    // borderWidth (set below) the anchor is unmistakable even when
+    // it sits mid-trunk among other merged patches.
+    if (flags.isAnchor) {
+        colors = Object.assign({}, colors, {
+            border: C.HIGHLIGHT.border,
         });
     }
 
@@ -1103,15 +1349,11 @@ function styleForEdge(edge, edgeId, flags, C) {
         color = C.edgeMain;
         width = 3;
         dashes = false;
-    } else if (flags.isBase) {
-        color = C.edgeDim;
-        width = 1;
-        dashes = false;
     } else {
         // Non-stale edges that aren't on the main chain (separate
-        // series, side branches, cross-group links) still represent a
-        // real current dependency — same color as main, just thinner
-        // so the dominant chain still stands out.
+        // series, side branches, cross-group links, trunk connections)
+        // still represent a real current dependency — same color as
+        // main, just thinner so the dominant chain stands out.
         color = C.edgeMain;
         width = 1.5;
         dashes = false;
@@ -1541,7 +1783,16 @@ function showNodeInfo(id) {
     const staleTag = staleIncoming.length > 0
         ? `<span class="stale-tag">NEEDS REBASE</span>` : '';
 
+    const C = getColors();
+    const anchorBanner = (node.id === currentAnchor)
+        ? `<div class="field" style="background:rgba(255,166,87,0.12);border-left:3px solid ${C.HIGHLIGHT.border};padding:6px 10px;border-radius:4px;margin-bottom:8px">
+            <span style="color:${C.HIGHLIGHT.border};font-weight:700">★ Anchor</span>
+            <span style="color:var(--text-muted);font-size:11px;margin-left:6px">The change this graph is centred on.</span>
+        </div>`
+        : '';
+
     panel.innerHTML = `
+        ${anchorBanner}
         <div class="field">
             <div class="fl">Change</div>
             <div class="fv">
@@ -1659,6 +1910,41 @@ function clickNode(id) {
     network.focus(id, { scale: 1.0, animation: { duration: 300, easingFunction: 'easeInOutQuad' } });
     showNodeInfo(id);
 }
+
+// Draw a thin dashed vertical line at canvas x=0 spanning the
+// merged trunk's y range. The line is purely a visual guide —
+// "everything in this column is a merged patch in landing order"
+// — and is drawn underneath the nodes/edges so it never obscures
+// them. Skipped when the trunk has fewer than 2 nodes (nothing
+// to guide). The callback fires every redraw, so we re-derive
+// the span from the live node positions in case the user drags
+// the network around.
+network.on('beforeDrawing', function (canvasCtx) {
+    const trunk = G.merged_trunk || [];
+    if (trunk.length < 2) return;
+    const trunkPositions = network.getPositions(trunk);
+    let minY = Infinity, maxY = -Infinity, lineX = 0;
+    let count = 0;
+    for (const cn of trunk) {
+        const p = trunkPositions[cn];
+        if (!p) continue;
+        minY = Math.min(minY, p.y);
+        maxY = Math.max(maxY, p.y);
+        lineX = p.x;
+        count++;
+    }
+    if (count < 2) return;
+    canvasCtx.save();
+    canvasCtx.strokeStyle = isLight()
+        ? 'rgba(0, 0, 0, 0.16)' : 'rgba(255, 255, 255, 0.18)';
+    canvasCtx.lineWidth = 2;
+    canvasCtx.setLineDash([5, 6]);
+    canvasCtx.beginPath();
+    canvasCtx.moveTo(lineX, minY - 40);
+    canvasCtx.lineTo(lineX, maxY + 40);
+    canvasCtx.stroke();
+    canvasCtx.restore();
+});
 
 network.on('click', function(params) {
     if (params.nodes.length > 0) {

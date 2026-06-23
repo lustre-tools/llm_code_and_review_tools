@@ -234,6 +234,14 @@ class BuildContext:
     # something each helper has to reimplement locally.
     seen_edges: set[tuple[int, int]] = field(default_factory=set)
     separate_groups: list[dict[str, Any]] = field(default_factory=list)
+    # `submitted` dates for merged changes discovered as ancestor
+    # parent commits but dropped from the visible graph by
+    # _filter_merged_ancestors. Kept so the trunk edge-redirect
+    # step can still resolve an in-flight patch's true upload-time
+    # master position (the parent commit is owned by one of these
+    # off-tree merged changes; we need its date to pick the right
+    # trunk node).
+    external_merged_submitted: dict[int, str] = field(default_factory=dict)
 
     def log(self, msg: str, end: str = "\n") -> None:
         """Legacy plain-text logger retained for places that don't
@@ -478,13 +486,22 @@ def _discover_missing_nodes(ctx: BuildContext) -> int:
 def _filter_merged_ancestors(ctx: BuildContext) -> int:
     """Drop discovered changes that are already MERGED — those are
     git ancestors on lustre-master, not part of the actual patch
-    series we care about. Returns the number of removed changes."""
+    series we care about. Returns the number of removed changes.
+
+    Before deletion, the submitted timestamp of each removed change
+    is stashed in ctx.external_merged_submitted. The trunk edge-
+    redirect step uses it to date an in-flight patch's true base
+    commit when that base lives in one of these off-tree ancestors.
+    """
     related_set = {e["cn"] for e in ctx.raw_entries}
     merged_discovered = [
         cn for cn in ctx.nodes
         if cn not in related_set and ctx.nodes[cn]["status"] == "MERGED"
     ]
     for cn in merged_discovered:
+        sub = ctx.nodes[cn].get("submitted", "")
+        if sub:
+            ctx.external_merged_submitted[cn] = sub
         del ctx.nodes[cn]
     return len(merged_discovered)
 
@@ -1091,9 +1108,285 @@ def _expand_separate_series(ctx: BuildContext) -> None:
 # ─── Output assembly ────────────────────────────────────────────────────
 
 
+def _promote_merged_to_main(ctx: BuildContext) -> int:
+    """Move every merged node out of its separate group into the
+    main series (series_group=0). The JS layout places merged
+    nodes as a single chronological trunk regardless of which
+    topic/hashtag pulled them in, so they no longer belong in any
+    separate group. Empty groups are pruned. Returns the number
+    of nodes promoted.
+    """
+    promoted = 0
+    for cn, n in ctx.nodes.items():
+        if n.get("status") == "MERGED" and (n.get("series_group") or 0) > 0:
+            n["series_group"] = 0
+            promoted += 1
+    if promoted == 0:
+        return 0
+    remaining_groups: list[dict[str, Any]] = []
+    for group in ctx.separate_groups:
+        group["node_ids"] = [
+            cn for cn in group["node_ids"]
+            if ctx.nodes.get(cn, {}).get("status") != "MERGED"
+        ]
+        if group["node_ids"]:
+            remaining_groups.append(group)
+    ctx.separate_groups = remaining_groups
+    return promoted
+
+
+def _build_merged_trunk(ctx: BuildContext) -> list[int]:
+    """Return every merged node's cn, sorted by `submitted` ASC
+    (oldest first). This is the chronological trunk the JS layout
+    arranges as a single vertical column. Ties on `submitted`
+    break on cn ascending so the order is fully deterministic.
+    Nodes missing a `submitted` value fall back to `updated`; if
+    both are missing they sort to the very end (newest).
+    """
+    merged = [
+        n for n in ctx.nodes.values() if n.get("status") == "MERGED"
+    ]
+    def key(n):
+        ts = n.get("submitted") or n.get("updated") or ""
+        # Empty timestamp → sort last (treat as "newest unknown").
+        return (ts == "", ts, n["id"])
+    merged.sort(key=key)
+    return [n["id"] for n in merged]
+
+
+def _trunk_timestamp(node: dict[str, Any]) -> str:
+    """The timestamp we treat as the trunk node's position on master.
+    Prefer `submitted`; fall back to `updated` so very old merged
+    nodes lacking the submitted field still sort sensibly."""
+    return node.get("submitted") or node.get("updated") or ""
+
+
+def _commit_is_on_master(
+    ctx: BuildContext, commit_hash: str,
+) -> tuple[bool, str]:
+    """True iff `commit_hash` is the merged revision of some change
+    we know about — i.e., that commit really lives on master.
+
+    Returns (True, submitted_date) when it does, (False, "") when
+    it doesn't (or when we can't tell). Two ways a commit qualifies:
+
+    1. It's the current_commit of a MERGED change still in
+       ctx.nodes — that's a trunk node, the commit is on master,
+       and we trust its `submitted` field.
+    2. Its owning change was filtered out as an off-tree merged
+       ancestor (ctx.external_merged_submitted). Filtered-out
+       changes are MERGED by definition (that's what the filter
+       selects on), and only their merged revision ends up in
+       commit_to_change_ps for use here — those commits are on
+       master too, and the side table holds the submitted date.
+    """
+    info = ctx.commit_to_change_ps.get(commit_hash)
+    if not info:
+        return False, ""
+    owner_cn, _ = info
+    node = ctx.nodes.get(owner_cn)
+    if node is not None:
+        if (node.get("status") == "MERGED"
+                and node.get("current_commit") == commit_hash):
+            return True, node.get("submitted") or node.get("updated") or ""
+        return False, ""
+    # Owner was filtered out; check the external table.
+    ts = ctx.external_merged_submitted.get(owner_cn, "")
+    if ts:
+        return True, ts
+    return False, ""
+
+
+def _inflight_base_date(ctx: BuildContext, child_id: int) -> str:
+    """Walk the in-flight node's git ancestry to find the first
+    commit that's actually on master, and return that commit's
+    submitted timestamp. This is the patch's "logical base on
+    master" — anything merged after this date wasn't there when
+    the patch was based, so the trunk node we visually attach it
+    to has to be at or before this point.
+
+    Walks via ctx.revision_parents (which holds parents for every
+    patchset commit we fetched). At each step we test whether the
+    current commit is on master via _commit_is_on_master; the
+    first hit wins. If the walk leaves our fetched-commit space
+    before finding a master commit, we fall back to the in-flight
+    patch's own upload-time fields (a coarser proxy).
+    """
+    child = ctx.nodes.get(child_id)
+    if not child:
+        return ""
+
+    # Find the commit hash of the child's current patchset.
+    current_ps = child.get("current_patchset", 0)
+    cur = None
+    for h, (cn, ps) in ctx.commit_to_change_ps.items():
+        if cn == child_id and ps == current_ps:
+            cur = h
+            break
+
+    if cur is None:
+        return (
+            child.get("current_ps_created", "")
+            or child.get("updated", "")
+            or ""
+        )
+
+    visited: set[str] = set()
+    # 50 hops is plenty — a typical in-flight patch's PS is at most
+    # 1-2 hops from a master commit through its rebase-base.
+    for _ in range(50):
+        parent = ctx.revision_parents.get(cur, "")
+        if not parent or parent in visited:
+            break
+        visited.add(parent)
+        on_master, ts = _commit_is_on_master(ctx, parent)
+        if on_master:
+            return ts
+        cur = parent
+
+    # The walk left our fetched-commit space (or hit a cycle). Use
+    # the patch's own upload-time fields as a coarse approximation.
+    return (
+        child.get("current_ps_created", "")
+        or child.get("updated", "")
+        or ""
+    )
+
+
+def _most_recent_merged_at_or_before(
+    ctx: BuildContext, merged_trunk: list[int], cutoff: str,
+) -> int | None:
+    """Return the cn of the most recent merged trunk node whose
+    `submitted` is at or before `cutoff`. `cutoff` must be an ISO
+    timestamp string (Gerrit's format compares correctly as plain
+    strings). Returns None when no trunk node qualifies (e.g. the
+    cutoff predates the earliest known merge).
+    """
+    if not cutoff:
+        return None
+    best_cn: int | None = None
+    best_ts = ""
+    for cn in merged_trunk:
+        n = ctx.nodes.get(cn)
+        if n is None:
+            continue
+        ts = _trunk_timestamp(n)
+        if not ts or ts > cutoff:
+            continue
+        if ts > best_ts:
+            best_ts = ts
+            best_cn = cn
+    return best_cn
+
+
+def _redirect_inflight_to_recent_merged(
+    ctx: BuildContext, merged_trunk: list[int],
+) -> int:
+    """Rewire each in-flight node's merged-ancestor edge to point at
+    the merged trunk node that best represents its place on master.
+
+    Why: /related preserves the historical parent relationship at
+    upload time, which can leave an in-flight patch literally
+    attached to an old merged ancestor whose final-merged patchset
+    isn't actually where the in-flight branched off. The user's
+    mental model is "from the in-flight patch, look back through
+    git history — the first merged patch you hit is the right
+    visual parent".
+
+    We don't have full git ancestry locally, so we approximate using
+    the in-flight node's CURRENT patchset creation time
+    (`current_ps_created`). The target is the most recent merged
+    trunk node whose `submitted` <= that timestamp: that's the
+    latest landed change the in-flight node could plausibly be
+    based on, because anything merged after the patchset was
+    uploaded didn't exist yet from the patch's perspective.
+
+    Edges from newer-than-anchor trunk nodes are left alone — those
+    are real in-flight-descendant chains above the anchor. Edges
+    that already point at the right target are no-ops.
+
+    Returns the number of edges redirected. Modifies ctx.edges in
+    place.
+    """
+    if not merged_trunk:
+        return 0
+    submitted_map = {
+        cn: _trunk_timestamp(ctx.nodes[cn])
+        for cn in merged_trunk if cn in ctx.nodes
+    }
+    anchor_node = ctx.nodes.get(ctx.change_number)
+    anchor_submitted = (
+        _trunk_timestamp(anchor_node) if anchor_node else ""
+    )
+
+    def is_redirect_candidate(e: dict) -> tuple[bool, int | None]:
+        child = ctx.nodes.get(e["to"])
+        parent = ctx.nodes.get(e["from"])
+        if not child or child.get("status") != "NEW":
+            return False, None
+        if not parent or parent.get("status") != "MERGED":
+            return False, None
+        if e["from"] not in submitted_map:
+            return False, None
+        parent_ts = submitted_map[e["from"]]
+        # Keep newer-than-anchor merged edges intact (real chains
+        # above the anchor).
+        if anchor_submitted and parent_ts >= anchor_submitted:
+            return False, None
+        # The "where did this patch branch off master?" cutoff.
+        # See _inflight_base_date — uses the parent commit's
+        # owning-change submitted when available, falling back to
+        # the in-flight patch's own upload time otherwise.
+        cutoff = _inflight_base_date(ctx, e["to"])
+        if not cutoff:
+            return False, None
+        target = _most_recent_merged_at_or_before(
+            ctx, merged_trunk, cutoff,
+        )
+        if target is None or target == e["from"]:
+            return False, None
+        return True, target
+
+    # Two-pass to support deduplication: walk the existing edges
+    # once to separate kept vs. candidates, then add redirects that
+    # don't collide with edges we're already keeping.
+    keep_edges: list[dict[str, Any]] = []
+    candidates: list[tuple[int, int]] = []  # (target, child)
+    for e in ctx.edges:
+        ok, target = is_redirect_candidate(e)
+        if ok and target is not None:
+            candidates.append((target, e["to"]))
+        else:
+            keep_edges.append(e)
+
+    existing_pairs: set[tuple[int, int]] = {
+        (e["from"], e["to"]) for e in keep_edges
+    }
+    for target, child in candidates:
+        if (target, child) in existing_pairs:
+            continue  # would be a duplicate of a kept edge
+        target_ps = ctx.nodes[target].get("current_patchset", 0)
+        keep_edges.append({
+            "from": target,
+            "to": child,
+            "parent_patchset": target_ps,
+            "parent_latest": target_ps,
+            "is_stale": False,
+        })
+        existing_pairs.add((target, child))
+    ctx.edges = keep_edges
+    return len(candidates)
+
+
 def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
     """Flatten the accumulated build state into the final dict shape
     consumed by `render.generate_html`."""
+    # Merged-trunk promotion runs BEFORE the separate-chain builder
+    # so chains are constructed over the in-flight pool only —
+    # nodes promoted into the main series no longer appear as
+    # separate-group seeds, and previously-empty groups are pruned.
+    _promote_merged_to_main(ctx)
+
     status_counts: dict[str, int] = {}
     for n in ctx.nodes.values():
         s = n["status"]
@@ -1108,6 +1401,14 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
     )
 
     chains = _build_separate_chains(ctx)
+    merged_trunk = _build_merged_trunk(ctx)
+    # Rewrite in-flight → old-merged edges to attach to the most
+    # recent merged trunk node the in-flight patch could plausibly
+    # have branched off (using its current patchset's creation
+    # time). Done AFTER chains are built so the chain detector
+    # still uses the historical edges for parent-commit matching;
+    # only the rendered edges get the redirect treatment.
+    _redirect_inflight_to_recent_merged(ctx, merged_trunk)
     return {
         "anchor": ctx.change_number,
         "base_url": ctx.base_url,
@@ -1119,6 +1420,12 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
         # separate groups as vertical columns rooted at their
         # oldest member.
         "separate_chains": chains,
+        # Every merged node in chronological order (oldest first).
+        # The JS layout positions these as a single vertical
+        # column at x=0, with the anchor pinned at y=0 — older
+        # merged below, newer merged (and in-flight descendants)
+        # above.
+        "merged_trunk": merged_trunk,
         "generated_at": generated_at,
         "stats": {
             "node_count": len(ctx.nodes),
@@ -1128,6 +1435,7 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
             "tickets": tickets,
             "separate_group_count": len(ctx.separate_groups),
             "separate_chain_count": len(chains),
+            "merged_trunk_count": len(merged_trunk),
             "generated_at": generated_at,
         },
     }
