@@ -1351,22 +1351,75 @@ def _redirect_inflight_to_recent_merged(
 
     # Two-pass to support deduplication: walk the existing edges
     # once to separate kept vs. candidates, then add redirects that
-    # don't collide with edges we're already keeping.
+    # don't collide with edges we're already keeping AND don't close
+    # a cycle by attaching target -> child when target is already
+    # reachable from child via the kept-edge set.
+    #
+    # Cycle case (hit on 54459): an in-flight series 54469..54486 had
+    # 54486 at the top before it merged. Chain edges 54469 -> 54470
+    # -> ... -> 54485 -> 54486 are still surfaced by /related as
+    # parent->child (Gerrit preserves the historical relationship,
+    # is_stale=False). When 54486 merges ahead and 54469 rebases onto
+    # it, the redirect would emit 54486 -> 54469 and close the loop.
+    # Graph.js's recursive layout (_subtreeWidth, _subtreeHeight,
+    # _layoutTree) walks childrenOf without a visited set and stack-
+    # overflows on cycles -> blank canvas. We skip the redirect in
+    # that case and keep the original (literal /related) edge so the
+    # in-flight node isn't orphaned from its series view.
     keep_edges: list[dict[str, Any]] = []
-    candidates: list[tuple[int, int]] = []  # (target, child)
+    candidates: list[tuple[int, int, dict[str, Any]]] = []
     for e in ctx.edges:
         ok, target = is_redirect_candidate(e)
         if ok and target is not None:
-            candidates.append((target, e["to"]))
+            candidates.append((target, e["to"], e))
         else:
             keep_edges.append(e)
+    # Pin candidate processing order — dict-iteration order over the
+    # Gerrit JSON is not guaranteed stable across runs/sessions, and
+    # eager adj updates below make later candidates dependent on the
+    # state earlier ones leave behind.
+    candidates.sort(key=lambda c: (c[0], c[1]))
+
+    adj: dict[int, set[int]] = {}
+    for e in keep_edges:
+        adj.setdefault(e["from"], set()).add(e["to"])
+
+    def _reachable(src: int, dst: int) -> bool:
+        """True iff dst is reachable from src via `adj`. `adj` is kept
+        in lockstep with keep_edges + existing_pairs in the loop below
+        so reachability reflects every edge that will actually ship."""
+        if src == dst:
+            return True
+        seen = {src}
+        stack = [src]
+        while stack:
+            u = stack.pop()
+            for v in adj.get(u, ()):
+                if v == dst:
+                    return True
+                if v not in seen:
+                    seen.add(v)
+                    stack.append(v)
+        return False
 
     existing_pairs: set[tuple[int, int]] = {
         (e["from"], e["to"]) for e in keep_edges
     }
-    for target, child in candidates:
+    for target, child, orig in candidates:
         if (target, child) in existing_pairs:
             continue  # would be a duplicate of a kept edge
+        if _reachable(child, target):
+            # target -> child would close a cycle. Fall back to the
+            # original /related parent edge so the in-flight node
+            # still has a merged-ancestor link — but only if the
+            # fallback itself doesn't close a cycle through edges
+            # other redirects have added in this loop.
+            if (orig["from"], orig["to"]) not in existing_pairs \
+                    and not _reachable(orig["to"], orig["from"]):
+                keep_edges.append(orig)
+                existing_pairs.add((orig["from"], orig["to"]))
+                adj.setdefault(orig["from"], set()).add(orig["to"])
+            continue
         target_ps = ctx.nodes[target].get("current_patchset", 0)
         keep_edges.append({
             "from": target,
@@ -1376,6 +1429,7 @@ def _redirect_inflight_to_recent_merged(
             "is_stale": False,
         })
         existing_pairs.add((target, child))
+        adj.setdefault(target, set()).add(child)
     ctx.edges = keep_edges
     return len(candidates)
 
