@@ -451,12 +451,24 @@ function _layoutTree(ctx, id, x, level, dir) {
     // tall enough to need extra space already has it — the side kid
     // can step in full LEVEL_H units without colliding with the next
     // trunk row.
+    //
+    // When the parent is a trunk node, skip the (w-1)*NODE_W/2
+    // centering: the trunk column is reserved at x=0, and a tall
+    // chain-like side kid (e.g. 62852 with 15 leaves spread across
+    // 22 levels) shouldn't get shoved 7 node widths away just
+    // because its leaf-count is large. Place it at parent.x ±
+    // NODE_W and let its subtree extend further out from there.
+    // For non-trunk parents we keep the centered allocation so
+    // siblings under a normal in-flight node don't overlap.
+    const parentInTrunk = trunkSet.has(id);
+
     let leftX = x - NODE_W;
     for (const kid of leftKids) {
         const w = _subtreeWidth(ctx, kid);
-        const top = _layoutTree(
-            ctx, kid, leftX - (w - 1) * NODE_W / 2, level + dir, dir
-        );
+        const kidX = parentInTrunk
+            ? leftX
+            : leftX - (w - 1) * NODE_W / 2;
+        const top = _layoutTree(ctx, kid, kidX, level + dir, dir);
         updateExtreme(top);
         leftX -= w * NODE_W;
     }
@@ -464,9 +476,10 @@ function _layoutTree(ctx, id, x, level, dir) {
     let rightX = x + NODE_W;
     for (const kid of rightKids) {
         const w = _subtreeWidth(ctx, kid);
-        const top = _layoutTree(
-            ctx, kid, rightX + (w - 1) * NODE_W / 2, level + dir, dir
-        );
+        const kidX = parentInTrunk
+            ? rightX
+            : rightX + (w - 1) * NODE_W / 2;
+        const top = _layoutTree(ctx, kid, kidX, level + dir, dir);
         updateExtreme(top);
         rightX += w * NODE_W;
     }
@@ -951,7 +964,10 @@ function _layoutTrunkSideBranches(ctx) {
         if (unplaced.length === 0) continue;
         // One row above the trunk node — _layoutMergedTrunk already
         // reserved enough rows above this trunk node for the kid's
-        // subtree height.
+        // subtree height. Skip the (w-1)*NODE_W/2 centering: trunk
+        // side kids hug the column at parent.x ± NODE_W regardless
+        // of how leaf-heavy their subtrees are (same logic as
+        // _layoutTree's trunk-parent branch).
         const sideStart = level + 1;
         let leftX = pos.x - NODE_W;
         let rightX = pos.x + NODE_W;
@@ -959,12 +975,10 @@ function _layoutTrunkSideBranches(ctx) {
             const kid = unplaced[i];
             const w = _subtreeWidth(ctx, kid);
             if (i % 2 === 0) {
-                _layoutTree(ctx, kid,
-                    rightX + (w - 1) * NODE_W / 2, sideStart, 1);
+                _layoutTree(ctx, kid, rightX, sideStart, 1);
                 rightX += w * NODE_W;
             } else {
-                _layoutTree(ctx, kid,
-                    leftX - (w - 1) * NODE_W / 2, sideStart, 1);
+                _layoutTree(ctx, kid, leftX, sideStart, 1);
                 leftX -= w * NODE_W;
             }
         }
