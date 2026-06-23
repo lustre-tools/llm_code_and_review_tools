@@ -1328,15 +1328,17 @@ def _redirect_inflight_to_recent_merged(
             return False, None
         if e["from"] not in submitted_map:
             return False, None
-        parent_ts = submitted_map[e["from"]]
-        # Keep newer-than-anchor merged edges intact (real chains
-        # above the anchor).
-        if anchor_submitted and parent_ts >= anchor_submitted:
-            return False, None
         # The "where did this patch branch off master?" cutoff.
-        # See _inflight_base_date — uses the parent commit's
-        # owning-change submitted when available, falling back to
-        # the in-flight patch's own upload time otherwise.
+        # See _inflight_base_date — walks the in-flight patch's git
+        # ancestry until it hits a commit that's actually on master,
+        # returning that change's submitted timestamp. We don't
+        # short-circuit on "parent is newer than anchor" because the
+        # literal /related parent can still be the wrong trunk node:
+        # an in-flight patch can be uploaded against a master commit
+        # that lives further up the trunk than the merged change
+        # /related happens to point at (hit on 62852 — current parent
+        # commit is owned by an off-tree merged change submitted
+        # AFTER the trunk node /related names).
         cutoff = _inflight_base_date(ctx, e["to"])
         if not cutoff:
             return False, None
