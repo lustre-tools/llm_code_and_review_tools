@@ -432,3 +432,142 @@ class TestRedirectInflightToRecentMerged:
         # 2026-05-29 12:00:00, which is 50 (May 28). NOT 80 (Jun 10).
         assert ctx.edges[0]["from"] == 50
         assert ctx.edges[0]["to"] == 100
+
+    def test_keeps_series_parent_that_merged_after_child_upload(self):
+        """54050 / 54051 shape: 54050 was rebased to merge five months
+        AFTER 54051's last upload, but 54051 ps6's git parent IS owned
+        by 54050 ps5. The literal /related parent (54050) is the
+        series parent and should win over the cutoff-date target
+        (54049). Dual gate fires: (1) parent merged after child
+        upload + (2) child's ancestry passes through parent."""
+        ctx = _ctx(
+            nodes=[
+                _node(49, "MERGED", submitted="2025-12-02 03:40:49",
+                      current_patchset=5),
+                _node(50, "MERGED", submitted="2026-05-28 05:02:58",
+                      current_patchset=6),
+                _node(51, "NEW", current_patchset=6,
+                      current_ps_created="2025-12-03 03:21:06"),
+            ],
+            edges=[{
+                # /related's literal parent: 50 -> 51, stale (parent
+                # has been rebased since the child was uploaded).
+                "from": 50, "to": 51,
+                "parent_patchset": 5, "parent_latest": 6,
+                "is_stale": True,
+            }],
+            anchor_cn=50,
+            commit_to_change_ps={
+                "C51_ps6": (51, 6),
+                "C50_ps5": (50, 5),  # 51's git parent commit
+                "C50_merged": (50, 6),
+                "C49_merged": (49, 5),
+            },
+            revision_parents={
+                "C51_ps6": "C50_ps5",      # 51 ps6 -> 50 ps5
+                "C50_ps5": "C49_merged",   # 50 ps5 -> 49 (on master)
+            },
+        )
+        count = _redirect_inflight_to_recent_merged(ctx, [49, 50])
+        # The cutoff-date math alone would pick 49 (most recent
+        # merged at-or-before 2025-12-02 — 50 hadn't merged yet
+        # when 51 was last uploaded). The new dual-gate rule
+        # short-circuits the candidate, so the edge stays as-is.
+        assert count == 0
+        assert len(ctx.edges) == 1
+        assert ctx.edges[0]["from"] == 50
+        assert ctx.edges[0]["to"] == 51
+        assert ctx.edges[0]["is_stale"] is True
+
+    def test_series_parent_rule_skipped_when_parent_merged_before_child(self):
+        """Mirror of the 54050 test but with the parent merging
+        BEFORE the child's last upload — i.e. the in-flight was
+        actively left behind on a stale ps (the 64441 shape). The
+        dual gate's first arm fails, the rule does NOT fire, and
+        the cutoff-date redirect should still run."""
+        ctx = _ctx(
+            nodes=[
+                _node(10, "MERGED", submitted="2026-01-01 00:00:00",
+                      current_patchset=5),
+                _node(20, "MERGED", submitted="2026-03-01 00:00:00",
+                      current_patchset=8),
+                _node(50, "MERGED", submitted="2026-05-28 00:00:00",
+                      current_patchset=3),
+                _node(100, "NEW", current_patchset=14,
+                      current_ps_created="2026-06-22 00:00:00"),
+            ],
+            edges=[{
+                "from": 20, "to": 100,
+                "parent_patchset": 3, "parent_latest": 8,
+                "is_stale": True,
+            }],
+            anchor_cn=50,
+            commit_to_change_ps={
+                "Cps14": (100, 14),
+                "C20_ps3": (20, 3),  # ancestry DOES pass through 20
+            },
+            revision_parents={
+                "Cps14": "C20_ps3",
+            },
+            external_merged_submitted={
+                # 100's logical master base: an external change
+                # merged 2026-05-29 (so the cutoff target is 50).
+                # We don't add it to revision_parents — the walk
+                # ends at C20_ps3, _inflight_base_date falls back
+                # to upload time, but that's after every trunk
+                # node anyway, so target = trunk top (50).
+            },
+        )
+        count = _redirect_inflight_to_recent_merged(
+            ctx, [10, 20, 50],
+        )
+        # parent.submitted (2026-03-01) is BEFORE child's
+        # current_ps_created (2026-06-22), so the series-parent
+        # rule does not fire. The cutoff-date redirect runs and
+        # retargets the edge.
+        assert count == 1
+        assert ctx.edges[0]["from"] != 20
+
+    def test_series_parent_rule_skipped_when_ancestry_misses_parent(self):
+        """62852 / 61965 shape: parent merged AFTER child upload
+        (gate 1 passes) BUT child was rebased onto an unrelated
+        base, so its git ancestry doesn't pass through the literal
+        /related parent (gate 2 fails). Rule does NOT fire — the
+        99442c1 redirect to the cutoff-date target still runs."""
+        ctx = _ctx(
+            nodes=[
+                _node(316, "MERGED", submitted="2026-06-20 06:34:21",
+                      current_patchset=9),
+                _node(689, "MERGED", submitted="2026-06-25 00:00:00",
+                      current_patchset=55),
+                _node(852, "NEW", current_patchset=54,
+                      current_ps_created="2026-06-15 00:00:00"),
+            ],
+            edges=[{
+                "from": 689, "to": 852,
+                "parent_patchset": 48, "parent_latest": 55,
+                "is_stale": True,
+            }],
+            anchor_cn=689,
+            commit_to_change_ps={
+                "C852_ps54": (852, 54),
+                # 852's git parent is owned by an off-tree change
+                # 985, NOT by 689.
+                "C985_merged": (985, 1),
+            },
+            revision_parents={
+                "C852_ps54": "C985_merged",
+            },
+            external_merged_submitted={
+                985: "2026-06-20 15:42:48",
+            },
+        )
+        count = _redirect_inflight_to_recent_merged(ctx, [316, 689])
+        # Gate 1 passes (689 merged 2026-06-25 > 852 uploaded
+        # 2026-06-15) but Gate 2 fails (ancestry hits 985, never
+        # 689). Cutoff-date redirect proceeds: _inflight_base_date
+        # finds 985 (off-tree, submitted 2026-06-20 15:42:48),
+        # most recent merged trunk at-or-before that is 316.
+        assert count == 1
+        assert ctx.edges[0]["from"] == 316
+        assert ctx.edges[0]["to"] == 852

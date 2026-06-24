@@ -1279,6 +1279,47 @@ def _most_recent_merged_at_or_before(
     return best_cn
 
 
+def _child_ancestry_contains(
+    ctx: BuildContext, child_id: int, parent_id: int,
+    max_hops: int = 50,
+) -> bool:
+    """True iff the in-flight child's current-patchset git ancestry
+    (walked via ctx.revision_parents) passes through any commit
+    owned by parent_id.
+
+    Used to tell apart "literal /related parent IS the series-
+    relative git parent" (keep the edge, even when stale) from
+    "patch was rebased away from the literal /related parent onto
+    an unrelated base" (let the redirect retarget to the cutoff
+    pick). Shares the walk shape of _inflight_base_date — start at
+    the child's current-PS commit, follow revision_parents one hop
+    at a time, bounded by max_hops and a visited-set against any
+    cycles the fetched-commit space might contain.
+    """
+    child = ctx.nodes.get(child_id)
+    if not child:
+        return False
+    current_ps = child.get("current_patchset", 0)
+    cur: str | None = None
+    for h, (cn, ps) in ctx.commit_to_change_ps.items():
+        if cn == child_id and ps == current_ps:
+            cur = h
+            break
+    if cur is None:
+        return False
+    visited: set[str] = set()
+    for _ in range(max_hops):
+        parent_h = ctx.revision_parents.get(cur, "")
+        if not parent_h or parent_h in visited:
+            return False
+        visited.add(parent_h)
+        info = ctx.commit_to_change_ps.get(parent_h)
+        if info and info[0] == parent_id:
+            return True
+        cur = parent_h
+    return False
+
+
 def _redirect_inflight_to_recent_merged(
     ctx: BuildContext, merged_trunk: list[int],
 ) -> int:
@@ -1327,6 +1368,32 @@ def _redirect_inflight_to_recent_merged(
         if not parent or parent.get("status") != "MERGED":
             return False, None
         if e["from"] not in submitted_map:
+            return False, None
+        # Series-relative parent precedence (dual gate). Keep the
+        # /related edge as-is when BOTH:
+        #   (1) the parent merged AFTER the child's last upload
+        #       (parent.submitted > child.current_ps_created), AND
+        #   (2) the child's current-PS git ancestry actually passes
+        #       through a commit owned by the parent.
+        # That combination is the "series parent merged ahead of
+        # the in-flight child" shape (54050/54051 — 54050 was
+        # rebased to merge in May 2026, five months after 54051's
+        # last upload, and 54051 ps6's git parent IS 54050 ps5; we
+        # want 54050 -> 54051 kept).
+        # Gate (1) rules out the 64441 shape (parent merged BEFORE
+        # the in-flight was last uploaded — the in-flight was
+        # actively left behind on a stale ps and the date-based
+        # redirect should fire).
+        # Gate (2) rules out the 62852 shape (in-flight was rebased
+        # onto an off-tree base, /related parent isn't in the git
+        # ancestry — 99442c1's redirect to the correct trunk node
+        # should fire).
+        parent_ts = submitted_map[e["from"]]
+        child_ps_created = child.get("current_ps_created", "")
+        if (parent_ts and child_ps_created
+                and parent_ts > child_ps_created
+                and _child_ancestry_contains(
+                    ctx, e["to"], e["from"])):
             return False, None
         # The "where did this patch branch off master?" cutoff.
         # See _inflight_base_date — walks the in-flight patch's git
