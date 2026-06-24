@@ -396,6 +396,22 @@ function _placeNode(ctx, id, x, y) {
     ctx.positions[id] = { x, y };
 }
 
+// True iff any already-placed node sits at column `colX` within
+// the level band [startLevel, startLevel + heightSigned]. Used by
+// trunk side-kid placement to detect when a sibling chain has
+// already claimed the column we'd otherwise default to.
+function _columnBlocked(ctx, colX, startLevel, heightSigned) {
+    const endLevel = startLevel + heightSigned;
+    const yLo = -Math.max(startLevel, endLevel) * LEVEL_H;
+    const yHi = -Math.min(startLevel, endLevel) * LEVEL_H;
+    for (const pid of (ctx.placementOrder || [])) {
+        const p = ctx.positions[pid];
+        if (!p || p.x !== colX) continue;
+        if (p.y >= yLo && p.y <= yHi) return true;
+    }
+    return false;
+}
+
 // Recursively place a subtree rooted at `id`. `dir` is +1 when
 // children grow up (negative y) and -1 when they grow down. Returns
 // the outermost level used by the subtree so callers can chain
@@ -433,10 +449,30 @@ function _layoutTree(ctx, id, x, level, dir) {
         .sort((a, b) => a - b);
 
     // Place side branches first, alternating left and right.
+    //
+    // Column-occupancy steer (trunk parents only): if the column
+    // immediately left of the trunk node is already occupied in
+    // the y-range the first side kid's subtree would span, flip
+    // the alternation seed so the kid goes RIGHT. Prevents two
+    // trunk-attached chains from both defaulting to LEFT and
+    // colliding — hit on 54459, where chain A (54469..54485) was
+    // placed at x=-380 by an earlier _layoutTree call rooted at
+    // trunk 54463, then chain B (54487..54496) off trunk 54486
+    // also wanted x=-380 and _resolveCollisions snaked its nodes
+    // between -380 and +380.
+    let startRight = false;
+    if (trunkSet.has(id) && sideKids.length >= 1 && dir > 0
+            && _columnBlocked(ctx, x - NODE_W, level + dir,
+                              _subtreeHeight(ctx, sideKids[0]) * dir)
+            && !_columnBlocked(ctx, x + NODE_W, level + dir,
+                               _subtreeHeight(ctx, sideKids[0]) * dir)) {
+        startRight = true;
+    }
     const leftKids = [];
     const rightKids = [];
     for (let i = 0; i < sideKids.length; i++) {
-        (i % 2 === 0 ? leftKids : rightKids).push(sideKids[i]);
+        const goRight = startRight ? (i % 2 === 0) : (i % 2 === 1);
+        (goRight ? rightKids : leftKids).push(sideKids[i]);
     }
 
     let extremeSideLevel = level;
@@ -462,6 +498,29 @@ function _layoutTree(ctx, id, x, level, dir) {
     // siblings under a normal in-flight node don't overlap.
     const parentInTrunk = trunkSet.has(id);
 
+    // Pre-place a CHAIN mainKid in the parent column BEFORE side
+    // branches. Chain mainLevel is level+dir and doesn't depend on
+    // extremeSideLevel from the side loops, so committing it early
+    // is safe. Once mainKid sits at parent.x at the level+dir row,
+    // a w=1 sideKid that the trunk-column rule in _resolveCollisions
+    // would otherwise bump from x=0 onto parent.x now finds parent.x
+    // taken and is bumped one more column out instead — chain stays
+    // straight, stale leaf branches off. Hit on 54489 (54491 chain
+    // mainKid vs 54490 stale leaf sideKid both at level+dir; the
+    // unconditional first bump in _resolveCollisions used to land
+    // 54490 on top of 54491's column at parent.x=380, pushing the
+    // chain to x=760).
+    // Skipped when mainKid is already placed (a fork's second trunk
+    // kid descended into below) since its position is fixed and the
+    // collision-avoidance is moot.
+    const mainKidIsChain = mainKid !== null
+            && !ctx.positions[mainKid]
+            && _isChainSubtree(ctx, mainKid);
+    if (mainKidIsChain) {
+        const top = _layoutTree(ctx, mainKid, x, level + dir, dir);
+        updateExtreme(top);
+    }
+
     let leftX = x - NODE_W;
     for (const kid of leftKids) {
         const w = _subtreeWidth(ctx, kid);
@@ -484,22 +543,12 @@ function _layoutTree(ctx, id, x, level, dir) {
         rightX += w * NODE_W;
     }
 
-    // Push main-chain child past side branches ONLY when its own
-    // subtree has inner side branches. The push protects against
-    // collisions like (parent's left side branch S1 ↘ chain growing
-    // up at S1.x) vs (mainKid's own left branch L ↘ placed at
-    // parent.x - NODE_W = S1.x) at the same Y level. A pure-chain
-    // mainKid (every node has ≤ 1 visible child all the way down)
-    // never produces an inner left/right branch, so there's no
-    // collision risk and we can place it directly at level+dir.
-    // This is what eliminates the vertical gaps when a tall stale
-    // side branch coexists with a simple straight-up current chain
-    // — e.g. 62689→62316→64620→65921 sits next to 62852's 17-deep
-    // stale subtree without being shoved 18 levels above.
-    if (mainKid) {
-        const mainLevel = _isChainSubtree(ctx, mainKid)
-            ? level + dir
-            : extremeSideLevel + dir;
+    // Non-chain mainKid: pushed past side branches so its own left/
+    // right sub-branches don't collide with this parent's side
+    // branches at the same row. Chain mainKid was already placed
+    // above; we only handle the non-chain case here.
+    if (mainKid && !mainKidIsChain) {
+        const mainLevel = extremeSideLevel + dir;
         const top = _layoutTree(ctx, mainKid, x, mainLevel, dir);
         updateExtreme(top);
     }
@@ -807,20 +856,45 @@ function _layoutUnplacedMainSeries(ctx) {
 function _resolveCollisions(ctx) {
     const positions = ctx.positions;
     const order = ctx.placementOrder || [];
+    // Reserve x=0 only across the y-range where trunk nodes actually
+    // sit. Above the topmost trunk node and below the bottommost the
+    // column is fair game for in-flight side branches — otherwise a
+    // node at parent.x = -NODE_W gets shoved to +NODE_W via the trunk
+    // reservation even though the row in question is free of any
+    // trunk patch, producing a visible 2*NODE_W gap (hit in 61965 at
+    // 66691/66481/66567 vs their parents at x=-NODE_W).
+    let trunkYMin = Infinity, trunkYMax = -Infinity;
+    for (const id of order) {
+        if (!trunkSet.has(id)) continue;
+        const p = positions[id];
+        if (!p) continue;
+        if (p.y < trunkYMin) trunkYMin = p.y;
+        if (p.y > trunkYMax) trunkYMax = p.y;
+    }
+    const xZeroReserved = (y) => y >= trunkYMin && y <= trunkYMax;
+
     const occupied = new Map();
     for (const id of order) {
         const pos = positions[id];
         if (!pos) continue;
         const isTrunk = trunkSet.has(id);
         const key = pos.x + ',' + pos.y;
-        if (!occupied.has(key)) {
+        // Treat "non-trunk landed on x=0 inside the trunk span" as a
+        // collision even when nothing else is at that slot, so the
+        // bump loop's blockedByTrunkColumn rule fires. Without this,
+        // a w=1 sideKid whose centered formula collapses to x=0
+        // would sit on the trunk column whenever no trunk node
+        // happens to share its exact row.
+        if (!occupied.has(key)
+                && (isTrunk || pos.x !== 0 || !xZeroReserved(pos.y))) {
             occupied.set(key, id);
             continue;
         }
         let px = pos.x + NODE_W;
         let tries = 0;
         while (tries < 30) {
-            const blockedByTrunkColumn = !isTrunk && px === 0;
+            const blockedByTrunkColumn = !isTrunk && px === 0
+                    && xZeroReserved(pos.y);
             if (!occupied.has(px + ',' + pos.y) && !blockedByTrunkColumn) {
                 break;
             }
@@ -888,20 +962,18 @@ function _layoutMergedTrunk(ctx, belowAnchorLevel) {
 
     // Number of vertical slots a trunk node needs ABOVE itself for
     // its in-flight side branches. Trunk-kid edges don't consume
-    // slots (those run along the trunk column). STALE edges to
-    // side kids are also skipped — a stale-reached subtree is
-    // historical noise that gets drawn in its own column; the
-    // main trunk shouldn't bloat itself reserving rows for it.
-    // This is the same logic that kept the upward main chain
-    // tight in _layoutTree (the chain-mainKid skip-push rule).
+    // slots (those run along the trunk column). Stale and non-stale
+    // edges both count: a stale side kid still gets rendered in
+    // its own column at level+1, so the trunk row above needs to
+    // skip past it for the side kid to be visually attached to its
+    // parent trunk node rather than colliding with the next trunk
+    // row's side kid. The same gap that gives the non-stale 62732
+    // → 64441 edge its own row should apply to the stale 62063 →
+    // 62389/62064 edges.
     function trunkSpacing(id) {
         const sideKids = (childrenOf[id] || [])
             .filter(k => _layoutShouldShow(ctx, k))
-            .filter(k => !trunkSet.has(k))
-            .filter(k => {
-                const e = edgeMap[id + '->' + k];
-                return !(e && e.is_stale);
-            });
+            .filter(k => !trunkSet.has(k));
         let h = 0;
         for (const sk of sideKids) h = Math.max(h, _subtreeHeight(ctx, sk));
         return Math.max(1, h + 1);
@@ -971,10 +1043,19 @@ function _layoutTrunkSideBranches(ctx) {
         const sideStart = level + 1;
         let leftX = pos.x - NODE_W;
         let rightX = pos.x + NODE_W;
+        // Symmetric column-occupancy steer: this function defaults
+        // i=0 to RIGHT, so flip to LEFT when right is blocked but
+        // left is free.
+        const firstKidH = _subtreeHeight(ctx, unplaced[0]);
+        const startLeft = _columnBlocked(ctx, pos.x + NODE_W,
+                                         sideStart, firstKidH)
+                && !_columnBlocked(ctx, pos.x - NODE_W,
+                                   sideStart, firstKidH);
         for (let i = 0; i < unplaced.length; i++) {
             const kid = unplaced[i];
             const w = _subtreeWidth(ctx, kid);
-            if (i % 2 === 0) {
+            const goRight = startLeft ? (i % 2 === 1) : (i % 2 === 0);
+            if (goRight) {
                 _layoutTree(ctx, kid, rightX, sideStart, 1);
                 rightX += w * NODE_W;
             } else {
