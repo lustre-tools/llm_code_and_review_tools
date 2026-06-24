@@ -106,6 +106,14 @@ let baseChainSet = new Set();
 // stays at x=0; any in-flight kid of a trunk node always branches
 // off to the side instead of trying to inherit the trunk column.
 const trunkSet = new Set(G.merged_trunk || []);
+// The newest trunk node (last in chronological merge order). The
+// trunk column above it is empty by definition, so an in-flight
+// "current live" kid can take that column instead of branching
+// off to the side — only ones above an OLDER trunk node have to
+// branch (the column above is reserved for the next trunk patch).
+const trunkTopId = (G.merged_trunk && G.merged_trunk.length > 0)
+    ? G.merged_trunk[G.merged_trunk.length - 1]
+    : null;
 let selectedNodeId = null;
 
 // ─── MAIN CHAIN COMPUTATION ───
@@ -339,9 +347,30 @@ function _pickMainKid(ctx, parentId, kids) {
     if (kids.length === 0) return null;
     const positions = ctx.positions;
     const parentInTrunk = trunkSet.has(parentId);
-    const candidates = parentInTrunk
-        ? kids.filter(k => trunkSet.has(k))
-        : kids;
+    // Trunk top exception: when the parent is the newest trunk
+    // node, the column directly above is free (no later merged
+    // patch). A "current live" in-flight kid (non-stale edge,
+    // has at least one descendant) is allowed to take that
+    // column. Without this exception, even a single non-stale
+    // continuation off the trunk top branches sideways and
+    // leaves the visual column above the trunk top empty.
+    let candidates;
+    if (parentInTrunk && parentId === trunkTopId) {
+        const trunkKids = kids.filter(k => trunkSet.has(k));
+        if (trunkKids.length > 0) {
+            candidates = trunkKids;
+        } else {
+            candidates = kids.filter(k => {
+                const e = edgeMap[parentId + '->' + k];
+                if (e && e.is_stale) return false;
+                return countDesc(k) > 0;
+            });
+        }
+    } else if (parentInTrunk) {
+        candidates = kids.filter(k => trunkSet.has(k));
+    } else {
+        candidates = kids;
+    }
     if (candidates.length === 0) return null;
     const sorted = candidates.slice().sort((a, b) => {
         const placedA = positions[a] ? 0 : 1;
