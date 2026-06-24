@@ -314,6 +314,59 @@ function _subtreeWidth(ctx, id) {
     return w;
 }
 
+// Subtree extents: how many NODE_W columns the subtree under `id`
+// occupies on the left and right of `id`'s own column when placed
+// by _layoutTree. Mirrors the alternating left/right side-kid
+// assignment (default startRight=false: i=0 → LEFT, i=1 → RIGHT).
+// mainKid sits in the parent column and contributes its own
+// extents directly.
+//
+// Used in place of the (w-1)*NODE_W/2 centered allocation so an
+// asymmetric subtree (e.g. 45051 which extends only leftward)
+// doesn't reserve the unused half-allocation and visually drift
+// away from its parent. For symmetric subtrees the result equals
+// (w-1)/2 on both sides — same as the old centered formula.
+// Assumes non-trunk-parent alternation; the parentInTrunk branch
+// in _layoutTree uses leftX/rightX directly and never consults
+// this helper.
+function _subtreeExtents(ctx, id) {
+    if (ctx.extentsCache[id] !== undefined) return ctx.extentsCache[id];
+    const kidsAll = (childrenOf[id] || [])
+        .filter(k => _layoutShouldShow(ctx, k));
+    if (kidsAll.length === 0) {
+        ctx.extentsCache[id] = { left: 0, right: 0 };
+        return ctx.extentsCache[id];
+    }
+    const mainKid = _pickMainKid(ctx, id, kidsAll);
+    const sideKids = kidsAll
+        .filter(k => k !== mainKid)
+        .sort((a, b) => a - b);
+    let leftCols = 0, rightCols = 0;
+    let leftOffset = 1, rightOffset = 1;
+    for (let i = 0; i < sideKids.length; i++) {
+        const goRight = (i % 2 === 1);
+        const k = sideKids[i];
+        const w = _subtreeWidth(ctx, k);
+        const ext = _subtreeExtents(ctx, k);
+        if (goRight) {
+            const rootOffset = rightOffset + ext.left;
+            rightCols = Math.max(rightCols, rootOffset + ext.right);
+            rightOffset += w;
+        } else {
+            const rootOffset = leftOffset + ext.right;
+            leftCols = Math.max(leftCols, rootOffset + ext.left);
+            leftOffset += w;
+        }
+    }
+    if (mainKid) {
+        const ext = _subtreeExtents(ctx, mainKid);
+        leftCols = Math.max(leftCols, ext.left);
+        rightCols = Math.max(rightCols, ext.right);
+    }
+    ctx.extentsCache[id] = { left: leftCols, right: rightCols };
+    return ctx.extentsCache[id];
+}
+
 // Subtree height = max depth from `id` to any visible leaf.
 function _subtreeHeight(ctx, id) {
     if (ctx.heightCache[id] !== undefined) return ctx.heightCache[id];
@@ -553,9 +606,18 @@ function _layoutTree(ctx, id, x, level, dir) {
     let leftX = x - NODE_W;
     for (const kid of leftKids) {
         const w = _subtreeWidth(ctx, kid);
+        // Extent-aware placement (non-trunk parents): position root
+        // so its rightward extent just touches leftX. For a purely
+        // left-leaning subtree (ext.right = 0, e.g. 45051) root sits
+        // AT leftX = parent.x - NODE_W instead of the centered
+        // parent.x - NODE_W - (w-1)*NODE_W/2. For symmetric subtrees
+        // ext.right = (w-1)/2, matching the old centered formula.
+        // Width budget consumed stays w*NODE_W so later left siblings
+        // still don't overlap.
+        const ext = _subtreeExtents(ctx, kid);
         const kidX = parentInTrunk
             ? leftX
-            : leftX - (w - 1) * NODE_W / 2;
+            : leftX - ext.right * NODE_W;
         const top = _layoutTree(ctx, kid, kidX, level + dir, dir);
         updateExtreme(top);
         leftX -= w * NODE_W;
@@ -564,9 +626,10 @@ function _layoutTree(ctx, id, x, level, dir) {
     let rightX = x + NODE_W;
     for (const kid of rightKids) {
         const w = _subtreeWidth(ctx, kid);
+        const ext = _subtreeExtents(ctx, kid);
         const kidX = parentInTrunk
             ? rightX
-            : rightX + (w - 1) * NODE_W / 2;
+            : rightX + ext.left * NODE_W;
         const top = _layoutTree(ctx, kid, kidX, level + dir, dir);
         updateExtreme(top);
         rightX += w * NODE_W;
@@ -1112,6 +1175,7 @@ function computeLayout(anchorId) {
         placementOrder: [],
         widthCache: {},
         heightCache: {},
+        extentsCache: {},
     };
     // Layout phases in dependency order. Each phase owns one
     // placement task and is safe to read in isolation.
