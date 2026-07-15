@@ -82,6 +82,17 @@ def _update_node_meta(node: dict[str, Any], change: dict[str, Any]) -> None:
     """Copy topic/hashtags/updated/wip/project/branch from a change
     payload onto a node. /related entries don't carry branch, so the
     bulk revision fetch is where this info lands."""
+    # /related returns the subject of whichever patchset it was
+    # queried at (usually ps1 for older cached entries). The bulk
+    # ChangeInfo carries the current patchset's subject, so use it
+    # here to keep the visible node label in sync with the latest
+    # commit message (Gerrit lets authors amend the subject on
+    # later patchsets).
+    subject = change.get("subject", "")
+    if subject:
+        node["subject"] = subject
+        m = re.match(r"(LU-\d+)", subject)
+        node["ticket"] = m.group(1) if m else ""
     node["topic"] = change.get("topic", "")
     node["hashtags"] = change.get("hashtags", [])
     node["updated"] = change.get("updated", "")
