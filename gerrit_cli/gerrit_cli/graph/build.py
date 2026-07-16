@@ -1501,6 +1501,134 @@ def _redirect_inflight_to_recent_merged(
     return len(candidates)
 
 
+def _hook_orphan_main_chains(
+    ctx: BuildContext, merged_trunk: list[int],
+) -> int:
+    """Attach orphan chain roots to the merged trunk.
+
+    A chain root is a NEW node with no incoming edge from any
+    already-connected node — either a main-group patch that was
+    rebased outside the tracked series (67067 -> 66436 in the
+    61965 graph) or a separate-group patch whose git base sits on
+    master rather than on another main-group patch (62140, 66444,
+    66882 in 61965). Without hooking these, the JS layout dumps
+    them into a far-right floating column and the user can't tell
+    where the chain branches off master.
+
+    Reuses the same "where did this branch off master" logic that
+    _redirect_inflight_to_recent_merged uses: walk the root's
+    current-PS ancestry via _inflight_base_date, pick the most
+    recent trunk node at-or-before that cutoff via
+    _most_recent_merged_at_or_before, and emit a stale edge to it.
+
+    Roots whose cutoff falls BEFORE the oldest trunk node (chain is
+    based on master history older than anything we track) or that
+    have no cutoff at all are left unhooked — they still lay out in
+    the far-right column so the user sees the chain isn't connected
+    to any tracked merged patch. Roots whose cutoff falls AFTER the
+    newest trunk node hook to the trunk top (base was merged just
+    after our visible range — visually "just above trunk top").
+
+    Returns the number of synthesized edges. Idempotent w.r.t.
+    ctx.seen_edges — a re-hook for the same (target, root) pair is
+    silently skipped.
+    """
+    if not merged_trunk:
+        return 0
+
+    trunk_dates = [
+        _trunk_timestamp(ctx.nodes[cn]) for cn in merged_trunk
+        if cn in ctx.nodes and _trunk_timestamp(ctx.nodes[cn])
+    ]
+    trunk_max = max(trunk_dates) if trunk_dates else ""
+
+    trunk_set = set(merged_trunk)
+    # A node is "already connected" if it has ANY incoming edge
+    # from another visible node, or an outgoing edge to a trunk
+    # node (in-flight parent of a trunk-column child — 62887's
+    # shape, already anchored via _layoutTrunkSideBranches).
+    has_incoming: set[int] = set()
+    has_trunk_child: set[int] = set()
+    for e in ctx.edges:
+        has_incoming.add(e["to"])
+        if e["to"] in trunk_set:
+            has_trunk_child.add(e["from"])
+
+    roots: list[int] = []
+    for cn, node in sorted(ctx.nodes.items()):
+        if cn in trunk_set:
+            continue
+        if cn in has_incoming:
+            continue
+        if cn in has_trunk_child:
+            continue
+        if cn == ctx.change_number:
+            continue
+        if node.get("status") != "NEW":
+            continue
+        roots.append(cn)
+
+    if not roots:
+        return 0
+
+    adj: dict[int, set[int]] = {}
+    for e in ctx.edges:
+        adj.setdefault(e["from"], set()).add(e["to"])
+
+    def _reachable(src: int, dst: int) -> bool:
+        if src == dst:
+            return True
+        seen = {src}
+        stack = [src]
+        while stack:
+            u = stack.pop()
+            for v in adj.get(u, ()):
+                if v == dst:
+                    return True
+                if v not in seen:
+                    seen.add(v)
+                    stack.append(v)
+        return False
+
+    added = 0
+    for root in roots:
+        cutoff = _inflight_base_date(ctx, root)
+        if not cutoff:
+            continue
+        target = _most_recent_merged_at_or_before(
+            ctx, merged_trunk, cutoff,
+        )
+        # target is None only when cutoff predates EVERY trunk
+        # timestamp — the chain root is based on master history
+        # older than anything we track. Leave it unhooked; hooking
+        # to any trunk node would misrepresent it as newer than
+        # its actual base. (The "cutoff after every trunk" case is
+        # already handled naturally: every trunk node qualifies as
+        # at-or-before, so the helper returns the trunk top.)
+        if target is None:
+            continue
+        if _reachable(root, target):
+            continue
+        key = (target, root)
+        if key in ctx.seen_edges:
+            continue
+        ctx.seen_edges.add(key)
+        target_ps = ctx.nodes[target].get("current_patchset", 0)
+        ctx.edges.append({
+            "from": target,
+            "to": root,
+            "parent_patchset": target_ps,
+            "parent_latest": target_ps,
+            # Stale so the JS layout renders the hookup with a
+            # dashed connector — we're inferring the relationship
+            # from a date walk, not from a concrete /related edge.
+            "is_stale": True,
+        })
+        adj.setdefault(target, set()).add(root)
+        added += 1
+    return added
+
+
 def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
     """Flatten the accumulated build state into the final dict shape
     consumed by `render.generate_html`."""
@@ -1532,6 +1660,13 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
     # still uses the historical edges for parent-commit matching;
     # only the rendered edges get the redirect treatment.
     _redirect_inflight_to_recent_merged(ctx, merged_trunk)
+    # Hook orphan main-group chains (roots with no incoming
+    # main-group edge) into the trunk column by date. Runs AFTER
+    # the redirect step because redirect only rewires existing
+    # in-flight -> merged edges — the orphan set is unchanged by
+    # it, and running after avoids any risk of the two phases
+    # picking competing targets for the same node.
+    _hook_orphan_main_chains(ctx, merged_trunk)
     return {
         "anchor": ctx.change_number,
         "base_url": ctx.base_url,

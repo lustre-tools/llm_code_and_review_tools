@@ -1117,10 +1117,54 @@ function _layoutMergedTrunk(ctx, belowAnchorLevel) {
 function _layoutTrunkSideBranches(ctx) {
     const positions = ctx.positions;
     const trunk = (G.merged_trunk || []).filter(id => nodeVisible(id));
+    // Reverse index: which unplaced in-flight parents (git-ancestors)
+    // does each trunk node have? Hit on 62887 in the 61965 graph —
+    // 62887 is NEW, its git child 61962 is merged and on trunk. The
+    // /related edge 62887 -> 61962 exists, but nothing walks it
+    // upward from 61962. Without a placement pass here, 62887 falls
+    // into _layoutUnplacedMainSeries's floating column.
+    const trunkParents = {};
+    for (const t of trunk) {
+        for (const e of (G.edges || [])) {
+            if (e.to !== t) continue;
+            if (trunkSet.has(e.from)) continue;
+            if (!_layoutShouldShow(ctx, e.from)) continue;
+            (trunkParents[t] = trunkParents[t] || []).push(e.from);
+        }
+    }
     for (const id of trunk) {
         const pos = positions[id];
         if (!pos) continue;
         const level = Math.round(-pos.y / LEVEL_H);
+        // In-flight parents of the trunk node — placed one row
+        // BELOW (older direction). Their outgoing edge to the
+        // trunk node reads upward toward it. Place the parent
+        // node itself with _placeNode (so it isn't recursed into
+        // as a subtree with dir=-1, which would push the parent's
+        // own in-flight kids further DOWN into the older-trunk
+        // row) and then recurse into the parent's own children
+        // upward with dir=+1 — their column stays alongside p and
+        // grows toward the trunk row.
+        const parentSides = (trunkParents[id] || [])
+            .filter(p => !positions[p])
+            .sort((a, b) => a - b);
+        if (parentSides.length > 0) {
+            let leftX = pos.x - NODE_W;
+            let rightX = pos.x + NODE_W;
+            for (let i = 0; i < parentSides.length; i++) {
+                const p = parentSides[i];
+                const pX = (i % 2 === 0) ? rightX : leftX;
+                _placeNode(ctx, p, pX, -(level - 1) * LEVEL_H);
+                for (const gk of (childrenOf[p] || [])) {
+                    if (!_layoutShouldShow(ctx, gk)) continue;
+                    if (positions[gk]) continue;
+                    _layoutTree(ctx, gk, pX, level, 1);
+                }
+                const w = _subtreeWidth(ctx, p);
+                if (i % 2 === 0) rightX += w * NODE_W;
+                else leftX -= w * NODE_W;
+            }
+        }
         const unplaced = (childrenOf[id] || [])
             .filter(k => _layoutShouldShow(ctx, k))
             .filter(k => !positions[k])
