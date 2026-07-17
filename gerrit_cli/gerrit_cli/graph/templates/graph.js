@@ -605,34 +605,36 @@ function _layoutTree(ctx, id, x, level, dir) {
 
     let leftX = x - NODE_W;
     for (const kid of leftKids) {
-        const w = _subtreeWidth(ctx, kid);
         // Extent-aware placement (non-trunk parents): position root
         // so its rightward extent just touches leftX. For a purely
         // left-leaning subtree (ext.right = 0, e.g. 45051) root sits
         // AT leftX = parent.x - NODE_W instead of the centered
         // parent.x - NODE_W - (w-1)*NODE_W/2. For symmetric subtrees
         // ext.right = (w-1)/2, matching the old centered formula.
-        // Width budget consumed stays w*NODE_W so later left siblings
-        // still don't overlap.
         const ext = _subtreeExtents(ctx, kid);
         const kidX = parentInTrunk
             ? leftX
             : leftX - ext.right * NODE_W;
         const top = _layoutTree(ctx, kid, kidX, level + dir, dir);
         updateExtreme(top);
-        leftX -= w * NODE_W;
+        // Advance past the columns the subtree ACTUALLY occupies
+        // (root at kidX, extending ext.left further left), not its
+        // leaf count. Leaf-count advances over-reserve for deep
+        // unbalanced trees — hit on 66898's left kids in 61965,
+        // where 63166 (leaf count 10, actual extent 1-2 columns)
+        // pushed the next left kid 67067 out to x=-4180.
+        leftX = kidX - (ext.left + 1) * NODE_W;
     }
 
     let rightX = x + NODE_W;
     for (const kid of rightKids) {
-        const w = _subtreeWidth(ctx, kid);
         const ext = _subtreeExtents(ctx, kid);
         const kidX = parentInTrunk
             ? rightX
             : rightX + ext.left * NODE_W;
         const top = _layoutTree(ctx, kid, kidX, level + dir, dir);
         updateExtreme(top);
-        rightX += w * NODE_W;
+        rightX = kidX + (ext.right + 1) * NODE_W;
     }
 
     // Non-chain mainKid: pushed past side branches so its own left/
@@ -1160,9 +1162,9 @@ function _layoutTrunkSideBranches(ctx) {
                     if (positions[gk]) continue;
                     _layoutTree(ctx, gk, pX, level, 1);
                 }
-                const w = _subtreeWidth(ctx, p);
-                if (i % 2 === 0) rightX += w * NODE_W;
-                else leftX -= w * NODE_W;
+                const ext = _subtreeExtents(ctx, p);
+                if (i % 2 === 0) rightX = pX + (ext.right + 1) * NODE_W;
+                else leftX = pX - (ext.left + 1) * NODE_W;
             }
         }
         const unplaced = (childrenOf[id] || [])
@@ -1189,14 +1191,18 @@ function _layoutTrunkSideBranches(ctx) {
                                    sideStart, firstKidH);
         for (let i = 0; i < unplaced.length; i++) {
             const kid = unplaced[i];
-            const w = _subtreeWidth(ctx, kid);
+            // Advance by the subtree's actual column extent, not
+            // leaf count — leaf-count advances over-reserve for
+            // deep unbalanced trees and shove the next sibling
+            // several empty columns out.
+            const ext = _subtreeExtents(ctx, kid);
             const goRight = startLeft ? (i % 2 === 1) : (i % 2 === 0);
             if (goRight) {
                 _layoutTree(ctx, kid, rightX, sideStart, 1);
-                rightX += w * NODE_W;
+                rightX += (ext.right + 1) * NODE_W;
             } else {
                 _layoutTree(ctx, kid, leftX, sideStart, 1);
-                leftX -= w * NODE_W;
+                leftX -= (ext.left + 1) * NODE_W;
             }
         }
     }
