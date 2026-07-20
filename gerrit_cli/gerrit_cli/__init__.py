@@ -98,7 +98,9 @@ from .reviewer import (
     FileChange,
     ReviewData,
     ReviewResult,
+    apply_review_prefix,
     get_review_data,
+    normalize_review_comments,
     post_review,
 )
 from .series import (
@@ -156,7 +158,9 @@ __all__ = [
     "FileChange",
     "ReviewData",
     "ReviewResult",
+    "apply_review_prefix",
     "get_review_data",
+    "normalize_review_comments",
     "post_review",
     # Series
     "SeriesFinder",

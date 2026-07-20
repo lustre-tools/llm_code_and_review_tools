@@ -286,7 +286,14 @@ the original git state. Use --keep-changes to preserve your work.
         "summary": "Get code changes for review",
         "description": """
 Get the diff and file changes from a Gerrit change for code review.
-Can also post review comments from a JSON file.
+Can also post review comments from a JSON file with --post-comments.
+
+The JSON file may contain "message", "vote", "tag", and "comments".
+Comments are either a flat list ([{path, line, message, unresolved}])
+or the Gerrit REST format ({path: [{line, message, unresolved}]}).
+Explicit CLI --message/--vote/--tag flags override the file values.
+Use --prefix to prepend text (e.g. a bot name) to the message and
+every comment, and --dry-run to preview the payload without posting.
 """,
         "examples": [
             {
@@ -304,6 +311,10 @@ Can also post review comments from a JSON file.
             {
                 "command": "gc review --post-comments review.json URL",
                 "description": "Post review comments from file",
+            },
+            {
+                "command": "gc review --post-comments review.json --prefix '[Marc Bot]' --dry-run URL",
+                "description": "Preview prefixed comments without posting",
             },
         ],
         "related": ["comments", "review-series"],

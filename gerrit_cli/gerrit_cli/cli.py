@@ -23,6 +23,9 @@ Examples:
 
     # Post a code review with comments from JSON file
     gc review --post-comments comments.json https://review.whamcloud.com/62796
+
+    # Post prefixed comments (preview first with --dry-run)
+    gc review --post-comments review.json --prefix '[Marc Bot]' https://review.whamcloud.com/62796
 """
 
 import argparse
@@ -52,7 +55,11 @@ from .rebase import (  # noqa: F401
     work_on_patch,
 )
 from .replier import CommentReplier  # noqa: F401
-from .reviewer import CodeReviewer  # noqa: F401
+from .reviewer import (  # noqa: F401
+    CodeReviewer,
+    apply_review_prefix,
+    normalize_review_comments,
+)
 from .series import SeriesFinder  # noqa: F401
 from .session import LastURLManager  # noqa: F401
 from .series_status import show_series_status  # noqa: F401

@@ -38,17 +38,35 @@ def cmd_review(args):
             with open(args.post_comments) as f:
                 review_spec = json_module.load(f)
 
-            # Handle dry-run mode
+            # Accepts both the flat comment list and the Gerrit REST
+            # path -> comments dict; an explicitly given CLI flag
+            # overrides the file value, the file is used otherwise.
+            comments = cli.normalize_review_comments(review_spec.get('comments'))
+            message = getattr(args, 'message', None) or review_spec.get('message')
+            vote = getattr(args, 'vote', None)
+            if vote is None:
+                vote = review_spec.get('vote')
+            prefix = getattr(args, 'prefix', None)
+            tag = getattr(args, 'tag', None) or review_spec.get('tag')
+
+            # Handle dry-run mode: preview the final text with the
+            # prefix applied, exactly as post_review would send it.
             dry_run = getattr(args, 'dry_run', False)
             if dry_run:
+                preview = [
+                    {**c, "message": cli.apply_review_prefix(prefix, c["message"])}
+                    for c in comments
+                ]
                 data = {
                     "dry_run": True,
                     "change_number": review_data.change_info.change_number,
                     "would_post": {
-                        "comments": review_spec.get('comments', []),
-                        "message": review_spec.get('message'),
-                        "vote": review_spec.get('vote'),
-                        "comment_count": len(review_spec.get('comments', [])),
+                        "comments": preview,
+                        "message": cli.apply_review_prefix(prefix, message) if message else message,
+                        "vote": vote,
+                        "prefix": prefix,
+                        "tag": tag,
+                        "comment_count": len(comments),
                     },
                 }
                 output_success(data, command, pretty)
@@ -56,9 +74,11 @@ def cmd_review(args):
 
             result = reviewer.post_review(
                 change_number=review_data.change_info.change_number,
-                comments=review_spec.get('comments', []),
-                message=review_spec.get('message'),
-                vote=review_spec.get('vote'),
+                comments=comments,
+                message=message,
+                vote=vote,
+                prefix=prefix,
+                tag=tag,
             )
 
             if result.success:
