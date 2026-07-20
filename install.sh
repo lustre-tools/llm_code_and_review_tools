@@ -187,7 +187,16 @@ install_tools() {
     echo -e "${GREEN}✓${NC} lreview installed"
 
     # Install drgn + lustre-drgn-tools
-    if [[ -d "$SCRIPT_DIR/lustre-drgn-tools" ]]; then
+    if [[ "$(uname -s)" == "Darwin" && -z "${LLM_TOOLS_TRY_DRGN:-}" ]]; then
+        # drgn ships no macOS wheels, its source build uses Linux-only
+        # APIs (os.sched_getaffinity), and the required elfutils has no
+        # Homebrew bottle — the install cannot succeed today.
+        echo ""
+        echo -e "${YELLOW}Skipping drgn/lustre-drgn-tools on macOS${NC} (drgn is effectively"
+        echo "Linux-only: no macOS wheels, source build fails). It is only"
+        echo "needed for vmcore analysis — use a Linux host for that, or"
+        echo "set LLM_TOOLS_TRY_DRGN=1 to attempt the install anyway."
+    elif [[ -d "$SCRIPT_DIR/lustre-drgn-tools" ]]; then
         echo ""
         echo "Installing drgn and lustre-drgn-tools..."
         if $PYTHON -c "import drgn" 2>/dev/null; then

@@ -69,6 +69,11 @@ tracker from the network (`go install
 github.com/steveyegge/beads/cmd/bd@latest`, or the upstream
 install script if Go is absent).
 
+On macOS the drgn/lustre-drgn-tools step is skipped: drgn ships no
+macOS wheels, its source build uses Linux-only APIs, and the
+required elfutils has no Homebrew bottle. vmcore analysis needs a
+Linux host; `LLM_TOOLS_TRY_DRGN=1` forces the attempt anyway.
+
 Per-tool: `cd <tool_dir> && pip install -e .`
 
 Requires Python 3.11+.
