@@ -11,13 +11,21 @@ pip install -e .
 
 ## Configuration
 
-Set environment variables:
+`JENKINS_USER` and `JENKINS_TOKEN` are required; `JENKINS_URL` is
+optional and defaults to `https://build.whamcloud.com`:
 
 ```bash
-export JENKINS_URL="https://build.whamcloud.com"
+export JENKINS_URL="https://build.whamcloud.com"   # optional
 export JENKINS_USER="your-username"
 export JENKINS_TOKEN="your-api-token"
 ```
+
+Instead of exporting variables, the settings may be placed in a `.env`
+file — the first existing of `~/.config/jenkins-tool/.env`,
+`/shared/support_files/.env`, or `./.env` is loaded (only that one
+file; values do not override variables already set in the environment).
+Every command also accepts `--url`, `--user`, and `--token` options
+which override both env vars and `.env` values.
 
 ## Quick Start
 
@@ -53,7 +61,10 @@ jenkins retrigger lustre-reviews 121880
 
 ## Output Format
 
-All commands return JSON with a consistent envelope:
+By default, commands output only the JSON data payload (errors output
+the error payload). Pass the global `--envelope` flag before the
+subcommand (e.g. `jenkins --envelope build lustre-reviews 121881`) to
+wrap output in the full envelope:
 
 ```json
 {
@@ -86,6 +97,7 @@ jenkins build lustre-reviews 121881 --pretty
 | `jenkins review <change>` | Find builds for a Gerrit change number |
 | `jenkins abort <job> <number>` | Abort a running build and all sub-builds |
 | `jenkins retrigger <job> <number>` | Retrigger via Gerrit Trigger plugin |
+| `jenkins describe [--command NAME]` | Machine-readable tool/command description (always JSON) |
 
 ### Matrix Builds
 
@@ -95,10 +107,14 @@ logs for a specific configuration — pass the config string exactly as shown in
 
 ### Build Number Aliases
 
-`BUILD_NUMBER` accepts special aliases in addition to numeric IDs:
-- `lastBuild` — most recent build (default)
+For `build` and `console`, `BUILD_NUMBER` is optional and accepts
+special aliases in addition to numeric IDs:
+- `lastBuild` — most recent build (the default when omitted)
 - `lastFailedBuild` — most recent failed build
 - `lastSuccessfulBuild` — most recent successful build
+
+`run-console`, `abort`, and `retrigger` require an explicit numeric
+build number (aliases are rejected).
 
 ## LLM Context Awareness
 

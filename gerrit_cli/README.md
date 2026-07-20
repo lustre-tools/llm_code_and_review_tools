@@ -6,7 +6,7 @@ triage Maloo test results, review patch series, and manage changes.
 ## Installation
 
 ```bash
-cd /shared/llm_code_and_review_tools/gerrit_cli && ./install.sh
+cd gerrit_cli && ./install.sh
 # or: pip install -e .
 ```
 
@@ -21,7 +21,10 @@ If `gerrit-cli` is not found after install, add `$HOME/.local/bin` to PATH.
 
 ## Output Format
 
-All commands return JSON: `{"ok": true, "data": {...}, "meta": {"tool": "gerrit-cli", ...}}`
+All commands print the JSON data payload by default (on errors, the
+error object is output directly — see Error Handling). Pass the global
+`--envelope` flag (before the subcommand) for the full wrapper:
+`{"ok": true, "data": {...}, "meta": {"tool": "gerrit-cli", ...}}`
 
 ## Quick Start
 
@@ -88,9 +91,9 @@ gc review --post-comments review.json --prefix '[Marc Bot]' <URL>
 ## Series Graph (DAG Visualizer)
 
 Visualize the full DAG of all related changes for a patch series as an
-interactive HTML graph. Unlike `series` which traces a single linear chain,
-`graph` shows the complete topology — branches, abandoned forks, stale
-patchsets, and which patches need rebasing.
+interactive HTML graph. Unlike `series-status` which traces a single
+linear chain, `graph` shows the complete topology — branches, abandoned
+forks, stale patchsets, and which patches need rebasing.
 
 ```bash
 # Generate and open interactive graph (default: opens in browser)
@@ -119,7 +122,9 @@ gc graph 61962 --include-topic extra-topic-name
 gc graph 61962 --include-hashtag extra-hashtag
 ```
 
-The generated HTML is self-contained (uses vis.js from CDN) and includes:
+The generated HTML is a single file (all app CSS/JS inlined) but loads
+vis.js from the unpkg CDN, so viewing it requires internet access. It
+includes:
 
 - **Vertical tree layout** growing upward from the anchor change, with
   the dominant main-chain centered and side branches spread left/right.
@@ -165,6 +170,9 @@ The generated HTML is self-contained (uses vis.js from CDN) and includes:
 comments <URL>                   # Get unresolved comments
 reply <thread_index> "msg"       # Reply to a comment
 reply <thread_index> --done      # Mark as done
+done <URL> <idx>                 # Mark as done (shortcut for 'reply --done')
+ack <URL> <idx>                  # Acknowledge (shortcut for 'reply --ack')
+batch <URL> <json-file>          # Reply to multiple comments from JSON file
 review <URL>                     # Get code changes for review
 review --post-comments f.json <URL>  # Post review from JSON (see above)
 ```
@@ -181,7 +189,7 @@ abort --keep-changes             # End session, keep current state
 
 ### Navigation
 ```bash
-work-on-patch <URL> <change>     # Jump to specific patch
+work-on-patch <URL-or-change>    # Jump to specific patch (change number or URL)
 next-patch                       # Manually advance to next patch
 status                           # Check session status (default if in session)
 ```
@@ -190,8 +198,12 @@ status                           # Check session status (default if in session)
 ```bash
 series-status <URL>              # Show status of all patches in series
 series-comments <URL>            # Get comments for all patches in series
+series-info <URL>                # Info for all patches (patchsets, reviews, CI)
+related <URL>                    # Relation chain (series) for a change
 graph <URL>                      # Interactive DAG visualizer (see above)
 info <URL>                       # Show change info (reviewers, labels, etc.)
+diff <URL>                       # Show what changed between two patchsets
+search <query>                   # Search changes (alias: s)
 maloo <URL> [URL...]             # Triage Maloo CI results (batch mode)
 watch <json-file>                # Check CI status on watched patches
 ```
@@ -199,13 +211,20 @@ watch <json-file>                # Check CI status on watched patches
 ### Reviewer Management
 ```bash
 add-reviewer <URL> "Name"        # Add a reviewer to a change
+remove-reviewer <URL> "Name"     # Remove a reviewer from a change
 reviewers <URL>                  # List reviewers on a change
+find-user "name"                 # Search Gerrit users (fuzzy match)
 ```
 
 ### Change Management
 ```bash
 checkout <URL>                   # Fetch and checkout a Gerrit change
+vote <URL> <label> <score>       # Vote on a label (alias: label)
+set-topic <URL> <topic>          # Set the change topic
+hashtag <URL> --add <tag>        # Add/remove hashtags (--add/--remove)
+rebase <URL>                     # Rebase a change onto its target branch
 abandon <URL>                    # Abandon a Gerrit change
+restore <URL>                    # Restore an abandoned change
 message <URL> "text"             # Post a top-level message
 ```
 
@@ -221,7 +240,7 @@ staged list                      # List all staged operations
 staged show <change>             # Show staged for specific change
 staged remove <change> <index>   # Remove one staged operation
 staged clear [change]            # Clear staged (one change or all)
-staged refresh <url>             # Refresh staged metadata
+staged refresh <change>          # Refresh staged metadata
 push <change>                    # Push staged operations for a change
 ```
 
@@ -229,6 +248,18 @@ push <change>                    # Push staged operations for a change
 ```bash
 continue-reintegration           # Continue after resolving conflicts
 skip-reintegration               # Skip conflicting change
+```
+
+### AI Review
+```bash
+sashiko-review <URL>             # Submit for automated AI review (alias: sr)
+```
+
+### Self-Documentation
+```bash
+explain <command>                # Detailed usage and examples for a command
+examples                         # Show common usage examples and workflows
+describe                         # Machine-readable API description (for LLMs)
 ```
 
 ## Key Points
@@ -241,7 +272,13 @@ skip-reintegration               # Skip conflicting change
 
 ## Error Handling
 
-Exit codes: 0=success, 1=general, 2=auth, 3=not found, 4=invalid input, 5=network.
+Exit codes: 0=success; 1=any command failure (auth, not-found, and
+network errors all currently exit 1 — the specific kind is in the JSON
+error envelope's `code` field); 4=invalid arguments to a subcommand;
+2=usage error at the top level (unknown command or bad global flag,
+argparse's standard code). The shared llm-tool-common ExitCode enum
+also defines 2=auth, 3=not found, 5=network, but gerrit-cli does not
+currently emit those meanings.
 
 Error responses include: `code` (machine-readable), `message` (human-readable),
 `http_status`, and `details`.

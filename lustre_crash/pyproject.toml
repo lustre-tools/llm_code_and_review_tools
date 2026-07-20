@@ -7,7 +7,7 @@ name = "lustre-crash"
 version = "0.2.0"
 description = "Non-interactive crash dump analysis using drgn for LLM agents"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = {text = "BSD-2-Clause"}
 authors = [
     {name = "Patrick Farrell"}

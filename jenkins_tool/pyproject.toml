@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "jenkins-tool"
 version = "0.1.1"
 description = "LLM-agent-focused CLI tool for Jenkins build server API"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
     {name = "LLM Code Tools Team"}

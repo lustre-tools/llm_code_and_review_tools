@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "maloo-tool"
 version = "0.1.1"
 description = "LLM-agent-focused CLI tool for Maloo test results API"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
     {name = "LLM Code Tools Team"}

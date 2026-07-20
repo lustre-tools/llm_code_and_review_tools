@@ -18,14 +18,18 @@ export MALOO_USER="your-username"
 export MALOO_PASS="your-password"
 ```
 
-The server URL defaults to `https://testing.whamcloud.com`.
+The server URL defaults to `https://testing.whamcloud.com`. Override it
+with the `MALOO_URL` environment variable. Variables may also be placed
+in a `.env` file; the first existing of `~/.config/maloo-tool/.env`,
+`/shared/support_files/.env`, `./.env` is loaded (values do not override
+variables already set in the environment).
 
 ## ID Types
 
 Maloo uses two distinct UUID types:
 
-- **Session UUID** — identifies a full test session (used with `session`, `failures`, `review`)
-- **Test set UUID** — identifies a suite run within a session (used with `subtests`, `bugs`, `logs`)
+- **Session UUID** — identifies a full test session (used with `session`, `failures`, `retest`; a full Maloo session URL is also accepted)
+- **Test set UUID** — identifies a suite run within a session (used with `subtests`, `bugs`, `logs`; `bugs` also accepts a subtest UUID)
 
 Both can be found in the output of `session` and `failures`.
 
@@ -42,8 +46,8 @@ maloo failures <session-UUID>
 maloo subtests <test_set-UUID>
 maloo subtests <test_set-UUID> --status PASS
 
-# Bug links for a test set
-maloo bugs <test_set-UUID>
+# Bug links for a test set (use --related to include links from child subtests)
+maloo bugs <test_set-UUID> --related
 
 # Find test sessions for a Gerrit review
 maloo review 54225
@@ -71,14 +75,21 @@ maloo logs <test_set-UUID> --grep "test_81a"
 
 ## Output Format
 
-All commands return JSON by default. Add `--pretty` for human-readable formatting:
+All commands print the JSON data payload by default (on failure, the
+error object is printed and the exit code is non-zero). Add `--pretty`
+for human-readable formatting:
 
 ```bash
 maloo session <uuid> --pretty
 maloo failures <uuid> --pretty
 ```
 
-The envelope format:
+Pass the global `--envelope` flag (before the subcommand) to wrap
+output in the full response envelope:
+
+```bash
+maloo --envelope session <uuid>
+```
 
 ```json
 {
@@ -91,6 +102,9 @@ The envelope format:
   }
 }
 ```
+
+(The envelope may also include a `next_actions` list of suggested
+follow-up commands.)
 
 ## Commands
 
@@ -106,8 +120,9 @@ The envelope format:
 
 | Command | Description |
 |---------|-------------|
-| `maloo bugs <test_set-UUID>` | JIRA bug links for a test failure |
+| `maloo bugs <test_set-or-subtest-UUID>` | JIRA bug links for a test set or subtest (add `--related` to also include links attached to child subtests) |
 | `maloo link-bug <test_set-UUID> <TICKET>` | Associate a JIRA bug with a test failure |
+| `maloo raise-bug <test_set-UUID>` | Raise a new JIRA bug via Maloo and auto-link it to the test failure (`--project`, `--summary`, `--description`, `--type TestSet\|SubTest`) |
 | `maloo retest <session-URL> <TICKET>` | Request a retest (requires JIRA justification) |
 
 ### Searching and History
@@ -118,7 +133,7 @@ The envelope format:
 | `maloo review <change>` | Test sessions for a Gerrit change number |
 | `maloo top-failures <branch>` | Most common failing tests on a branch |
 | `maloo test-history <test>` | Pass/fail history for a specific subtest |
-| `maloo queue` | Current test queue (filter by `--review`, `--branch`, `--status`) |
+| `maloo queue` | Test queue status; requires at least one filter: `--review`, `--build`, `--branch`, or `--status` |
 
 ### Logs
 

@@ -7,7 +7,7 @@ name = "lreview"
 version = "0.1.0"
 description = "Run the kreview AI patch-review skill on Gerrit changes in parallel and post the results"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
     {name = "Claude", email = "claude@anthropic.com"}

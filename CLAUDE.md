@@ -4,10 +4,12 @@ Repository of CLI tools designed for LLM agent use. Each tool
 outputs JSON to stdout by default (no envelope wrapper). Use
 `--envelope` for the full `{ok, data, meta}` wrapper. Do NOT
 use `--pretty` — raw JSON is preferred; agents parse it directly.
+Exception: `lreview` is an operator-facing orchestrator and prints
+human-readable colored output (no `--envelope`).
 
 ## Tools
 
-### JIRA tool (`jira`, v0.5.0)
+### JIRA tool (`jira`, v0.5.2)
 
 Bug tracking, issue management, and test failure research.
 
@@ -77,8 +79,10 @@ Run `jira --help` for full command list.
 Code review, comment management, patch workflows, and CI triage.
 
 **Key commands:**
-- **Review:** `gc comments <url>`, `gc reply <url> <idx> "msg"`,
-  `gc review <url>`, `gc done <url> <idx>`, `gc ack <url> <idx>`
+- **Review:** `gc comments <url>`,
+  `gc reply <idx> "msg" [--url <url>]` (URL defaults to the one
+  remembered from the last `gc comments`), `gc review <url>`,
+  `gc done <url> <idx>`, `gc ack <url> <idx>`
 - **Post review from JSON:** `gc review --post-comments <file> <url>`
   posts a cover message + inline line comments in one call. The file
   holds `message`/`vote`/`tag`/`comments` (Gerrit REST dict or flat
@@ -99,11 +103,14 @@ Code review, comment management, patch workflows, and CI triage.
   `gc remove-reviewer <url> <name>`, `gc find-user <name>`
 
 **Configuration:** Environment variables in `.env` file, loaded
-from (in priority order):
-1. `~/.config/gerrit-cli/.env`
-2. `/etc/gerrit-cli/.env`
-3. `/shared/support_files/.env`
-4. `./.env`
+from (in priority order, highest first):
+1. `./.env`
+2. `~/.config/gerrit-cli/.env`
+3. `/etc/gerrit-cli/.env`
+4. `/shared/support_files/.env`
+
+All matching files are loaded; higher-priority files override
+values from lower-priority ones.
 
 **Required env vars:**
 ```bash
@@ -146,6 +153,18 @@ patchset revision and guarded against double-posting. If the kreview
 skill is not installed, the tool offers to clone review-prompts and
 run its `setup.sh claude kernel`. See `lreview/README.md`.
 
+### Other tools
+
+Also installed from this repo:
+- `maloo` — Lustre CI test results (testing.whamcloud.com);
+  needs `MALOO_USER`/`MALOO_PASS`. See `maloo_tool/README.md`.
+- `jenkins` — Jenkins build server (build.whamcloud.com); needs
+  `JENKINS_USER`/`JENKINS_TOKEN`. See `jenkins_tool/README.md`.
+- `janitor` — Gerrit Janitor test results; no auth, optional
+  `JANITOR_URL` env var. See the top-level `README.md`.
+- `lustre-crash` — drgn-based crash-dump analysis; no auth.
+  See `lustre_crash/README.md`.
+
 ## Development
 
 All tools share `llm-tool-common` for envelope formatting and
@@ -163,9 +182,9 @@ for unit tests, `-m integration` for tests requiring network.
 
 ## Output format
 
-All tools follow the same output convention:
+All tools except `lreview` follow the same output convention:
 - **Default:** JSON data payload only (no wrapper)
 - **`--envelope`:** Full `{ok: bool, data: ..., meta: ...}` wrapper
 - **`--debug`:** (jira) Debug output to stderr
-- **Exit codes:** 0 = success, 2 = auth error, 4 = invalid input,
-  5 = not found, 8 = server error
+- **Exit codes:** 0 = success, 1 = general error, 2 = auth error,
+  3 = not found, 4 = invalid input, 5 = network error

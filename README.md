@@ -46,7 +46,8 @@ Details: [lreview/README.md](lreview/README.md).
 - **lustre-drgn-tools** -- drgn-based Lustre vmcore analysis
   (`lustre_triage.py`, `obd_devs.py`, `ldlm_dumplocks.py`, etc.).
   Separate repo bundled as a git submodule. Requires drgn;
-  run `lustre-drgn-tools/install-drgn.sh` to set up.
+  `./install.sh` sets it up automatically, or run
+  `lustre-drgn-tools/install-drgn.sh` manually.
 
 ### Beta / experimental
 
@@ -60,17 +61,37 @@ Details: [lreview/README.md](lreview/README.md).
 ./install.sh --uninstall
 ```
 
+Besides the Python tools, `./install.sh` also initializes git
+submodules and installs drgn if missing (via
+`lustre-drgn-tools/install-drgn.sh`, falling back to
+`pip install drgn`), and installs the external beads (`bd`) task
+tracker from the network (`go install
+github.com/steveyegge/beads/cmd/bd@latest`, or the upstream
+install script if Go is absent).
+
 Per-tool: `cd <tool_dir> && pip install -e .`
 
-Requires Python 3.9+.
+Requires Python 3.11+.
+
+**Externally managed Python (macOS Homebrew, newer distros):** when
+the system Python refuses pip installs (PEP 668's
+`externally-managed-environment` error), `./install.sh` offers to
+create a virtual environment (default `<repo>/.venv`, path editable
+at the prompt) and installs the tools into it. `./install.sh --venv
+[PATH]` selects that non-interactively, and an existing `.venv` in
+the repo is reused automatically on later runs (including
+`--uninstall`). The installer prints the `source .venv/bin/activate`
+/ PATH line to make the tools available.
 
 ## Configuration
 
 ### Gerrit
 
-Set environment variables directly or in a `.env` file
-(searched in order: `./.env`, `~/.config/gerrit-cli/.env`,
-`/etc/gerrit-cli/.env`):
+Set environment variables directly or in a `.env` file. All
+existing files from these locations are loaded, highest priority
+first (earlier-listed files override later ones): `./.env`,
+`~/.config/gerrit-cli/.env`, `/etc/gerrit-cli/.env`,
+`/shared/support_files/.env`:
 
 ```bash
 GERRIT_URL=https://review.whamcloud.com
@@ -81,8 +102,11 @@ GERRIT_PASS=your-http-password
 To get your HTTP password: log into Gerrit, go to
 Settings > HTTP Credentials > Generate Password.
 
-Optional: `GERRIT_SSH_USER` for SSH operations (defaults to
-`GERRIT_USER`).
+Optional: `GERRIT_SSH_USER` for SSH operations. If unset, the SSH
+user is auto-discovered from `ssh://user@<gerrit-host>` URLs in
+`git remote -v`, then from shell alias definitions, then from the
+`GERRIT_USER=` entry in `~/.config/gerrit-cli/.env`; the
+`GERRIT_USER` environment variable itself is not used.
 
 Verify: `gerrit info <any-change-url>`
 
@@ -121,7 +145,13 @@ Auth types:
 
 Select instance with `jira -I cloud get EX-1234`. Projects
 listed in `JIRA_CLOUD_PROJECTS` (comma-separated env var) are
-automatically routed to the cloud instance.
+automatically routed to a Cloud client built from the
+`JIRA_CLOUD_SERVER`, `JIRA_CLOUD_EMAIL`, and `JIRA_CLOUD_TOKEN`
+environment variables — not from a config-file instance.
+`JIRA_CLOUD_SERVER` and `JIRA_CLOUD_TOKEN` must be set or routed
+commands fail with a config error (`JIRA_CLOUD_EMAIL` is needed
+for Atlassian Cloud basic auth). An explicit `-I` always
+overrides auto-routing.
 
 Verify: `jira get <any-issue-key>`
 
@@ -148,7 +178,7 @@ JENKINS_TOKEN=your-api-token
 To get your API token: log into Jenkins, go to your user
 profile > Configure > API Token > Add new Token.
 
-Verify: `jenkins build <any-build-url>`
+Verify: `jenkins jobs`
 
 ### lreview
 
@@ -159,16 +189,20 @@ Optional environment variables:
 
 ```bash
 LREVIEW_MODEL='sonnet'                            # default model (default: opus)
+LREVIEW_AGENT='claude'                            # agent backend: claude/codex/
+                                                  # gemini/opencode (only claude
+                                                  # verified)
 LREVIEW_PREFIX='[Marc Bot - AI review - <model>]' # posted-message prefix;
                                                   # <model> is substituted
 REVIEW_PROMPTS_DIR=~/review-prompts               # where to clone the skill repo
+NO_COLOR=1                                        # disable colored output
 ```
 
 ### Other Tools
 
 | Tool | Notes |
 |------|-------|
-| Janitor | Uses Gerrit credentials (no extra config) |
+| Janitor | No auth required; optional `JANITOR_URL` (default `https://testing.whamcloud.com/gerrit-janitor`) |
 | Lustre Crash | No auth required |
 
 ## Output Format
@@ -206,8 +240,9 @@ llm_code_and_review_tools/
 ## Development
 
 ```bash
-pip install -e .          # Install in dev mode
-pytest                    # Run all tests
+./install.sh                       # Install all tools (editable/dev mode)
+cd <tool_dir> && pip install -e .  # Or install a single tool in dev mode
+pytest                             # Run all tests (from repo root)
 ```
 
 Code style: dataclasses, type hints, functions under ~60 lines,
