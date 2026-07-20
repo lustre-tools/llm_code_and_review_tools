@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Unified installer for LLM Code and Review Tools
-# Installs: jira, gerrit-cli, maloo, jenkins, and beads (bd)
+# Installs: jira, gerrit-cli, maloo, jenkins, lustre-crash, janitor, lreview, and beads (bd)
 #
 
 set -e
@@ -17,27 +17,104 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
-    echo "Install LLM code and review tools (jira, gerrit-cli, maloo, jenkins, janitor, beads)"
+    echo "Install LLM code and review tools (jira, gerrit-cli, maloo, jenkins, lustre-crash, janitor, lreview, beads)"
     echo ""
     echo "Options:"
     echo "  --help, -h     Show this help message"
     echo "  --uninstall    Uninstall all tools"
+    echo "  --venv [PATH]  Install into a virtual environment (created if"
+    echo "                 missing; default path: <repo>/.venv). Offered"
+    echo "                 automatically when the system Python is"
+    echo "                 externally managed (PEP 668, e.g. Homebrew)."
     echo ""
 }
 
 check_python() {
-    for py in python3.11 python3.10 python3.9 python3; do
+    for py in python3.12 python3.11 python3; do
         if command -v $py &> /dev/null; then
             version=$($py -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
             major=$(echo $version | cut -d. -f1)
             minor=$(echo $version | cut -d. -f2)
-            if [ "$major" -ge 3 ] && [ "$minor" -ge 9 ]; then
+            if [ "$major" -ge 3 ] && [ "$minor" -ge 11 ]; then
                 echo $py
                 return 0
             fi
         fi
     done
     return 1
+}
+
+# True when pip installs with this interpreter would be refused by
+# PEP 668 (marker file in the stdlib dir, and not already in a venv) —
+# the "externally-managed-environment" error from Homebrew/Debian
+# pythons.
+is_externally_managed() {
+    "$1" -c '
+import os, sys, sysconfig
+in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+marker = os.path.join(sysconfig.get_path("stdlib"), "EXTERNALLY-MANAGED")
+sys.exit(0 if (not in_venv and os.path.exists(marker)) else 1)'
+}
+
+# Resolve the interpreter to install with. Sets PYTHON and VENV_USED.
+# An existing venv (default <repo>/.venv, or --venv PATH) is reused;
+# otherwise, if the system Python is externally managed (or --venv was
+# given), offer to create a venv — ssh-keygen style, with an editable
+# path — and install into it.
+resolve_python() {
+    local base_py="$1"
+    VENV_USED=""
+    local venv="${VENV_PATH:-$SCRIPT_DIR/.venv}"
+
+    if [ -x "$venv/bin/python" ]; then
+        PYTHON="$venv/bin/python"
+        VENV_USED="$venv"
+        echo -e "${GREEN}✓${NC} Using existing virtual environment: $venv"
+        return 0
+    fi
+
+    if [ "$VENV_FLAG" -eq 0 ] && ! is_externally_managed "$base_py"; then
+        PYTHON="$base_py"
+        return 0
+    fi
+
+    if [ "$VENV_FLAG" -eq 0 ]; then
+        echo ""
+        echo -e "${YELLOW}This Python is externally managed (PEP 668):${NC} pip refuses to"
+        echo "install packages outside a virtual environment (typical for"
+        echo "Homebrew Python on macOS and system Python on newer distros)."
+        if [ ! -t 0 ]; then
+            echo "Re-run interactively, or choose a venv up front:"
+            echo "  ./install.sh --venv          # uses $venv"
+            echo "  ./install.sh --venv PATH"
+            return 1
+        fi
+        local answer
+        read -r -p "Create a virtual environment for the tools? [Y/n] " answer || true
+        case "$answer" in
+            n|N|no|NO)
+                echo "Aborted. To install manually into a venv of your choice:"
+                echo "  $base_py -m venv $venv"
+                echo "  $venv/bin/pip install -e <tool_dir>"
+                return 1
+                ;;
+        esac
+    fi
+
+    if [ -z "$VENV_PATH" ] && [ -t 0 ]; then
+        local answer
+        read -r -p "Enter venv path [$venv]: " answer || true
+        venv="${answer:-$venv}"
+    fi
+
+    echo "Creating virtual environment: $venv"
+    "$base_py" -m venv "$venv" || {
+        echo -e "${RED}Failed to create virtual environment at $venv${NC}"
+        return 1
+    }
+    PYTHON="$venv/bin/python"
+    VENV_USED="$venv"
+    "$PYTHON" -m pip install -q --upgrade pip 2>/dev/null || true
 }
 
 install_tools() {
@@ -48,9 +125,10 @@ install_tools() {
 
     # Check Python
     PYTHON=$(check_python) || {
-        echo -e "${RED}Error: Python 3.9+ required${NC}"
+        echo -e "${RED}Error: Python 3.11+ required${NC}"
         exit 1
     }
+    resolve_python "$PYTHON" || exit 1
     echo -e "${GREEN}✓${NC} Found Python: $PYTHON"
 
     # Install llm_tool_common first (shared dependency)
@@ -116,12 +194,14 @@ install_tools() {
             echo -e "${GREEN}✓${NC} drgn already installed"
         else
             echo "  Installing drgn..."
-            if [[ -x "$SCRIPT_DIR/lustre-drgn-tools/install-drgn.sh" ]]; then
-                "$SCRIPT_DIR/lustre-drgn-tools/install-drgn.sh"
+            if [[ -x "$SCRIPT_DIR/lustre-drgn-tools/install-drgn.sh" ]] \
+                && "$SCRIPT_DIR/lustre-drgn-tools/install-drgn.sh"; then
                 echo -e "${GREEN}✓${NC} drgn installed"
-            else
-                $PYTHON -m pip install -q drgn
+            elif $PYTHON -m pip install -q drgn; then
                 echo -e "${GREEN}✓${NC} drgn installed via pip"
+            else
+                echo -e "${YELLOW}warning:${NC} drgn install failed" \
+                    "(optional; only needed for lustre-drgn-tools)"
             fi
         fi
         echo -e "${GREEN}✓${NC} lustre-drgn-tools ready"
@@ -147,6 +227,14 @@ install_tools() {
     echo -e "${GREEN}Installation Complete!${NC}"
     echo "========================================"
     echo ""
+    if [ -n "$VENV_USED" ]; then
+        echo "Tools are installed in a virtual environment:"
+        echo "  $VENV_USED"
+        echo "Activate it, or add it to PATH:"
+        echo "  source $VENV_USED/bin/activate"
+        echo "  export PATH=\"$VENV_USED/bin:\$PATH\""
+        echo ""
+    fi
     echo "Installed tools:"
     echo "  jira            - JIRA issue tracking"
     echo "  gerrit          - Gerrit code review (also: gc)"
@@ -154,6 +242,7 @@ install_tools() {
     echo "  jenkins         - Jenkins build server"
     echo "  lustre-crash    - Non-interactive crash dump analysis"
     echo "  janitor         - Gerrit Janitor test results"
+    echo "  lreview         - Parallel AI patch reviews (kreview)"
     echo "  bd              - Beads task tracking"
     echo ""
     echo "Verify installation:"
@@ -163,6 +252,7 @@ install_tools() {
     echo "  jenkins --help"
     echo "  lustre-crash --help"
     echo "  janitor --help"
+    echo "  lreview check"
     echo "  bd --help"
     echo ""
     echo "Configuration:"
@@ -182,9 +272,16 @@ uninstall_tools() {
     echo ""
 
     PYTHON=$(check_python) || {
-        echo -e "${RED}Error: Python 3.9+ required${NC}"
+        echo -e "${RED}Error: Python 3.11+ required${NC}"
         exit 1
     }
+
+    # Uninstall from the venv the tools were installed into, if any
+    local venv="${VENV_PATH:-$SCRIPT_DIR/.venv}"
+    if [ -x "$venv/bin/python" ]; then
+        PYTHON="$venv/bin/python"
+        echo "Using virtual environment: $venv"
+    fi
 
     echo "Uninstalling jira-tool..."
     $PYTHON -m pip uninstall -y jira-tool 2>/dev/null || true
@@ -220,23 +317,40 @@ uninstall_tools() {
     echo ""
 }
 
+# Allow sourcing the functions without running the installer (tests)
+if [ -n "${INSTALL_SH_NO_MAIN:-}" ]; then return 0 2>/dev/null || exit 0; fi
+
 # Parse arguments
-case "${1:-}" in
-    --help|-h)
-        usage
-        exit 0
-        ;;
-    --uninstall)
-        uninstall_tools
-        exit 0
-        ;;
-    "")
-        install_tools
-        exit 0
-        ;;
-    *)
-        echo -e "${RED}Unknown option: $1${NC}"
-        usage
-        exit 1
-        ;;
-esac
+ACTION="install"
+VENV_FLAG=0
+VENV_PATH=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --uninstall)
+            ACTION="uninstall"
+            ;;
+        --venv)
+            VENV_FLAG=1
+            if [ -n "${2:-}" ] && [ "${2#--}" = "$2" ]; then
+                VENV_PATH="$2"
+                shift
+            fi
+            ;;
+        *)
+            echo -e "${RED}Unknown option: $1${NC}"
+            usage
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+if [ "$ACTION" = "uninstall" ]; then
+    uninstall_tools
+else
+    install_tools
+fi
