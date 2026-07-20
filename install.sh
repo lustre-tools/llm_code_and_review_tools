@@ -14,6 +14,10 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Console scripts our packages install (used for ~/.local/bin symlinks
+# when installing into a venv, and for cleanup on uninstall)
+TOOL_BINS="jira gerrit gerrit-cli gc maloo jenkins janitor lustre-crash lreview"
+
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -115,6 +119,49 @@ resolve_python() {
     PYTHON="$venv/bin/python"
     VENV_USED="$venv"
     "$PYTHON" -m pip install -q --upgrade pip 2>/dev/null || true
+}
+
+# A child process can't activate a venv in the parent shell, so make
+# activation unnecessary instead: symlink the tools' entry points into
+# ~/.local/bin (the pipx approach) — they run from the venv without it
+# being active.
+link_venv_tools() {
+    [ -n "$VENV_USED" ] || return 0
+    local bin_dir="$HOME/.local/bin"
+    mkdir -p "$bin_dir"
+    local linked=""
+    local t
+    for t in $TOOL_BINS; do
+        if [ -x "$VENV_USED/bin/$t" ]; then
+            ln -sf "$VENV_USED/bin/$t" "$bin_dir/$t"
+            linked="$linked $t"
+        fi
+    done
+    [ -n "$linked" ] || return 0
+    echo "Symlinked into $bin_dir (no venv activation needed):"
+    echo " $linked"
+    case ":$PATH:" in
+        *":$bin_dir:"*) ;;
+        *)
+            echo -e "${YELLOW}note:${NC} $bin_dir is not on your PATH; add it:"
+            echo "  export PATH=\"$bin_dir:\$PATH\""
+            ;;
+    esac
+}
+
+# Remove ~/.local/bin symlinks that point into the given venv
+unlink_venv_tools() {
+    local venv="$1"
+    local bin_dir="$HOME/.local/bin"
+    local t link target
+    for t in $TOOL_BINS; do
+        link="$bin_dir/$t"
+        [ -L "$link" ] || continue
+        target="$(readlink "$link")"
+        case "$target" in
+            "$venv"/*) rm -f "$link"; echo "  removed $link" ;;
+        esac
+    done
 }
 
 install_tools() {
@@ -239,9 +286,9 @@ install_tools() {
     if [ -n "$VENV_USED" ]; then
         echo "Tools are installed in a virtual environment:"
         echo "  $VENV_USED"
-        echo "Activate it, or add it to PATH:"
-        echo "  source $VENV_USED/bin/activate"
-        echo "  export PATH=\"$VENV_USED/bin:\$PATH\""
+        link_venv_tools
+        echo "(activating the venv is only needed for python-level use:"
+        echo "  source $VENV_USED/bin/activate)"
         echo ""
     fi
     echo "Installed tools:"
@@ -290,6 +337,8 @@ uninstall_tools() {
     if [ -x "$venv/bin/python" ]; then
         PYTHON="$venv/bin/python"
         echo "Using virtual environment: $venv"
+        echo "Removing ~/.local/bin symlinks into it..."
+        unlink_venv_tools "$venv"
     fi
 
     echo "Uninstalling jira-tool..."

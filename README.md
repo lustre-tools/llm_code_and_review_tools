@@ -85,8 +85,12 @@ create a virtual environment (default `<repo>/.venv`, path editable
 at the prompt) and installs the tools into it. `./install.sh --venv
 [PATH]` selects that non-interactively, and an existing `.venv` in
 the repo is reused automatically on later runs (including
-`--uninstall`). The installer prints the `source .venv/bin/activate`
-/ PATH line to make the tools available.
+`--uninstall`). The tools' executables are then symlinked into
+`~/.local/bin` (pipx-style), so they work from any shell **without
+activating the venv** — activation is only needed for python-level
+use. `--uninstall` removes those symlinks again. (An installer is a
+child process and cannot activate a venv in your shell — the
+symlinks make that unnecessary.)
 
 ## Configuration
 
