@@ -88,9 +88,18 @@ the repo is reused automatically on later runs (including
 `--uninstall`). The tools' executables are then symlinked into
 `~/.local/bin` (pipx-style), so they work from any shell **without
 activating the venv** — activation is only needed for python-level
-use. `--uninstall` removes those symlinks again. (An installer is a
-child process and cannot activate a venv in your shell — the
-symlinks make that unnecessary.)
+use. `--uninstall` removes those symlinks again.
+
+To end up with the venv activated in your current shell, run the
+installer sourced (works in zsh and bash):
+
+```bash
+source install.sh            # install + activate in this shell
+```
+
+(A normally-executed `./install.sh` is a child process and cannot
+change your shell's environment; sourcing is what makes activation
+possible.)
 
 ## Configuration
 

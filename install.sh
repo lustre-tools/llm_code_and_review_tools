@@ -3,6 +3,43 @@
 # Unified installer for LLM Code and Review Tools
 # Installs: jira, gerrit-cli, maloo, jenkins, lustre-crash, janitor, lreview, and beads (bd)
 #
+# Run it either way:
+#   ./install.sh [OPTIONS]          # normal run
+#   source install.sh [OPTIONS]     # same, then activates the venv
+#                                   # in your current shell (zsh/bash)
+
+# When sourced, run the installer as a child process and then activate
+# the venv it used in the *current* shell — the one thing a child
+# process cannot do itself. The early `return` also stops the shell
+# from parsing the rest of this bash script.
+_lct_sourced=0
+if [ -n "${ZSH_VERSION:-}" ]; then
+    case "${ZSH_EVAL_CONTEXT:-}" in *:file*) _lct_sourced=1 ;; esac
+elif [ -n "${BASH_VERSION:-}" ]; then
+    [ "${BASH_SOURCE[0]}" != "$0" ] && _lct_sourced=1
+fi
+if [ "$_lct_sourced" = 1 ] && [ -z "${INSTALL_SH_NO_MAIN:-}" ]; then
+    if [ -n "${ZSH_VERSION:-}" ]; then
+        _lct_script="${(%):-%x}"
+    else
+        _lct_script="${BASH_SOURCE[0]}"
+    fi
+    _lct_state="$(mktemp)"
+    INSTALL_SH_VENV_FILE="$_lct_state" bash "$_lct_script" "$@"
+    _lct_rc=$?
+    _lct_venv=""
+    [ -r "$_lct_state" ] && _lct_venv="$(cat "$_lct_state")"
+    rm -f "$_lct_state"
+    if [ "$_lct_rc" -eq 0 ] && [ -n "$_lct_venv" ] \
+        && [ -f "$_lct_venv/bin/activate" ]; then
+        . "$_lct_venv/bin/activate"
+        echo ""
+        echo "venv activated in your current shell: $_lct_venv"
+    fi
+    unset _lct_sourced _lct_script _lct_state _lct_venv
+    return $_lct_rc
+fi
+unset _lct_sourced
 
 set -e
 
@@ -20,6 +57,7 @@ TOOL_BINS="jira gerrit gerrit-cli gc maloo jenkins janitor lustre-crash lreview"
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
+    echo "       source $0 [OPTIONS]   (activates the venv in your shell)"
     echo ""
     echo "Install LLM code and review tools (jira, gerrit-cli, maloo, jenkins, lustre-crash, janitor, lreview, beads)"
     echo ""
@@ -287,8 +325,14 @@ install_tools() {
         echo "Tools are installed in a virtual environment:"
         echo "  $VENV_USED"
         link_venv_tools
-        echo "(activating the venv is only needed for python-level use:"
-        echo "  source $VENV_USED/bin/activate)"
+        if [ -n "${INSTALL_SH_VENV_FILE:-}" ]; then
+            printf '%s\n' "$VENV_USED" > "$INSTALL_SH_VENV_FILE" \
+                2>/dev/null || true
+        else
+            echo "(activating the venv is only needed for python-level"
+            echo " use — run 'source install.sh' next time to end with"
+            echo " it activated, or now: source $VENV_USED/bin/activate)"
+        fi
         echo ""
     fi
     echo "Installed tools:"
