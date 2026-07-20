@@ -329,9 +329,14 @@ install_tools() {
             printf '%s\n' "$VENV_USED" > "$INSTALL_SH_VENV_FILE" \
                 2>/dev/null || true
         else
-            echo "(activating the venv is only needed for python-level"
-            echo " use — run 'source install.sh' next time to end with"
-            echo " it activated, or now: source $VENV_USED/bin/activate)"
+            echo ""
+            echo -e "${YELLOW}To activate the venv in this shell, run:${NC}"
+            echo ""
+            echo "  source $VENV_USED/bin/activate"
+            echo ""
+            echo "(or run 'source install.sh' next time to finish with it"
+            echo "activated automatically; the ~/.local/bin symlinks above"
+            echo "work without any activation)"
         fi
         echo ""
     fi
