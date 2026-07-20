@@ -72,13 +72,19 @@ JIRA_CLOUD_PROJECTS="PROJ1,PROJ2"   # comma-separated project prefixes
 
 Run `jira --help` for full command list.
 
-### Gerrit tool (`gerrit`, aliased as `gc`, v0.2.1)
+### Gerrit tool (`gerrit`, aliased as `gc`, v0.2.4)
 
 Code review, comment management, patch workflows, and CI triage.
 
 **Key commands:**
 - **Review:** `gc comments <url>`, `gc reply <url> <idx> "msg"`,
   `gc review <url>`, `gc done <url> <idx>`, `gc ack <url> <idx>`
+- **Post review from JSON:** `gc review --post-comments <file> <url>`
+  posts a cover message + inline line comments in one call. The file
+  holds `message`/`vote`/`tag`/`comments` (Gerrit REST dict or flat
+  list). `--prefix '[Marc Bot]'` prepends a bot name to every message;
+  `--dry-run` previews the exact payload without posting. See
+  `gerrit_cli/README.md` ("Posting a Review from JSON").
 - **Patch workflow:** `gc work-on-patch <url>`, `gc finish-patch`,
   `gc next-patch`, `gc abort`, `gc status`
 - **Info:** `gc info <url>`, `gc series-info <url>`,
@@ -112,6 +118,33 @@ HTTP Credentials → Generate Password.
 Run `gerrit --help` for full command list.
 Run `gc examples` for common workflow examples.
 Run `gc explain <command>` for detailed usage of a command.
+
+### lreview tool (`lreview`, v0.1.0)
+
+Runs the kreview AI patch-review skill (from the external
+[review-prompts](https://github.com/verygreen/review-prompts/) repo) on
+a batch of Gerrit changes in parallel — one headless agent process per
+change (Claude Code by default; codex/gemini/opencode via `--agent` /
+`$LREVIEW_AGENT`, best-effort), each in its own git worktree — then
+posts the collected `gerrit-review.json` results via gerrit-cli.
+
+```bash
+lreview check                        # Verify claude + skill setup
+lreview run 64086 64087 --repo lustre-release   # Review (no post)
+lreview post                         # Post collected findings
+lreview run 64086 --post             # Review + post in one go
+```
+
+Defaults: opus model (`--model` / `$LREVIEW_MODEL` for sonnet/fable),
+5 parallel reviews (`--jobs`), 2h per-review timeout, results in
+`./lreview-results/` (per-change JSON + log + summary.json), a live
+status line with token counter while reviews run, and posted messages
+prefixed `[AI review - <model>]` on a bold own line (`--prefix` /
+`$LREVIEW_PREFIX` override; a `<model>` placeholder in a custom prefix
+is substituted too). Posting is pinned to the reviewed
+patchset revision and guarded against double-posting. If the kreview
+skill is not installed, the tool offers to clone review-prompts and
+run its `setup.sh claude kernel`. See `lreview/README.md`.
 
 ## Development
 

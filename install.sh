@@ -102,6 +102,12 @@ install_tools() {
     $PYTHON -m pip install -q -e "$SCRIPT_DIR/janitor_tool"
     echo -e "${GREEN}✓${NC} janitor installed"
 
+    # Install lreview
+    echo ""
+    echo "Installing lreview..."
+    $PYTHON -m pip install -q -e "$SCRIPT_DIR/lreview"
+    echo -e "${GREEN}✓${NC} lreview installed"
+
     # Install drgn + lustre-drgn-tools
     if [[ -d "$SCRIPT_DIR/lustre-drgn-tools" ]]; then
         echo ""
@@ -195,6 +201,9 @@ uninstall_tools() {
 
     echo "Uninstalling janitor-tool..."
     $PYTHON -m pip uninstall -y janitor-tool 2>/dev/null || true
+
+    echo "Uninstalling lreview..."
+    $PYTHON -m pip uninstall -y lreview 2>/dev/null || true
 
     echo "Uninstalling lustre-crash..."
     $PYTHON -m pip uninstall -y lustre-crash 2>/dev/null || true

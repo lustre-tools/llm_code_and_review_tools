@@ -8,6 +8,7 @@ CI, issue tracking, and crash analysis systems.
 | Tool | Command | Purpose |
 |------|---------|---------|
 | **Gerrit CLI** | `gerrit` / `gc` | Gerrit code review -- comments, replies, reviewer management, patch series, Maloo triage |
+| **lreview** | `lreview` | Parallel AI patch reviews -- runs the kreview skill headless on N Gerrit changes, posts results |
 | **JIRA** | `jira` | JIRA issue tracking -- get, search, comment, create, transition |
 | **Maloo** | `maloo` | Lustre CI test results -- failures, retests, bug linking |
 | **Jenkins** | `jenkins` | Jenkins build server -- build status, console logs, retriggers |
@@ -15,6 +16,30 @@ CI, issue tracking, and crash analysis systems.
 | **Lustre Crash** | `lustre-crash` | Crash dump analysis using drgn, with structured JSON output |
 
 Shared utilities live in `llm_tool_common/`.
+
+### lreview in one minute
+
+`lreview` reviews Gerrit changes with AI and posts the findings as
+inline review comments. Each change is reviewed by a headless agent
+process — Claude Code by default; codex, gemini, and opencode are also
+supported (`--agent`; currently only claude is verified as working,
+the others are best-effort) — running the
+[review-prompts](https://github.com/verygreen/review-prompts/)
+kreview skill in its own git worktree, pinned to the change's current
+patchset; results (`gerrit-review-*.json`, logs, `summary.json`) land
+in `./lreview-results/`, and posting goes through gerrit-cli with an
+`[AI review - <model>]` prefix, guarded against double-posting.
+
+```bash
+lreview check                                    # verify claude + skill setup
+lreview run --repo lustre-release 64086 64087    # review (5 parallel, opus)
+lreview post                                     # post findings after inspection
+lreview run --repo lustre-release --post 64086   # or review + post in one go
+```
+
+Live colored status with per-review token counter while running;
+`-j N` for concurrency, `--model sonnet|fable` to switch models.
+Details: [lreview/README.md](lreview/README.md).
 
 ### Bundled submodules
 
@@ -125,6 +150,20 @@ profile > Configure > API Token > Add new Token.
 
 Verify: `jenkins build <any-build-url>`
 
+### lreview
+
+Uses the Gerrit credentials above, plus the `claude` CLI on PATH and
+the kreview skill installed from the review-prompts repo
+(`lreview check` verifies; `lreview run` offers to set it up).
+Optional environment variables:
+
+```bash
+LREVIEW_MODEL='sonnet'                            # default model (default: opus)
+LREVIEW_PREFIX='[Marc Bot - AI review - <model>]' # posted-message prefix;
+                                                  # <model> is substituted
+REVIEW_PROMPTS_DIR=~/review-prompts               # where to clone the skill repo
+```
+
 ### Other Tools
 
 | Tool | Notes |
@@ -136,7 +175,8 @@ Verify: `jenkins build <any-build-url>`
 
 All tools output raw JSON by default (no envelope). Use `--envelope`
 for the full `{ok, data, meta}` wrapper. Use `--pretty` for
-human-readable formatted output.
+human-readable formatted output. Exception: `lreview` is an
+operator-facing orchestrator and prints human-readable colored output.
 
 ```json
 {"ok": true, "data": {...}, "meta": {"tool": "jira", "command": "issue.get"}}
@@ -150,6 +190,7 @@ Exit codes: 0=success, 1=general error, 2=auth, 3=not found,
 ```
 llm_code_and_review_tools/
 ├── gerrit_cli/          # Gerrit code review CLI
+├── lreview/             # Parallel AI patch reviews (kreview skill)
 ├── jira_tool/           # JIRA issue tracking CLI
 ├── maloo_tool/          # Maloo CI results CLI
 ├── jenkins_tool/        # Jenkins build server CLI
