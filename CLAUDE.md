@@ -74,6 +74,42 @@ JIRA_CLOUD_PROJECTS="PROJ1,PROJ2"   # comma-separated project prefixes
 
 Run `jira --help` for full command list.
 
+### Confluence tool (`confluence`, aliased as `cf`, v0.1.0)
+
+Read-only Confluence wiki search and page reads.
+
+**Key commands:** `confluence search <text>` (`--space`, `--cql`),
+`confluence get <id-or-url>`, `confluence spaces`, `confluence check`,
+`confluence config-sample`, `confluence describe`. No write commands.
+
+**Multi-instance (`~/.confluence-tool.json`):** same shape as
+`~/.jira-tool.json`; `-I <name>` selects an instance, default is `cloud`.
+- `cloud` — Confluence Cloud (`.atlassian.net/wiki`), basic auth (email +
+  Atlassian API token, the same token as the JIRA `cloud` instance). Uses
+  `{server}/rest/api`.
+- `whamcloud` — the public Lustre community wiki (`wiki.whamcloud.com`),
+  `auth.type = "none"`. Reached **anonymously and read-only**, which
+  structurally guarantees only public (open-source) Lustre articles are
+  accessible there.
+
+```json
+{
+  "instances": {
+    "cloud": {
+      "server": "https://your-org.atlassian.net/wiki",
+      "auth": {"type": "basic", "email": "<email>", "token": "<Atlassian API token>"}
+    },
+    "whamcloud": {
+      "server": "https://wiki.whamcloud.com",
+      "auth": {"type": "none"}
+    }
+  },
+  "default": "cloud"
+}
+```
+
+Run `confluence --help` or `confluence describe` for the full surface.
+
 ### Gerrit tool (`gerrit`, aliased as `gc`, v0.2.4)
 
 Code review, comment management, patch workflows, and CI triage.

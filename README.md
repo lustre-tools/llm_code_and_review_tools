@@ -10,6 +10,7 @@ CI, issue tracking, and crash analysis systems.
 | **Gerrit CLI** | `gerrit` / `gc` | Gerrit code review -- comments, replies, reviewer management, patch series, Maloo triage |
 | **lreview** | `lreview` | Parallel AI patch reviews -- runs the kreview skill headless on N Gerrit changes, posts results |
 | **JIRA** | `jira` | JIRA issue tracking -- get, search, comment, create, transition |
+| **Confluence** | `confluence` / `cf` | Confluence wiki (read-only) -- search and read pages; cloud + public whamcloud Lustre wiki |
 | **Maloo** | `maloo` | Lustre CI test results -- failures, retests, bug linking |
 | **Jenkins** | `jenkins` | Jenkins build server -- build status, console logs, retriggers |
 | **Janitor** | `janitor` | Gerrit Janitor test results (separate from Maloo/enforced CI) |
@@ -172,6 +173,26 @@ for Atlassian Cloud basic auth). An explicit `-I` always
 overrides auto-routing.
 
 Verify: `jira get <any-issue-key>`
+
+### Confluence
+
+Read-only Confluence wiki access (`confluence`, alias `cf`). Multi-instance,
+configured in `~/.confluence-tool.json` (`confluence config-sample` prints a
+template):
+- **cloud** (default) — authenticated Confluence Cloud, basic auth with the
+  same email + Atlassian API token as the JIRA `cloud` instance.
+- **whamcloud** — the public Lustre community wiki, reached **anonymously
+  (no credentials) and read-only**, so only public open-source Lustre articles
+  are ever accessible.
+
+```bash
+confluence search 'nodemap'                    # default (cloud)
+confluence -I whamcloud search 'lnet routing'  # public Lustre wiki
+confluence get <id-or-url>
+```
+
+Verify: `confluence check` (and `confluence -I whamcloud check`).
+See `confluence_tool/README.md`.
 
 ### Maloo
 

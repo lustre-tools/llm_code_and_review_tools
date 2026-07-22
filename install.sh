@@ -53,7 +53,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Console scripts our packages install (used for ~/.local/bin symlinks
 # when installing into a venv, and for cleanup on uninstall)
-TOOL_BINS="jira gerrit gerrit-cli gc maloo jenkins janitor lustre-crash lreview"
+TOOL_BINS="jira confluence cf gerrit gerrit-cli gc maloo jenkins janitor lustre-crash lreview"
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -227,6 +227,12 @@ install_tools() {
     echo "Installing jira..."
     $PYTHON -m pip install -q -e "$SCRIPT_DIR/jira_tool"
     echo -e "${GREEN}✓${NC} jira installed"
+
+    # Install confluence_tool
+    echo ""
+    echo "Installing confluence..."
+    $PYTHON -m pip install -q -e "$SCRIPT_DIR/confluence_tool"
+    echo -e "${GREEN}✓${NC} confluence installed"
 
     # Install gerrit_cli
     echo ""

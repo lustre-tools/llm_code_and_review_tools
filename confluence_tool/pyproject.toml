@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "confluence-tool"
+version = "0.1.0"
+description = "Read-only LLM-agent-focused CLI tool for the Confluence REST API"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "LLM Code Tools Team"}
+]
+dependencies = [
+    "click>=8.0.0",
+    "requests>=2.28.0",
+    "python-dotenv>=1.0.0",
+    "llm-tool-common",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "responses>=0.23.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+    "types-requests>=2.28.0",
+]
+
+[project.scripts]
+confluence = "confluence_tool.cli:main"
+cf = "confluence_tool.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short --strict-markers"
+markers = [
+    "integration: marks tests as integration tests (may require network)",
+    "unit: marks tests as unit tests",
+    "readonly: marks integration tests that only read data (no side effects)",
+    "slow: marks tests as slow-running",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["confluence_tool"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false

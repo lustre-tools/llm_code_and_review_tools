@@ -29,6 +29,7 @@ venv/
 
 # Config (may contain secrets)
 .jira-tool.json
+.confluence-tool.json
 
 # Runtime state
 .gerrit-cli/
