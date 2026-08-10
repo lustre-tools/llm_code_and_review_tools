@@ -1064,12 +1064,52 @@ function _layoutMergedTrunk(ctx, belowAnchorLevel) {
     // row's side kid. The same gap that gives the non-stale 62732
     // → 64441 edge its own row should apply to the stale 62063 →
     // 62389/62064 edges.
+    // Only rows that will ACTUALLY be used in this trunk node's
+    // band count. Nodes the anchor walk places independently —
+    // reachable from the anchor via visible child edges WITHOUT
+    // passing through this trunk node, or already placed (the
+    // anchor column from _layoutAnchorColumn) — are budgeted
+    // relative to the anchor, not this band, so counting their
+    // height reserves dead vertical space. Hit on 58458: the NEW
+    // anchor itself is the newest trunk node's only side kid
+    // (subtree height 12 → 13 empty rows between them), and
+    // 66900's chain continues into rows the anchor's upward walk
+    // already claims.
+    function _anchorReachAvoiding(avoidId) {
+        const reach = new Set([ctx.anchorId]);
+        const stack = [ctx.anchorId];
+        while (stack.length > 0) {
+            const cur = stack.pop();
+            if (cur === avoidId) continue;
+            for (const k of (childrenOf[cur] || [])) {
+                if (reach.has(k)) continue;
+                if (!_layoutShouldShow(ctx, k)) continue;
+                reach.add(k);
+                stack.push(k);
+            }
+        }
+        return reach;
+    }
+
     function trunkSpacing(id) {
+        const excluded = _anchorReachAvoiding(id);
+        const seen = new Set();
+        const heightExcl = (k) => {
+            if (excluded.has(k) || seen.has(k)) return 0;
+            if (ctx.positions[k] !== undefined) return 0;
+            seen.add(k);
+            let h = 0;
+            for (const c of (childrenOf[k] || [])) {
+                if (!_layoutShouldShow(ctx, c)) continue;
+                h = Math.max(h, heightExcl(c));
+            }
+            return h + 1;
+        };
         const sideKids = (childrenOf[id] || [])
             .filter(k => _layoutShouldShow(ctx, k))
             .filter(k => !trunkSet.has(k));
         let h = 0;
-        for (const sk of sideKids) h = Math.max(h, _subtreeHeight(ctx, sk));
+        for (const sk of sideKids) h = Math.max(h, heightExcl(sk));
         return Math.max(1, h + 1);
     }
 
