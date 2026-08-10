@@ -13,6 +13,7 @@ from typing import Any
 from gerrit_cli.graph.build import (
     _build_merged_trunk,
     _promote_merged_to_main,
+    _prune_unrelated_merged,
     _redirect_inflight_to_recent_merged,
 )
 
@@ -21,6 +22,8 @@ def _node(
     cn: int, status: str, submitted: str = "", updated: str = "",
     series_group: int = 0, current_patchset: int = 1,
     current_ps_created: str = "",
+    ticket: str = "", topic: str = "",
+    hashtags: list[str] | None = None,
 ) -> dict[str, Any]:
     """Minimal node dict shape the trunk helpers consult."""
     return {
@@ -31,6 +34,9 @@ def _node(
         "series_group": series_group,
         "current_patchset": current_patchset,
         "current_ps_created": current_ps_created,
+        "ticket": ticket,
+        "topic": topic,
+        "hashtags": hashtags or [],
     }
 
 
@@ -55,6 +61,11 @@ def _ctx(
         commit_to_change_ps=dict(commit_to_change_ps or {}),
         revision_parents=dict(revision_parents or {}),
         external_merged_submitted=dict(external_merged_submitted or {}),
+        seen_edges=set(
+            (e["from"], e["to"]) for e in (edges or [])
+        ),
+        extra_topics=[],
+        extra_hashtags=[],
     )
 
 
@@ -571,3 +582,133 @@ class TestRedirectInflightToRecentMerged:
         assert count == 1
         assert ctx.edges[0]["from"] == 316
         assert ctx.edges[0]["to"] == 852
+
+
+# ─── _prune_unrelated_merged ──────────────────────────────────────
+
+
+class TestPruneUnrelatedMerged:
+    """Merged patches that carry no series signal (ticket / topic /
+    hashtag) are chain-stacking artifacts from /related. They get
+    deleted — unless something non-merged hangs directly off them,
+    in which case they stay as uncounted trunk_structural branch
+    points. Modeled on the 65282 graph (LU-18222, hashtag db_lqa,
+    intruders 64499/64529/64534)."""
+
+    def _series(self):
+        return [
+            _node(100, "NEW", ticket="LU-18222",
+                  hashtags=["db_lqa"]),          # anchor
+            _node(90, "MERGED", submitted="2026-01-05 00:00:00",
+                  ticket="LU-18222", hashtags=["db_lqa"]),
+            _node(80, "MERGED", submitted="2026-01-04 00:00:00",
+                  ticket="LU-18222"),
+        ]
+
+    def test_deletes_unrelated_merged_without_descendants(self):
+        ctx = _ctx(
+            nodes=self._series() + [
+                # Intruder chain stacked on the series at upload
+                # time; different tickets, no shared hashtag,
+                # nothing in-flight hangs off them.
+                _node(50, "MERGED", submitted="2026-01-06 00:00:00",
+                      ticket="LU-19963"),
+                _node(51, "MERGED", submitted="2026-01-07 00:00:00",
+                      ticket="LU-19975"),
+            ],
+            edges=[
+                {"from": 80, "to": 90, "parent_patchset": 1,
+                 "parent_latest": 1, "is_stale": False},
+                {"from": 90, "to": 50, "parent_patchset": 1,
+                 "parent_latest": 1, "is_stale": False},
+                {"from": 50, "to": 51, "parent_patchset": 1,
+                 "parent_latest": 1, "is_stale": False},
+            ],
+            anchor_cn=100,
+            commit_to_change_ps={
+                "C50_ps1": (50, 1), "C50_merged": (50, 2),
+            },
+        )
+        ctx.nodes[50]["current_commit"] = "C50_merged"
+        deleted, structural = _prune_unrelated_merged(ctx)
+        assert deleted == 2
+        assert structural == 0
+        assert 50 not in ctx.nodes and 51 not in ctx.nodes
+        # Relevant merged members untouched.
+        assert 80 in ctx.nodes and 90 in ctx.nodes
+        # Edges touching deleted nodes dropped; series edge kept.
+        assert [(e["from"], e["to"]) for e in ctx.edges] == [(80, 90)]
+        assert (90, 50) not in ctx.seen_edges
+        # Submitted stashed for ancestry dating; only the merged
+        # revision hash survives in commit_to_change_ps.
+        assert ctx.external_merged_submitted[50] == "2026-01-06 00:00:00"
+        assert "C50_ps1" not in ctx.commit_to_change_ps
+        assert ctx.commit_to_change_ps["C50_merged"] == (50, 2)
+
+    def test_unrelated_merged_with_inflight_child_kept_structural(self):
+        ctx = _ctx(
+            nodes=self._series() + [
+                _node(50, "MERGED", submitted="2026-01-06 00:00:00",
+                      ticket="LU-19963"),
+                _node(60, "NEW", ticket="LU-20000"),
+            ],
+            edges=[
+                {"from": 50, "to": 60, "parent_patchset": 1,
+                 "parent_latest": 1, "is_stale": True},
+            ],
+            anchor_cn=100,
+        )
+        deleted, structural = _prune_unrelated_merged(ctx)
+        assert deleted == 0
+        assert structural == 1
+        assert ctx.nodes[50]["trunk_structural"] is True
+
+    def test_unrelated_merged_with_inflight_parent_kept_structural(self):
+        # 62887 shape: an in-flight git-parent points INTO the
+        # merged node. Downward-only reasoning would delete it.
+        ctx = _ctx(
+            nodes=self._series() + [
+                _node(50, "MERGED", submitted="2026-01-06 00:00:00",
+                      ticket="LU-19963"),
+                _node(60, "NEW", ticket="LU-20000"),
+            ],
+            edges=[
+                {"from": 60, "to": 50, "parent_patchset": 1,
+                 "parent_latest": 1, "is_stale": False},
+            ],
+            anchor_cn=100,
+        )
+        deleted, structural = _prune_unrelated_merged(ctx)
+        assert deleted == 0
+        assert structural == 1
+        assert ctx.nodes[50]["trunk_structural"] is True
+
+    def test_hashtag_match_is_relevant(self):
+        ctx = _ctx(
+            nodes=self._series() + [
+                # Different ticket but carries the anchor hashtag.
+                _node(50, "MERGED", submitted="2026-01-06 00:00:00",
+                      ticket="LU-19963", hashtags=["db_lqa"]),
+            ],
+            anchor_cn=100,
+        )
+        deleted, structural = _prune_unrelated_merged(ctx)
+        assert deleted == 0
+        assert structural == 0
+        assert 50 in ctx.nodes
+
+    def test_no_signals_is_a_noop(self):
+        # Ticketless anchor with no topic/hashtags: pruning would
+        # gut the trunk, so the phase must bail out.
+        ctx = _ctx(
+            nodes=[
+                _node(100, "NEW"),
+                _node(50, "MERGED", submitted="2026-01-06 00:00:00",
+                      ticket="LU-19963"),
+            ],
+            anchor_cn=100,
+        )
+        deleted, structural = _prune_unrelated_merged(ctx)
+        assert deleted == 0
+        assert structural == 0
+        assert 50 in ctx.nodes

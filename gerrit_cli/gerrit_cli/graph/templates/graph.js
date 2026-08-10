@@ -66,7 +66,7 @@ const breakdown = healthChips.length
 document.getElementById('stats').innerHTML =
     `<span class="badge badge-new">In-flight: ${inflight}</span>`
   + breakdown
-  + `<span class="badge badge-merged">MERGED: ${sc.MERGED || 0}</span>`
+  + `<span class="badge badge-merged" title="${sc.MERGED || 0} series member(s) merged${(G.stats.structural_merged_count || 0) ? `; ${G.stats.structural_merged_count} unrelated merged patch(es) shown dimmed only as branch base` : ''}">MERGED: ${sc.MERGED || 0}${(G.stats.structural_merged_count || 0) ? ` +${G.stats.structural_merged_count} base` : ''}</span>`
   + `<span class="badge badge-abandoned">ABANDONED: ${sc.ABANDONED || 0}</span>`
   + `<span style="color:#8b949e;font-size:11px">${G.stats.node_count} changes</span>`;
 
@@ -1339,6 +1339,7 @@ function legendItems() {
         { kind: 'fill', label: 'Jenkins',     color: C.REVIEW_BAD_JENKINS.bg },
         { kind: 'fill', label: 'Other -1',    color: C.REVIEW_BAD_OTHER.bg },
         { kind: 'fill', label: 'Merged',      color: C.STATUS.MERGED.bg },
+        { kind: 'border', label: 'Base (unrelated parent)', color: C.STATUS.MERGED.border },
         { kind: 'fill', label: 'Abandoned',   color: C.STATUS.ABANDONED.bg },
         { kind: 'border', label: '🚧 WIP',   color: '#c9d1d9', dashed: true },
         { kind: 'border', label: 'Anchor',   color: C.HIGHLIGHT.border, thick: true },
@@ -1517,6 +1518,17 @@ function nodeBaseColors(node, flags, C) {
 // Full vis.js node options for a rendered node.
 function styleForNode(node, flags, position, C) {
     let colors = nodeBaseColors(node, flags, C);
+
+    // Structural trunk members: unrelated merged patches kept in
+    // the trunk only because an in-flight branch hangs off them.
+    // Dim fill + merged border marks them as context rather than
+    // series members; the stats bar counts them separately as
+    // "+N base" so the Merged number matches the full-color boxes.
+    if (node.trunk_structural) {
+        colors = Object.assign({}, C.DIM, {
+            border: C.STATUS.MERGED.border,
+        });
+    }
 
     // master-next override: a patch tagged "master-next" is queued
     // for the next master merge and is treated as effectively

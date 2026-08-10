@@ -26,7 +26,11 @@ def _make_node(
 ) -> dict[str, Any]:
     """Create a node dict for the graph."""
     if not ticket:
-        m = re.match(r"(LU-\d+)", subject)
+        # Any JIRA-style prefix (LU-, EX-, DDN-, ...), not just LU —
+        # the trunk-relevance filter keys off tickets, and an
+        # EX-anchored graph with ticket="" everywhere would have no
+        # relevance signal at all.
+        m = re.match(r"([A-Z][A-Z0-9]*-\d+)", subject)
         ticket = m.group(1) if m else ""
     ref = f"refs/changes/{cn % 100:02d}/{cn}/{latest}"
     fetch_cmd = f"git fetch {base_url}/{project} {ref}"
@@ -91,7 +95,7 @@ def _update_node_meta(node: dict[str, Any], change: dict[str, Any]) -> None:
     subject = change.get("subject", "")
     if subject:
         node["subject"] = subject
-        m = re.match(r"(LU-\d+)", subject)
+        m = re.match(r"([A-Z][A-Z0-9]*-\d+)", subject)
         node["ticket"] = m.group(1) if m else ""
     node["topic"] = change.get("topic", "")
     node["hashtags"] = change.get("hashtags", [])

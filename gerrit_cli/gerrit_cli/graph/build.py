@@ -1629,6 +1629,127 @@ def _hook_orphan_main_chains(
     return added
 
 
+def _prune_unrelated_merged(ctx: BuildContext) -> tuple[int, int]:
+    """Drop merged patches that have nothing to do with the series.
+
+    Gerrit /related returns the anchor's whole git chain, including
+    patches that merely happened to be stacked above/below the
+    series at upload time. Once merged they'd inflate the trunk and
+    the Merged counter (hit on 65282: 64499/64529/64534 are
+    nodemap/mdt work with no LU-18222 relation, stacked on 64560).
+
+    A merged node is RELEVANT when it carries any series signal:
+      - its ticket matches a ticket of any non-merged node (the
+        series' in-flight and abandoned members) or the anchor's, or
+      - its topic is the anchor's topic (or a --topic extra), or
+      - its hashtags intersect the anchor's non-lifecycle hashtags
+        (or an --include-hashtag extra).
+    The anchor itself is always relevant.
+
+    An irrelevant merged node with a DIRECT edge to or from a
+    non-merged node is a branch point: something in-flight hangs
+    off it (or an in-flight git-parent points into it), so it
+    stays in the trunk column — flagged trunk_structural=True and
+    excluded from the Merged counter. Every other irrelevant
+    merged node is deleted: its submitted timestamp is stashed in
+    external_merged_submitted so ancestry dating (redirect/hookup
+    cutoffs) still resolves through its merged commit, its
+    non-current revision hashes are purged from commit_to_change_ps
+    so _commit_is_on_master can't misdate old pre-merge patchsets
+    as on-master, and its edges + seen_edges pairs are dropped.
+
+    No-op when the relevance signal set is empty (ticketless anchor
+    with no topic/hashtags) — pruning without signals would gut the
+    trunk.
+
+    Must run AFTER _promote_merged_to_main (separate_groups
+    node_ids are scrubbed of merged cns there) and BEFORE
+    status_counts / _build_separate_chains / _build_merged_trunk.
+
+    Returns (deleted_count, structural_count).
+    """
+    anchor_cn = ctx.change_number
+    anchor = ctx.nodes.get(anchor_cn) or {}
+
+    tickets = {
+        n["ticket"] for n in ctx.nodes.values()
+        if n.get("status") != "MERGED" and n.get("ticket")
+    }
+    if anchor.get("ticket"):
+        tickets.add(anchor["ticket"])
+    topics = {t for t in [anchor.get("topic", "")] if t}
+    topics.update(t for t in ctx.extra_topics if t)
+    hashtags = {
+        h for h in (anchor.get("hashtags") or [])
+        if h not in _LIFECYCLE_HASHTAGS
+    }
+    hashtags.update(h for h in ctx.extra_hashtags if h)
+
+    if not tickets and not topics and not hashtags:
+        return 0, 0
+
+    def relevant(n: dict[str, Any]) -> bool:
+        if n["id"] == anchor_cn:
+            return True
+        if n.get("ticket") and n["ticket"] in tickets:
+            return True
+        if n.get("topic") and n["topic"] in topics:
+            return True
+        return any(h in hashtags for h in (n.get("hashtags") or []))
+
+    irrelevant = [
+        cn for cn, n in ctx.nodes.items()
+        if n.get("status") == "MERGED" and not relevant(n)
+    ]
+    if not irrelevant:
+        return 0, 0
+
+    branch_point: set[int] = set()
+    for e in ctx.edges:
+        src = ctx.nodes.get(e["from"])
+        dst = ctx.nodes.get(e["to"])
+        if not src or not dst:
+            continue
+        if (src.get("status") == "MERGED"
+                and dst.get("status") != "MERGED"):
+            branch_point.add(e["from"])
+        if (dst.get("status") == "MERGED"
+                and src.get("status") != "MERGED"):
+            branch_point.add(e["to"])
+
+    structural = 0
+    deleted: set[int] = set()
+    for cn in irrelevant:
+        node = ctx.nodes[cn]
+        if cn in branch_point:
+            node["trunk_structural"] = True
+            structural += 1
+            continue
+        sub = node.get("submitted", "")
+        if sub:
+            ctx.external_merged_submitted[cn] = sub
+        current = node.get("current_commit", "")
+        stale_hashes = [
+            h for h, (owner, _ps) in ctx.commit_to_change_ps.items()
+            if owner == cn and h != current
+        ]
+        for h in stale_hashes:
+            del ctx.commit_to_change_ps[h]
+        del ctx.nodes[cn]
+        deleted.add(cn)
+
+    if deleted:
+        ctx.edges = [
+            e for e in ctx.edges
+            if e["from"] not in deleted and e["to"] not in deleted
+        ]
+        ctx.seen_edges = {
+            k for k in ctx.seen_edges
+            if k[0] not in deleted and k[1] not in deleted
+        }
+    return len(deleted), structural
+
+
 def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
     """Flatten the accumulated build state into the final dict shape
     consumed by `render.generate_html`."""
@@ -1637,10 +1758,16 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
     # nodes promoted into the main series no longer appear as
     # separate-group seeds, and previously-empty groups are pruned.
     _promote_merged_to_main(ctx)
+    pruned_merged, structural_merged = _prune_unrelated_merged(ctx)
 
     status_counts: dict[str, int] = {}
     for n in ctx.nodes.values():
         s = n["status"]
+        # Structural merged nodes are branch-point parents of the
+        # series, not series members — visible in the trunk but
+        # excluded from the Merged counter.
+        if s == "MERGED" and n.get("trunk_structural"):
+            continue
         status_counts[s] = status_counts.get(s, 0) + 1
 
     stale_edges = sum(1 for e in ctx.edges if e["is_stale"])
@@ -1694,6 +1821,10 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
             "separate_group_count": len(ctx.separate_groups),
             "separate_chain_count": len(chains),
             "merged_trunk_count": len(merged_trunk),
+            # Unrelated merged patches removed from / kept-but-
+            # uncounted in the trunk (see _prune_unrelated_merged).
+            "pruned_merged_count": pruned_merged,
+            "structural_merged_count": structural_merged,
             "generated_at": generated_at,
         },
     }
