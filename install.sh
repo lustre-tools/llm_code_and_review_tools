@@ -366,6 +366,7 @@ install_tools() {
     echo "  Maloo:   Set MALOO_USER and MALOO_PASS env vars"
     echo "  Jenkins: Set JENKINS_URL, JENKINS_USER, JENKINS_TOKEN env vars"
     echo "  Beads:   Run 'bd init --stealth' in your project"
+    echo "  lreview: Run 'lreview setup' for guided AI-review setup"
     echo ""
     echo "See AGENTS.md for usage documentation."
 }

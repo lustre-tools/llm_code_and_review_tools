@@ -1,21 +1,16 @@
 """Agent backends for lreview.
 
-The kreview prompts from review-prompts support several coding agents
-(setup.sh claude|codex|gemini|opencode). lreview can drive any of
-them headless: the prompt itself mandates the ./gerrit-review.json and
-./review-metadata.json output files, so collection and posting are
-agent-agnostic — only the skill location and the headless invocation
-differ per agent.
+Reviews are initiated with a plain prompt that references
+review-core.md directly (the review-prompts README quick-start form),
+so every backend receives the same instruction text — only the
+headless CLI invocation differs per agent.
 
 Claude is the verified backend (and the only one whose stream-json
 output gives live token counts, final usage/cost, and model
-detection). The other backends are best-effort command templates: the
-installed kreview command file's content is passed as the prompt text,
-so they do not depend on each CLI's slash-command expansion.
+detection). The other backends are best-effort command templates.
 """
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
 
@@ -23,19 +18,10 @@ from typing import Optional
 class AgentSpec:
     """One supported agent backend."""
     name: str
-    # Where review-prompts' setup.sh installs the kreview command for
-    # this agent (relative to $HOME) — from review-prompts/agents/*.sh.
-    commands_subdir: str
     # Only claude emits the stream-json events lreview parses for
     # live tokens, final usage, and the model name.
     stream_json: bool = False
     verified: bool = True
-
-    def commands_dir(self) -> Path:
-        return Path.home() / self.commands_subdir
-
-    def command_file(self) -> Path:
-        return self.commands_dir() / "kreview.md"
 
     def build_cmd(
         self,
@@ -44,7 +30,7 @@ class AgentSpec:
         prompt_text: str,
     ) -> list[str]:
         if self.name == "claude":
-            cmd = ["claude", "-p", "/kreview",
+            cmd = ["claude", "-p", prompt_text,
                    "--dangerously-skip-permissions",
                    "--verbose", "--output-format", "stream-json"]
             if model:
@@ -70,16 +56,10 @@ class AgentSpec:
 
 
 AGENTS = {
-    "claude": AgentSpec(
-        name="claude", commands_subdir=".claude/commands",
-        stream_json=True),
-    "codex": AgentSpec(
-        name="codex", commands_subdir=".codex/prompts", verified=False),
-    "gemini": AgentSpec(
-        name="gemini", commands_subdir=".gemini/commands", verified=False),
-    "opencode": AgentSpec(
-        name="opencode", commands_subdir=".opencode/commands",
-        verified=False),
+    "claude": AgentSpec(name="claude", stream_json=True),
+    "codex": AgentSpec(name="codex", verified=False),
+    "gemini": AgentSpec(name="gemini", verified=False),
+    "opencode": AgentSpec(name="opencode", verified=False),
 }
 
 

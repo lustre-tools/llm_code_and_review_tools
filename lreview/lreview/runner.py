@@ -1,14 +1,15 @@
-"""Parallel execution of headless kreview runs.
+"""Parallel execution of headless review runs.
 
-Each change is reviewed by a headless Claude Code process running the
-/kreview slash command inside a dedicated git worktree of the source
-repository. kreview writes ./gerrit-review.json (in the worktree) only
-when it finds issues, and ./review-metadata.json for every completed
-analysis; the runner collects both into the results directory suffixed
-by <change>_ps<N> so parallel and repeated runs never overwrite each
-other. review-metadata.json doubles as the completion marker: a run
-that produced neither file did not finish and is recorded as failed,
-not clean.
+Each change is reviewed by a headless agent process, prompted with the
+review-prompts review-core.md instruction, inside a dedicated git
+worktree of the source repository. The prompt writes
+./gerrit-review.json (in the worktree) only when it finds issues, and
+./review-metadata.json for every completed analysis; the runner
+collects both into the results directory suffixed by <change>_ps<N>
+so parallel and repeated runs never overwrite each other.
+review-metadata.json doubles as the completion marker: a run that
+produced neither file did not finish and is recorded as failed, not
+clean.
 """
 
 import json
@@ -134,6 +135,7 @@ class BatchConfig:
     repo: Path
     results_dir: Path
     worktrees_dir: Path
+    prompts_dir: Path = Path.home() / "review-prompts" / "kernel"
     jobs: int = 5
     timeout: int = 7200
     keep_worktrees: bool = False
@@ -147,26 +149,37 @@ class BatchConfig:
         self.repo = Path(self.repo).expanduser().resolve()
         self.results_dir = Path(self.results_dir).expanduser().resolve()
         self.worktrees_dir = Path(self.worktrees_dir).expanduser().resolve()
+        self.prompts_dir = Path(self.prompts_dir).expanduser().resolve()
         get_agent(self.agent)  # fail fast on unknown agents
         if self.jobs < 1:
             raise ValueError(f"jobs must be >= 1, got {self.jobs}")
 
 
+def review_prompt(config: BatchConfig) -> str:
+    """The instruction that initiates a review.
+
+    This is the review-prompts README quick-start form (also what its
+    own kernel/scripts automation uses) — a plain prompt referencing
+    review-core.md by absolute path; the wording "deep dive
+    regression analysis" is deliberate, per the README it gets better
+    prompt compliance than calling it a review. The worktree's HEAD
+    is the patch, so "the top commit" needs no SHA.
+    """
+    return (f"Using the prompt {config.prompts_dir}/review-core.md "
+            "run a deep dive regression analysis of the top commit")
+
+
 def build_agent_cmd(config: BatchConfig) -> list[str]:
     """Headless review command for the configured agent.
 
-    claude invokes the installed /kreview slash command with
+    All agents receive the same instruction prompt; claude runs with
     stream-json output (events appear in the log as they happen, so
     the log doubles as a liveness/token signal — text mode buffers
-    everything until the end). Other agents get the installed kreview
-    command file's content as the prompt text, which does not depend
-    on the CLI's own slash-command expansion.
+    everything until the end).
     """
     spec = get_agent(config.agent)
-    prompt_text = ""
-    if not spec.stream_json:
-        prompt_text = spec.command_file().read_text()
-    return spec.build_cmd(config.model, config.agent_args, prompt_text)
+    return spec.build_cmd(config.model, config.agent_args,
+                          review_prompt(config))
 
 
 def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:

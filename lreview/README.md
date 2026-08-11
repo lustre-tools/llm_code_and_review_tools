@@ -1,32 +1,56 @@
 # lreview
 
-Run the **kreview** AI patch-review skill on a batch of Gerrit changes
-in parallel, collect the resulting `gerrit-review.json` files, and post
-them to Gerrit as inline review comments.
+Run AI patch reviews (the
+[review-prompts](https://github.com/verygreen/review-prompts/)
+`review-core.md` deep-dive regression analysis) on a batch of Gerrit
+changes in parallel, collect the resulting `gerrit-review.json` files,
+and post them to Gerrit as inline review comments.
 
 Each change is reviewed by a **headless AI agent** process (Claude Code
 by default) running in its **own git worktree** pinned to the change's
 current patchset. Because every review runs in its own worktree, the
-`./gerrit-review.json` files produced by kreview never collide; the
+`./gerrit-review.json` files produced by the review never collide; the
 runner collects them into the results directory as
 `gerrit-review-<change>_ps<N>.json`.
 
-## Prerequisites
+## Getting started (from a fresh clone)
 
-1. **An agent CLI** on PATH — `claude` (Claude Code, the default),
-   `codex`, `gemini`, or `opencode`.
-2. **The kreview skill** from the
-   [review-prompts](https://github.com/verygreen/review-prompts/) repo,
-   installed for your agent:
-   ```bash
-   git clone https://github.com/verygreen/review-prompts/ ~/review-prompts
-   cd ~/review-prompts && ./setup.sh claude kernel   # or codex/gemini/opencode
-   ```
-   `lreview check [--agent X]` verifies the whole chain; `lreview run`
-   offers to perform this setup interactively when the skill is missing.
-3. **Gerrit credentials** (`GERRIT_URL`, `GERRIT_USER`, `GERRIT_PASS`)
-   in the environment — same as gerrit-cli, which this tool uses as a
-   library.
+```bash
+# 1. Install the tools (offers a venv where needed; 'source' ends
+#    with it activated — plain ./install.sh works too)
+git clone <this-repo> && cd llm_code_and_review_tools
+source install.sh
+
+# 2. Guided setup — checks each prerequisite, offers to clone the
+#    review prompts, verifies your Gerrit credentials live
+lreview setup                   # or: lreview setup --agent codex
+
+# 3. First review
+lreview run --repo /path/to/lustre-release 64086
+lreview post
+```
+
+`lreview setup` walks through the three prerequisites and prints
+exact instructions for anything missing:
+
+1. **An agent CLI** on PATH — `claude` (Claude Code, the default;
+   `npm install -g @anthropic-ai/claude-code`, then log in), or
+   `codex` / `gemini` / `opencode` for other AIs (see Agents below).
+2. **A clone of the
+   [review-prompts](https://github.com/verygreen/review-prompts/)
+   repo** — nothing more; reviews reference `review-core.md`
+   directly (the repo's own quick-start and automation form), so no
+   `setup.sh` skill installation is needed. lreview finds the clone
+   via `--prompts-dir` / `$REVIEW_PROMPTS_DIR`, a legacy
+   `~/.claude/commands/kreview.md` skill install, or
+   `~/review-prompts` — and offers to clone it when missing.
+3. **Gerrit credentials** (`GERRIT_URL`, `GERRIT_USER`, `GERRIT_PASS`
+   in the environment or `~/.config/gerrit-cli/.env`; HTTP password
+   from Gerrit → Settings → HTTP Credentials). Setup verifies them
+   with a real read-only API call.
+
+`lreview check` runs the same checks non-interactively (for scripts
+and CI).
 
 ## Agents
 
@@ -35,24 +59,31 @@ runner collects them into the results directory as
 > integrations — expect to tweak invocation flags (`--agent-arg`) and
 > please report what works.
 
-kreview itself is agent-agnostic — the prompt mandates the
+The review prompt is agent-agnostic — it mandates the
 `gerrit-review.json` / `review-metadata.json` output files, so
-collection and posting work the same for every agent. Select with
+collection and posting work the same for every agent. Every backend
+receives the same instruction:
+
+```
+Using the prompt <prompts>/review-core.md run a deep dive regression
+analysis of the top commit
+```
+
+("deep dive regression analysis" is deliberate — per the
+review-prompts README it gets better prompt compliance than calling
+it a review.) Select the backend with
 `--agent {claude,codex,gemini,opencode}` or `LREVIEW_AGENT`:
 
-- **claude** (default) — the verified backend. Invokes the installed
-  `/kreview` slash command with stream-json output, which is what
-  powers the live token counter, final token/cost figures, and model
-  detection.
-- **codex / gemini / opencode** — best-effort backends: lreview passes
-  the installed kreview command file's content as the prompt text (no
-  reliance on each CLI's slash-command support) and runs `codex exec`,
-  `gemini --yolo -p`, or `opencode run` respectively. Reviews, logs,
-  collection, and posting all work; live token/cost/model niceties are
-  claude-only (the status line falls back to log size, and the posted
-  prefix falls back to `--model` or the agent name). These invocations
-  have not been battle-tested — use `--agent-arg` to adjust flags if
-  your CLI version differs.
+- **claude** (default) — the verified backend, run with stream-json
+  output, which is what powers the live token counter, final
+  token/cost figures, and model detection.
+- **codex / gemini / opencode** — best-effort backends via
+  `codex exec`, `gemini --yolo -p`, or `opencode run`. Reviews, logs,
+  collection, and posting all work; live token/cost/model niceties
+  are claude-only (the status line falls back to log size, and the
+  posted prefix falls back to `--model` or the agent name). These
+  invocations have not been battle-tested — use `--agent-arg` to
+  adjust flags if your CLI version differs.
 
 ## Quick start
 
@@ -115,12 +146,12 @@ falling back to the model claude reports in the review log.
    worktrees share the object store). Worktrees go to
    `<repo>/../ai_worktrees/lreview/` when an `ai_worktrees`
    directory exists next to the repo, else under the results dir.
-3. Up to `--jobs` (default 5) headless agent processes run the kreview
+3. Up to `--jobs` (default 5) headless agent processes run the review
    prompt concurrently, one per worktree (worktree names carry the pid,
    so concurrent lreview invocations never collide). Full output of
    each run is logged to `kreview-<change>_ps<N>.log`; on timeout the
    whole agent process group is killed.
-4. kreview writes `./gerrit-review.json` **only when it finds issues**,
+4. The prompt writes `./gerrit-review.json` **only when it finds issues**,
    and `./review-metadata.json` (severity score) for **every completed
    analysis** — the metadata file is the completion marker, so a run
    that produced neither is recorded as `failed`, not silently clean.
@@ -166,7 +197,8 @@ jq -r 'select(.type=="assistant").message.content[]?
 ## Commands
 
 ```
-lreview check                    # verify claude + skill + prompts
+lreview setup                    # guided first-time setup
+lreview check                    # verify agent CLI + prompts + Gerrit
 lreview run <change|url>... [options]
 lreview post [<change|url>...] [options]
 ```
@@ -190,7 +222,7 @@ rejoin a positional list split around a flag).
 | `--agent-arg=ARG` | — | Extra agent-CLI arg (repeatable; `--claude-arg` is a legacy alias) |
 | `--post` | off | Post findings when batch finishes |
 | `--prefix TEXT` | `[AI review - <model>]` | Message prefix; `<model>` placeholder substituted (`$LREVIEW_PREFIX` overrides the default; `''` for none) |
-| `--setup-dest DIR` | `~/review-prompts` | Where to clone review-prompts if the skill is missing (`$REVIEW_PROMPTS_DIR`) |
+| `--prompts-dir DIR` | auto | review-prompts clone (repo root or its `kernel/`); default: `$REVIEW_PROMPTS_DIR`, a legacy kreview.md install, or `~/review-prompts` |
 
 ### post options
 
@@ -202,8 +234,9 @@ already-posted review.
 ### Exit codes
 
 `run`: 0 all reviews clean or with findings, 1 any failed/timed out
-(or a post error with `--post`), 2 skill/setup not available.
-`post`: 0 posted/skipped, 1 any error. `check`: 0 ready, 2 not ready.
+(or a post error with `--post`), 2 prompts/agent CLI not available.
+`post`: 0 posted/skipped, 1 any error. `check` / `setup`: 0 ready,
+2 not ready.
 
 ## Environment variables
 
@@ -212,7 +245,7 @@ already-posted review.
 | `LREVIEW_AGENT` | Default for `--agent` (else `claude`) |
 | `LREVIEW_MODEL` | Default for `--model` (else `opus` for claude) |
 | `LREVIEW_PREFIX` | Default for `--prefix`; `<model>` substituted |
-| `REVIEW_PROMPTS_DIR` | Default clone location for the skill repo |
+| `REVIEW_PROMPTS_DIR` | Path to the review-prompts clone |
 | `NO_COLOR` | Disable colored output |
 | `GERRIT_URL/USER/PASS` | Gerrit credentials (via gerrit-cli) |
 
@@ -223,7 +256,7 @@ already-posted review.
   `--dangerously-bypass-approvals-and-sandbox`, gemini: `--yolo`) —
   they must read the tree, run git/grep, and write one JSON file; each
   runs confined to its own disposable worktree.
-- Reviews are expensive (a deep kreview of a non-trivial patch can run
+- Reviews are expensive (a deep analysis of a non-trivial patch can run
   30–90 minutes and significant tokens). Start with one change to
   calibrate before batching.
 - This is an operator-facing tool and prints human-readable output,

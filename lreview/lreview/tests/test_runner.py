@@ -122,10 +122,15 @@ def _config(repo: Path, tmp_path: Path, **kwargs) -> BatchConfig:
 class TestBuildAgentCmd:
 
     def test_default(self, tmp_path):
-        cmd = build_agent_cmd(_config(tmp_path, tmp_path))
-        assert cmd == ["claude", "-p", "/kreview",
-                       "--dangerously-skip-permissions",
-                       "--verbose", "--output-format", "stream-json"]
+        config = _config(tmp_path, tmp_path,
+                         prompts_dir=Path("/p/kernel"))
+        cmd = build_agent_cmd(config)
+        assert cmd[:2] == ["claude", "-p"]
+        assert cmd[2] == ("Using the prompt /p/kernel/review-core.md "
+                          "run a deep dive regression analysis of the "
+                          "top commit")
+        assert cmd[3:] == ["--dangerously-skip-permissions",
+                           "--verbose", "--output-format", "stream-json"]
 
     def test_model_and_extra_args(self, tmp_path):
         config = _config(tmp_path, tmp_path, model="opus",

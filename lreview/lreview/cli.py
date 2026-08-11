@@ -4,7 +4,8 @@ Unlike the JSON-emitting agent tools in this repository, lreview
 is an operator-facing orchestrator and prints human-readable output.
 
 Subcommands:
-    check  - verify the kreview skill / claude CLI are set up
+    setup  - guided first-time setup (agent CLI, prompts, Gerrit)
+    check  - verify the review prompts / agent CLI / Gerrit creds
     run    - review a batch of Gerrit changes in parallel
     post   - post previously collected results to Gerrit
 """
@@ -23,7 +24,7 @@ from .runner import (
     STATUS_FINDINGS,
     run_batch,
 )
-from .skill import check_skill, offer_setup, setup_instructions
+from .prompts import check_prompts, offer_setup, setup_instructions
 
 
 def _positive_int(value: str) -> int:
@@ -55,42 +56,60 @@ def resolve_model(agent: str, model: str = None) -> str:
     return "opus" if agent == "claude" else None
 
 
-def ensure_skill(setup_dest: Path, agent: str = "claude") -> bool:
-    """Check the kreview skill; offer setup when missing."""
-    status = check_skill(agent=agent)
-    if status.available:
-        return True
+def ensure_prompts(args):
+    """Resolve the review prompts, offering a clone when missing.
 
-    print(f"kreview skill is not ready for {agent}:")
+    Returns the resolved prompts dir Path, or None.
+    """
+    explicit = args.prompts_dir
+    status = check_prompts(explicit=explicit, agent=args.agent)
+    if status.available:
+        return status.prompts_dir
+
+    print(f"review prompts are not ready for {args.agent}:")
     for problem in status.problems:
         print(f"  - {problem}")
     print()
 
-    if offer_setup(setup_dest, agent):
-        status = check_skill(agent=agent)
+    if offer_setup(Path(explicit) if explicit else None):
+        status = check_prompts(explicit=explicit, agent=args.agent)
         if status.available:
-            print("kreview skill installed.")
-            return True
-        print("Setup ran but the skill check still fails:")
+            print(f"review prompts ready: {status.prompts_dir}")
+            return status.prompts_dir
+        print("Clone done but the check still fails:")
         for problem in status.problems:
             print(f"  - {problem}")
-    return False
+    return None
 
 
 def cmd_check(args) -> int:
-    status = check_skill(agent=args.agent)
-    if status.available:
-        print(f"kreview skill is ready for {args.agent}:")
-        print(f"  agent CLI:    {status.agent_cli}")
-        print(f"  command file: {status.command_file}")
-        print(f"  prompt:       {status.prompt_path}")
+    from .doctor import check_gerrit
+    status = check_prompts(explicit=args.prompts_dir, agent=args.agent)
+    gerrit_ok, gerrit_detail = check_gerrit(live=True)
+
+    if status.available and gerrit_ok:
+        print(f"lreview is ready for {args.agent}:")
+        print(f"  agent CLI: {status.agent_cli}")
+        print(f"  prompts:   {status.prompts_dir}")
+        print(f"  found via: {status.source}")
+        print(f"  gerrit:    {gerrit_detail}")
         return 0
-    print(f"kreview skill is NOT ready for {args.agent}:")
+    print(f"lreview is NOT ready for {args.agent}:")
     for problem in status.problems:
         print(f"  - {problem}")
+    if not gerrit_ok:
+        print(f"  - gerrit: {gerrit_detail}")
     print()
-    print(setup_instructions(args.setup_dest, args.agent))
+    if not status.available:
+        print(setup_instructions(
+            Path(args.prompts_dir) if args.prompts_dir else None))
+    print("Run 'lreview setup' for guided setup.")
     return 2
+
+
+def cmd_setup(args) -> int:
+    from .doctor import run_setup
+    return run_setup(args.agent, args.prompts_dir)
 
 
 def cmd_run(args) -> int:
@@ -100,7 +119,8 @@ def cmd_run(args) -> int:
         print(f"error: {repo} is not a git repository (--repo)")
         return 1
 
-    if not ensure_skill(args.setup_dest, args.agent):
+    prompts_dir = ensure_prompts(args)
+    if prompts_dir is None:
         return 2
 
     from .agents import get_agent
@@ -155,6 +175,7 @@ def cmd_run(args) -> int:
         repo=repo,
         results_dir=results_dir,
         worktrees_dir=worktrees_dir,
+        prompts_dir=prompts_dir,
         jobs=args.jobs,
         timeout=args.timeout,
         keep_worktrees=args.keep_worktrees,
@@ -269,8 +290,8 @@ def cmd_post(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lreview",
-        description="Run the kreview AI review skill on Gerrit changes in "
-                    "parallel and post the results.",
+        description="Run AI patch reviews (review-prompts review-core) "
+                    "on Gerrit changes in parallel and post the results.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "key run options (full list: lreview run -h):\n"
@@ -289,23 +310,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=True,
+                                metavar="{setup,check,run,post}")
 
     from .agents import AGENTS
     default_prefix = os.environ.get("LREVIEW_PREFIX")
     default_agent = os.environ.get("LREVIEW_AGENT", "claude")
-    default_setup_dest = Path(
-        os.environ.get("REVIEW_PROMPTS_DIR", Path.home() / "review-prompts"))
+    default_prompts = os.environ.get("REVIEW_PROMPTS_DIR") or None
+    prompts_help = (
+        "Path to the review-prompts clone (repo root or its kernel/ "
+        "dir; default: $REVIEW_PROMPTS_DIR, a legacy kreview.md "
+        "install, or ~/review-prompts)")
+
+    setup_p = sub.add_parser(
+        "setup", help="Guided first-time setup: agent CLI, review "
+                      "prompts, Gerrit credentials")
+    setup_p.add_argument(
+        "--agent", choices=sorted(AGENTS), default=default_agent,
+        help="Agent to set up (default: $LREVIEW_AGENT or claude)")
+    setup_p.add_argument(
+        "--prompts-dir", default=default_prompts, help=prompts_help)
+    setup_p.set_defaults(func=cmd_setup)
 
     check_p = sub.add_parser(
-        "check", help="Verify the kreview skill and agent CLI are set up")
+        "check", help="Verify agent CLI, review prompts, and Gerrit "
+                      "credentials")
     check_p.add_argument(
         "--agent", choices=sorted(AGENTS), default=default_agent,
         help="Agent to check (default: $LREVIEW_AGENT or claude)")
     check_p.add_argument(
-        "--setup-dest", type=Path, default=default_setup_dest,
-        help="Where review-prompts would be cloned "
-             "(default: $REVIEW_PROMPTS_DIR or ~/review-prompts)")
+        "--prompts-dir", default=default_prompts, help=prompts_help)
     check_p.set_defaults(func=cmd_check)
 
     run_p = sub.add_parser(
@@ -359,8 +393,7 @@ def build_parser() -> argparse.ArgumentParser:
              "$LREVIEW_PREFIX, else '[AI review - <model>]'; "
              "pass '' for no prefix)")
     run_p.add_argument(
-        "--setup-dest", type=Path, default=default_setup_dest,
-        help="Where to clone review-prompts if the skill is missing")
+        "--prompts-dir", default=default_prompts, help=prompts_help)
     run_p.set_defaults(func=cmd_run)
 
     post_p = sub.add_parser(

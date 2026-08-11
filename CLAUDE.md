@@ -128,15 +128,18 @@ Run `gc explain <command>` for detailed usage of a command.
 
 ### lreview tool (`lreview`, v0.1.0)
 
-Runs the kreview AI patch-review skill (from the external
-[review-prompts](https://github.com/verygreen/review-prompts/) repo) on
-a batch of Gerrit changes in parallel — one headless agent process per
+Runs AI patch reviews — the
+[review-prompts](https://github.com/verygreen/review-prompts/)
+`review-core.md` deep-dive regression analysis, referenced directly
+by prompt (no skill/slash-command install needed, just a clone) — on
+a batch of Gerrit changes in parallel: one headless agent process per
 change (Claude Code by default; codex/gemini/opencode via `--agent` /
-`$LREVIEW_AGENT`, best-effort), each in its own git worktree — then
+`$LREVIEW_AGENT`, best-effort), each in its own git worktree, then
 posts the collected `gerrit-review.json` results via gerrit-cli.
 
 ```bash
-lreview check                        # Verify claude + skill setup
+lreview setup                        # Guided first-time setup
+lreview check                        # Verify agent/prompts/Gerrit
 lreview run 64086 64087 --repo lustre-release   # Review (no post)
 lreview post                         # Post collected findings
 lreview run 64086 --post             # Review + post in one go
@@ -149,9 +152,10 @@ status line with token counter while reviews run, and posted messages
 prefixed `[AI review - <model>]` on a bold own line (`--prefix` /
 `$LREVIEW_PREFIX` override; a `<model>` placeholder in a custom prefix
 is substituted too). Posting is pinned to the reviewed
-patchset revision and guarded against double-posting. If the kreview
-skill is not installed, the tool offers to clone review-prompts and
-run its `setup.sh claude kernel`. See `lreview/README.md`.
+patchset revision and guarded against double-posting. Prompts are
+found via `--prompts-dir` / `$REVIEW_PROMPTS_DIR`, a legacy
+kreview.md skill install, or `~/review-prompts`; if missing, the
+tool offers to clone review-prompts. See `lreview/README.md`.
 
 ### Other tools
 
