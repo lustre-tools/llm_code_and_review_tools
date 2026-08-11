@@ -120,6 +120,18 @@ gc graph 61962 --skip-topic --skip-hashtag
 # Or pull in additional ones beyond the anchor's own
 gc graph 61962 --include-topic extra-topic-name
 gc graph 61962 --include-hashtag extra-hashtag
+
+# Ticket mode: visualize ALL patches of a JIRA ticket. The anchor is
+# picked automatically — the in-flight patch whose series has the most
+# in-flight members (or the newest merged patch when nothing is in
+# flight) — and every change whose subject STARTS with the ticket is
+# pulled in (mere mentions in the commit message don't count).
+gc graph LU-18222
+gc graph LU-18222 --branch b_es7_0    # non-master ticket anchor
+
+# Keep your own anchor and add a ticket as an extra expansion signal
+# (works like --include-hashtag, subject-match semantics)
+gc graph 61962 --ticket LU-18222,LU-17916
 ```
 
 The generated HTML is a single file (all app CSS/JS inlined) but loads

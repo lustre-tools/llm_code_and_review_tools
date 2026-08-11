@@ -16,6 +16,16 @@ _LUSTRE_CHANGE_TRAILER_RE = re.compile(
 )
 
 
+def subject_ticket(subject: str) -> str:
+    """Extract the leading JIRA-style ticket (LU-/EX-/DDN-/...)
+    from a commit subject, or "" when the subject doesn't start
+    with one. Subject-leading position is the Lustre convention —
+    a ticket merely MENTIONED elsewhere in the message does not
+    make the change belong to that ticket."""
+    m = re.match(r"([A-Z][A-Z0-9]*-\d+)", subject or "")
+    return m.group(1) if m else ""
+
+
 def _make_node(
     cn: int, subject: str, status: str, latest: int,
     author: str, base_url: str, ticket: str = "",
@@ -30,8 +40,7 @@ def _make_node(
         # the trunk-relevance filter keys off tickets, and an
         # EX-anchored graph with ticket="" everywhere would have no
         # relevance signal at all.
-        m = re.match(r"([A-Z][A-Z0-9]*-\d+)", subject)
-        ticket = m.group(1) if m else ""
+        ticket = subject_ticket(subject)
     ref = f"refs/changes/{cn % 100:02d}/{cn}/{latest}"
     fetch_cmd = f"git fetch {base_url}/{project} {ref}"
     return {
@@ -95,8 +104,7 @@ def _update_node_meta(node: dict[str, Any], change: dict[str, Any]) -> None:
     subject = change.get("subject", "")
     if subject:
         node["subject"] = subject
-        m = re.match(r"([A-Z][A-Z0-9]*-\d+)", subject)
-        node["ticket"] = m.group(1) if m else ""
+        node["ticket"] = subject_ticket(subject)
     node["topic"] = change.get("topic", "")
     node["hashtags"] = change.get("hashtags", [])
     node["updated"] = change.get("updated", "")

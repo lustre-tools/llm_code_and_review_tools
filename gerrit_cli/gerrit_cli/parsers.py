@@ -240,7 +240,15 @@ def add_series_comments_parser(subparsers):
         help="Get comments for all patches in a series",
         description="Extract comments from all patches in a Gerrit series",
     )
-    parser.add_argument("url", help="Gerrit change URL or number (any patch in the series)")
+    parser.add_argument(
+        "url",
+        help="Gerrit change URL, number (any patch in the series), "
+             "or a JIRA ticket like LU-18222. Ticket form picks the "
+             "anchor automatically: the in-flight patch whose series "
+             "has the most in-flight members (newest merged patch "
+             "when the ticket has nothing in flight) and pulls in "
+             "every change whose subject starts with the ticket.",
+    )
     parser.add_argument(
         "--pretty", "-p",
         action="store_true",
@@ -301,7 +309,15 @@ def add_review_series_parser(subparsers):
         description="List all patches in a series and show the AI review prompt. "
                     "This is the main entry point for AI-assisted patch series review.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number (any patch in the series)")
+    parser.add_argument(
+        "url",
+        help="Gerrit change URL, number (any patch in the series), "
+             "or a JIRA ticket like LU-18222. Ticket form picks the "
+             "anchor automatically: the in-flight patch whose series "
+             "has the most in-flight members (newest merged patch "
+             "when the ticket has nothing in flight) and pulls in "
+             "every change whose subject starts with the ticket.",
+    )
     parser.add_argument(
         "--pretty", "-p",
         action="store_true",
@@ -730,7 +746,15 @@ def add_series_info_parser(subparsers):
                     "for every patch in the series. Combines series discovery "
                     "with per-patch info in a single call.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number (any patch in the series)")
+    parser.add_argument(
+        "url",
+        help="Gerrit change URL, number (any patch in the series), "
+             "or a JIRA ticket like LU-18222. Ticket form picks the "
+             "anchor automatically: the in-flight patch whose series "
+             "has the most in-flight members (newest merged patch "
+             "when the ticket has nothing in flight) and pulls in "
+             "every change whose subject starts with the ticket.",
+    )
     parser.add_argument(
         "--show-bots",
         action="store_true",
@@ -939,7 +963,15 @@ def add_graph_parser(subparsers):
                     "branches, abandoned forks, and stale patchsets. Opens an HTML "
                     "file with vis.js visualization.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number (any patch in the series)")
+    parser.add_argument(
+        "url",
+        help="Gerrit change URL, number (any patch in the series), "
+             "or a JIRA ticket like LU-18222. Ticket form picks the "
+             "anchor automatically: the in-flight patch whose series "
+             "has the most in-flight members (newest merged patch "
+             "when the ticket has nothing in flight) and pulls in "
+             "every change whose subject starts with the ticket.",
+    )
     parser.add_argument(
         "--output", "-o",
         default=None,
@@ -985,6 +1017,26 @@ def add_graph_parser(subparsers):
         metavar="HASHTAGS",
         help="Comma-separated list of ADDITIONAL hashtags to include "
              "(beyond the anchor's own hashtags)",
+    )
+    parser.add_argument(
+        "--ticket",
+        default="",
+        metavar="TICKETS",
+        help="Comma-separated list of ADDITIONAL JIRA tickets to "
+             "include (e.g. LU-18222). Works like --include-hashtag "
+             "but matches changes whose subject STARTS with the "
+             "ticket — mere mentions in the commit message don't "
+             "count. Combine with a change URL/number to keep your "
+             "own anchor, or with a bare-ticket url argument.",
+    )
+    parser.add_argument(
+        "--branch",
+        default=None,
+        metavar="BRANCH",
+        help="Branch for ticket-mode anchor selection (default: "
+             "master). Only used when the url argument is a bare "
+             "ticket; with a change URL/number the anchor's own "
+             "branch scopes the graph as usual.",
     )
     parser.add_argument(
         "--cross-project",

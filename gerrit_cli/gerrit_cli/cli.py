@@ -165,8 +165,31 @@ def cmd_graph(args):
 
     pretty = getattr(args, "pretty", False)
     try:
-        base_url, change_number = GerritCommentsClient.parse_gerrit_url(args.url)
+        import re as _re
+        from .graph import resolve_ticket_anchor
         client = GerritCommentsClient()
+        extra_tickets_raw = getattr(args, "ticket", "") or ""
+        extra_tickets = [
+            t.strip() for t in extra_tickets_raw.split(",") if t.strip()
+        ]
+        ticket_arg = (args.url or "").strip()
+        name = getattr(args, "name", None)
+        if _re.fullmatch(r"[A-Z][A-Z0-9]*-\d+", ticket_arg):
+            # Ticket mode: pick the anchor automatically (in-flight
+            # patch in the biggest in-flight series; newest merged
+            # as fallback) and expand by the ticket itself.
+            branch = getattr(args, "branch", None) or "master"
+            change_number = resolve_ticket_anchor(
+                client, ticket_arg, branch=branch,
+            )
+            base_url = client.url.rstrip("/")
+            extra_tickets = [ticket_arg] + [
+                t for t in extra_tickets if t != ticket_arg
+            ]
+            if not name:
+                name = ticket_arg
+        else:
+            base_url, change_number = GerritCommentsClient.parse_gerrit_url(args.url)
         skip_details = getattr(args, "skip_ci_details", False)
         fetch_comments = getattr(args, "comments", False)
         skip_topic = getattr(args, "skip_topic", False)
@@ -176,7 +199,6 @@ def cmd_graph(args):
         extra_topics = [t.strip() for t in extra_topics_raw.split(",") if t.strip()]
         extra_hashtags = [h.strip() for h in extra_hashtags_raw.split(",") if h.strip()]
         cross_project_branch = getattr(args, "cross_project", False)
-        name = getattr(args, "name", None)
         graph_data = build_graph(
             client, change_number, base_url,
             fetch_details=not skip_details,
@@ -185,6 +207,7 @@ def cmd_graph(args):
             include_hashtag=not skip_hashtag,
             extra_topics=extra_topics,
             extra_hashtags=extra_hashtags,
+            extra_tickets=extra_tickets,
             cross_project_branch=cross_project_branch,
             name=name,
         )

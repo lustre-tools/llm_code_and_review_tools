@@ -24,7 +24,7 @@ from urllib.parse import quote
 
 from ..client import GerritCommentsClient
 from .edges import _break_cycles, _collect_revisions
-from .nodes import _make_node, _update_node_meta
+from .nodes import _make_node, _update_node_meta, subject_ticket
 from .review import (
     _empty_review,
     _extract_ci_links,
@@ -208,6 +208,11 @@ class BuildContext:
     include_hashtag: bool
     extra_topics: list[str]
     extra_hashtags: list[str]
+    # Ticket-based expansion (subject-leading JIRA ids, e.g.
+    # LU-18222). Behaves like extra_hashtags — one search label per
+    # ticket — but matches are filtered to changes whose SUBJECT
+    # starts with the ticket, so mere mentions don't get pulled in.
+    extra_tickets: list[str]
     # When False (the default), search-based expansion (topic/hashtag
     # and commit-parent discovery) is restricted to changes in the
     # same project AND branch as the anchor. When True, results from
@@ -737,6 +742,14 @@ def _collect_search_labels(
         if h and h not in seen_h:
             seen_h.add(h)
             search_labels.append((f"hashtag:{h}", f"hashtag {h}"))
+    # Ticket expansion: Gerrit has no first-class ticket operator,
+    # so search the commit message and rely on the subject-ticket
+    # filter in _expand_separate_series to drop mere mentions.
+    seen_k: set[str] = set()
+    for t in ctx.extra_tickets:
+        if t and t not in seen_k:
+            seen_k.add(t)
+            search_labels.append((f'message:"{t}"', f"ticket {t}"))
     return search_labels
 
 
@@ -1084,6 +1097,16 @@ def _expand_separate_series(ctx: BuildContext) -> None:
         except Exception:
             result = []
         in_scope = [ch for ch in result if _matches_anchor_scope(ctx, ch)]
+        # Ticket labels search the whole commit message (no better
+        # Gerrit operator) — keep only changes whose SUBJECT starts
+        # with the ticket so a patch that merely mentions it (e.g.
+        # in a Fixes: line) isn't pulled into the graph.
+        if label.startswith("ticket "):
+            want = label[len("ticket "):]
+            in_scope = [
+                ch for ch in in_scope
+                if subject_ticket(ch.get("subject", "")) == want
+            ]
         seed_cns = [
             ch.get("_number", 0) for ch in in_scope
             if ch.get("_number")
@@ -1670,6 +1693,10 @@ def _prune_unrelated_merged(ctx: BuildContext) -> tuple[int, int]:
     """
     anchor_cn = ctx.change_number
     anchor = ctx.nodes.get(anchor_cn) or {}
+    # Recorded for stats so a vanished trunk row is diagnosable
+    # from the build output ("where did change X go").
+    ctx.pruned_merged_cns = []
+    ctx.structural_merged_cns = []
 
     tickets = {
         n["ticket"] for n in ctx.nodes.values()
@@ -1684,6 +1711,7 @@ def _prune_unrelated_merged(ctx: BuildContext) -> tuple[int, int]:
         if h not in _LIFECYCLE_HASHTAGS
     }
     hashtags.update(h for h in ctx.extra_hashtags if h)
+    tickets.update(t for t in ctx.extra_tickets if t)
 
     if not tickets and not topics and not hashtags:
         return 0, 0
@@ -1723,6 +1751,7 @@ def _prune_unrelated_merged(ctx: BuildContext) -> tuple[int, int]:
         node = ctx.nodes[cn]
         if cn in branch_point:
             node["trunk_structural"] = True
+            ctx.structural_merged_cns.append(cn)
             structural += 1
             continue
         sub = node.get("submitted", "")
@@ -1747,6 +1776,8 @@ def _prune_unrelated_merged(ctx: BuildContext) -> tuple[int, int]:
             k for k in ctx.seen_edges
             if k[0] not in deleted and k[1] not in deleted
         }
+    ctx.pruned_merged_cns = sorted(deleted)
+    ctx.structural_merged_cns.sort()
     return len(deleted), structural
 
 
@@ -1825,12 +1856,89 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
             # uncounted in the trunk (see _prune_unrelated_merged).
             "pruned_merged_count": pruned_merged,
             "structural_merged_count": structural_merged,
+            "pruned_merged_cns": getattr(ctx, "pruned_merged_cns", []),
+            "structural_merged_cns": getattr(
+                ctx, "structural_merged_cns", []),
             "generated_at": generated_at,
         },
     }
 
 
 # ─── Public entry point ─────────────────────────────────────────────────
+
+
+def resolve_ticket_anchor(
+    client: GerritCommentsClient,
+    ticket: str,
+    branch: str = "master",
+) -> int:
+    """Pick the anchor change for a ticket-mode graph.
+
+    Candidates are changes on `branch` whose SUBJECT starts with
+    the ticket (a mention elsewhere in the message doesn't count).
+    Among in-flight (NEW) candidates, prefer the one embedded in
+    the series with the most in-flight members — its /related
+    chain is the richest context for the ticket. Ties break on
+    ticket-member count within the series, then most recently
+    updated. Only the 8 most recently updated NEW candidates get
+    a /related probe to bound the API cost.
+
+    A ticket with no in-flight patches anchors on the newest
+    merged one (pure trunk view of the landing order). Raises
+    ValueError when the ticket has no matching changes at all.
+    """
+    q = f'message:"{ticket}" branch:{branch}'
+    try:
+        result = client.rest.get(
+            f"/changes/?q={quote(q, safe=':+ ')}&n=200"
+        )
+    except Exception as e:
+        raise ValueError(f"ticket search failed for {ticket}: {e}")
+    cands = [
+        ch for ch in result
+        if subject_ticket(ch.get("subject", "")) == ticket
+        and ch.get("_number")
+    ]
+    if not cands:
+        raise ValueError(
+            f"no changes on branch '{branch}' with a subject "
+            f"starting with {ticket}"
+        )
+
+    new_cands = [ch for ch in cands if ch.get("status") == "NEW"]
+    if not new_cands:
+        merged = [ch for ch in cands if ch.get("status") == "MERGED"]
+        pool = merged or cands
+        pool.sort(
+            key=lambda ch: ch.get("submitted")
+            or ch.get("updated") or "",
+            reverse=True,
+        )
+        return pool[0]["_number"]
+
+    new_cands.sort(key=lambda ch: ch.get("updated", ""), reverse=True)
+    best_cn = None
+    best_key: tuple[int, int, str] | None = None
+    for ch in new_cands[:8]:
+        cn = ch["_number"]
+        try:
+            rel = client.rest.get(
+                f"/changes/{cn}/revisions/current/related"
+            ).get("changes", [])
+        except Exception:
+            rel = []
+        n_inflight = sum(1 for e in rel if e.get("status") == "NEW")
+        n_ticket = sum(
+            1 for e in rel
+            if subject_ticket(
+                (e.get("commit") or {}).get("subject", "")
+            ) == ticket
+        )
+        key = (n_inflight, n_ticket, ch.get("updated", ""))
+        if best_key is None or key > best_key:
+            best_key = key
+            best_cn = cn
+    return best_cn
 
 
 def build_graph(
@@ -1844,6 +1952,7 @@ def build_graph(
     include_hashtag: bool = True,
     extra_topics: list[str] | None = None,
     extra_hashtags: list[str] | None = None,
+    extra_tickets: list[str] | None = None,
     cross_project_branch: bool = False,
     name: str | None = None,
 ) -> dict[str, Any]:
@@ -1861,6 +1970,9 @@ def build_graph(
         include_hashtag: Same as include_topic but for hashtags.
         extra_topics: Additional topic names to search for and include.
         extra_hashtags: Additional hashtag names to search for and include.
+        extra_tickets: JIRA tickets (e.g. LU-18222) whose patches are
+            searched for and included; only changes whose subject
+            STARTS with the ticket count (mentions are ignored).
         cross_project_branch: When False (the default), search-based
             expansion (topic/hashtag/commit-parent discovery) is
             scoped to the anchor's project AND branch. Set True to
@@ -1880,6 +1992,7 @@ def build_graph(
         include_hashtag=include_hashtag,
         extra_topics=list(extra_topics or []),
         extra_hashtags=list(extra_hashtags or []),
+        extra_tickets=list(extra_tickets or []),
         cross_project_branch=cross_project_branch,
         logger=logger,
     )
