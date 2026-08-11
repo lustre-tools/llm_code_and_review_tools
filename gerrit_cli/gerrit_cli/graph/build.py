@@ -1886,6 +1886,15 @@ def resolve_ticket_anchor(
     A ticket with no in-flight patches anchors on the newest
     merged one (pure trunk view of the landing order). Raises
     ValueError when the ticket has no matching changes at all.
+
+    SECURITY GATE: the anchor is only ever taken from `branch`
+    (default master). The branch is constrained in the Gerrit
+    query AND re-verified client-side on every candidate — the
+    tool is hosted on the web, and an auto-selected anchor from a
+    non-requested branch would leak that branch's patches into a
+    publicly served graph (the anchor's branch scopes the whole
+    expansion). Any other branch requires the caller to pass it
+    explicitly via --branch.
     """
     q = f'message:"{ticket}" branch:{branch}'
     try:
@@ -1898,6 +1907,7 @@ def resolve_ticket_anchor(
         ch for ch in result
         if subject_ticket(ch.get("subject", "")) == ticket
         and ch.get("_number")
+        and ch.get("branch") == branch
     ]
     if not cands:
         raise ValueError(

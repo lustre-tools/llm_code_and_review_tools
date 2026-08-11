@@ -34,10 +34,11 @@ def _client(routes: dict[str, Any]) -> SimpleNamespace:
 
 
 def _ch(cn: int, subject: str, status: str, updated: str = "",
-        submitted: str = "") -> dict[str, Any]:
+        submitted: str = "", branch: str = "master") -> dict[str, Any]:
     return {
         "_number": cn, "subject": subject, "status": status,
         "updated": updated, "submitted": submitted,
+        "branch": branch,
     }
 
 
@@ -96,6 +97,31 @@ class TestResolveTicketAnchor:
             ],
         })
         assert resolve_ticket_anchor(client, "LU-1") == 20
+
+    def test_wrong_branch_candidates_are_rejected(self):
+        # Security gate: even if the Gerrit query response contains
+        # changes from another branch (server quirk or hostile
+        # response), they must never become the anchor — the
+        # anchor's branch scopes the whole publicly served graph.
+        client = _client({
+            "related": {"changes": []},
+            "/changes/?q=": [
+                _ch(100, "LU-1 internal", "NEW",
+                    updated="2026-08-10", branch="b_internal"),
+                _ch(200, "LU-1 master patch", "NEW",
+                    updated="2026-08-01"),
+            ],
+        })
+        assert resolve_ticket_anchor(client, "LU-1") == 200
+
+    def test_wrong_branch_only_raises(self):
+        client = _client({
+            "/changes/?q=": [
+                _ch(100, "LU-1 internal", "NEW", branch="b_internal"),
+            ],
+        })
+        with pytest.raises(ValueError):
+            resolve_ticket_anchor(client, "LU-1")
 
     def test_raises_when_no_subject_matches(self):
         client = _client({
