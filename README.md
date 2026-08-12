@@ -43,6 +43,9 @@ Details: [lreview/README.md](lreview/README.md).
 
 ### Bundled submodules
 
+- **review-prompts** -- the AI review prompts lreview runs
+  (verygreen/review-prompts, `lustre-dev` branch). Initialized by
+  `./install.sh`; lreview finds it automatically.
 - **lustre-drgn-tools** -- drgn-based Lustre vmcore analysis
   (`lustre_triage.py`, `obd_devs.py`, `ldlm_dumplocks.py`, etc.).
   Separate repo bundled as a git submodule. Requires drgn;
@@ -244,6 +247,7 @@ Exit codes: 0=success, 1=general error, 2=auth, 3=not found,
 llm_code_and_review_tools/
 ├── gerrit_cli/          # Gerrit code review CLI
 ├── lreview/             # Parallel AI patch reviews (review-prompts)
+├── review-prompts/      # AI review prompts (submodule)
 ├── jira_tool/           # JIRA issue tracking CLI
 ├── maloo_tool/          # Maloo CI results CLI
 ├── jenkins_tool/        # Jenkins build server CLI

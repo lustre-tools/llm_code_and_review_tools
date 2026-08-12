@@ -12,14 +12,25 @@ from lreview.prompts import (
 )
 
 
-@pytest.fixture
-def clone(tmp_path):
-    """A fake review-prompts clone with the needed kernel prompts."""
-    d = tmp_path / "review-prompts" / "kernel"
+@pytest.fixture(autouse=True)
+def no_real_repo(monkeypatch, tmp_path):
+    """Isolate from the real checkout's bundled submodule."""
+    monkeypatch.setattr("lreview.prompts._REPO_ROOT",
+                        tmp_path / "norepo")
+
+
+def _make_prompts(base: Path) -> Path:
+    d = base / "kernel"
     d.mkdir(parents=True)
     (d / "review-core.md").write_text("# review core\n")
     (d / "gerrit-review.md").write_text("# gerrit output\n")
-    return tmp_path / "review-prompts"
+    return base
+
+
+@pytest.fixture
+def clone(tmp_path):
+    """A fake review-prompts clone with the needed kernel prompts."""
+    return _make_prompts(tmp_path / "review-prompts")
 
 
 @pytest.fixture
@@ -66,6 +77,27 @@ class TestFindPromptsDir:
     def test_nothing_found(self, no_legacy):
         assert find_prompts_dir() == (None, None)
 
+    def test_bundled_submodule(self, monkeypatch, tmp_path, no_legacy):
+        repo = tmp_path / "llmrepo"
+        _make_prompts(repo / "review-prompts")
+        monkeypatch.setattr("lreview.prompts._REPO_ROOT", repo)
+        found, source = find_prompts_dir()
+        assert found == repo / "review-prompts" / "kernel"
+        assert "bundled submodule" in source
+
+    def test_bundled_beats_legacy(self, monkeypatch, tmp_path, clone,
+                                  no_legacy):
+        repo = tmp_path / "llmrepo"
+        _make_prompts(repo / "review-prompts")
+        monkeypatch.setattr("lreview.prompts._REPO_ROOT", repo)
+        commands = no_legacy / ".claude" / "commands"
+        commands.mkdir(parents=True)
+        (commands / "kreview.md").write_text(
+            f"Read the prompt {clone}/kernel/review-core.md\n")
+        found, source = find_prompts_dir()
+        assert found == repo / "review-prompts" / "kernel"
+        assert "bundled" in source
+
 
 class TestCheckPrompts:
 
@@ -106,3 +138,13 @@ class TestSetupInstructions:
         assert "git clone" in text
         assert "no skill installation is needed" in text
         assert "setup.sh" not in text
+
+    def test_mentions_submodule_when_bundled(self, monkeypatch, tmp_path):
+        repo = tmp_path / "llmrepo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / ".gitmodules").write_text(
+            '[submodule "review-prompts"]\n\tpath = review-prompts\n')
+        monkeypatch.setattr("lreview.prompts._REPO_ROOT", repo)
+        text = setup_instructions()
+        assert "submodule update --init review-prompts" in text
+        assert "git clone" in text  # fallback still listed

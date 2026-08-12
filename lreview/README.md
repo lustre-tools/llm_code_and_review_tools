@@ -36,14 +36,16 @@ exact instructions for anything missing:
 1. **An agent CLI** on PATH — `claude` (Claude Code, the default;
    `npm install -g @anthropic-ai/claude-code`, then log in), or
    `codex` / `gemini` / `opencode` for other AIs (see Agents below).
-2. **A clone of the
+2. **The review prompts** — bundled with this repository as the
    [review-prompts](https://github.com/verygreen/review-prompts/)
-   repo** — nothing more; reviews reference `review-core.md`
-   directly (the repo's own quick-start and automation form), so no
-   `setup.sh` skill installation is needed. lreview finds the clone
-   via `--prompts-dir` / `$REVIEW_PROMPTS_DIR`, a legacy
-   `~/.claude/commands/kreview.md` skill install, or
-   `~/review-prompts` — and offers to clone it when missing.
+   submodule, which `./install.sh` initializes automatically (or
+   `git submodule update --init review-prompts`). Reviews reference
+   `review-core.md` directly (the repo's own quick-start and
+   automation form), so no `setup.sh` skill installation is needed.
+   Resolution order: `--prompts-dir` / `$REVIEW_PROMPTS_DIR` →
+   bundled submodule → a legacy `~/.claude/commands/kreview.md`
+   skill install → `~/review-prompts`; `lreview setup` offers to
+   initialize/clone when missing.
 3. **Gerrit credentials** (`GERRIT_URL`, `GERRIT_USER`, `GERRIT_PASS`
    in the environment or `~/.config/gerrit-cli/.env`; HTTP password
    from Gerrit → Settings → HTTP Credentials). Setup verifies them
@@ -222,7 +224,7 @@ rejoin a positional list split around a flag).
 | `--agent-arg=ARG` | — | Extra agent-CLI arg (repeatable; `--claude-arg` is a legacy alias) |
 | `--post` | off | Post findings when batch finishes |
 | `--prefix TEXT` | `[AI review - <model>]` | Message prefix; `<model>` placeholder substituted (`$LREVIEW_PREFIX` overrides the default; `''` for none) |
-| `--prompts-dir DIR` | auto | review-prompts clone (repo root or its `kernel/`); default: `$REVIEW_PROMPTS_DIR`, a legacy kreview.md install, or `~/review-prompts` |
+| `--prompts-dir DIR` | auto | review-prompts location (repo root or its `kernel/`); default: `$REVIEW_PROMPTS_DIR`, the bundled submodule, a legacy kreview.md install, or `~/review-prompts` |
 
 ### post options
 

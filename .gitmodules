@@ -1,3 +1,7 @@
 [submodule "claude_images"]
 	path = claude_images
 	url = git@github.com:paf0186/claude-images.git
+[submodule "review-prompts"]
+	path = review-prompts
+	url = https://github.com/verygreen/review-prompts/
+	branch = lustre-dev

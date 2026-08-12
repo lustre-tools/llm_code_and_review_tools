@@ -9,9 +9,11 @@ needs is a clone of https://github.com/verygreen/review-prompts/.
 The prompts directory (the one containing review-core.md and
 gerrit-review.md) is resolved in this order:
 1. --prompts-dir / $REVIEW_PROMPTS_DIR (repo root or its kernel/ dir)
-2. the path referenced by a legacy ~/.claude/commands/kreview.md from
+2. the review-prompts submodule bundled with this repository
+   (initialized by install.sh, or `git submodule update --init`)
+3. the path referenced by a legacy ~/.claude/commands/kreview.md from
    an earlier setup.sh skill install, if present
-3. ~/review-prompts/kernel
+4. ~/review-prompts/kernel
 """
 
 import re
@@ -26,6 +28,10 @@ REVIEW_PROMPTS_REPO = "https://github.com/verygreen/review-prompts/"
 
 CORE_PROMPT = "review-core.md"
 GERRIT_PROMPT = "gerrit-review.md"
+
+# Repository root when lreview runs from an editable install / git
+# checkout — the bundled review-prompts submodule lives there.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # First absolute *.md path in a legacy installed command file
 _PROMPT_PATH_RE = re.compile(r"(/\S+\.md)")
@@ -65,6 +71,11 @@ def _legacy_command_dir() -> Optional[Path]:
     return None
 
 
+def _bundled_dir() -> Optional[Path]:
+    """The review-prompts submodule bundled with this repository."""
+    return _kernel_dir(_REPO_ROOT / "review-prompts")
+
+
 def find_prompts_dir(explicit: Optional[Path] = None):
     """Resolve the prompts directory; returns (dir, source) or
     (None, None)."""
@@ -72,6 +83,10 @@ def find_prompts_dir(explicit: Optional[Path] = None):
         found = _kernel_dir(Path(explicit).expanduser())
         return found, (f"--prompts-dir/$REVIEW_PROMPTS_DIR ({explicit})"
                        if found else None)
+
+    bundled = _bundled_dir()
+    if bundled:
+        return bundled, f"bundled submodule ({_REPO_ROOT / 'review-prompts'})"
 
     legacy = _legacy_command_dir()
     if legacy:
@@ -113,30 +128,66 @@ def check_prompts(explicit: Optional[Path] = None,
     return status
 
 
+def _has_bundled_submodule() -> bool:
+    """True when this is a git checkout with the review-prompts
+    submodule registered (possibly not yet initialized)."""
+    gitmodules = _REPO_ROOT / ".gitmodules"
+    return (gitmodules.is_file()
+            and "review-prompts" in gitmodules.read_text()
+            and (_REPO_ROOT / ".git").exists())
+
+
+def _init_bundled_submodule() -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(_REPO_ROOT), "submodule", "update", "--init",
+         "review-prompts"])
+    return result.returncode == 0 and _bundled_dir() is not None
+
+
 def setup_instructions(dest: Optional[Path] = None) -> str:
     """Return the manual setup steps for the review prompts."""
     dest = dest or Path.home() / "review-prompts"
-    return (
-        "To set up the review prompts, clone the repository:\n"
-        f"  git clone {REVIEW_PROMPTS_REPO} {dest}\n"
-        "and point lreview at it if it is not the default location:\n"
-        f"  export REVIEW_PROMPTS_DIR={dest}\n"
+    lines = ["To set up the review prompts:"]
+    if _has_bundled_submodule():
+        lines += [
+            "initialize the bundled submodule:",
+            f"  git -C {_REPO_ROOT} submodule update --init review-prompts",
+            "or clone the repository elsewhere:",
+        ]
+    else:
+        lines.append("clone the repository:")
+    lines += [
+        f"  git clone {REVIEW_PROMPTS_REPO} {dest}",
+        "and point lreview at a non-default location with:",
+        f"  export REVIEW_PROMPTS_DIR={dest}",
         "(no skill installation is needed — lreview references "
-        "review-core.md directly)"
-    )
+        "review-core.md directly)",
+    ]
+    return "\n".join(lines)
 
 
 def offer_setup(dest: Optional[Path] = None) -> bool:
-    """Interactively offer to clone review-prompts.
+    """Interactively offer to set up the review prompts — by
+    initializing the bundled submodule when available, else by
+    cloning the repository.
 
-    Returns True if a clone was performed. Non-interactive sessions
-    just get the instructions printed and False back.
+    Returns True if setup succeeded. Non-interactive sessions just
+    get the instructions printed and False back.
     """
     dest = dest or Path.home() / "review-prompts"
 
     if not sys.stdin.isatty():
         print(setup_instructions(dest))
         return False
+
+    if _has_bundled_submodule():
+        answer = input(
+            "Initialize the bundled review-prompts submodule "
+            f"({_REPO_ROOT / 'review-prompts'})? [Y/n] ").strip().lower()
+        if answer not in ("n", "no"):
+            if _init_bundled_submodule():
+                return True
+            print("submodule init failed; falling back to a clone")
 
     if dest.is_dir() and _kernel_dir(dest):
         print(f"Found existing review-prompts clone at {dest}")
