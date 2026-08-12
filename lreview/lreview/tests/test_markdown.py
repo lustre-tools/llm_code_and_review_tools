@@ -81,3 +81,71 @@ class TestReviewMarkdown:
         assert path == (tmp_path / "markdown" /
                         markdown_filename(_change()))
         assert path.read_text().startswith("# 63809 ps54")
+
+
+class TestRenderExisting:
+
+    def _results(self, tmp_path, with_summary=True, with_metadata=False):
+        import json
+        d = tmp_path / "results"
+        d.mkdir()
+        (d / "gerrit-review-63809_ps54.json").write_text(
+            json.dumps(SPEC))
+        if with_summary:
+            (d / "summary.json").write_text(json.dumps({"63809": {
+                "number": 63809, "patchset": 54, "sha": "b" * 40,
+                "subject": "LU-19852 lod: raidset aware stripe allocator",
+                "base_url": "https://review.whamcloud.com",
+                "severity": "high", "model": "opus",
+                "tokens": 6_500_000, "cost_usd": 7.92,
+                "duration_s": 1117, "status": "findings",
+            }}))
+        if with_metadata:
+            (d / "review-metadata-63809_ps54.json").write_text(
+                json.dumps({"subject": "LU-19852 from metadata",
+                            "sha": "c" * 40}))
+        return d
+
+    def test_render_with_summary_stats(self, tmp_path):
+        from lreview.markdown import render_existing
+        d = self._results(tmp_path)
+        written, skipped = render_existing(results_dir=d)
+        assert skipped == []
+        assert len(written) == 1
+        text = written[0].read_text()
+        assert "LU-19852 lod: raidset aware stripe allocator" in text
+        assert "6.5M tokens, $7.92" in text
+        assert written[0].parent == d / "markdown"
+
+    def test_render_metadata_fallback(self, tmp_path):
+        from lreview.markdown import render_existing
+        d = self._results(tmp_path, with_summary=False,
+                          with_metadata=True)
+        written, _ = render_existing(results_dir=d)
+        text = written[0].read_text()
+        assert "LU-19852 from metadata" in text
+        assert "cccccccccccc" in text
+
+    def test_render_stale_summary_entry_ignored(self, tmp_path):
+        """A summary entry for a different patchset must not lend its
+        stats to this file."""
+        import json
+        from lreview.markdown import render_existing
+        d = self._results(tmp_path, with_metadata=True)
+        summary = json.loads((d / "summary.json").read_text())
+        summary["63809"]["patchset"] = 55
+        (d / "summary.json").write_text(json.dumps(summary))
+        written, _ = render_existing(results_dir=d)
+        text = written[0].read_text()
+        assert "LU-19852 from metadata" in text
+        assert "$7.92" not in text
+
+    def test_render_explicit_files_and_skips(self, tmp_path):
+        from lreview.markdown import render_existing
+        d = self._results(tmp_path)
+        odd = d / "notes.json"
+        odd.write_text("{}")
+        written, skipped = render_existing(
+            files=[d / "gerrit-review-63809_ps54.json", odd])
+        assert len(written) == 1
+        assert skipped[0][0] == odd

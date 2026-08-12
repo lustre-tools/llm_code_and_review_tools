@@ -257,6 +257,22 @@ def cmd_run(args) -> int:
     return 1 if failed else 0
 
 
+def cmd_render(args) -> int:
+    from .markdown import render_existing
+    results_dir = Path(args.results_dir).expanduser().resolve()
+    files = [Path(f) for f in args.files] if args.files else None
+    written, skipped = render_existing(files=files,
+                                       results_dir=results_dir)
+    for path in written:
+        print(f"  {path}")
+    for path, reason in skipped:
+        print(f"  skipped {path}: {reason}")
+    if not written and not skipped:
+        print(f"no gerrit-review-*.json files found in {results_dir}")
+        return 1
+    return 0 if written or not skipped else 1
+
+
 def cmd_post(args) -> int:
     results_dir = Path(args.results_dir).expanduser().resolve()
 
@@ -321,7 +337,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True,
-                                metavar="{setup,check,run,post}")
+                                metavar="{setup,check,run,render,post}")
 
     from .agents import AGENTS
     default_prefix = os.environ.get("LREVIEW_PREFIX")
@@ -411,6 +427,16 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--prompts-dir", default=default_prompts, help=prompts_help)
     run_p.set_defaults(func=cmd_run)
+
+    render_p = sub.add_parser(
+        "render", help="Render existing review JSONs to Markdown reports")
+    render_p.add_argument(
+        "files", nargs="*",
+        help="gerrit-review-*.json files (default: all in --results-dir)")
+    render_p.add_argument(
+        "--results-dir", default="./lreview-results",
+        help="Results directory to render (default: ./lreview-results)")
+    render_p.set_defaults(func=cmd_render)
 
     post_p = sub.add_parser(
         "post", help="Post previously collected results to Gerrit")

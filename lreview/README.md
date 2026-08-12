@@ -195,7 +195,10 @@ report** under `markdown/<change>_<subject>_ps<N>.md` — change link,
 severity, model/tokens/cost, the overall assessment, and each finding
 anchored to its file and line. The paths are listed at the end of the
 `run` output, so results can be read comfortably without posting
-anything to Gerrit.
+anything to Gerrit. `lreview render` (re)generates the reports for
+review JSONs that already exist — from older runs predating this
+feature, or after hand-editing — pulling stats from `summary.json`
+when it matches and the `review-metadata-*.json` sidecar otherwise.
 
 The logs are JSONL event streams; useful jq one-liners:
 
@@ -211,6 +214,8 @@ jq -r 'select(.type=="assistant").message.content[]?
 lreview setup                    # guided first-time setup
 lreview check                    # verify agent CLI + prompts + Gerrit
 lreview run <change|url>... [options]
+lreview render [file.json...]    # (re)generate Markdown reports from
+                                 # existing review JSONs (--results-dir)
 lreview post [<change|url>...] [options]
 ```
 

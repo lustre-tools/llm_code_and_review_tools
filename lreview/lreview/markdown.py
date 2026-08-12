@@ -5,14 +5,18 @@ Every review with findings gets a report at
 be read comfortably without posting them to Gerrit.
 """
 
+import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Optional
 
-from .gerrit import ResolvedChange
+from .gerrit import ResolvedChange, change_ref
 from .ui import elapsed, format_tokens
 
 MARKDOWN_SUBDIR = "markdown"
+
+_REVIEW_JSON_RE = re.compile(r"gerrit-review-(\d+)_ps(\d+)\.json$")
 
 
 def _sanitize(text: str, max_len: int = 60) -> str:
@@ -115,3 +119,88 @@ def write_review_markdown(
     path = md_dir / markdown_filename(change)
     path.write_text(review_markdown(change, spec, **stats))
     return path
+
+
+def _reconstruct(json_path: Path, number: int, patchset: int):
+    """Best-effort (change, stats) for an existing review JSON, from
+    summary.json when its entry matches this patchset, else from the
+    review-metadata sidecar, else minimal."""
+    results_dir = json_path.parent
+    entry: dict = {}
+    summary_path = results_dir / "summary.json"
+    if summary_path.is_file():
+        try:
+            candidate = json.loads(summary_path.read_text()).get(
+                str(number)) or {}
+            if candidate.get("patchset") == patchset:
+                entry = candidate
+        except json.JSONDecodeError:
+            pass
+
+    subject = entry.get("subject")
+    sha = entry.get("sha")
+    if not subject or not sha:
+        metadata_path = (results_dir /
+                         f"review-metadata-{number}_ps{patchset}.json")
+        if metadata_path.is_file():
+            try:
+                metadata = json.loads(metadata_path.read_text())
+                subject = subject or metadata.get("subject")
+                sha = sha or metadata.get("sha")
+            except json.JSONDecodeError:
+                pass
+
+    base_url = (entry.get("base_url")
+                or os.environ.get("GERRIT_URL")
+                or "https://review.whamcloud.com")
+    change = ResolvedChange(
+        number=number, project="fs/lustre-release",
+        subject=subject or f"change {number}",
+        sha=sha or "0" * 40, patchset=patchset,
+        ref=change_ref(number, patchset), base_url=base_url)
+    stats = {
+        "severity": entry.get("severity"),
+        "model": entry.get("model"),
+        "tokens": entry.get("tokens"),
+        "cost_usd": entry.get("cost_usd"),
+        "duration": entry.get("duration_s"),
+    }
+    return change, stats
+
+
+def render_existing(
+    files: Optional[list[Path]] = None,
+    results_dir: Optional[Path] = None,
+):
+    """Render existing gerrit-review-*.json files to Markdown.
+
+    Returns (written_paths, skipped) where skipped is a list of
+    (path, reason) for files that could not be rendered.
+    """
+    if files:
+        targets = [Path(f) for f in files]
+    else:
+        targets = sorted((results_dir or Path(".")).glob(
+            "gerrit-review-*.json"))
+
+    written: list[Path] = []
+    skipped: list[tuple] = []
+    for json_path in targets:
+        match = _REVIEW_JSON_RE.search(json_path.name)
+        if not match:
+            skipped.append((json_path,
+                            "name is not gerrit-review-<N>_ps<M>.json"))
+            continue
+        try:
+            spec = json.loads(json_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            skipped.append((json_path, str(exc)))
+            continue
+        if not isinstance(spec, dict):
+            skipped.append((json_path, "not a JSON object"))
+            continue
+        change, stats = _reconstruct(
+            json_path, int(match.group(1)), int(match.group(2)))
+        written.append(write_review_markdown(
+            json_path.parent, change, spec, **stats))
+    return written, skipped
