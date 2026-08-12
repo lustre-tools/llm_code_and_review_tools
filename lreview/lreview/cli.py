@@ -139,19 +139,46 @@ def cmd_run(args) -> int:
     # long-running review starts.
     changes = []
     seen = set()
-    for spec in args.changes:
-        try:
-            change = resolve_change(spec)
-        except Exception as exc:
-            print(f"error: cannot resolve change '{spec}': {exc}")
-            return 1
-        if change.number in seen:
-            print(f"  note: {change.number} given more than once, "
-                  "reviewing once")
-            continue
-        seen.add(change.number)
-        changes.append(change)
-        print(f"  {change.number} ps{change.patchset}  {change.subject[:70]}")
+    in_place = False
+    # No changes at all = review the checked-out HEAD of --repo, in
+    # place; --local makes the positional args local refs instead of
+    # Gerrit changes (each in its own worktree).
+    if args.local or not args.changes:
+        from .gerrit import LocalChange
+        from .worktree import commit_subject, rev_parse
+        refs = args.changes or ["HEAD"]
+        in_place = not args.changes
+        for ref in refs:
+            try:
+                sha = rev_parse(repo, ref)
+            except Exception as exc:
+                print(f"error: cannot resolve local ref '{ref}': {exc}")
+                return 1
+            if sha in seen:
+                print(f"  note: {ref} resolves to an already-listed "
+                      "commit, reviewing once")
+                continue
+            seen.add(sha)
+            change = LocalChange(ref_name=ref, sha=sha,
+                                 subject=commit_subject(repo, sha))
+            changes.append(change)
+            where = "in place" if in_place else "worktree"
+            print(f"  {change.slug}  {change.subject[:60]} ({where})")
+    else:
+        for spec in args.changes:
+            try:
+                change = resolve_change(spec)
+            except Exception as exc:
+                print(f"error: cannot resolve change '{spec}': {exc}")
+                return 1
+            if change.number in seen:
+                print(f"  note: {change.number} given more than once, "
+                      "reviewing once")
+                continue
+            seen.add(change.number)
+            changes.append(change)
+            print(f"  {change.number} ps{change.patchset}  "
+                  f"{change.subject[:70]}")
 
     # Warn when a change's current patchset was already reviewed and
     # posted — a re-review is fine, but reposting needs --force.
@@ -161,6 +188,8 @@ def cmd_run(args) -> int:
     except Exception:
         previous = {}
     for change in changes:
+        if change.number is None:
+            continue
         old = previous.get(str(change.number))
         if old and old.get("posted") and old.get("sha") == change.sha:
             print(f"  note: {change.number} ps{change.patchset} was already "
@@ -187,7 +216,7 @@ def cmd_run(args) -> int:
     if args.effort and args.agent != "claude":
         print(f"note: --effort is claude-only; ignored for "
               f"'{args.agent}'")
-    results = run_batch(config, changes)
+    results = run_batch(config, changes, in_place=in_place)
 
     from .runner import format_tokens
     from .ui import console
@@ -232,6 +261,12 @@ def cmd_run(args) -> int:
             print(f"  {report}")
 
     with_findings = [r for r in results if r.status == STATUS_FINDINGS]
+    local_findings = [r for r in with_findings if r.change.number is None]
+    with_findings = [r for r in with_findings
+                     if r.change.number is not None]
+    if local_findings and args.post:
+        print("\nnote: local reviews are not tied to a Gerrit change "
+              "and are never posted; see the reports above.")
     if with_findings:
         numbers = [r.change.number for r in with_findings]
         if args.post:
@@ -371,11 +406,18 @@ def build_parser() -> argparse.ArgumentParser:
     run_p = sub.add_parser(
         "run", help="Review Gerrit changes in parallel")
     run_p.add_argument(
-        "changes", nargs="+",
-        help="Gerrit change numbers or URLs")
+        "changes", nargs="*",
+        help="Gerrit change numbers or URLs; with --local, git refs "
+             "of --repo instead. With no changes at all, the "
+             "checked-out HEAD of --repo is reviewed in place.")
     run_p.add_argument(
         "--repo", default=".",
         help="Path to the source git repository (default: cwd)")
+    run_p.add_argument(
+        "--local", action="store_true",
+        help="Treat the change arguments as local git refs "
+             "(branches/SHAs) of --repo — each reviewed in its own "
+             "worktree. Local results are not postable to Gerrit.")
     run_p.add_argument(
         "--jobs", "-j", type=_positive_int, default=5,
         help="Maximum parallel reviews (default: 5)")

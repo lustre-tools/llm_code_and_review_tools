@@ -39,6 +39,32 @@ def change_ref(number: int, patchset: int) -> str:
     return f"refs/changes/{number % 100:02d}/{number}/{patchset}"
 
 
+@dataclass
+class LocalChange:
+    """A local git ref to review — no Gerrit change behind it.
+
+    Duck-typed against ResolvedChange for the runner (slug/sha/
+    subject); number is None, which marks the result as local and
+    not postable.
+    """
+    ref_name: str
+    sha: str
+    subject: str
+    number: Optional[int] = None
+    patchset: Optional[int] = None
+    project: str = ""
+    base_url: str = ""
+    ref: str = ""
+
+    @property
+    def slug(self) -> str:
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", self.ref_name).strip("_")
+        return f"{safe[:40]}_{self.sha[:7]}"
+
+    def fetch_url(self) -> str:
+        return ""
+
+
 def resolve_change(url_or_number: str, client: Optional[Any] = None) -> ResolvedChange:
     """Resolve a Gerrit URL or bare change number to a patchset.
 

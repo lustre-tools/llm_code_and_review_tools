@@ -497,6 +497,7 @@ def _review_and_cleanup(
     change: ResolvedChange,
     worktree_dir: Path,
     tracker: Optional[ProgressTracker] = None,
+    cleanup: bool = True,
 ) -> ReviewResult:
     """Worker wrapper: never lets an exception escape into the pool."""
     if tracker:
@@ -511,28 +512,63 @@ def _review_and_cleanup(
     finally:
         if tracker:
             tracker.finish(change.slug)
-        if not config.keep_worktrees:
+        if cleanup and not config.keep_worktrees:
             wt.remove_worktree(config.repo, worktree_dir)
     result.agent = config.agent
     return result
 
 
+def _stash_stale_artifacts(config: BatchConfig, repo_dir: Path) -> None:
+    """Move pre-existing review artifacts out of an in-place repo so a
+    stale gerrit-review.json is never collected as this run's result."""
+    for name in (REVIEW_JSON_NAME, METADATA_JSON_NAME):
+        path = repo_dir / name
+        if path.exists():
+            dest = config.results_dir / f"stale-{os.getpid()}-{name}"
+            shutil.move(str(path), dest)
+            _log(f"note: moved pre-existing {name} from the repo "
+                 f"to {dest}")
+
+
+def _remove_artifacts(repo_dir: Path) -> None:
+    for name in (REVIEW_JSON_NAME, METADATA_JSON_NAME):
+        try:
+            (repo_dir / name).unlink()
+        except OSError:
+            pass
+
+
 def run_batch(
     config: BatchConfig,
     changes: list[ResolvedChange],
+    in_place: bool = False,
 ) -> list[ReviewResult]:
     """Prepare worktrees sequentially, then review in parallel.
+
+    With in_place=True (single local review of the checked-out HEAD),
+    the review runs directly in config.repo — no worktree is created
+    or removed, and the generated artifact files are cleaned from the
+    repo after collection.
 
     Results collected so far (including on KeyboardInterrupt) are
     always persisted to the summary manifest.
     """
+    if in_place and len(changes) != 1:
+        raise ValueError("in_place reviews take exactly one change")
     config.results_dir.mkdir(parents=True, exist_ok=True)
 
-    prepared: list[tuple[ResolvedChange, Path]] = []
+    # (change, directory, cleanup?) — in-place runs use the repo
+    # itself and must never be removed
+    prepared: list[tuple[ResolvedChange, Path, bool]] = []
     results: list[ReviewResult] = []
     for change in changes:
+        if in_place:
+            _stash_stale_artifacts(config, config.repo)
+            prepared.append((change, config.repo, False))
+            continue
         try:
-            prepared.append((change, prepare_worktree(config, change)))
+            prepared.append(
+                (change, prepare_worktree(config, change), True))
         except Exception as exc:  # noqa: BLE001 - record and continue
             _log(f"[{change.slug}] worktree setup failed: {exc}")
             results.append(ReviewResult(
@@ -545,8 +581,9 @@ def run_batch(
             with ProgressTracker(total=len(prepared)) as tracker:
                 futures = [
                     pool.submit(
-                        _review_and_cleanup, config, change, wtree, tracker)
-                    for change, wtree in prepared
+                        _review_and_cleanup, config, change, wtree,
+                        tracker, cleanup)
+                    for change, wtree, cleanup in prepared
                 ]
                 try:
                     for future in futures:
@@ -566,9 +603,11 @@ def run_batch(
                     if not interrupted:
                         pool.shutdown(wait=True)
                     if not config.keep_worktrees:
-                        for _, wtree in prepared:
-                            if wtree.exists():
+                        for _, wtree, cleanup in prepared:
+                            if cleanup and wtree.exists():
                                 wt.remove_worktree(config.repo, wtree)
+                    if in_place:
+                        _remove_artifacts(config.repo)
     finally:
         update_summary(config.results_dir, results)
 
@@ -587,11 +626,14 @@ def update_summary(results_dir: Path, results: list[ReviewResult]) -> None:
     with locked_summary(results_dir) as summary:
         for result in results:
             change = result.change
-            key = str(change.number)
+            # Local reviews have no change number; key them by slug
+            key = str(change.number) if change.number else change.slug
             old = summary.get(key)
 
             entry = {
                 "number": change.number,
+                "local": change.number is None,
+                "ref_name": getattr(change, "ref_name", None),
                 "patchset": change.patchset,
                 "sha": change.sha,
                 "subject": change.subject,

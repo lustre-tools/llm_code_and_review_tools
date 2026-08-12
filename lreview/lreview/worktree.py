@@ -41,6 +41,17 @@ def commit_exists(repo: Path, sha: str) -> bool:
     return result.returncode == 0
 
 
+def rev_parse(repo: Path, ref: str) -> str:
+    """Resolve a local ref (branch, tag, SHA, HEAD) to a commit SHA."""
+    result = run_git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    return result.stdout.strip()
+
+
+def commit_subject(repo: Path, sha: str) -> str:
+    result = run_git(repo, "log", "-1", "--format=%s", sha)
+    return result.stdout.strip()
+
+
 def fetch_change(repo: Path, remote_url: str, ref: str) -> None:
     """Fetch a Gerrit change ref into the repository object store."""
     with _GIT_LOCK:

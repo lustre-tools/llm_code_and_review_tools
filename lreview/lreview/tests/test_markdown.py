@@ -75,6 +75,18 @@ class TestReviewMarkdown:
         assert "### 1. `a.c` (file-level)" in md
         assert "**Run:**" not in md
 
+    def test_local_change_render(self):
+        from lreview.gerrit import LocalChange
+        change = LocalChange(
+            ref_name="feat/foo", sha="b" * 40,
+            subject="LU-1 osc: fix the thing")
+        md = review_markdown(change, SPEC, severity="low")
+        assert md.startswith("# feat/foo — LU-1 osc: fix the thing")
+        assert "local review — not tied to a Gerrit change" in md
+        assert "bbbbbbbbbbbb" in md
+        name = markdown_filename(change)
+        assert name == (f"feat_foo_{'b' * 7}_LU-1_osc_fix_the_thing.md")
+
     def test_write_creates_markdown_dir(self, tmp_path):
         path = write_review_markdown(tmp_path, _change(), SPEC,
                                      severity="high")

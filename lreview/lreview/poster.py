@@ -39,7 +39,7 @@ def resolve_prefix(prefix: Optional[str], entry: dict) -> Optional[str]:
 
 @dataclass
 class PostOutcome:
-    number: int
+    number: object  # change number, or the slug for local reviews
     status: str  # posted | skipped | error
     detail: str = ""
 
@@ -130,6 +130,11 @@ def post_results(
                 continue
             number = entry["number"]
 
+            if entry.get("local"):
+                outcomes.append(PostOutcome(
+                    key, "skipped",
+                    "local review — not tied to a Gerrit change"))
+                continue
             if entry["status"] != STATUS_FINDINGS:
                 outcomes.append(PostOutcome(
                     number, "skipped", f"status is '{entry['status']}'"))

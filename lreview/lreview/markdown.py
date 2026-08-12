@@ -25,7 +25,9 @@ def _sanitize(text: str, max_len: int = 60) -> str:
     return text[:max_len].rstrip("_")
 
 
-def markdown_filename(change: ResolvedChange) -> str:
+def markdown_filename(change) -> str:
+    if change.number is None:  # local review: keyed by ref + sha
+        return f"{change.slug}_{_sanitize(change.subject)}.md"
     return (f"{change.number}_{_sanitize(change.subject)}"
             f"_ps{change.patchset}.md")
 
@@ -64,8 +66,6 @@ def review_markdown(
     cost_usd: Optional[float] = None,
     duration: Optional[float] = None,
 ) -> str:
-    url = (f"{change.base_url.rstrip('/')}/c/{change.project}"
-           f"/+/{change.number}")
     findings = list(_iter_findings(spec))
 
     review_bits = [f"{len(findings)} finding(s)"]
@@ -81,13 +81,25 @@ def review_markdown(
     if duration is not None:
         run_bits.append(elapsed(duration))
 
-    lines = [
-        f"# {change.number} ps{change.patchset} — {change.subject}",
-        "",
-        f"- **Change:** {url} (patchset {change.patchset}, "
-        f"`{change.sha[:12]}`)",
-        f"- **Review:** {', '.join(review_bits)}",
-    ]
+    if change.number is None:  # local review
+        ref_name = getattr(change, "ref_name", "local")
+        lines = [
+            f"# {ref_name} — {change.subject}",
+            "",
+            f"- **Commit:** `{change.sha[:12]}` ({ref_name}, local "
+            "review — not tied to a Gerrit change)",
+            f"- **Review:** {', '.join(review_bits)}",
+        ]
+    else:
+        url = (f"{change.base_url.rstrip('/')}/c/{change.project}"
+               f"/+/{change.number}")
+        lines = [
+            f"# {change.number} ps{change.patchset} — {change.subject}",
+            "",
+            f"- **Change:** {url} (patchset {change.patchset}, "
+            f"`{change.sha[:12]}`)",
+            f"- **Review:** {', '.join(review_bits)}",
+        ]
     if run_bits:
         lines.append(f"- **Run:** {', '.join(run_bits)}")
     lines.append("")

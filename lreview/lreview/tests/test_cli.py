@@ -88,6 +88,48 @@ class TestParser:
         with pytest.raises(SystemExit):
             build_parser().parse_args([])
 
+    def test_local_flag(self):
+        args = build_parser().parse_args(["run", "--local"])
+        assert args.local is True
+        assert args.changes == []
+        args = build_parser().parse_args(
+            ["run", "--local", "branch1", "branch2"])
+        assert args.changes == ["branch1", "branch2"]
+
+    def test_run_no_changes_reviews_head_in_place(self, tmp_path,
+                                                  monkeypatch, capsys):
+        """`lreview run --repo X` alone reviews X's HEAD in place."""
+        import subprocess
+        from pathlib import Path
+        from lreview.cli import cmd_run
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        for cmd in (["git", "init", "-q"],
+                    ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                     "commit", "-q", "--allow-empty", "-m", "top subject"]):
+            subprocess.run(cmd, cwd=repo, check=True)
+
+        captured = {}
+
+        def fake_run_batch(config, changes, in_place=False):
+            captured["changes"] = changes
+            captured["in_place"] = in_place
+            return []
+
+        monkeypatch.setattr("lreview.cli.ensure_prompts",
+                            lambda args: Path("/p/kernel"))
+        monkeypatch.setattr("lreview.cli.run_batch", fake_run_batch)
+
+        args = build_parser().parse_args(["run", "--repo", str(repo)])
+        rc = cmd_run(args)
+        assert rc == 0
+        assert captured["in_place"] is True
+        assert len(captured["changes"]) == 1
+        assert captured["changes"][0].ref_name == "HEAD"
+        assert captured["changes"][0].subject == "top subject"
+        assert "(in place)" in capsys.readouterr().out
+
     def test_jobs_must_be_positive(self):
         with pytest.raises(SystemExit):
             build_parser().parse_args(["run", "1", "--jobs", "0"])

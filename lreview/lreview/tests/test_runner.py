@@ -410,6 +410,66 @@ class TestRunBatch:
         results = run_batch(config, [_change(501, sha)])
         assert results[0].status == STATUS_CLEAN
 
+    def test_local_refs_in_worktrees(self, repo, tmp_path, stub_claude):
+        from lreview.gerrit import LocalChange
+        sha = _commit_with_marker(
+            repo, "HAS_FINDINGS", json.dumps(REVIEW_SPEC))
+        _git(repo, "branch", "feat/my-branch", sha)
+        change = LocalChange(
+            ref_name="feat/my-branch", sha=sha, subject="local subject")
+        config = _config(repo, tmp_path)
+        results = run_batch(config, [change])
+
+        assert results[0].status == STATUS_FINDINGS
+        slug = f"feat_my-branch_{sha[:7]}"
+        assert results[0].change.slug == slug
+        assert (config.results_dir / f"gerrit-review-{slug}.json").is_file()
+        summary = json.loads(
+            (config.results_dir / "summary.json").read_text())
+        assert summary[slug]["local"] is True
+        assert summary[slug]["ref_name"] == "feat/my-branch"
+        assert summary[slug]["number"] is None
+        # Markdown report named by ref+sha (no Gerrit number/ps)
+        md = (config.results_dir / "markdown" /
+              f"{slug}_local_subject.md")
+        assert md.is_file()
+        assert md.read_text().startswith(
+            "# feat/my-branch — local subject")
+        assert summary[slug]["markdown"] == f"markdown/{md.name}"
+        # worktree cleaned up; repo untouched
+        assert not any((tmp_path / "worktrees").glob("kreview_*"))
+        assert not (repo / "gerrit-review.json").exists()
+
+    def test_local_in_place(self, repo, tmp_path, stub_claude):
+        from lreview.gerrit import LocalChange
+        sha = _commit_with_marker(
+            repo, "HAS_FINDINGS", json.dumps(REVIEW_SPEC))
+        _git(repo, "checkout", "-q", sha)
+        # a stale artifact from an old manual run must not be collected
+        (repo / "gerrit-review.json").write_text('{"message": "STALE"}')
+
+        change = LocalChange(ref_name="HEAD", sha=sha, subject="s")
+        config = _config(repo, tmp_path)
+        results = run_batch(config, [change], in_place=True)
+
+        assert results[0].status == STATUS_FINDINGS
+        collected = json.loads(
+            (config.results_dir /
+             f"gerrit-review-{change.slug}.json").read_text())
+        assert collected == REVIEW_SPEC  # fresh, not the stale file
+        stale = list(config.results_dir.glob("stale-*gerrit-review.json"))
+        assert len(stale) == 1
+        assert "STALE" in stale[0].read_text()
+        # no worktrees were made; repo artifacts cleaned afterwards
+        assert not (tmp_path / "worktrees").exists()
+        assert not (repo / "gerrit-review.json").exists()
+        assert not (repo / "review-metadata.json").exists()
+        # Markdown report for the in-place local review
+        md = (config.results_dir / "markdown" /
+              f"HEAD_{sha[:7]}_s.md")
+        assert md.is_file()
+        assert "local review — not tied to a Gerrit change" in md.read_text()
+
     def test_summary_merges_previous_runs(self, repo, tmp_path, stub_claude):
         sha = _git(repo, "rev-parse", "HEAD")
         config = _config(repo, tmp_path)

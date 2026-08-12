@@ -178,6 +178,27 @@ falling back to the model claude reports in the review log.
 A URL that pins an explicit patchset (`.../+/64086/38`) reviews that
 patchset instead of the current one.
 
+## Local reviews (no Gerrit)
+
+```bash
+lreview run --repo ~/git/lustre-release                    # the checked-out
+                                                           # HEAD, in place
+lreview run --repo ~/git/lustre-release --local br1 br2    # branch tips, each
+                                                           # in its own worktree
+```
+
+With no changes at all, the review runs directly in the repo against
+whatever is checked out — no worktree is created, and any stale
+`gerrit-review.json` lying in the repo from a manual run is moved
+aside first so it can't be mistaken for this run's result. `--local`
+makes the change arguments local refs (branches, SHAs) instead of
+Gerrit changes; each gets its own worktree exactly like Gerrit
+changes do, so they run in parallel.
+
+Local results get the same collection, `summary.json` entries (keyed
+`<ref>_<sha7>`, marked `local`), and Markdown reports — but they are
+never posted; `post` skips them.
+
 ## Results directory
 
 ```
@@ -228,6 +249,7 @@ rejoin a positional list split around a flag).
 | Option | Default | Description |
 |---|---|---|
 | `--repo PATH` | `.` | Source git repository |
+| `--local` | off | Changes are git refs of `--repo`; no changes at all = checked-out HEAD, in place (no flag needed); not postable |
 | `--jobs, -j N` | 5 | Parallel reviews |
 | `--timeout SECS` | 7200 | Per-review timeout |
 | `--results-dir DIR` | `./lreview-results` | Logs, JSONs, summary.json |

@@ -188,6 +188,28 @@ class TestPostResults:
             post_results(results_dir, changes=[101], prefix="")
         assert reviewer.post_review.call_args[1]["prefix"] == ""
 
+    def test_local_entries_never_posted(self, results_dir):
+        summary = load_summary(results_dir)
+        summary["mybranch_abc1234"] = {
+            "number": None, "local": True, "ref_name": "mybranch",
+            "patchset": None, "sha": "c" * 40, "subject": "s",
+            "base_url": "", "status": "findings", "findings": 2,
+            "json": "gerrit-review-mybranch_abc1234.json",
+            "posted": False,
+        }
+        (results_dir / "summary.json").write_text(json.dumps(summary))
+
+        reviewer = _mock_reviewer()
+        p_rev, p_client = _patched(reviewer)
+        with p_rev, p_client:
+            outcomes = post_results(results_dir)  # post everything
+        local = [o for o in outcomes if o.number == "mybranch_abc1234"]
+        assert local[0].status == "skipped"
+        assert "local review" in local[0].detail
+        # the gerrit entry still posts normally
+        assert any(o.status == "posted" and o.number == 101
+                   for o in outcomes)
+
     def test_guard_rechecks_manifest_under_lock(self, results_dir):
         """A concurrent poster marking the entry posted between our
         snapshot and the per-entry lock must be respected."""

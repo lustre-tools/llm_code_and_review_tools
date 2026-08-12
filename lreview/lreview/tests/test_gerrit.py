@@ -71,6 +71,15 @@ class TestResolveChange:
                 "https://review.whamcloud.com/c/fs/lustre-release/+/64086/99",
                 client=client)
 
+    def test_local_change_slug_sanitized(self):
+        from lreview.gerrit import LocalChange
+        change = LocalChange(
+            ref_name="gerrit/claude/LU-1234_foo bar", sha="abcdef1" + "0" * 33,
+            subject="s")
+        assert change.slug == "gerrit_claude_LU-1234_foo_bar_abcdef1"
+        assert change.number is None
+        assert change.fetch_url() == ""
+
     def test_slug_and_fetch_url(self):
         change = ResolvedChange(
             number=64086, project="fs/lustre-release", subject="s",
