@@ -181,8 +181,12 @@ def cmd_run(args) -> int:
         keep_worktrees=args.keep_worktrees,
         agent=args.agent,
         model=resolve_model(args.agent, args.model),
+        effort=args.effort,
         agent_args=args.agent_arg or [],
     )
+    if args.effort and args.agent != "claude":
+        print(f"note: --effort is claude-only; ignored for "
+              f"'{args.agent}'")
     results = run_batch(config, changes)
 
     from .runner import format_tokens
@@ -220,6 +224,12 @@ def cmd_run(args) -> int:
         if total_cost:
             totals += f", ${total_cost:.2f}"
         print(totals)
+
+    reports = [r.markdown_path for r in results if r.markdown_path]
+    if reports:
+        print("\nHuman-readable reports:")
+        for report in reports:
+            print(f"  {report}")
 
     with_findings = [r for r in results if r.status == STATUS_FINDINGS]
     if with_findings:
@@ -378,6 +388,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Model for the review runs, e.g. opus, sonnet, fable "
              "(default: $LREVIEW_MODEL, else opus for claude; other "
              "agents use their own default)")
+    run_p.add_argument(
+        "--effort", choices=["low", "medium", "high", "xhigh", "max"],
+        default=os.environ.get("LREVIEW_EFFORT"),
+        help="Reasoning effort for the claude review runs "
+             "(default: $LREVIEW_EFFORT or claude's own default; "
+             "claude-only)")
     run_p.add_argument(
         "--agent-arg", "--claude-arg", action="append", dest="agent_arg",
         metavar="ARG",

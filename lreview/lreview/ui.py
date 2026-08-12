@@ -10,6 +10,21 @@ import os
 import sys
 import threading
 
+def elapsed(seconds: float) -> str:
+    minutes, secs = divmod(int(seconds), 60)
+    return f"{minutes}m{secs:02d}s"
+
+
+def format_tokens(count):
+    if count is None:
+        return None
+    if count < 1000:
+        return str(count)
+    if count < 1_000_000:
+        return f"{count / 1000:.0f}k"
+    return f"{count / 1_000_000:.1f}M"
+
+
 _CODES = {
     "red": "31",
     "green": "32",

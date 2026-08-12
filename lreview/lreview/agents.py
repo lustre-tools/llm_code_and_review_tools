@@ -26,15 +26,20 @@ class AgentSpec:
     def build_cmd(
         self,
         model: Optional[str],
+        effort: Optional[str],
         extra_args: list[str],
         prompt_text: str,
     ) -> list[str]:
+        # effort is claude-only; other backends ignore it (the CLI
+        # warns when it would be dropped)
         if self.name == "claude":
             cmd = ["claude", "-p", prompt_text,
                    "--dangerously-skip-permissions",
                    "--verbose", "--output-format", "stream-json"]
             if model:
                 cmd += ["--model", model]
+            if effort:
+                cmd += ["--effort", effort]
             return cmd + extra_args
         if self.name == "codex":
             cmd = ["codex", "exec",

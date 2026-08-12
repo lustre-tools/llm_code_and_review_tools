@@ -185,8 +185,17 @@ lreview-results/
 ├── gerrit-review-64086_ps40.json     # the review (only when findings)
 ├── review-metadata-64086_ps40.json   # severity score + issue count
 ├── kreview-64086_ps40.log            # full claude event log (stream-json)
+├── markdown/
+│   └── 64086_LU-..._ps40.md          # human-readable report (see below)
 └── summary.json                      # per-change manifest (see above)
 ```
+
+Every review with findings also gets a **human-readable Markdown
+report** under `markdown/<change>_<subject>_ps<N>.md` — change link,
+severity, model/tokens/cost, the overall assessment, and each finding
+anchored to its file and line. The paths are listed at the end of the
+`run` output, so results can be read comfortably without posting
+anything to Gerrit.
 
 The logs are JSONL event streams; useful jq one-liners:
 
@@ -221,6 +230,7 @@ rejoin a positional list split around a flag).
 | `--keep-worktrees` | off | Keep worktrees after review |
 | `--agent NAME` | `claude` (or `$LREVIEW_AGENT`) | Agent backend: claude, codex, gemini, opencode |
 | `--model NAME` | `opus` for claude (or `$LREVIEW_MODEL`); other agents use their own default | Model for the review runs |
+| `--effort LEVEL` | claude's default (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max (claude-only) |
 | `--agent-arg=ARG` | — | Extra agent-CLI arg (repeatable; `--claude-arg` is a legacy alias) |
 | `--post` | off | Post findings when batch finishes |
 | `--prefix TEXT` | `[AI review - <model>]` | Message prefix; `<model>` placeholder substituted (`$LREVIEW_PREFIX` overrides the default; `''` for none) |

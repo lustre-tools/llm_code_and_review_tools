@@ -307,6 +307,11 @@ class TestRunBatch:
         # Collected artifacts are per-change suffixed and valid
         collected = config.results_dir / "gerrit-review-101_ps1.json"
         assert json.loads(collected.read_text()) == REVIEW_SPEC
+        # Human-readable markdown report generated for findings
+        md = config.results_dir / "markdown" / "101_change_101_ps1.md"
+        assert md.is_file()
+        assert "## Findings" in md.read_text()
+        assert results[101].markdown_path == md
         metadata = config.results_dir / "review-metadata-101_ps1.json"
         assert json.loads(
             metadata.read_text())["issue-severity-score"] == "high"
@@ -327,6 +332,7 @@ class TestRunBatch:
         assert summary["101"]["model"] == "fable"
         assert summary["101"]["tokens"] == 53010
         assert summary["101"]["cost_usd"] == 1.23
+        assert summary["101"]["markdown"] == "markdown/101_change_101_ps1.md"
         assert summary["101"]["sha"] == sha_findings
         assert summary["101"]["posted"] is False
         assert summary["102"]["status"] == STATUS_CLEAN

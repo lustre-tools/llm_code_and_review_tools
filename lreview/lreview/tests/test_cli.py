@@ -12,7 +12,9 @@ class TestParser:
     def test_run_defaults(self, monkeypatch):
         monkeypatch.delenv("LREVIEW_PREFIX", raising=False)
         monkeypatch.delenv("LREVIEW_AGENT", raising=False)
+        monkeypatch.delenv("LREVIEW_EFFORT", raising=False)
         args = build_parser().parse_args(["run", "64086"])
+        assert args.effort is None
         assert args.changes == ["64086"]
         assert args.jobs == 5
         assert args.timeout == 7200
@@ -33,6 +35,15 @@ class TestParser:
         assert args.agent == "gemini"
         with pytest.raises(SystemExit):
             build_parser().parse_args(["run", "1", "--agent", "cursor"])
+
+    def test_effort_flag_and_env(self, monkeypatch):
+        monkeypatch.setenv("LREVIEW_EFFORT", "high")
+        args = build_parser().parse_args(["run", "1"])
+        assert args.effort == "high"
+        args = build_parser().parse_args(["run", "1", "--effort", "max"])
+        assert args.effort == "max"
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(["run", "1", "--effort", "turbo"])
 
     def test_resolve_model(self, monkeypatch):
         from lreview.cli import resolve_model

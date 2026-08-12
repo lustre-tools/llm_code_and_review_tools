@@ -29,7 +29,8 @@ from typing import Optional
 from .agents import get_agent
 from .gerrit import ResolvedChange
 from .manifest import SUMMARY_NAME, locked_summary  # noqa: F401 (re-export)
-from .ui import console
+from .markdown import write_review_markdown
+from .ui import console, elapsed as _elapsed, format_tokens  # noqa: F401
 from . import worktree as wt
 
 REVIEW_JSON_NAME = "gerrit-review.json"
@@ -74,16 +75,6 @@ def _read_tail(path: Path, size: int) -> str:
         return ""
 
 
-def format_tokens(count: Optional[int]) -> Optional[str]:
-    if count is None:
-        return None
-    if count < 1000:
-        return str(count)
-    if count < 1_000_000:
-        return f"{count / 1000:.0f}k"
-    return f"{count / 1_000_000:.1f}M"
-
-
 def live_token_count(log_path: Path) -> Optional[int]:
     """Latest estimated_tokens value from the streaming log."""
     matches = _ESTIMATED_TOKENS_RE.findall(_read_tail(log_path, 16384))
@@ -126,6 +117,7 @@ class ReviewResult:
     cost_usd: Optional[float] = None
     duration: float = 0.0
     json_path: Optional[Path] = None
+    markdown_path: Optional[Path] = None
     log_path: Optional[Path] = None
     error: Optional[str] = None
 
@@ -141,6 +133,7 @@ class BatchConfig:
     keep_worktrees: bool = False
     agent: str = "claude"
     model: Optional[str] = None
+    effort: Optional[str] = None
     agent_args: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -178,7 +171,7 @@ def build_agent_cmd(config: BatchConfig) -> list[str]:
     everything until the end).
     """
     spec = get_agent(config.agent)
-    return spec.build_cmd(config.model, config.agent_args,
+    return spec.build_cmd(config.model, config.effort, config.agent_args,
                           review_prompt(config))
 
 
@@ -255,11 +248,6 @@ def detect_model(log_path: Optional[Path],
     if match:
         return match.group(1)[:20]
     return None
-
-
-def _elapsed(seconds: float) -> str:
-    minutes, secs = divmod(int(seconds), 60)
-    return f"{minutes}m{secs:02d}s"
 
 
 class ProgressTracker:
@@ -479,6 +467,16 @@ def run_review(
             cost_usd=cost_usd, error=error)
 
     findings = count_findings(spec)
+    markdown_path = None
+    try:
+        markdown_path = write_review_markdown(
+            config.results_dir, change, spec, severity=severity,
+            model=model, tokens=tokens, cost_usd=cost_usd,
+            duration=duration)
+    except Exception as exc:  # noqa: BLE001 - the report is a
+        # convenience; never fail the review over it
+        _log(f"[{change.slug}] warning: markdown report failed: {exc}")
+
     severity_color = {"urgent": "red", "high": "red",
                       "medium": "yellow"}.get(severity or "", "green")
     severity_note = (
@@ -490,7 +488,8 @@ def run_review(
     return ReviewResult(
         change, STATUS_FINDINGS, findings=findings, severity=severity,
         model=model, tokens=tokens, cost_usd=cost_usd, duration=duration,
-        json_path=dest_json, log_path=log_path)
+        json_path=dest_json, markdown_path=markdown_path,
+        log_path=log_path)
 
 
 def _review_and_cleanup(
@@ -606,6 +605,9 @@ def update_summary(results_dir: Path, results: list[ReviewResult]) -> None:
                 "cost_usd": result.cost_usd,
                 "duration_s": round(result.duration),
                 "json": result.json_path.name if result.json_path else None,
+                "markdown": (f"{result.markdown_path.parent.name}/"
+                             f"{result.markdown_path.name}"
+                             if result.markdown_path else None),
                 "log": result.log_path.name if result.log_path else None,
                 "error": result.error,
                 "posted": False,
