@@ -104,8 +104,9 @@ lreview run 64086 64087 --post
 
 While reviews run, a colored status line at the bottom of the terminal
 is redrawn in place every few seconds — elapsed time and a **live token
-counter** per running review (from the stream-json `estimated_tokens`
-events claude emits; also your liveness signal — a frozen counter means
+counter** per running review (billed usage summed live from the
+stream-json events, tracking the final total to ~1%; also your
+liveness signal — a frozen counter means
 a stuck review). Event lines scroll above it; completions show final
 tokens and cost from the result event, and the batch summary prints
 per-change and total tokens/cost:
@@ -185,7 +186,10 @@ lreview run --repo lustre-release -m 64086                # full gate
 3. Up to `--jobs` (default 5) headless agent processes run the review
    prompt concurrently, one per worktree (worktree names carry the pid,
    so concurrent lreview invocations never collide). Full output of
-   each run is logged to `kreview-<change>_ps<N>.log`; on timeout the
+   each run is logged to its own stamped file
+   `kreview-<change>_ps<N>-<timestamp>.<pid>.log` — every run's log
+   is preserved (they are the ground truth for comparing runs;
+   `summary.json` names the log of the current entry); on timeout the
    whole agent process group is killed.
 4. The prompt writes `./gerrit-review.json` **only when it finds issues**,
    and `./review-metadata.json` (severity score) for **every completed
@@ -271,7 +275,7 @@ never posted; `post` skips them.
 lreview-results/
 ├── gerrit-review-64086_ps40.json     # the review (only when findings)
 ├── review-metadata-64086_ps40.json   # severity score + issue count
-├── kreview-64086_ps40.log            # full claude event log (stream-json)
+├── kreview-64086_ps40-20260828-153012.1234.log   # per-run claude event log
 ├── markdown/
 │   └── 64086_LU-..._ps40.md          # human-readable report (see below)
 └── summary.json                      # per-change manifest (see above)
@@ -295,9 +299,9 @@ when it matches and the `review-metadata-*.json` sidecar otherwise.
 The logs are JSONL event streams; useful jq one-liners:
 
 ```bash
-jq -r '.result // empty' kreview-64086_ps40.log      # final review text
+jq -r '.result // empty' kreview-64086_ps40-*.log    # final review text
 jq -r 'select(.type=="assistant").message.content[]?
-       | .text // .name' kreview-64086_ps40.log       # what claude did
+       | .text // .name' kreview-64086_ps40-*.log     # what claude did
 ```
 
 ## Commands

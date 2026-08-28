@@ -81,7 +81,40 @@ def _read_tail(path: Path, size: int) -> str:
 
 
 def live_token_count(log_path: Path) -> Optional[int]:
-    """Latest estimated_tokens value from the streaming log."""
+    """Tokens consumed so far, from the stream-json usage events.
+
+    Sums input/cache-creation/cache-read/output over the assistant
+    messages seen so far, deduplicated by message id (the same
+    message can be logged more than once; the last one wins). This
+    tracks the final result-event total to ~1% — only the
+    per-message output_tokens are partial. Falls back to the legacy
+    estimated_tokens event when the log carries no usage (other
+    agents, older claude versions).
+    """
+    usage_by_id: dict = {}
+    try:
+        with open(log_path, errors="replace") as f:
+            for line in f:
+                if '"usage"' not in line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue  # e.g. a line still being written
+                if obj.get("type") != "assistant":
+                    continue
+                msg = obj.get("message") or {}
+                usage = msg.get("usage")
+                if isinstance(usage, dict):
+                    usage_by_id[msg.get("id")] = usage
+    except OSError:
+        return None
+    if usage_by_id:
+        return sum(
+            usage.get(key, 0)
+            for usage in usage_by_id.values()
+            for key in ("input_tokens", "cache_creation_input_tokens",
+                        "cache_read_input_tokens", "output_tokens"))
     matches = _ESTIMATED_TOKENS_RE.findall(_read_tail(log_path, 16384))
     return int(matches[-1]) if matches else None
 
@@ -429,14 +462,28 @@ def _collect_json(source: Path, dest: Path):
     return spec, None
 
 
+def run_log_path(config: BatchConfig, change: ResolvedChange) -> Path:
+    """Per-run log file, stamped with the start time (plus pid, so
+    concurrent invocations reviewing the same change never share a
+    log). Every run's log is preserved — they are the only ground
+    truth for comparing runs — and summary.json records which log
+    belongs to the current entry."""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    return (config.results_dir /
+            f"kreview-{change.slug}{artifact_tag(config.mode)}"
+            f"-{stamp}.{os.getpid()}.log")
+
+
 def run_review(
     config: BatchConfig,
     change: ResolvedChange,
     worktree_dir: Path,
+    log_path: Optional[Path] = None,
 ) -> ReviewResult:
     """Run one headless kreview in its worktree and collect the output."""
     tag = artifact_tag(config.mode)
-    log_path = config.results_dir / f"kreview-{change.slug}{tag}.log"
+    if log_path is None:
+        log_path = run_log_path(config, change)
     cmd = build_agent_cmd(config, change)
     start = time.monotonic()
 
@@ -588,11 +635,9 @@ def _review_and_cleanup(
     cleanup: bool = True,
 ) -> ReviewResult:
     """Worker wrapper: never lets an exception escape into the pool."""
+    log_path = run_log_path(config, change)
     if tracker:
-        tracker.start(
-            change.slug,
-            config.results_dir /
-            f"kreview-{change.slug}{artifact_tag(config.mode)}.log")
+        tracker.start(change.slug, log_path)
 
     memory_path = None
     memory_before = None
@@ -607,7 +652,8 @@ def _review_and_cleanup(
             _log(f"[{change.slug}] warning: memory doc unavailable: {exc}")
 
     try:
-        result = run_review(config, change, worktree_dir)
+        result = run_review(config, change, worktree_dir,
+                            log_path=log_path)
     except Exception as exc:  # noqa: BLE001 - one bad review must not
         # abort the batch or strand the other results
         _log(f"[{change.slug}] FAILED with unexpected error: {exc!r}")

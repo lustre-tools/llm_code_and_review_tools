@@ -255,6 +255,25 @@ class TestTokenParsing:
         assert format_tokens(53010) == "53k"
         assert format_tokens(2_140_000) == "2.1M"
 
+    def test_live_token_count_sums_usage_events(self, tmp_path):
+        """The live counter sums per-message usage, deduplicated by
+        message id (later lines for the same id win)."""
+        from lreview.runner import live_token_count
+        log = tmp_path / "usage.log"
+        log.write_text(
+            '{"type":"assistant","message":{"id":"m1","usage":'
+            '{"input_tokens":4,"cache_creation_input_tokens":100,'
+            '"cache_read_input_tokens":1000,"output_tokens":1}}}\n'
+            '{"type":"assistant","message":{"id":"m1","usage":'
+            '{"input_tokens":4,"cache_creation_input_tokens":100,'
+            '"cache_read_input_tokens":1000,"output_tokens":50}}}\n'
+            '{"type":"assistant","message":{"id":"m2","usage":'
+            '{"input_tokens":2,"cache_creation_input_tokens":0,'
+            '"cache_read_input_tokens":2000,"output_tokens":10}}}\n'
+            'not json at all\n')
+        # m1 counted once (last wins): 4+100+1000+50, m2: 2+0+2000+10
+        assert live_token_count(log) == 1154 + 2012
+
     def test_live_token_count_latest_wins(self, tmp_path):
         from lreview.runner import live_token_count
         log = tmp_path / "x.log"
@@ -348,7 +367,7 @@ class TestRunBatch:
         # Invalid output is preserved for debugging
         assert (config.results_dir / "gerrit-review-104_ps1.invalid").exists()
         # Logs exist per change
-        assert (config.results_dir / "kreview-103_ps1.log").exists()
+        assert list(config.results_dir.glob("kreview-103_ps1-*.log"))
 
         # Worktrees were cleaned up
         assert not any((tmp_path / "worktrees").glob("kreview_*"))
@@ -390,7 +409,8 @@ class TestRunBatch:
                 "gerrit-review-120_ps1-light.json").is_file()
         assert (config.results_dir /
                 "review-metadata-120_ps1-light.json").is_file()
-        assert (config.results_dir / "kreview-120_ps1-light.log").is_file()
+        assert list(
+            config.results_dir.glob("kreview-120_ps1-light-*.log"))
         md = (config.results_dir / "markdown" /
               "120_change_120_ps1-light.md")
         assert md.is_file()
@@ -421,6 +441,24 @@ class TestRunBatch:
         assert results[0].status == STATUS_CLEAN
         assert full_json.exists()        # full results untouched
         assert not light_json.exists()   # stale light result superseded
+
+    def test_per_run_logs_preserved(self, repo, tmp_path, stub_claude):
+        """Each run writes its own stamped log; a re-review never
+        overwrites the previous run's log."""
+        sha = _git(repo, "rev-parse", "HEAD")
+        config = _config(repo, tmp_path)
+        run_batch(config, [_change(140, sha)])
+        first = list(config.results_dir.glob("kreview-140_ps1-*.log"))
+        assert len(first) == 1
+        import time as time_mod
+        time_mod.sleep(1.1)  # stamp granularity is one second
+        run_batch(config, [_change(140, sha)])
+        logs = sorted(config.results_dir.glob("kreview-140_ps1-*.log"))
+        assert len(logs) == 2
+        summary = json.loads(
+            (config.results_dir / "summary.json").read_text())
+        # the manifest names the latest run's log
+        assert summary["140"]["log"] == logs[-1].name
 
     def test_clean_rereview_supersedes_stale_findings(self, repo, tmp_path,
                                                       stub_claude):
