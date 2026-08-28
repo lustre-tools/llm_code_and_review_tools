@@ -87,6 +87,29 @@ class TestReviewMarkdown:
         name = markdown_filename(change)
         assert name == (f"feat_foo_{'b' * 7}_LU-1_osc_fix_the_thing.md")
 
+    def test_clean_render(self):
+        md = review_markdown(
+            _change(), None, severity="none", model="opus",
+            tokens=11_000_000, cost_usd=10.91, duration=1493)
+        assert "clean — no findings" in md
+        assert "severity" not in md  # "none" adds nothing to a clean report
+        assert "## Findings" in md
+        assert "completed without findings" in md
+        assert "## Overall assessment" not in md
+
+    def test_clean_render_with_memory(self):
+        md = review_markdown(
+            _change(), None, memory="/db/64620-subject.md")
+        assert "- **Review memory:** `/db/64620-subject.md`" in md
+        assert "see the review memory document" in md
+
+    def test_findings_render_with_memory(self):
+        md = review_markdown(
+            _change(), SPEC, severity="high",
+            memory="/db/64620-subject.md")
+        assert "- **Review memory:** `/db/64620-subject.md`" in md
+        assert "3 finding(s), severity **high**" in md
+
     def test_write_creates_markdown_dir(self, tmp_path):
         path = write_review_markdown(tmp_path, _change(), SPEC,
                                      severity="high")

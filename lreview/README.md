@@ -139,6 +139,40 @@ contain the `<model>` placeholder, e.g.
 `[Marc Bot - AI review - opus]`. The model is taken from `--model`,
 falling back to the model claude reports in the review log.
 
+## Review modes (`--mode`)
+
+Two depths of review share the same pipeline, artifacts, and posting
+machinery:
+
+- **`full`** (default) — the review-prompts `review-core.md` deep-dive
+  regression analysis, unchanged. Exhaustive (context gathering,
+  callstack analysis, Gerrit-thread reconciliation, commit-message and
+  JIRA verification, kernel-compat audit, false-positive pass) and
+  priced accordingly: expect on the order of 15–30 minutes and
+  ~$5–15 per non-trivial patch. The pre-landing gate.
+- **`light`** — a single focused pass driven by the bundled
+  `light-prompt.md`: read the diff and the surrounding code
+  (callers/callees, locking/refcount/error invariants), check error
+  handling and resource cleanup, apply `lustre-style.md` (loaded from
+  the review-prompts checkout), sanity-check the commit message, and
+  double-check every issue before reporting it — with the full
+  protocol's false-positive discipline distilled in. Much cheaper and
+  faster; the everyday iteration loop, especially combined with
+  `--memory`.
+
+Light-mode artifacts are namespaced with a `-light` suffix
+(`gerrit-review-<change>_ps<N>-light.json`, `..._ps<N>-light.md`,
+manifest key `<change>-light`), so light and full results for the same
+change+patchset coexist — a light run never overwrites or supersedes
+a full run's results. `lreview post <change>` posts every mode's
+unposted findings for that change; use the exact key
+(`lreview post 64086-light`) to target one mode.
+
+```bash
+lreview run --mode light --repo lustre-release -m 64086   # cheap pass
+lreview run --repo lustre-release -m 64086                # full gate
+```
+
 ## How it works
 
 1. Every change (number or URL) is resolved to its **current patchset**
@@ -243,10 +277,15 @@ lreview-results/
 └── summary.json                      # per-change manifest (see above)
 ```
 
-Every review with findings also gets a **human-readable Markdown
+Every completed review also gets a **human-readable Markdown
 report** under `markdown/<change>_<subject>_ps<N>.md` — change link,
 severity, model/tokens/cost, the overall assessment, and each finding
-anchored to its file and line. The paths are listed at the end of the
+anchored to its file and line. A clean review writes a report saying
+so; re-reviewing a change+patchset that previously had findings also
+removes the now-superseded `gerrit-review-*.json`, so the results
+directory always reflects the latest review (with `--memory`, the
+clean report points at the memory document, which records what was
+re-checked and withdrawn). The paths are listed at the end of the
 `run` output, so results can be read comfortably without posting
 anything to Gerrit. `lreview render` (re)generates the reports for
 review JSONs that already exist — from older runs predating this
@@ -282,6 +321,7 @@ rejoin a positional list split around a flag).
 |---|---|---|
 | `--repo PATH` | `.` | Source git repository |
 | `--local` | off | Changes are git refs of `--repo`; no changes at all = checked-out HEAD, in place (no flag needed); not postable |
+| `--mode NAME` | `full` | Review depth: `full` = review-core.md deep dive, `light` = the bundled single-pass light review (see "Review modes") |
 | `--jobs, -j N` | 5 | Parallel reviews |
 | `--timeout SECS` | 7200 | Per-review timeout |
 | `--results-dir DIR` | `./lreview-results` | Logs, JSONs, summary.json |

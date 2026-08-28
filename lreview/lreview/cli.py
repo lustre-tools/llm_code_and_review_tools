@@ -189,10 +189,12 @@ def cmd_run(args) -> int:
         previous = read_summary(results_dir)
     except Exception:
         previous = {}
+    from .runner import artifact_tag
+    mode_tag = artifact_tag(args.mode)
     for change in changes:
         if change.number is None:
             continue
-        old = previous.get(str(change.number))
+        old = previous.get(f"{change.number}{mode_tag}")
         if old and old.get("posted") and old.get("sha") == change.sha:
             print(f"  note: {change.number} ps{change.patchset} was already "
                   "posted; posting a fresh result needs 'post --force'")
@@ -227,6 +229,7 @@ def cmd_run(args) -> int:
         jobs=args.jobs,
         timeout=args.timeout,
         keep_worktrees=args.keep_worktrees,
+        mode=args.mode,
         agent=args.agent,
         model=resolve_model(args.agent, args.model),
         effort=args.effort,
@@ -249,7 +252,8 @@ def cmd_run(args) -> int:
             status = console.color("green", result.status)
         else:
             status = console.color("red", result.status)
-        line = f"  {result.change.slug:<16} {status}"
+        slug = result.change.slug + artifact_tag(result.mode)
+        line = f"  {slug:<16} {status}"
         if result.status == STATUS_FINDINGS:
             line += f" ({result.findings} finding(s)"
             if result.severity:
@@ -297,7 +301,8 @@ def cmd_run(args) -> int:
         print("\nnote: local reviews are not tied to a Gerrit change "
               "and are never posted; see the reports above.")
     if with_findings:
-        numbers = [r.change.number for r in with_findings]
+        numbers = [f"{r.change.number}{mode_tag}"
+                   for r in with_findings]
         if args.post:
             print("\nPosting results to Gerrit...")
             try:
@@ -340,12 +345,18 @@ def cmd_render(args) -> int:
 def cmd_post(args) -> int:
     results_dir = Path(args.results_dir).expanduser().resolve()
 
-    # Accept bare numbers and Gerrit URLs alike.
+    # Accept bare numbers, Gerrit URLs, and mode-tagged manifest keys
+    # ("64620-light") alike. A bare number posts every mode's entry
+    # for that change.
+    import re
     changes = None
     if args.changes:
         from gerrit_cli.client import GerritCommentsClient
         changes = []
         for spec in args.changes:
+            if re.fullmatch(r"\d+-[a-z]+", str(spec)):
+                changes.append(str(spec))
+                continue
             try:
                 _, number = GerritCommentsClient.parse_gerrit_url(str(spec))
             except Exception:
@@ -386,6 +397,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "key run options (full list: lreview run -h):\n"
             "  -j, --jobs N     parallel reviews (default: 5)\n"
+            "  --mode NAME      full (default) or light — one cheap\n"
+            "                   focused pass instead of the deep dive\n"
             "  --agent NAME     claude (default), codex, gemini, opencode\n"
             "  --model NAME     opus (default), sonnet, fable, ...\n"
             "  --post           post findings when the batch finishes\n"
@@ -447,6 +460,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Treat the change arguments as local git refs "
              "(branches/SHAs) of --repo — each reviewed in its own "
              "worktree. Local results are not postable to Gerrit.")
+    run_p.add_argument(
+        "--mode", choices=["full", "light"], default="full",
+        help="Review depth: 'full' (default) runs the review-prompts "
+             "review-core.md deep-dive pipeline unchanged; 'light' "
+             "runs the bundled single-pass light review (code + "
+             "surrounding code + lustre-style.md + commit message) — "
+             "much cheaper, artifacts suffixed '-light' so the two "
+             "modes never overwrite each other")
     run_p.add_argument(
         "--jobs", "-j", type=_positive_int, default=5,
         help="Maximum parallel reviews (default: 5)")

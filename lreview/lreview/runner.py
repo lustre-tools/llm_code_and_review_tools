@@ -36,6 +36,11 @@ from . import worktree as wt
 REVIEW_JSON_NAME = "gerrit-review.json"
 METADATA_JSON_NAME = "review-metadata.json"
 
+# Review modes: "full" runs the review-prompts review-core.md
+# pipeline; "light" runs the bundled single-pass light-prompt.md
+REVIEW_MODES = ("full", "light")
+LIGHT_PROMPT_PATH = Path(__file__).resolve().parent / "light-prompt.md"
+
 # Review status values recorded in the summary manifest
 STATUS_FINDINGS = "findings"
 STATUS_CLEAN = "clean"
@@ -105,10 +110,21 @@ def parse_final_usage(log_path: Path):
     return None, None
 
 
+def artifact_tag(mode: str) -> str:
+    """Filename/manifest-key suffix separating review modes.
+
+    Full-mode artifacts keep their historical unsuffixed names; other
+    modes are namespaced so a light run never overwrites or
+    supersedes a full run's results for the same change+patchset.
+    """
+    return "" if mode == "full" else f"-{mode}"
+
+
 @dataclass
 class ReviewResult:
     change: ResolvedChange
     status: str
+    mode: str = "full"
     findings: int = 0
     severity: Optional[str] = None
     model: Optional[str] = None
@@ -133,6 +149,7 @@ class BatchConfig:
     jobs: int = 5
     timeout: int = 7200
     keep_worktrees: bool = False
+    mode: str = "full"
     agent: str = "claude"
     model: Optional[str] = None
     effort: Optional[str] = None
@@ -149,6 +166,9 @@ class BatchConfig:
         self.worktrees_dir = Path(self.worktrees_dir).expanduser().resolve()
         self.prompts_dir = Path(self.prompts_dir).expanduser().resolve()
         get_agent(self.agent)  # fail fast on unknown agents
+        if self.mode not in REVIEW_MODES:
+            raise ValueError(
+                f"mode must be one of {REVIEW_MODES}, got {self.mode!r}")
         if self.jobs < 1:
             raise ValueError(f"jobs must be >= 1, got {self.jobs}")
 
@@ -164,11 +184,21 @@ def review_prompt(config: BatchConfig,
     prompt compliance than calling it a review. The worktree's HEAD
     is the patch, so "the top commit" needs no SHA.
 
+    In light mode the instruction references the bundled
+    light-prompt.md instead — one focused pass, with the review-prompts
+    directory passed along so the driver can load lustre-style.md.
+
     With memory enabled, the prompt additionally points at the
     memory-protocol instructions and the change's memory document.
     """
-    prompt = (f"Using the prompt {config.prompts_dir}/review-core.md "
-              "run a deep dive regression analysis of the top commit")
+    if config.mode == "light":
+        prompt = (f"Using the prompt {LIGHT_PROMPT_PATH} run a light "
+                  "regression review of the top commit; the "
+                  "review-prompts knowledge directory is "
+                  f"{config.prompts_dir}")
+    else:
+        prompt = (f"Using the prompt {config.prompts_dir}/review-core.md "
+                  "run a deep dive regression analysis of the top commit")
     if config.memory_db is not None and change is not None:
         from .memory import MEMORY_PROMPT_PATH, ensure_doc
         doc = ensure_doc(config.memory_db, change)
@@ -405,7 +435,8 @@ def run_review(
     worktree_dir: Path,
 ) -> ReviewResult:
     """Run one headless kreview in its worktree and collect the output."""
-    log_path = config.results_dir / f"kreview-{change.slug}.log"
+    tag = artifact_tag(config.mode)
+    log_path = config.results_dir / f"kreview-{change.slug}{tag}.log"
     cmd = build_agent_cmd(config, change)
     start = time.monotonic()
 
@@ -418,13 +449,15 @@ def run_review(
         _log(f"[{change.slug}] {console.color('red', 'TIMEOUT')} "
              f"after {int(duration)}s")
         return ReviewResult(
-            change, STATUS_TIMEOUT, duration=duration, log_path=log_path,
+            change, STATUS_TIMEOUT, mode=config.mode, duration=duration,
+            log_path=log_path,
             model=detect_model(log_path, config.model),
             tokens=live_token_count(log_path),
             error=f"timed out after {config.timeout}s")
     except OSError as exc:
         return ReviewResult(
-            change, STATUS_FAILED, duration=time.monotonic() - start,
+            change, STATUS_FAILED, mode=config.mode,
+            duration=time.monotonic() - start,
             log_path=log_path, model=detect_model(None, config.model),
             error=str(exc))
 
@@ -436,13 +469,21 @@ def run_review(
     review_json = worktree_dir / REVIEW_JSON_NAME
     metadata_json = worktree_dir / METADATA_JSON_NAME
 
+    memory_doc = None
+    if config.memory_db is not None:
+        from .memory import ensure_doc
+        try:
+            memory_doc = ensure_doc(config.memory_db, change)
+        except OSError:
+            pass
+
     # review-metadata.json is written for every completed analysis;
     # collect it (best effort) and use it as the completion marker.
     severity = None
     if metadata_json.is_file():
         metadata, _ = _collect_json(
             metadata_json,
-            config.results_dir / f"review-metadata-{change.slug}.json")
+            config.results_dir / f"review-metadata-{change.slug}{tag}.json")
         if metadata:
             severity = metadata.get("issue-severity-score")
 
@@ -457,32 +498,58 @@ def run_review(
             _log(f"[{change.slug}] {console.color('red', 'FAILED')} "
                  f"(exit {returncode}), see {log_path}")
             return ReviewResult(
-                change, STATUS_FAILED, duration=duration, log_path=log_path,
-                model=model, tokens=tokens, cost_usd=cost_usd,
-                error=f"claude exited {returncode}")
+                change, STATUS_FAILED, mode=config.mode, duration=duration,
+                log_path=log_path, model=model, tokens=tokens,
+                cost_usd=cost_usd, error=f"claude exited {returncode}")
         if not metadata_json.is_file():
             _log(f"[{change.slug}] {console.color('red', 'FAILED')} — "
                  f"review did not complete (no {METADATA_JSON_NAME}), "
                  f"see {log_path}")
             return ReviewResult(
-                change, STATUS_FAILED, duration=duration, log_path=log_path,
-                model=model, tokens=tokens, cost_usd=cost_usd,
+                change, STATUS_FAILED, mode=config.mode, duration=duration,
+                log_path=log_path, model=model, tokens=tokens,
+                cost_usd=cost_usd,
                 error=f"no {METADATA_JSON_NAME} produced — review did not "
                       "run to completion")
+        # A completed clean review supersedes earlier findings
+        # artifacts for the same change+patchset: drop the stale
+        # findings JSON so the results directory never shows findings
+        # the latest run withdrew, and write the report saying clean.
+        dest_json = (config.results_dir /
+                     f"gerrit-review-{change.slug}{tag}.json")
+        for stale in (dest_json, dest_json.with_suffix(".invalid")):
+            if stale.exists():
+                try:
+                    stale.unlink()
+                    _log(f"[{change.slug}] note: removed superseded "
+                         f"{stale.name}")
+                except OSError:
+                    pass
+        markdown_path = None
+        try:
+            markdown_path = write_review_markdown(
+                config.results_dir, change, None, severity=severity,
+                model=model, tokens=tokens, cost_usd=cost_usd,
+                duration=duration, memory=memory_doc, tag=tag)
+        except Exception as exc:  # noqa: BLE001 - the report is a
+            # convenience; never fail the review over it
+            _log(f"[{change.slug}] warning: markdown report failed: {exc}")
         _log(f"[{change.slug}] {console.color('green', 'clean')} — "
              f"no findings ({stats})")
         return ReviewResult(
-            change, STATUS_CLEAN, severity=severity, model=model,
+            change, STATUS_CLEAN, mode=config.mode, severity=severity,
+            model=model,
             tokens=tokens, cost_usd=cost_usd, duration=duration,
-            log_path=log_path)
+            markdown_path=markdown_path, log_path=log_path)
 
-    dest_json = config.results_dir / f"gerrit-review-{change.slug}.json"
+    dest_json = config.results_dir / f"gerrit-review-{change.slug}{tag}.json"
     spec, error = _collect_json(review_json, dest_json)
     if spec is None:
         _log(f"[{change.slug}] {console.color('red', 'INVALID JSON')} "
              f"output: {error}")
         return ReviewResult(
-            change, STATUS_INVALID_JSON, duration=duration,
+            change, STATUS_INVALID_JSON, mode=config.mode,
+            duration=duration,
             log_path=log_path, model=model, tokens=tokens,
             cost_usd=cost_usd, error=error)
 
@@ -492,7 +559,7 @@ def run_review(
         markdown_path = write_review_markdown(
             config.results_dir, change, spec, severity=severity,
             model=model, tokens=tokens, cost_usd=cost_usd,
-            duration=duration)
+            duration=duration, memory=memory_doc, tag=tag)
     except Exception as exc:  # noqa: BLE001 - the report is a
         # convenience; never fail the review over it
         _log(f"[{change.slug}] warning: markdown report failed: {exc}")
@@ -506,7 +573,8 @@ def run_review(
          f"{console.color('yellow', f'{findings} finding(s)')}"
          f"{severity_note} ({stats}) -> {dest_json.name}")
     return ReviewResult(
-        change, STATUS_FINDINGS, findings=findings, severity=severity,
+        change, STATUS_FINDINGS, mode=config.mode, findings=findings,
+        severity=severity,
         model=model, tokens=tokens, cost_usd=cost_usd, duration=duration,
         json_path=dest_json, markdown_path=markdown_path,
         log_path=log_path)
@@ -522,7 +590,9 @@ def _review_and_cleanup(
     """Worker wrapper: never lets an exception escape into the pool."""
     if tracker:
         tracker.start(
-            change.slug, config.results_dir / f"kreview-{change.slug}.log")
+            change.slug,
+            config.results_dir /
+            f"kreview-{change.slug}{artifact_tag(config.mode)}.log")
 
     memory_path = None
     memory_before = None
@@ -541,7 +611,8 @@ def _review_and_cleanup(
     except Exception as exc:  # noqa: BLE001 - one bad review must not
         # abort the batch or strand the other results
         _log(f"[{change.slug}] FAILED with unexpected error: {exc!r}")
-        result = ReviewResult(change, STATUS_FAILED, error=repr(exc))
+        result = ReviewResult(change, STATUS_FAILED,
+                              mode=config.mode, error=repr(exc))
     finally:
         if tracker:
             tracker.finish(change.slug)
@@ -617,7 +688,8 @@ def run_batch(
         except Exception as exc:  # noqa: BLE001 - record and continue
             _log(f"[{change.slug}] worktree setup failed: {exc}")
             results.append(ReviewResult(
-                change, STATUS_FAILED, agent=config.agent, error=str(exc)))
+                change, STATUS_FAILED, mode=config.mode,
+                agent=config.agent, error=str(exc)))
 
     interrupted = False
     try:
@@ -671,13 +743,17 @@ def update_summary(results_dir: Path, results: list[ReviewResult]) -> None:
     with locked_summary(results_dir) as summary:
         for result in results:
             change = result.change
-            # Local reviews have no change number; key them by slug
+            # Local reviews have no change number; key them by slug.
+            # Non-full modes are namespaced (e.g. "64620-light") so a
+            # light run never replaces a full run's manifest entry.
             key = str(change.number) if change.number else change.slug
+            key += artifact_tag(result.mode)
             old = summary.get(key)
 
             entry = {
                 "number": change.number,
                 "local": change.number is None,
+                "mode": result.mode,
                 "ref_name": getattr(change, "ref_name", None),
                 "patchset": change.patchset,
                 "sha": change.sha,

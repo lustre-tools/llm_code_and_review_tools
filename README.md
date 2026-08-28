@@ -35,10 +35,13 @@ lreview setup                                    # guided first-time setup
 lreview run --repo lustre-release 64086 64087    # review (5 parallel, opus)
 lreview post                                     # post findings after inspection
 lreview run --repo lustre-release --post 64086   # or review + post in one go
+lreview run --mode light --repo lustre-release 64086  # cheap single-pass review
 ```
 
 Live colored status with per-review token counter while running;
-`-j N` for concurrency, `--model sonnet|fable` to switch models.
+`-j N` for concurrency, `--model sonnet|fable` to switch models,
+`--mode light` for a cheap single-pass review (light artifacts are
+`-light`-suffixed and never overwrite full-review results).
 Details: [lreview/README.md](lreview/README.md).
 
 ### Bundled submodules

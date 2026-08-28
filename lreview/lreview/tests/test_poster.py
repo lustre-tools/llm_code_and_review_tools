@@ -126,6 +126,37 @@ class TestPostResults:
         with pytest.raises(KeyError):
             post_results(results_dir, changes=[999])
 
+    def test_mode_tagged_entries_reachable(self, results_dir):
+        """A light entry is posted via its exact key or via the bare
+        change number (which expands to every mode's entry)."""
+        (results_dir / "gerrit-review-103_ps2-light.json").write_text(
+            json.dumps(REVIEW_SPEC))
+        summary = load_summary(results_dir)
+        summary["103-light"] = {
+            "number": 103, "patchset": 2, "sha": "c" * 40,
+            "subject": "s3", "base_url": "https://gerrit.invalid",
+            "status": "findings", "findings": 1, "model": "opus",
+            "agent": "claude", "mode": "light",
+            "json": "gerrit-review-103_ps2-light.json",
+            "log": "kreview-103_ps2-light.log", "error": None,
+            "posted": False,
+        }
+        (results_dir / "summary.json").write_text(json.dumps(summary))
+
+        reviewer = _mock_reviewer()
+        p_rev, p_client = _patched(reviewer)
+        with p_rev, p_client:
+            outcomes = post_results(results_dir, changes=["103-light"])
+        assert outcomes[0].status == "posted"
+        assert reviewer.post_review.call_args[1]["change_number"] == 103
+
+        # bare number expands to the light entry too (now already
+        # posted, so it is found and guard-skipped, not missing)
+        with p_rev, p_client:
+            outcomes = post_results(results_dir, changes=[103])
+        assert outcomes[0].status == "skipped"
+        assert "already posted" in outcomes[0].detail
+
     def test_missing_summary_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             post_results(tmp_path)

@@ -1,8 +1,11 @@
 """Render collected review JSONs as human-readable Markdown reports.
 
-Every review with findings gets a report at
+Every completed review gets a report at
 <results-dir>/markdown/<change>_<subject>_ps<N>.md so the results can
-be read comfortably without posting them to Gerrit.
+be read comfortably without posting them to Gerrit. A clean review
+(spec=None) writes a report saying so — it replaces the previous
+run's findings report, keeping the directory in sync with the latest
+review of that change+patchset.
 """
 
 import json
@@ -16,7 +19,8 @@ from .ui import elapsed, format_tokens
 
 MARKDOWN_SUBDIR = "markdown"
 
-_REVIEW_JSON_RE = re.compile(r"gerrit-review-(\d+)_ps(\d+)\.json$")
+_REVIEW_JSON_RE = re.compile(
+    r"gerrit-review-(\d+)_ps(\d+)(-[a-z]+)?\.json$")
 
 
 def _sanitize(text: str, max_len: int = 60) -> str:
@@ -25,11 +29,13 @@ def _sanitize(text: str, max_len: int = 60) -> str:
     return text[:max_len].rstrip("_")
 
 
-def markdown_filename(change) -> str:
+def markdown_filename(change, tag: str = "") -> str:
+    """Report filename; `tag` is the review-mode suffix ("" for full,
+    "-light" for light) so modes keep separate reports."""
     if change.number is None:  # local review: keyed by ref + sha
-        return f"{change.slug}_{_sanitize(change.subject)}.md"
+        return f"{change.slug}_{_sanitize(change.subject)}{tag}.md"
     return (f"{change.number}_{_sanitize(change.subject)}"
-            f"_ps{change.patchset}.md")
+            f"_ps{change.patchset}{tag}.md")
 
 
 def _iter_findings(spec: dict):
@@ -59,18 +65,24 @@ def _anchor(path: str, entry: dict) -> str:
 
 def review_markdown(
     change: ResolvedChange,
-    spec: dict,
+    spec: Optional[dict],
     severity: Optional[str] = None,
     model: Optional[str] = None,
     tokens: Optional[int] = None,
     cost_usd: Optional[float] = None,
     duration: Optional[float] = None,
+    memory: Optional[Any] = None,
 ) -> str:
-    findings = list(_iter_findings(spec))
+    findings = list(_iter_findings(spec)) if spec is not None else []
 
-    review_bits = [f"{len(findings)} finding(s)"]
-    if severity:
-        review_bits.append(f"severity **{severity}**")
+    if spec is None:
+        review_bits = ["clean — no findings"]
+        if severity and severity != "none":
+            review_bits.append(f"severity **{severity}**")
+    else:
+        review_bits = [f"{len(findings)} finding(s)"]
+        if severity:
+            review_bits.append(f"severity **{severity}**")
     run_bits = []
     if model:
         run_bits.append(model)
@@ -102,13 +114,22 @@ def review_markdown(
         ]
     if run_bits:
         lines.append(f"- **Run:** {', '.join(run_bits)}")
+    if memory:
+        lines.append(f"- **Review memory:** `{memory}`")
     lines.append("")
 
-    message = spec.get("message")
+    message = (spec or {}).get("message")
     if message:
         lines += ["## Overall assessment", "", message, ""]
 
     lines += ["## Findings", ""]
+    if spec is None:
+        note = "None — the review completed without findings."
+        if memory:
+            note += (" Prior findings, if any, were re-checked against "
+                     "this patchset; see the review memory document for "
+                     "what was verified and withdrawn.")
+        lines += [note, ""]
     for i, (path, entry) in enumerate(findings, 1):
         note = ("" if entry.get("unresolved", True)
                 else " *(informational)*")
@@ -123,17 +144,19 @@ def review_markdown(
 def write_review_markdown(
     results_dir: Path,
     change: ResolvedChange,
-    spec: dict,
+    spec: Optional[dict],
+    tag: str = "",
     **stats: Any,
 ) -> Path:
     md_dir = results_dir / MARKDOWN_SUBDIR
     md_dir.mkdir(parents=True, exist_ok=True)
-    path = md_dir / markdown_filename(change)
+    path = md_dir / markdown_filename(change, tag)
     path.write_text(review_markdown(change, spec, **stats))
     return path
 
 
-def _reconstruct(json_path: Path, number: int, patchset: int):
+def _reconstruct(json_path: Path, number: int, patchset: int,
+                 tag: str = ""):
     """Best-effort (change, stats) for an existing review JSON, from
     summary.json when its entry matches this patchset, else from the
     review-metadata sidecar, else minimal."""
@@ -143,7 +166,7 @@ def _reconstruct(json_path: Path, number: int, patchset: int):
     if summary_path.is_file():
         try:
             candidate = json.loads(summary_path.read_text()).get(
-                str(number)) or {}
+                f"{number}{tag}") or {}
             if candidate.get("patchset") == patchset:
                 entry = candidate
         except json.JSONDecodeError:
@@ -153,7 +176,7 @@ def _reconstruct(json_path: Path, number: int, patchset: int):
     sha = entry.get("sha")
     if not subject or not sha:
         metadata_path = (results_dir /
-                         f"review-metadata-{number}_ps{patchset}.json")
+                         f"review-metadata-{number}_ps{patchset}{tag}.json")
         if metadata_path.is_file():
             try:
                 metadata = json.loads(metadata_path.read_text())
@@ -211,8 +234,9 @@ def render_existing(
         if not isinstance(spec, dict):
             skipped.append((json_path, "not a JSON object"))
             continue
+        tag = match.group(3) or ""
         change, stats = _reconstruct(
-            json_path, int(match.group(1)), int(match.group(2)))
+            json_path, int(match.group(1)), int(match.group(2)), tag)
         written.append(write_review_markdown(
-            json_path.parent, change, spec, **stats))
+            json_path.parent, change, spec, tag=tag, **stats))
     return written, skipped

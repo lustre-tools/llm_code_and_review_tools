@@ -142,6 +142,31 @@ class TestBuildAgentCmd:
         with pytest.raises(ValueError):
             _config(tmp_path, tmp_path, jobs=0)
 
+    def test_light_mode_prompt(self, tmp_path):
+        from lreview.runner import LIGHT_PROMPT_PATH
+        config = _config(tmp_path, tmp_path, mode="light",
+                         prompts_dir=Path("/p/kernel"))
+        cmd = build_agent_cmd(config)
+        assert cmd[2] == (f"Using the prompt {LIGHT_PROMPT_PATH} run a "
+                          "light regression review of the top commit; "
+                          "the review-prompts knowledge directory is "
+                          "/p/kernel")
+        assert LIGHT_PROMPT_PATH.is_file()  # ships as package data
+        assert "lustre-style.md" in LIGHT_PROMPT_PATH.read_text()
+
+    def test_light_mode_prompt_with_memory(self, tmp_path):
+        from lreview.runner import review_prompt
+        config = _config(tmp_path, tmp_path, mode="light",
+                         memory_db=tmp_path / "db")
+        sha = "c" * 40
+        prompt = review_prompt(config, _change(130, sha))
+        assert "light regression review" in prompt
+        assert "your review memory document" in prompt
+
+    def test_unknown_mode_rejected(self, tmp_path):
+        with pytest.raises(ValueError):
+            _config(tmp_path, tmp_path, mode="medium")
+
 
 class TestModelDetection:
 
@@ -312,6 +337,11 @@ class TestRunBatch:
         assert md.is_file()
         assert "## Findings" in md.read_text()
         assert results[101].markdown_path == md
+        # A clean review gets a report saying so, too
+        md_clean = config.results_dir / "markdown" / "102_change_102_ps1.md"
+        assert md_clean.is_file()
+        assert "clean — no findings" in md_clean.read_text()
+        assert results[102].markdown_path == md_clean
         metadata = config.results_dir / "review-metadata-101_ps1.json"
         assert json.loads(
             metadata.read_text())["issue-severity-score"] == "high"
@@ -336,7 +366,90 @@ class TestRunBatch:
         assert summary["101"]["sha"] == sha_findings
         assert summary["101"]["posted"] is False
         assert summary["102"]["status"] == STATUS_CLEAN
+        assert summary["102"]["markdown"] == "markdown/102_change_102_ps1.md"
         assert summary["103"]["error"] == "claude exited 3"
+
+    def test_light_mode_namespaced_artifacts(self, repo, tmp_path,
+                                             stub_claude):
+        """Light-mode artifacts carry a -light suffix everywhere, so a
+        light run never overwrites or supersedes a full run's results
+        for the same change+patchset."""
+        sha = _commit_with_marker(
+            repo, "HAS_FINDINGS", json.dumps(REVIEW_SPEC))
+        config = _config(repo, tmp_path, mode="light")
+        # Pre-existing FULL-mode results must survive a light run
+        config.results_dir.mkdir(parents=True)
+        full_json = config.results_dir / "gerrit-review-120_ps1.json"
+        full_json.write_text(json.dumps(REVIEW_SPEC))
+
+        results = run_batch(config, [_change(120, sha)])
+
+        assert results[0].status == STATUS_FINDINGS
+        assert results[0].mode == "light"
+        assert (config.results_dir /
+                "gerrit-review-120_ps1-light.json").is_file()
+        assert (config.results_dir /
+                "review-metadata-120_ps1-light.json").is_file()
+        assert (config.results_dir / "kreview-120_ps1-light.log").is_file()
+        md = (config.results_dir / "markdown" /
+              "120_change_120_ps1-light.md")
+        assert md.is_file()
+        assert full_json.exists()  # untouched by the light run
+
+        summary = json.loads(
+            (config.results_dir / "summary.json").read_text())
+        assert "120" not in summary
+        assert summary["120-light"]["mode"] == "light"
+        assert summary["120-light"]["number"] == 120
+        assert summary["120-light"]["json"] == \
+            "gerrit-review-120_ps1-light.json"
+
+    def test_light_clean_does_not_supersede_full(self, repo, tmp_path,
+                                                 stub_claude):
+        """A clean light run only supersedes light artifacts — a full
+        run's findings JSON for the same change+ps stays."""
+        sha = _git(repo, "rev-parse", "HEAD")  # no markers => clean
+        config = _config(repo, tmp_path, mode="light")
+        config.results_dir.mkdir(parents=True)
+        full_json = config.results_dir / "gerrit-review-121_ps1.json"
+        full_json.write_text(json.dumps(REVIEW_SPEC))
+        light_json = config.results_dir / "gerrit-review-121_ps1-light.json"
+        light_json.write_text(json.dumps(REVIEW_SPEC))
+
+        results = run_batch(config, [_change(121, sha)])
+
+        assert results[0].status == STATUS_CLEAN
+        assert full_json.exists()        # full results untouched
+        assert not light_json.exists()   # stale light result superseded
+
+    def test_clean_rereview_supersedes_stale_findings(self, repo, tmp_path,
+                                                      stub_claude):
+        """A clean re-review of the same change+patchset removes the
+        earlier findings JSON and replaces the markdown report, so the
+        results directory never shows findings the latest run
+        withdrew."""
+        sha = _git(repo, "rev-parse", "HEAD")
+        config = _config(repo, tmp_path)
+        config.results_dir.mkdir(parents=True)
+        stale_json = config.results_dir / "gerrit-review-105_ps1.json"
+        stale_json.write_text(json.dumps(REVIEW_SPEC))
+        stale_invalid = config.results_dir / "gerrit-review-105_ps1.invalid"
+        stale_invalid.write_text("{oops")
+        md_dir = config.results_dir / "markdown"
+        md_dir.mkdir()
+        stale_md = md_dir / "105_change_105_ps1.md"
+        stale_md.write_text("# old findings report\n")
+
+        results = run_batch(config, [_change(105, sha)])
+
+        assert results[0].status == STATUS_CLEAN
+        assert not stale_json.exists()
+        assert not stale_invalid.exists()
+        assert "clean — no findings" in stale_md.read_text()
+        summary = json.loads(
+            (config.results_dir / "summary.json").read_text())
+        assert summary["105"]["json"] is None
+        assert summary["105"]["markdown"] == "markdown/105_change_105_ps1.md"
 
     def test_no_metadata_means_incomplete_not_clean(self, repo, tmp_path,
                                                     stub_claude):

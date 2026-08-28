@@ -109,8 +109,22 @@ def post_results(
     """
     snapshot = load_summary(results_dir)
     if changes:
-        wanted = [str(n) for n in changes]
-        missing = [n for n in wanted if n not in snapshot]
+        # A request may be an exact manifest key ("64620",
+        # "64620-light") or a bare change number, which expands to
+        # every mode's entry for that change.
+        wanted = []
+        missing = []
+        for item in changes:
+            name = str(item)
+            if name in snapshot:
+                wanted.append(name)
+                continue
+            expanded = [k for k in snapshot
+                        if k == name or k.startswith(f"{name}-")]
+            if expanded:
+                wanted.extend(sorted(expanded))
+            else:
+                missing.append(name)
         if missing:
             raise KeyError(
                 f"change(s) {', '.join(missing)} not found in "
@@ -126,7 +140,7 @@ def post_results(
             entry = summary.get(key)
             if entry is None:
                 outcomes.append(PostOutcome(
-                    int(key), "skipped", "no longer in manifest"))
+                    key, "skipped", "no longer in manifest"))
                 continue
             number = entry["number"]
 

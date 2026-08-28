@@ -143,8 +143,12 @@ lreview check                        # Verify agent/prompts/Gerrit
 lreview run 64086 64087 --repo lustre-release   # Review (no post)
 lreview post                         # Post collected findings
 lreview run 64086 --post             # Review + post in one go
+lreview run --mode light 64086 --repo lustre-release  # cheap single-pass
 ```
 
+`--mode light` runs the bundled single-pass light review instead of
+the review-core deep dive (much cheaper; artifacts `-light`-suffixed
+so the modes never overwrite each other).
 Defaults: opus model (`--model` / `$LREVIEW_MODEL` for sonnet/fable),
 5 parallel reviews (`--jobs`), 2h per-review timeout, results in
 `./lreview-results/` (per-change JSON + log + summary.json), a live
