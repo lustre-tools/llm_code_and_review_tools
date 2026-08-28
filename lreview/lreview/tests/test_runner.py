@@ -470,6 +470,65 @@ class TestRunBatch:
         assert md.is_file()
         assert "local review — not tied to a Gerrit change" in md.read_text()
 
+    def test_memory_prompt_and_update_tracking(self, repo, tmp_path,
+                                               stub_claude):
+        """With memory_db set: the prompt names the memory doc, and
+        an unchanged doc is flagged as not updated."""
+        from lreview.runner import review_prompt
+        sha = _git(repo, "rev-parse", "HEAD")
+        change = _change(701, sha)
+        config = _config(repo, tmp_path, memory_db=tmp_path / "db")
+
+        prompt = review_prompt(config, change)
+        assert "memory-prompt.md" in prompt
+        doc = tmp_path / "db" / "701-change_701.md"
+        assert str(doc) in prompt
+        assert doc.is_file()  # skeleton pre-created
+
+        # The stub claude never touches the doc -> not updated
+        results = run_batch(config, [change])
+        assert results[0].memory_path == doc
+        assert results[0].memory_updated is False
+        summary = json.loads(
+            (config.results_dir / "summary.json").read_text())
+        assert summary["701"]["memory"] == str(doc)
+
+    def test_memory_updated_detected(self, repo, tmp_path, stub_claude,
+                                     monkeypatch):
+        """A review that rewrites its memory doc is detected. The stub
+        writes the doc when MEMDOC_FILE names it."""
+        import stat as stat_mod
+        sha = _git(repo, "rev-parse", "HEAD")
+        change = _change(702, sha)
+        db = tmp_path / "db"
+        doc = db / "702-change_702.md"
+
+        # extend the stub: also write the memory doc
+        stub = tmp_path / "bin" / "claude"
+        stub.write_text(STUB_CLAUDE.replace(
+            'echo \'{"type":"system","subtype":"estimated_tokens"',
+            'if [ -n "$MEMDOC_FILE" ]; then echo notes > "$MEMDOC_FILE"; fi\n'
+            'echo \'{"type":"system","subtype":"estimated_tokens"'))
+        stub.chmod(stub.stat().st_mode | stat_mod.S_IEXEC)
+        monkeypatch.setenv("MEMDOC_FILE", str(doc))
+
+        config = _config(repo, tmp_path, memory_db=db)
+        results = run_batch(config, [change])
+        assert results[0].memory_path == doc
+        assert results[0].memory_updated is True
+        assert doc.read_text().strip() == "notes"
+
+    def test_no_memory_without_flag(self, repo, tmp_path, stub_claude):
+        from lreview.runner import review_prompt
+        sha = _git(repo, "rev-parse", "HEAD")
+        change = _change(703, sha)
+        config = _config(repo, tmp_path)  # memory_db not set
+
+        assert "memory" not in review_prompt(config, change)
+        results = run_batch(config, [change])
+        assert results[0].memory_path is None
+        assert not (tmp_path / "db").exists()
+
     def test_summary_merges_previous_runs(self, repo, tmp_path, stub_claude):
         sha = _git(repo, "rev-parse", "HEAD")
         config = _config(repo, tmp_path)

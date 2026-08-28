@@ -23,6 +23,7 @@ class ResolvedChange:
     patchset: int
     ref: str
     base_url: str
+    change_id: Optional[str] = None
 
     @property
     def slug(self) -> str:
@@ -55,6 +56,7 @@ class LocalChange:
     project: str = ""
     base_url: str = ""
     ref: str = ""
+    change_id: Optional[str] = None
 
     @property
     def slug(self) -> str:
@@ -103,4 +105,5 @@ def resolve_change(url_or_number: str, client: Optional[Any] = None) -> Resolved
         patchset=patchset,
         ref=ref,
         base_url=base_url,
+        change_id=detail.get("change_id"),
     )

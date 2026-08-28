@@ -34,3 +34,7 @@ venv/
 .gerrit-cli/
 .claude/
 
+
+# lreview per-change review memory
+lreview-db/
+lreview-results/

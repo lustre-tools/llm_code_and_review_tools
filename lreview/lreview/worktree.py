@@ -52,6 +52,15 @@ def commit_subject(repo: Path, sha: str) -> str:
     return result.stdout.strip()
 
 
+def commit_change_id(repo: Path, sha: str):
+    """The commit's Gerrit Change-Id trailer, or None."""
+    import re
+    body = run_git(repo, "log", "-1", "--format=%B", sha).stdout
+    matches = re.findall(r"^Change-Id:\s*(I[0-9a-f]{8,40})\s*$",
+                         body, re.MULTILINE)
+    return matches[-1] if matches else None
+
+
 def fetch_change(repo: Path, remote_url: str, ref: str) -> None:
     """Fetch a Gerrit change ref into the repository object store."""
     with _GIT_LOCK:

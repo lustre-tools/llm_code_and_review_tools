@@ -178,6 +178,38 @@ falling back to the model claude reports in the review log.
 A URL that pins an explicit patchset (`.../+/64086/38`) reviews that
 patchset instead of the current one.
 
+## Review memory (`--memory` / `-m`)
+
+Every run normally studies the patch from scratch, which burns most
+of the effort budget on re-deriving context — and makes successive
+runs surface a different handful of findings each time. `-m` gives
+each change a persistent notes document (modeled on a per-patch
+ai_docs workflow):
+
+```bash
+lreview run -m --repo lustre-release 63809     # read notes, review, update notes
+lreview run -m -c --repo lustre-release 63809  # clear the notes first
+```
+
+Before analyzing, the agent reads the change's document — what the
+patch does, call chains already established, findings already
+reported, and **false positives already eliminated** — then diffs
+the previously-reviewed patchset against the current one and spends
+the freed effort on deeper analysis and on areas marked not yet
+covered. Afterwards it rewrites the document as a fresh snapshot.
+The protocol lives in `lreview/memory-prompt.md` (shipped with the
+package; readable and editable).
+
+Documents are plain Markdown in the database directory
+(`--db`, `$LREVIEW_DB`, default `lreview-db/` in this repository —
+gitignored), named `<change>-<subject>.md` and keyed by **Gerrit
+Change-Id**, so a local pre-push review and later Gerrit reviews of
+the same patch share one document. The paths are listed at the end
+of the run — the explanations are useful reading on their own.
+
+Without `-m` the database is neither read nor written. `-c` requires
+`-m` and deletes just that change's document before the run.
+
 ## Local reviews (no Gerrit)
 
 ```bash
@@ -258,6 +290,9 @@ rejoin a positional list split around a flag).
 | `--agent NAME` | `claude` (or `$LREVIEW_AGENT`) | Agent backend: claude, codex, gemini, opencode |
 | `--model NAME` | `opus` for claude (or `$LREVIEW_MODEL`); other agents use their own default | Model for the review runs |
 | `--effort LEVEL` | claude's default (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max (claude-only) |
+| `--memory, -m` | off | Read/update the per-change review memory document |
+| `--clear-memory, -c` | off | With `-m`: delete the change's memory document first |
+| `--db DIR` | `$LREVIEW_DB`, else `<repo>/lreview-db` | Memory database directory |
 | `--agent-arg=ARG` | — | Extra agent-CLI arg (repeatable; `--claude-arg` is a legacy alias) |
 | `--post` | off | Post findings when batch finishes |
 | `--prefix TEXT` | `[AI review - <model>]` | Message prefix; `<model>` placeholder substituted (`$LREVIEW_PREFIX` overrides the default; `''` for none) |
@@ -283,6 +318,7 @@ already-posted review.
 |---|---|
 | `LREVIEW_AGENT` | Default for `--agent` (else `claude`) |
 | `LREVIEW_MODEL` | Default for `--model` (else `opus` for claude) |
+| `LREVIEW_DB` | Default for `--db` (memory database directory) |
 | `LREVIEW_PREFIX` | Default for `--prefix`; `<model>` substituted |
 | `REVIEW_PROMPTS_DIR` | Path to the review-prompts clone |
 | `NO_COLOR` | Disable colored output |

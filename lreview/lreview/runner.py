@@ -118,6 +118,8 @@ class ReviewResult:
     duration: float = 0.0
     json_path: Optional[Path] = None
     markdown_path: Optional[Path] = None
+    memory_path: Optional[Path] = None
+    memory_updated: bool = False
     log_path: Optional[Path] = None
     error: Optional[str] = None
 
@@ -134,6 +136,9 @@ class BatchConfig:
     agent: str = "claude"
     model: Optional[str] = None
     effort: Optional[str] = None
+    # When set, the lreview-db directory: reviews read their per-change
+    # memory document before analyzing and rewrite it afterwards
+    memory_db: Optional[Path] = None
     agent_args: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -148,7 +153,8 @@ class BatchConfig:
             raise ValueError(f"jobs must be >= 1, got {self.jobs}")
 
 
-def review_prompt(config: BatchConfig) -> str:
+def review_prompt(config: BatchConfig,
+                  change: Optional[ResolvedChange] = None) -> str:
     """The instruction that initiates a review.
 
     This is the review-prompts README quick-start form (also what its
@@ -157,12 +163,26 @@ def review_prompt(config: BatchConfig) -> str:
     regression analysis" is deliberate, per the README it gets better
     prompt compliance than calling it a review. The worktree's HEAD
     is the patch, so "the top commit" needs no SHA.
+
+    With memory enabled, the prompt additionally points at the
+    memory-protocol instructions and the change's memory document.
     """
-    return (f"Using the prompt {config.prompts_dir}/review-core.md "
-            "run a deep dive regression analysis of the top commit")
+    prompt = (f"Using the prompt {config.prompts_dir}/review-core.md "
+              "run a deep dive regression analysis of the top commit")
+    if config.memory_db is not None and change is not None:
+        from .memory import MEMORY_PROMPT_PATH, ensure_doc
+        doc = ensure_doc(config.memory_db, change)
+        now = (f"patchset {change.patchset} ({change.sha[:12]})"
+               if change.patchset else f"commit {change.sha[:12]}")
+        prompt += (f". Additionally follow the instructions in "
+                   f"{MEMORY_PROMPT_PATH} — your review memory "
+                   f"document for this change is {doc}; you are "
+                   f"reviewing {now}")
+    return prompt
 
 
-def build_agent_cmd(config: BatchConfig) -> list[str]:
+def build_agent_cmd(config: BatchConfig,
+                    change: Optional[ResolvedChange] = None) -> list[str]:
     """Headless review command for the configured agent.
 
     All agents receive the same instruction prompt; claude runs with
@@ -172,7 +192,7 @@ def build_agent_cmd(config: BatchConfig) -> list[str]:
     """
     spec = get_agent(config.agent)
     return spec.build_cmd(config.model, config.effort, config.agent_args,
-                          review_prompt(config))
+                          review_prompt(config, change))
 
 
 def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:
@@ -386,7 +406,7 @@ def run_review(
 ) -> ReviewResult:
     """Run one headless kreview in its worktree and collect the output."""
     log_path = config.results_dir / f"kreview-{change.slug}.log"
-    cmd = build_agent_cmd(config)
+    cmd = build_agent_cmd(config, change)
     start = time.monotonic()
 
     _log(f"[{change.slug}] {console.color('cyan', 'review started')}: "
@@ -503,6 +523,19 @@ def _review_and_cleanup(
     if tracker:
         tracker.start(
             change.slug, config.results_dir / f"kreview-{change.slug}.log")
+
+    memory_path = None
+    memory_before = None
+    if config.memory_db is not None:
+        from .memory import ensure_doc
+        try:
+            memory_path = ensure_doc(config.memory_db, change)
+            # content comparison, not mtime — filesystem timestamp
+            # granularity can lump a fast run into one tick
+            memory_before = memory_path.read_bytes()
+        except OSError as exc:
+            _log(f"[{change.slug}] warning: memory doc unavailable: {exc}")
+
     try:
         result = run_review(config, change, worktree_dir)
     except Exception as exc:  # noqa: BLE001 - one bad review must not
@@ -514,7 +547,19 @@ def _review_and_cleanup(
             tracker.finish(change.slug)
         if cleanup and not config.keep_worktrees:
             wt.remove_worktree(config.repo, worktree_dir)
+
     result.agent = config.agent
+    if memory_path is not None:
+        result.memory_path = memory_path
+        try:
+            result.memory_updated = (
+                memory_path.read_bytes() != memory_before)
+        except OSError:
+            result.memory_updated = False
+        if not result.memory_updated and result.status in (
+                STATUS_FINDINGS, STATUS_CLEAN):
+            _log(f"[{change.slug}] warning: the review did not update "
+                 f"its memory document ({memory_path.name})")
     return result
 
 
@@ -650,6 +695,8 @@ def update_summary(results_dir: Path, results: list[ReviewResult]) -> None:
                 "markdown": (f"{result.markdown_path.parent.name}/"
                              f"{result.markdown_path.name}"
                              if result.markdown_path else None),
+                "memory": (str(result.memory_path)
+                           if result.memory_path else None),
                 "log": result.log_path.name if result.log_path else None,
                 "error": result.error,
                 "posted": False,

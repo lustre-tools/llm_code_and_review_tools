@@ -37,6 +37,9 @@ lreview = "lreview.cli:main"
 [tool.setuptools.packages.find]
 include = ["lreview*"]
 
+[tool.setuptools.package-data]
+lreview = ["*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["lreview/tests"]
 addopts = "--strict-markers"

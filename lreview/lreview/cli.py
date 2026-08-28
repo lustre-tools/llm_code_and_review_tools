@@ -148,6 +148,7 @@ def cmd_run(args) -> int:
         from .worktree import commit_subject, rev_parse
         refs = args.changes or ["HEAD"]
         in_place = not args.changes
+        from .worktree import commit_change_id
         for ref in refs:
             try:
                 sha = rev_parse(repo, ref)
@@ -160,7 +161,8 @@ def cmd_run(args) -> int:
                 continue
             seen.add(sha)
             change = LocalChange(ref_name=ref, sha=sha,
-                                 subject=commit_subject(repo, sha))
+                                 subject=commit_subject(repo, sha),
+                                 change_id=commit_change_id(repo, sha))
             changes.append(change)
             where = "in place" if in_place else "worktree"
             print(f"  {change.slug}  {change.subject[:60]} ({where})")
@@ -195,9 +197,26 @@ def cmd_run(args) -> int:
             print(f"  note: {change.number} ps{change.patchset} was already "
                   "posted; posting a fresh result needs 'post --force'")
 
+    memory_db = None
+    if args.memory:
+        from .memory import clear_doc, default_db_dir
+        from .prompts import _REPO_ROOT
+        memory_db = (Path(args.db).expanduser().resolve() if args.db
+                     else default_db_dir(_REPO_ROOT))
+        if args.clear_memory:
+            for change in changes:
+                removed = clear_doc(memory_db, change)
+                if removed:
+                    print(f"  cleared memory: {removed}")
+    elif args.clear_memory:
+        print("error: --clear-memory/-c requires --memory/-m")
+        return 1
+
     print(f"\nReviewing {len(changes)} change(s), "
           f"{args.jobs} in parallel, timeout {args.timeout}s each")
     print(f"  results:   {results_dir}")
+    if memory_db is not None:
+        print(f"  memory db: {memory_db}")
     print(f"  worktrees: {worktrees_dir}\n")
 
     config = BatchConfig(
@@ -211,6 +230,7 @@ def cmd_run(args) -> int:
         agent=args.agent,
         model=resolve_model(args.agent, args.model),
         effort=args.effort,
+        memory_db=memory_db,
         agent_args=args.agent_arg or [],
     )
     if args.effort and args.agent != "claude":
@@ -259,6 +279,15 @@ def cmd_run(args) -> int:
         print("\nHuman-readable reports:")
         for report in reports:
             print(f"  {report}")
+
+    memories = [(r.memory_path, r.memory_updated)
+                for r in results if r.memory_path]
+    if memories:
+        print("\nReview memory (what the patch does, findings, "
+              "eliminated false positives):")
+        for path, updated in memories:
+            note = "" if updated else "  (not updated this run)"
+            print(f"  {path}{note}")
 
     with_findings = [r for r in results if r.status == STATUS_FINDINGS]
     local_findings = [r for r in with_findings if r.change.number is None]
@@ -452,6 +481,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reasoning effort for the claude review runs "
              "(default: $LREVIEW_EFFORT or claude's own default; "
              "claude-only)")
+    run_p.add_argument(
+        "--memory", "-m", action="store_true",
+        help="Use per-change review memory: read the change's notes "
+             "document from the lreview-db before analyzing (what the "
+             "patch does, prior findings, eliminated false positives) "
+             "and rewrite it afterwards. Without this flag the db is "
+             "neither read nor written.")
+    run_p.add_argument(
+        "--clear-memory", "-c", action="store_true",
+        help="With --memory: delete the change's memory document "
+             "first, starting its notes from scratch")
+    run_p.add_argument(
+        "--db", default=None, metavar="DIR",
+        help="Memory database directory (default: $LREVIEW_DB, else "
+             "lreview-db/ in this repository — gitignored)")
     run_p.add_argument(
         "--agent-arg", "--claude-arg", action="append", dest="agent_arg",
         metavar="ARG",
