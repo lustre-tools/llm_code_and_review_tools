@@ -89,9 +89,13 @@ These are implementation rules, not suggestions.
 4. **Policy is snapshotted at run creation.** Editing patch policy affects the
    next run by default. The UI requires a separate explicit action to alter or
    cancel an active run.
-5. **Side effects are controller-owned.** Workers request actions. The
-   controller validates policy, revision, budget, and idempotency before an
-   adapter performs them.
+5. **Remote engineering actions are controller-owned.** Gerrit, Maloo,
+   Jenkins, JIRA, and patch-upload writes are requested by workers and executed
+   only after the controller validates policy, revision, budget, and
+   idempotency. A worker with the LTVM capability may directly create the
+   ephemeral VM topology it needs; session ownership metadata makes those
+   local resources discoverable and terminal cleanup remains Patch Watcher's
+   responsibility.
 6. **No action is inferred from prose.** Only a validated structured request
    can advance state or request an external write.
 7. **Every state change is an event.** Current-state columns are projections
@@ -177,9 +181,10 @@ keeping later separation possible.
   from Claude Voice Control without depending on that application.
 - **Checkout adapter:** creates and verifies full, independent,
   revision-pinned source checkouts.
-- **Tracked LTVM tool:** lets the agent choose and create the target, topology,
-  and VM parameters it needs while automatically registering every created VM
-  against the current session and handling terminal cleanup.
+- **Direct LTVM capability:** launches Claude with `LTVM_OWNER_ID` and allows
+  it to invoke normal LTVM commands, choosing the target, topology, and VM
+  parameters itself. Patch Watcher discovers the resulting VMs through LTVM's
+  persisted `owner_id` and handles terminal cleanup.
 
 ### Tool adapters
 
@@ -595,17 +600,30 @@ one VM or a cluster and chooses the target, architecture, topology, memory,
 disks, and other LTVM arguments appropriate to the task. It creates those VMs
 on demand and they are disposable session resources.
 
-Reliable discovery requires an explicit ownership mechanism; comparing
+Reliable discovery uses LTVM's implemented ownership contract; comparing
 `ltvm list` before and after a command is ambiguous when sessions overlap.
-LTVM should persist an opaque owner/session identifier on every created VM,
-including each member created by `cluster create`, and expose it through its
-machine-readable list/status output. Patch Watcher launches Claude with that
-identifier in a session-scoped environment. Ownership input remains backward
-compatible and optional: an explicit CLI owner overrides the environment, and
-ordinary calls with neither use a typed invoking-process fallback such as
-`pid:<n>`. Existing state with no owner remains valid. The PID fallback is
-diagnostic ownership for ordinary commands; Patch Watcher always supplies the
-durable session identifier needed for restart-safe reconciliation.
+Patch Watcher launches Claude with a durable opaque value such as
+`patch-watcher:<session-id>` in `LTVM_OWNER_ID`. Claude then invokes ordinary
+commands without Patch Watcher choosing their substantive arguments:
+
+```bash
+ltvm create NAME ...
+sudo ltvm cluster create NAME NODES...
+```
+
+LTVM resolves ownership once per create operation and persists it on the VM
+and, for clusters, every member. The input contract is backward compatible:
+
+1. explicit `--owner ID` or `--owner-id ID`;
+2. `LTVM_OWNER_ID` from the invoking environment; or
+3. automatic `pid:<invoking-ltvm-pid>` fallback.
+
+Explicit ownership is optional, existing commands remain valid, and legacy VM
+state with no owner remains valid. `ltvm list --json` returns `owner_id` for
+each VM and returns `null` for legacy unowned VMs. Patch Watcher uses only its
+durable session values for automatic reconciliation; a PID fallback is useful
+diagnostic ownership but is not restart-stable enough to identify a Patch
+Watcher session.
 
 This preserves agent autonomy: Claude invokes normal LTVM commands and chooses
 their substantive arguments. The owner field only supplies durable attribution.
@@ -662,7 +680,9 @@ Before general source-editing or autonomous operation, add worker isolation:
 - no host home directory, SSH agent, Docker/Podman socket, runner socket, or broad
   credential directory mounted;
 - CPU, memory, process, disk, runtime, and output limits;
-- controller-mediated access to LTVM and external write actions;
+- access to host LTVM through a narrow container bridge that preserves the
+  agent-selected arguments and injects the session owner; controller-mediated
+  external review/CI write actions;
 - per-capability credential injection with automatic expiry/cleanup;
 - explicit network profile recorded in policy and run history.
 
@@ -891,7 +911,8 @@ Exit criteria:
 Build:
 
 - full independent checkout lifecycle;
-- session-scoped LTVM ownership metadata and reconciliation;
+- consume LTVM's existing session-scoped `owner_id` inventory and implement
+  reconciliation;
 - agent-driven, on-demand VM/cluster creation with target
   list/fetch/validate guidance and recorded VM environment;
 - safe command/test manifests rather than arbitrary dashboard shell text;
