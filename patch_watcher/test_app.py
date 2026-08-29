@@ -190,6 +190,30 @@ class PatchWatcherTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Invalid seed entry"):
                 app.load_seed_file(seed)
 
+    def test_watch_file_persists_urls_privately_and_reloads(self):
+        app.add_patch("https://review.whamcloud.com/c/1", "Temporary title")
+        app.add_patch("https://review.whamcloud.com/c/2")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            watch_file = Path(temp_dir) / "config" / "patches.txt"
+            app.save_watch_file(watch_file)
+            self.assertEqual(
+                watch_file.read_text(encoding="utf-8"),
+                "https://review.whamcloud.com/c/1\n"
+                "https://review.whamcloud.com/c/2\n",
+            )
+            self.assertEqual(watch_file.stat().st_mode & 0o777, 0o600)
+            app.PATCHES.clear()
+            with patch("app.refresh_patch") as refresh:
+                loaded = app.load_seed_file(watch_file)
+        self.assertEqual(
+            [item["url"] for item in loaded],
+            [
+                "https://review.whamcloud.com/c/1",
+                "https://review.whamcloud.com/c/2",
+            ],
+        )
+        self.assertEqual(refresh.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

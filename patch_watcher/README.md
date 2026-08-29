@@ -90,7 +90,7 @@ Their proposed escalation behavior is documented in `DESIGN_ACTION_FLOW.md`.
 - `DESIGN_ACTION_FLOW.md` defines the product-policy flow for test failures,
   Jenkins failures, and future review handling.
 - `AGENT_ORCHESTRATION_DESIGN.md` defines the implementation architecture,
-  durable state machines, Claude Voice Control integration, human messaging,
+  durable state machines, native Claude runner, human messaging,
   LTVM/resource lifecycle, isolation roadmap, dashboard, recovery behavior,
   and phased acceptance criteria.
 
@@ -98,7 +98,9 @@ Use another local port with `python3 app.py --port 8090`.
 
 ## Seed a watch list
 
-The default seed file is `~/.config/patch-watcher/patches.txt`. Each
+The durable watch-list file is `~/.config/patch-watcher/patches.txt`. Adding or
+removing a patch updates it atomically with private `0600` permissions, and a
+restart reloads the same watch list. Each
 non-comment line is a Gerrit URL followed by an optional tab-separated title:
 
 ```text

@@ -18,6 +18,7 @@ from reporting import send_daily_summary
 
 PATCHES = []
 DEFAULT_SEED_FILE = Path.home() / ".config" / "patch-watcher" / "patches.txt"
+ACTIVE_WATCH_FILE = DEFAULT_SEED_FILE
 JIRA_BASE_URL = "https://jira.whamcloud.com/browse"
 
 
@@ -255,6 +256,17 @@ def load_seed_file(path=DEFAULT_SEED_FILE):
     return loaded
 
 
+def save_watch_file(path=DEFAULT_SEED_FILE):
+    """Atomically persist the current watch list as private URL-only config."""
+    watch_path = Path(path)
+    watch_path.parent.mkdir(parents=True, exist_ok=True)
+    pending = watch_path.with_name(f".{watch_path.name}.tmp")
+    contents = "".join(f"{patch['url']}\n" for patch in PATCHES)
+    pending.write_text(contents, encoding="utf-8")
+    pending.chmod(0o600)
+    pending.replace(watch_path)
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
@@ -276,7 +288,16 @@ class Handler(BaseHTTPRequestHandler):
             patch, error = add_patch(url)
             if error: self.respond(page(error)); return
             refresh_patch(patch)
-        elif path == "/remove": PATCHES[:] = [p for p in PATCHES if p["url"] != data.get("url", [""])[0]]
+            try:
+                save_watch_file(ACTIVE_WATCH_FILE)
+            except OSError as exc:
+                self.respond(page(f"Could not save the watch list: {exc}")); return
+        elif path == "/remove":
+            PATCHES[:] = [p for p in PATCHES if p["url"] != data.get("url", [""])[0]]
+            try:
+                save_watch_file(ACTIVE_WATCH_FILE)
+            except OSError as exc:
+                self.respond(page(f"Could not save the watch list: {exc}")); return
         elif path == "/refresh-all":
             for patch in PATCHES:
                 refresh_patch(patch)
@@ -306,6 +327,7 @@ if __name__ == "__main__":
         help="refresh seeds, then send/dry-run the configured daily email",
     )
     args = parser.parse_args()
+    ACTIVE_WATCH_FILE = args.seed_file
     load_seed_file(args.seed_file)
     if args.daily_summary:
         config = GerritConfig.load()

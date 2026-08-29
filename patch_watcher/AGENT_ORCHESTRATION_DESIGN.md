@@ -25,7 +25,7 @@ unsandboxed, but the dashboard must say so explicitly.
 - Pin work to an exact Gerrit patchset and revision SHA; stale work must never
   affect a newer patchset.
 - Grant each run only the capabilities required for that run.
-- Survive Patch Watcher, Claude Voice Control, Claude Code, and host restarts
+- Survive Patch Watcher, the Claude runner, Claude Code, and host restarts
   without losing the audit trail or repeating ambiguous external actions.
 - Reuse the LLM review tools and LTVM rather than reimplementing Gerrit, JIRA,
   Maloo, Jenkins, checkout, build, or VM operations.
@@ -56,8 +56,8 @@ before automation is enabled:
    requests when two refreshes observe the same state.
 5. There is no exact patchset/SHA pin or final stale-patchset check before a
    side effect.
-6. Claude Voice Control stores session state in a JSON registry and is a
-   process/session transport, not a durable workflow database.
+6. Claude Voice Control has useful process/session patterns, but making its CLI
+   and registry a Patch Watcher dependency would couple two different products.
 7. `WORKER_STATUS` text markers are useful for compatibility, but they are too
    weak to be the only agent protocol.
 8. Current checkboxes do not define trigger mode, capability scope, budgets,
@@ -83,9 +83,9 @@ These are implementation rules, not suggestions.
 2. **Every run is revision-pinned.** It stores change number, patchset number,
    and revision SHA. Before every external write, Patch Watcher refreshes and
    compares all three.
-3. **The database is authoritative.** Claude Voice Control owns Claude process
-   continuity; LTVM owns VM lifecycle; neither decides Patch Watcher workflow
-   state.
+3. **The database is authoritative.** Patch Watcher's Claude runner owns Claude
+   process continuity; LTVM performs requested VM operations; neither decides
+   Patch Watcher workflow state.
 4. **Policy is snapshotted at run creation.** Editing patch policy affects the
    next run by default. The UI requires a separate explicit action to alter or
    cancel an active run.
@@ -116,13 +116,13 @@ The UI and code should use these terms consistently:
 - **Trigger:** a durable fact that might justify work, such as a newly observed
   enforced test failure or a manual request.
 - **Run:** one bounded attempt to handle a trigger against one pinned revision.
-- **Session:** the Claude Voice Control conversation/process associated with an
+- **Session:** the managed Claude conversation/process associated with an
   agent-backed run.
 - **Turn:** one prompt/response cycle inside that session.
 - **Action attempt:** one controller-mediated external operation, such as a
   Maloo retest request.
-- **Resource lease:** exclusive ownership of a worktree, VM, or other mutable
-  resource by a run.
+- **Session resource:** an ephemeral checkout, VM, or VM cluster created for and
+  recorded against one agent session.
 
 Patch status, run status, Claude turn status, and action status must be stored
 and displayed separately. For example, a patch may be `ci-failed`, its run may
@@ -158,26 +158,28 @@ keeping later separation possible.
 
 ### Dispatcher and reconciler
 
-- Obtains the per-patch run lease transactionally.
+- Claims the per-patch active-run slot transactionally.
 - Creates runs and dispatches deterministic actions or agent work.
-- Holds a renewable singleton dispatcher lease in the initial SQLite
+- Holds a renewable singleton dispatcher lock in the initial SQLite
   deployment, so accidentally starting two service processes cannot create two
   schedulers. A standby process may serve read-only UI traffic but may not
-  dispatch until it owns that lease.
-- Periodically reconciles database state with Claude Voice Control, action
-  adapters, worktrees, and LTVM resources.
+  dispatch until it owns that lock.
+- Periodically reconciles database state with Claude runner sessions, action
+  adapters, full checkouts, and session-created LTVM resources.
 - Detects stalled, orphaned, externally completed, and stale work.
 
 ### Runner adapters
 
 - **Deterministic runner:** executes bounded controller workflows such as one
   Maloo retest request without starting Claude.
-- **Claude Voice Control adapter:** starts, resumes, messages, interrupts,
-  stops, archives, and reads bounded event tails for Claude sessions.
-- **Worktree adapter:** creates and verifies isolated, revision-pinned source
-  trees.
-- **LTVM adapter:** selects/fetches/validates targets, creates/deploys VMs,
-  records console/test artifacts, and destroys or quarantines resources.
+- **Native Claude runner:** starts, resumes, messages, interrupts, stops, and
+  reads structured event streams for Claude sessions. It borrows proven ideas
+  from Claude Voice Control without depending on that application.
+- **Checkout adapter:** creates and verifies full, independent,
+  revision-pinned source checkouts.
+- **Tracked LTVM tool:** lets the agent choose and create the target, topology,
+  and VM parameters it needs while automatically registering every created VM
+  against the current session and handling terminal cleanup.
 
 ### Tool adapters
 
@@ -205,7 +207,7 @@ Minimum entities:
 | `run_event` | run, monotonic sequence, actor, type, structured payload, timestamp |
 | `run_message` | run, author, body, urgency, delivery state, target question/turn, timestamps |
 | `action_attempt` | run, action type, idempotency key, state, request/result, timestamps |
-| `resource_lease` | run, resource type/key, state, acquired/renewed/released, cleanup result |
+| `session_resource` | run/session, type, name, create request, environment, lifecycle state, last seen, cleanup result |
 | `artifact` | run, kind, path/URI, content hash, size, description, retention state |
 | `notification` | run/patch, type, destination, idempotency key, delivery state/result |
 | `service_cursor` | observer/reconciler/Claude-log cursors and last successful activity |
@@ -217,7 +219,7 @@ Required constraints include:
 - one trigger per stable fingerprint;
 - one non-terminal run per patch (partial unique index);
 - one action attempt per idempotency key;
-- one active lease per resource key;
+- one live ownership record per checkout or VM name;
 - ordered, unique event sequence numbers per run.
 
 Large Claude logs, build logs, and VM artifacts stay in private files; the
@@ -243,7 +245,7 @@ new work.
 ### Run states
 
 - `queued`: durable and eligible, but not allocated.
-- `preparing`: acquiring session/worktree/VM resources.
+- `preparing`: starting the session and creating its full source checkout.
 - `running`: controller or agent is actively performing a step.
 - `waiting_external`: waiting for a known CI, timer, or other external result.
 - `waiting_human`: paused on one explicit operator question or decision.
@@ -257,16 +259,16 @@ new work.
 
 All transitions use optimistic concurrency (`run.version`) and are recorded in
 `run_event`. `waiting_human`, `waiting_external`, `paused`, and `blocked` keep
-the logical one-run-per-patch lease. If a new patchset appears, the reconciler
+the logical one-active-run-per-patch claim. If a new patchset appears, the reconciler
 marks the old run `stale`, releases mutable resources according to policy, and
 allows evaluation of the new revision.
 
 ### Claude state mapping
 
-Claude Voice Control already separates its turn state from its task state.
-Patch Watcher retains that distinction and maps it rather than copying it:
+The native runner should retain Claude Voice Control's useful distinction
+between turn state and task state rather than collapsing them:
 
-| Claude Voice Control observation | Patch Watcher interpretation |
+| Claude runner observation | Patch Watcher interpretation |
 | --- | --- |
 | turn `running` | session is active; run usually remains `running` |
 | turn `waiting`/`idle`, task `in_progress` | turn ended; controller evaluates the structured report before continuing |
@@ -304,14 +306,14 @@ maloo-retest:<change>:<revision-sha>:<session-id>:<test-group>
    - no non-terminal run owns the patch;
    - current revision still matches the trigger;
    - retry, runtime, turn, and action budgets remain.
-5. Dispatcher snapshots policy, creates the run, claims the patch lease, and
+5. Dispatcher snapshots policy, creates the run, claims the active-run slot, and
    marks the trigger dispatched.
 6. Runner executes one bounded step, records events/actions, and yields to the
    reconciler between steps.
 7. Any newer revision immediately makes the run stale before another side
    effect can occur.
 
-Manual triggers follow the same path. They do not bypass revision, lease,
+Manual triggers follow the same path. They do not bypass revision, ownership,
 capability, budget, or idempotency checks.
 
 ## Policy and capabilities
@@ -349,7 +351,7 @@ Capability names should be explicit and composable:
 
 - `read_gerrit`, `read_ci`, `read_jira`, `read_repository`;
 - `request_maloo_retest`;
-- `create_worktree`, `edit_source`;
+- `create_checkout`, `edit_source`;
 - `start_ltvm`, `run_vm_tests`;
 - `post_gerrit_message`, `reply_review_comment`, `vote_gerrit`;
 - `upload_patchset`;
@@ -382,66 +384,66 @@ current Gerrit revision and compare patchset and SHA. A mismatch:
 2. prevents the action;
 3. marks the run stale;
 4. preserves its logs and artifacts;
-5. releases or quarantines its worktree/VM; and
+5. cleans its checkout and session-created VMs, unless an operator has
+   explicitly retained a resource for debugging; and
 6. lets the new revision create its own trigger/run.
 
 An operator may view or download stale artifacts, but cannot “resume anyway.”
 They can start a new run whose prompt includes a bounded summary or selected
 artifacts from the old run.
 
-## Claude Voice Control integration
+## Native Claude runner
 
-Claude Voice Control should be reused as the local Claude process and
-conversation adapter. Patch Watcher should not copy its terminal bridge or
-session-resume implementation.
+Patch Watcher should own a small `ClaudeRunner` interface and a native
+implementation over Claude Code's structured stream protocol. Claude Voice
+Control is a useful reference for persistent conversations, structured event
+capture, interruption, resumption, and separate turn/task state, but it is not
+a runtime dependency and its registry/session model is not copied wholesale.
 
 ### Session ownership
 
-- Create one Claude Voice Control session per Patch Watcher run, named like
+- Create one managed Claude session per Patch Watcher run, named like
   `pw-68160-ps4-a1b2c3`.
 - A session may have many turns and human messages during that run.
 - A new Gerrit revision gets a new run and session. This prevents stale context
   from silently governing a new patchset.
 - Store `run_id`, patch/change, patchset, SHA, policy version, capability
-  profile, worktree, and VM lease identifiers in CVC metadata.
+  profile, checkout path, and session-resource identifiers in Patch Watcher.
 - Archive, rather than delete, terminal sessions after their retention policy
   permits it.
 
 ### API boundary
 
-Patch Watcher needs a stable programmatic CVC interface for:
+The `ClaudeRunner` interface provides:
 
 - start/send/status/list/interrupt/stop/archive;
 - JSON results and typed errors;
 - an event cursor or bounded event tail;
 - session/task/turn identifiers and timestamps.
 
-Initially this may be a serialized Python adapter around CVC's manager or JSON
-CLI. Do not scrape its human-readable table. CVC's JSON registry currently has
-atomic replacement but is not a transactional multi-writer database, so all
-Patch Watcher calls must be serialized until CVC gains locking or a service
-API.
+The first implementation may borrow and simplify the cctty/streaming code from
+Claude Voice Control, but it lives behind the Patch Watcher-owned interface.
+If both applications later need the same stable implementation, extract a
+small independent runner library rather than making either application depend
+on the other or vendoring two drifting copies.
 
-CVC remains the source of process facts, while the Patch Watcher database owns
-workflow facts. On startup the reconciler compares both and adopts, resumes,
-or marks sessions orphaned without silently duplicating them.
+The runner remains the source of process facts, while the Patch Watcher
+database owns workflow facts. On startup the reconciler compares both and
+adopts, resumes, or marks sessions orphaned without silently duplicating them.
 
 ### Continuation behavior
 
-Patch Watcher, not CVC markerless fallback, should decide workflow
-continuation. Disable markerless auto-continuation for managed Patch Watcher
-runs. A valid structured `in_progress` report may cause the dispatcher to send
-the next bounded prompt after checking revision, policy, budgets, and pending
-operator messages.
-
-CVC's high continuation cap can remain useful for manually supervised legacy
-sessions, but write-capable Patch Watcher runs must cross the controller policy
-boundary between turns.
+Patch Watcher decides workflow continuation. There is no markerless automatic
+continuation for managed runs. A valid structured `in_progress` report may
+cause the dispatcher to send the next bounded prompt after checking revision,
+policy, budgets, and pending operator messages. Write-capable runs cross that
+controller policy boundary between every turn.
 
 ### Worker report protocol
 
-Retain `WORKER_STATUS` for CVC compatibility, and require one machine-readable
-report at the end of each agent turn. A versioned envelope should contain:
+The familiar `WORKER_STATUS` marker may remain as a human-readable fallback,
+but require one machine-readable report at the end of each agent turn. A
+versioned envelope should contain:
 
 ```json
 {
@@ -471,7 +473,7 @@ visible states: `queued`, `sent`, `acknowledged`, `failed`, or `superseded`.
 - **Running:** default delivery waits for the current turn boundary, avoiding
   accidental interruption during a command. The operator may explicitly choose
   **Interrupt and send**, which records the interrupt and then delivers after
-  CVC confirms the turn stopped.
+  the runner confirms the turn stopped.
 - **Waiting for human:** the response targets the displayed question ID. On
   successful delivery the run returns to `queued`/`running`.
 - **Waiting external:** a message may be queued, but does not automatically
@@ -499,9 +501,11 @@ Operator run controls:
 - **Archive session** after completion;
 - **Open bounded/raw log** and artifacts.
 
-Stopping Claude does not automatically destroy a VM or worktree. Cleanup is a
-separate, logged controller step, with quarantine available when failure
-evidence should be retained.
+Interrupting one Claude turn does not destroy its checkout or VMs. Once the
+session/run becomes terminal, Patch Watcher automatically collects configured
+artifacts and schedules all resources created by that session for purge. An
+operator may explicitly retain a resource for debugging; retained resources
+remain prominent until their retention ends or the operator purges them.
 
 ## Waiting for human contract
 
@@ -567,38 +571,80 @@ Early workers should not receive raw credential files. The controller can
 prefetch inputs or expose a narrow tool broker. Later direct tool access must
 mount or inject only the credentials required by the capability profile.
 
-## Worktrees and LTVM resources
+## Full checkouts and ephemeral LTVM resources
 
 An agent that edits or executes code needs a resource manifest stored with the
 run.
 
-### Worktree rules
+### Checkout rules
 
-- Create a dedicated worktree or checkout at the pinned revision.
+- Create a dedicated full checkout at the pinned revision. Do not use Git
+  worktrees for Lustre builds: generated configuration, staging, modules, and
+  other source-adjacent state make independent checkouts the safer boundary.
 - Record repository remote, base branch, revision SHA, path, and initial dirty
   state.
-- Never reuse a dirty worktree across runs.
-- Preserve the worktree as an artifact on failure when useful; otherwise clean
-  it through a logged step.
+- Never reuse a dirty checkout across runs.
+- Preserve the checkout as an artifact on failure when explicitly requested;
+  otherwise clean it through a logged step.
 - A prepared commit or diff is an artifact until upload capability is enabled.
 
 ### LTVM rules
 
-- Check `ltvm target list` locally/remotely and fetch a published target before
-  building one.
-- Validate the target against the pinned Lustre tree.
-- Record target, architecture, kernel, page size when known, variant, vCPU,
-  memory, disks, and deployment revision in the resource manifest.
-- Use descriptive VM names containing the Patch Watcher/CVC run identity and a
-  filesystem-safe checkout identifier.
-- Default to 2 GiB unless the workflow explicitly needs more.
-- Lease each mutable VM to one run. Do not let agents share a writable VM.
+VMs are not drawn from a pre-existing pool. The agent decides whether it needs
+one VM or a cluster and chooses the target, architecture, topology, memory,
+disks, and other LTVM arguments appropriate to the task. It creates those VMs
+on demand and they are disposable session resources.
+
+Reliable discovery requires an explicit ownership mechanism; comparing
+`ltvm list` before and after a command is ambiguous when sessions overlap.
+LTVM should persist an opaque owner/session identifier on every created VM,
+including each member created by `cluster create`, and expose it through its
+machine-readable list/status output. Patch Watcher launches Claude with that
+identifier in a session-scoped environment. Ownership input remains backward
+compatible and optional: an explicit CLI owner overrides the environment, and
+ordinary calls with neither use a typed invoking-process fallback such as
+`pid:<n>`. Existing state with no owner remains valid. The PID fallback is
+diagnostic ownership for ordinary commands; Patch Watcher always supplies the
+durable session identifier needed for restart-safe reconciliation.
+
+This preserves agent autonomy: Claude invokes normal LTVM commands and chooses
+their substantive arguments. The owner field only supplies durable attribution.
+
+The session-resource lifecycle is:
+
+- `creating`: the agent requested creation but it has not been confirmed;
+- `active`: LTVM reports the VM with this session's owner identifier;
+- `cleanup_pending`: the session is terminal and purge is queued;
+- `destroying`: Patch Watcher issued the exact destroy operation;
+- `destroyed`: LTVM confirms the VM no longer exists;
+- `cleanup_failed`: destruction failed and will be retried/escalated;
+- `retained`: an operator explicitly preserved it for bounded debugging;
+- `orphaned`: ownership exists but Patch Watcher cannot match a healthy session.
+
+Operational rules:
+
+- The reconciler queries LTVM's machine-readable inventory and associates VMs
+  by the durable owner/session identifier, not only by name or process ID.
+- Use descriptive names containing the session/run identity and a
+  filesystem-safe checkout identifier as an additional human aid.
+- Check published targets before building, validate the target against the
+  pinned Lustre checkout, and default to 2 GiB unless the task needs more.
+- Record target, architecture, kernel, page size when known, variant, topology,
+  vCPU, memory, disks, create command/result, and deployment revision.
 - Capture commands, exit status, bounded output, console logs, and result
   artifacts.
-- Destroy on normal completion; quarantine with a visible reason and expiry on
-  failure or human request.
-- Reconcile orphan VMs after service restart; never destroy an unowned or
-  unrelated VM.
+- On `succeeded`, `failed`, `cancelled`, or `stale`, first collect configured
+  artifacts and then purge every VM/cluster owned by the session. Cleanup is a
+  durable, retried finalization step; the run remains visibly cleaning until
+  LTVM confirms removal.
+- `waiting_human`, `waiting_external`, `paused`, and recoverable `blocked`
+  sessions retain their VMs because the session is not finished.
+- Retention is an explicit operator exception with a visible expiry. After the
+  retention period, the exact owner-recorded resources return to cleanup.
+- A global resources page shows every Patch Watcher-owned VM, session, state,
+  age, last-seen time, and cleanup error.
+- Never destroy a VM whose durable owner cannot be verified as a Patch Watcher
+  session. Surface unmatched resources for human reconciliation instead.
 
 LTVM isolates the code being tested. It does not isolate the Claude process or
 its host credentials, so it is not a replacement for worker containerization.
@@ -612,8 +658,8 @@ from building untrusted code or receiving broad write credentials.
 Before general source-editing or autonomous operation, add worker isolation:
 
 - rootless container, non-root user, read-only base image;
-- only the run worktree and per-run scratch directory mounted writable;
-- no host home directory, SSH agent, Docker/Podman socket, CVC socket, or broad
+- only the run checkout and per-run scratch directory mounted writable;
+- no host home directory, SSH agent, Docker/Podman socket, runner socket, or broad
   credential directory mounted;
 - CPU, memory, process, disk, runtime, and output limits;
 - controller-mediated access to LTVM and external write actions;
@@ -647,7 +693,8 @@ Show:
 - global automation state and emergency stop;
 - counts of queued, running, waiting-human, waiting-external, blocked, failed,
   and stale runs;
-- available/busy Claude slots and LTVM resources;
+- available/busy Claude slots plus active, retained, orphaned, and
+  cleanup-failed LTVM resources;
 - recent errors and unsent notifications;
 - default policy and worker isolation mode.
 
@@ -671,7 +718,7 @@ Sections:
 1. Current Gerrit/review/CI observation and exact revision.
 2. Effective policy, inherited defaults, pending edits, and safety budgets.
 3. Active run card: state, reason, step, model, runtime, last activity,
-   worktree/VM, capabilities, isolation/network profile.
+   full checkout, session-created VMs, capabilities, isolation/network profile.
 4. Pending human question or blocker, displayed above routine logs.
 5. Conversation and message composer with delivery state and interrupt option.
 6. Timeline of observations, triggers, policy decisions, messages, worker
@@ -697,14 +744,15 @@ On startup and periodically:
 
 1. Mark non-terminal runs `recovering` internally while keeping their last
    user-facing state visible.
-2. Compare each run with its CVC session, action attempts, worktree, and VM
-   leases.
-3. Adopt a healthy running CVC host rather than starting another.
+2. Compare each run with its Claude runner session, action attempts, full
+   checkout, and owner-attributed LTVM inventory.
+3. Adopt a healthy running Claude process rather than starting another.
 4. If a host died, resume only when policy permits and no action is ambiguous;
    otherwise mark blocked with a specific recovery action.
 5. Reconcile every `executing` action against remote state before retry.
 6. Verify revision freshness.
-7. Renew, release, or quarantine owned resource leases.
+7. Continue terminal cleanup, retain explicit debugging resources, and surface
+   any owner-attributed resources that no longer match a healthy session.
 8. Record the recovery decision as an event.
 
 Use distinct limits for:
@@ -782,7 +830,7 @@ Build:
 
 - run/event/message/action/resource schema;
 - dispatcher and startup reconciler;
-- serialized CVC JSON/Python adapter;
+- native `ClaudeRunner` over the structured stream protocol;
 - one manual **Investigate** run pinned to a revision with read-only tools;
 - run detail page, conversation, waiting-human question, message delivery,
   pause/interrupt/cancel/resume/follow-up controls;
@@ -795,7 +843,7 @@ Exit criteria:
 - human messages deliver exactly once and their state is visible;
 - waiting-human survives service restart and resumes only after a valid answer;
 - terminal/stale runs cannot be silently resumed;
-- a live CVC session is adopted after Patch Watcher restart;
+- a live Claude runner session is adopted after Patch Watcher restart;
 - no external write capability is present.
 
 ### Phase 1: deterministic automatic retest
@@ -842,8 +890,10 @@ Exit criteria:
 
 Build:
 
-- worktree and LTVM resource broker/leases;
-- target list/fetch/validate flow and recorded VM environment;
+- full independent checkout lifecycle;
+- session-scoped LTVM ownership metadata and reconciliation;
+- agent-driven, on-demand VM/cluster creation with target
+  list/fetch/validate guidance and recorded VM environment;
 - safe command/test manifests rather than arbitrary dashboard shell text;
 - artifact collection, cleanup, quarantine, and orphan reconciliation;
 - rootless worker container prototype and network-profile display.
@@ -852,7 +902,7 @@ Exit criteria:
 
 - untrusted build/test code does not execute in the web service or host worker
   context;
-- two runs cannot share a writable worktree or VM;
+- two runs cannot share a writable checkout or owner-attributed VM;
 - cancellation and restart do not destroy unrelated VMs;
 - environment and test results are reproducible from the run manifest;
 - restricted-egress behavior is tested and honestly represented.
@@ -920,15 +970,16 @@ Build a fake-adapter test harness before enabling actions. Required suites:
 - SQLite migration, constraint, transaction, and crash-restart tests;
 - duplicate poll/trigger/run/action races;
 - stale patchset at every transition and immediately before writes;
-- CVC lost host, idle turn, invalid marker/report, needs-input, interrupt, and
+- Claude runner lost process, idle turn, invalid marker/report, needs-input, interrupt, and
   resume behavior;
 - human message idempotency, stale question, queued delivery, and terminal-run
   follow-up behavior;
 - external action success/failure/timeout/ambiguous/reconciliation;
-- LTVM lease, orphan, cleanup, quarantine, and unrelated-VM protection;
+- LTVM owner propagation, terminal purge, orphan, cleanup retry, retention, and
+  unrelated-VM protection;
 - capability-denial, secret-redaction, prompt-injection, CSRF, and auth tests;
 - event replay: rebuild current projections from a recorded event sequence;
-- end-to-end dry-run with fake Gerrit/Maloo/Jenkins/JIRA/CVC/LTVM adapters.
+- end-to-end dry-run with fake Gerrit/Maloo/Jenkins/JIRA/Claude/LTVM adapters.
 
 Production integrations get explicit opt-in integration tests. The default
 test suite performs no network requests, sends no mail, changes no Gerrit
@@ -941,14 +992,14 @@ capability is enabled:
 
 - service manager on Mac versus Linux deployment target;
 - authenticated remote access design for Mulberry Server;
-- exact CVC programmatic API/locking change;
+- exact native Claude runner interface and structured-event contract;
 - Maloo's remote identifiers and best reconciliation query for ambiguous
   retest calls;
 - artifact retention limits and backup location;
 - agent model/effort and budget accounting source;
 - container runtime and model-endpoint network strategy;
 - credential broker design;
-- whether worktrees/VMs are always ephemeral or may use a reconciled warm pool;
+- retained-VM expiry and artifact collection policy before automatic purge;
 - Gerrit identity and approval policy for eventual automated writes.
 
 No unresolved decision should be hidden behind an enabled checkbox. The

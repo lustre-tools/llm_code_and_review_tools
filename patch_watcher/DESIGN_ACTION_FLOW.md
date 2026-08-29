@@ -4,7 +4,7 @@ This document describes the first step toward Patch Shepherd-style patch
 handling. It is a design plan only: the controls do not execute automated
 actions yet.
 
-The implementation-grade state, persistence, Claude Voice Control, human
+The implementation-grade state, persistence, native Claude runner, human
 messaging, LTVM, security, recovery, and phased-delivery contracts are in
 `AGENT_ORCHESTRATION_DESIGN.md`. This document remains the product-policy flow;
 the orchestration design explains how the flow can be executed safely and made
@@ -120,7 +120,8 @@ The page will eventually show:
 - a durable run history containing inputs, decisions, tool actions, results,
   errors, and links to artifacts.
 
-Before starting a run, the controller obtains a per-patch execution lease. If
+Before starting a run, the controller transactionally claims that patch's
+single active-run slot. If
 an active run already owns that patch, the trigger is recorded as coalesced and
 does not start a second agent. A newer patchset invalidates stale work and is
 shown clearly; it never silently applies an old run's result to the new
@@ -157,7 +158,7 @@ modify source or Gerrit.
 
 ### Phase 3: controlled patch work
 
-An agent can create an isolated checkout/worktree for a pinned patchset,
+An agent receives an isolated full checkout for a pinned patchset,
 build, run prescribed tests, and prepare a proposed patch revision. Any
 change remains an artifact for review; uploading a Gerrit patchset requires a
 separate, explicit capability and policy.
