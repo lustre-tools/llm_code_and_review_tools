@@ -41,6 +41,14 @@ retests, alter Gerrit state, or send other external actions.
 
 ## Test-error workflow (modeled on Patch Shepherd)
 
+### Top-level gate
+
+Before checking any tests, inspect the current patchset's review votes. If a
+reviewer other than Maloo has submitted a `-1` review, stop this flow for the
+patch: record the reviewer, patchset, and review message, mark the patch as
+**needs human review**, and do not query or process test failures. A Maloo
+`-1` is a CI signal and does not trigger this gate.
+
 When test-error handling is eventually enabled, the intended flow is:
 
 1. Check the patch's current Gerrit patchset and fetch its Maloo results.
