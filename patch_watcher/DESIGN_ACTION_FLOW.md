@@ -65,10 +65,11 @@ When test-error handling is eventually enabled, the intended flow is:
 6. Record the resulting recommendation (retest, needs review, stop, or
    investigate) and include it in the next status report.
 
-## Build-error handling
+## Build-error handling (Jenkins)
 
-Build-failure handling is intentionally a stub in the first implementation.
-If enabled, it may record that a build failed and surface the failure, but it
-does not attempt diagnosis or any other follow-up. Retesting belongs to the
-test-error branch, not this build-failure stub. The build branch is therefore
-a deliberate dead end until its criteria and actions are designed separately.
+Build-failure handling means a Jenkins build failure specifically. It is
+intentionally a stub in the first implementation: it may record and surface
+the Jenkins failure, but does not attempt diagnosis or other follow-up.
+Retesting belongs to the test-error branch, not this build-failure stub. The
+build branch is therefore a deliberate dead end until its criteria and
+actions are designed separately.
