@@ -64,13 +64,70 @@ class PatchWatcherTests(unittest.TestCase):
         )
         rendered = app.page()
         for value in (
-            "Open", "3", "Yes", "Ready", "Reviewer +1",
+            "Open", "3", "WIP", "Ready", "Reviewer +1",
             "2 unresolved", "PASS", "RUNNING",
         ):
             self.assertIn(value, rendered)
         self.assertIn("href='https://review.whamcloud.com/c/7'", rendered)
         self.assertIn("href='https://jira.whamcloud.com/browse/LU-12345'", rendered)
         self.assertIn("jobs=x&amp;amp=y", rendered)
+
+    def test_lifecycle_chips_have_text_and_mark_style_tones(self):
+        self.assertIn("tone-info", app._lifecycle_chip("Open"))
+        self.assertIn(">Open</span>", app._lifecycle_chip("Open"))
+        self.assertIn("tone-good", app._lifecycle_chip("Merged"))
+        self.assertIn(">Merged</span>", app._lifecycle_chip("Merged"))
+        self.assertIn("tone-bad", app._lifecycle_chip("Abandoned"))
+        self.assertIn(">Abandoned</span>", app._lifecycle_chip("Abandoned"))
+
+    def test_review_chips_distinguish_ready_clean_needs_and_veto(self):
+        ready = app._review_chip({"review": "Ready"})
+        clean = app._review_chip({
+            "review": "Pending", "jenkins": "PASS", "maloo": "PASS",
+            "unresolved": 0,
+        })
+        needs = app._review_chip({
+            "review": "Pending", "jenkins": "RUNNING", "maloo": "—",
+            "unresolved": 0,
+        })
+        veto = app._review_chip({"review": "Veto"})
+        self.assertIn("✓ Ready", ready)
+        self.assertIn("tone-good", ready)
+        self.assertIn("✓ Clean", clean)
+        self.assertIn("tone-info", clean)
+        self.assertIn("! Needs", needs)
+        self.assertIn("tone-warn", needs)
+        self.assertIn("✕ Veto", veto)
+        self.assertIn("tone-bad", veto)
+
+    def test_ci_chips_include_service_state_text_and_tone(self):
+        passed = app._ci_chip("Jenkins", "PASS")
+        failed = app._ci_chip("Maloo", "FAIL")
+        running = app._ci_chip("Maloo", "RUNNING")
+        self.assertIn("✓ Jenkins pass", passed)
+        self.assertIn("tone-good", passed)
+        self.assertIn("✕ Maloo fail", failed)
+        self.assertIn("tone-bad", failed)
+        self.assertIn("… Maloo running", running)
+        self.assertIn("tone-warn", running)
+
+    def test_watch_state_chips_are_accessibly_labelled(self):
+        attention = app._watch_chip("needs-attention")
+        ready = app._watch_chip("ready")
+        waiting = app._watch_chip("awaiting-ci")
+        self.assertIn("✕ Needs Attention", attention)
+        self.assertIn("tone-bad", attention)
+        self.assertIn("✓ Ready", ready)
+        self.assertIn("! Awaiting Ci", waiting)
+
+    def test_page_includes_disabled_review_handling_stubs(self):
+        rendered = app.page()
+        self.assertIn("Handle reviews", rendered)
+        self.assertIn("Handle simple comments", rendered)
+        self.assertIn("Handle all comments", rendered)
+        self.assertIn("Stub · disabled", rendered)
+        self.assertEqual(rendered.count("aria-disabled='true'"), 2)
+        self.assertNotIn("action='/handle-review", rendered)
 
     def test_ticket_requires_leading_issue_key(self):
         self.assertEqual(app.ticket_from_title("LU-12345: fix pages"), "LU-12345")

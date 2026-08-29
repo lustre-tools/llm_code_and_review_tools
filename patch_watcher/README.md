@@ -68,6 +68,17 @@ description of the newest upload or message. Refresh failures preserve the
 last known state and are written as private structured JSONL records under
 `~/.local/state/patch-watcher/errors.jsonl`.
 
+Lifecycle, review health, CI, WIP, and watch states use the same green/red/
+amber/blue visual vocabulary as the Gerrit graph. Every colored chip also
+contains explicit text and a symbol, so meaning never depends on color alone.
+Review health is summarized as **Ready**, **Clean**, **Needs**, or **Veto**;
+Jenkins and Maloo retain their explicit pass/fail/running labels.
+
+The **Handle reviews** section shows two disabled design stubs: handling only
+simple comments, or asking Claude Code to attempt all comments. Neither option
+is selectable, invokes Claude, sends escalation email, or writes to Gerrit.
+Their proposed escalation behavior is documented in `DESIGN_ACTION_FLOW.md`.
+
 Use another local port with `python3 app.py --port 8090`.
 
 ## Seed a watch list
