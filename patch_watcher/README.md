@@ -77,8 +77,10 @@ Review health is summarized as **Ready**, **Clean**, **Needs**, or **Veto**;
 Jenkins and Maloo retain their explicit pass/fail/running labels.
 The lifecycle remains in the status model, but the table folds terminal
 lifecycle into watch state: merged patches display **Merged** and abandoned
-patches display **Abandoned** rather than occupying a separate column. The
-compact table places patchset/WIP immediately after Jenkins and Maloo status.
+patches display **Abandoned** rather than occupying a separate column. Jenkins
+and Maloo chips appear inside **Watch state / CI**. Patchset appears as compact
+`PS N` metadata under the patch title; only actual work-in-progress changes
+show a WIP badge, so there is no ambiguous “Active” label.
 
 The **Handle reviews** section shows two disabled design stubs: handling only
 simple comments, or asking Claude Code to attempt all comments. Neither option

@@ -120,13 +120,23 @@ class PatchWatcherTests(unittest.TestCase):
         self.assertIn("Abandoned", abandoned)
         self.assertIn("tone-bad", abandoned)
 
-    def test_table_folds_lifecycle_and_places_patchset_after_ci(self):
+    def test_table_folds_lifecycle_ci_and_patchset_into_compact_columns(self):
+        patch_record, _ = app.add_patch("https://review.whamcloud.com/c/13")
+        patch_record.update(patchset=7, wip=False, jenkins="PASS", maloo="RUNNING")
         rendered = app.page()
         self.assertNotIn("<th>Lifecycle</th>", rendered)
-        self.assertLess(
-            rendered.index("<th>Jenkins / Maloo</th>"),
-            rendered.index("<th>Patchset</th>"),
-        )
+        self.assertNotIn("<th>Jenkins / Maloo</th>", rendered)
+        self.assertNotIn("<th>Patchset</th>", rendered)
+        self.assertIn("<th>Watch state / CI</th>", rendered)
+        self.assertIn("PS 7", rendered)
+        self.assertNotIn(">Active<", rendered)
+        self.assertIn("Jenkins pass", rendered)
+        self.assertIn("Maloo running", rendered)
+
+    def test_wip_is_shown_only_when_set(self):
+        patch_record, _ = app.add_patch("https://review.whamcloud.com/c/14")
+        patch_record.update(patchset=3, wip=True)
+        self.assertIn("! WIP", app.page())
 
     def test_table_has_only_global_refresh_and_overall_checked_time(self):
         patch_record, _ = app.add_patch("https://review.whamcloud.com/c/11")
