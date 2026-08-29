@@ -193,6 +193,25 @@ output and documented exit codes. Each adapter returns a normalized typed
 result while retaining a redacted raw-result reference for debugging. Do not
 parse human-oriented terminal tables.
 
+### Resource sampler
+
+- Samples the worker host independently of the browser and records sample
+  freshness and collection errors.
+- Reads total, available, and used host memory plus swap and memory-pressure
+  indicators from a supported OS API.
+- Measures each live Claude process tree rather than only the parent process.
+  Prefer proportional set size (PSS) where the OS exposes it; otherwise label
+  resident set size (RSS) as an estimate that may double-count shared pages.
+- Inventories all current LTVM VMs. For each VM, keep configured guest memory
+  separate from the actual host memory used by its VM process; neither number
+  is silently substituted for the other.
+- Associates a VM with a Patch Watcher session only when its durable LTVM
+  `owner_id` matches that session. Legacy or externally owned VMs remain
+  visible as unassociated resources and are never adopted for cleanup.
+- Samples more frequently while sessions are active and downsamples or expires
+  old detail according to a retention policy. The current dashboard never
+  presents a stale sample without its timestamp and warning.
+
 ## Persistence model
 
 Use SQLite initially, with foreign keys enabled, WAL mode, transactions, and
@@ -209,12 +228,15 @@ Minimum entities:
 | `observation` | patch/revision, checked time, normalized review/CI state, source fingerprints |
 | `trigger` | patch/revision, type, fingerprint, state, reason, first/last observed |
 | `run` | patch/revision, trigger, policy snapshot, type, execution profile, effective timeout limits, state, summary/question/error, started/last-qualifying-activity/deadline timestamps, version |
+| `agent_session` | run, runner/session id, worker host, process identity, state, started/last-event/ended timestamps |
 | `run_event` | run, monotonic sequence, actor, type, structured payload, timestamp |
 | `run_message` | run, author, body, urgency, delivery state, target question/turn, timestamps |
 | `action_attempt` | run, action type, idempotency key, state, request/result, timestamps |
 | `session_resource` | run/session, type, name, create request, environment, lifecycle state, last seen, cleanup result |
 | `artifact` | run, kind, path/URI, content hash, size, description, retention state |
 | `notification` | run/patch, type, destination, idempotency key, delivery state/result |
+| `worker_host` | stable identity, display name, OS/architecture, total memory, last seen, sampler state/error |
+| `resource_sample` | host/session/resource scope, measured time, CPU, RSS/PSS, configured guest memory, swap/pressure fields, quality/source |
 | `service_cursor` | observer/reconciler/Claude-log cursors and last successful activity |
 
 Required constraints include:
@@ -527,8 +549,7 @@ Use `engineering` for debugging, patch development, builds, tests, and other
 work that may create LTVM VMs. These runs do not have a short wall-clock limit.
 Instead, the default failure threshold is 30 minutes without qualifying
 activity while the run is `preparing` or `running`. Reaching the threshold
-fails the run with `agent_inactivity_timeout`. A separate total-runtime safety
-cap may be introduced later, but it must be independently named and displayed.
+fails the run with `agent_inactivity_timeout`.
 
 Qualifying activity is evidence that the owned work is advancing, including:
 
@@ -549,6 +570,27 @@ The inactivity clock runs only in `preparing` and `running`. It is suspended in
 states already identify why progress is intentionally stopped. Resumption
 starts a fresh inactivity interval and records that transition.
 
+### Long-running notices and absolute cap
+
+Every agent session also has a nonextendable absolute wall-clock cap of 48
+hours. Triage sessions ordinarily hit their 20-minute limit first. A
+non-terminal engineering session may continue as long as it is making
+progress, but Patch Watcher sends a status email when its wall-clock age
+reaches two hours and every two hours thereafter, including while it is in a
+waiting state. Each reminder has an interval-derived idempotency key, and a
+service restart must not resend an interval already recorded as delivered.
+
+The reminder is informational: it does not pause the worker or reset any
+clock. It includes the patch and run, elapsed time, current step, last
+qualifying activity, bounded excerpts of the most recent session messages,
+current resource use, owned VMs, and an authenticated **Kill session** link.
+The link opens the run page with the destructive action ready for explicit
+confirmation; an email GET request must never kill a process by itself.
+
+At 48 hours Patch Watcher fails the run with `agent_absolute_runtime_cap` and
+uses the same stop, artifact collection, notification, and owner-scoped cleanup
+path as other timeouts. The cap cannot be extended from the dashboard.
+
 ### Timeout response
 
 When either timeout fires, Patch Watcher must:
@@ -563,8 +605,9 @@ When either timeout fires, Patch Watcher must:
 4. purge only the checkout and LTVM resources owned by that run/session;
 5. send one immediate idempotent email with the patch, run, timeout reason,
    last activity, cleanup state, and dashboard link; and
-6. show **Failed — 20-minute runtime limit** or **Failed — inactive for 30
-   minutes** on the patch and run pages.
+6. show **Failed — 20-minute runtime limit**, **Failed — inactive for 30
+   minutes**, or **Failed — 48-hour absolute limit** on the patch and run
+   pages.
 
 The dashboard shows the profile, start time, last qualifying activity, current
 step, and remaining runtime or inactivity time for every active agent run. A
@@ -598,11 +641,21 @@ an answer cannot accidentally target a superseded state. Duplicate browser
 submissions use an idempotency token. The timeline shows author, delivery
 state, target turn/question, and when Claude next produced activity.
 
+The active-run card exposes **Send guidance** as the operator's deliberate
+“prod.” It can clarify or change the requested approach after the operator has
+reviewed recent activity. By default it queues guidance for the next safe turn
+boundary; **Interrupt and send** is a separate, more disruptive choice. This
+human control is distinct from patch observation: Patch Watcher never injects
+new Gerrit or CI activity into a running session automatically.
+
 Operator run controls:
 
 - **Pause after current step**;
 - **Interrupt turn**;
 - **Stop and cancel**;
+- **Kill session**, which requires confirmation, stops the Claude process,
+  records who requested it, marks the run cancelled, and begins owner-scoped
+  artifact collection and cleanup;
 - **Resume**;
 - **Retry as a new run**;
 - **Supersede with a new run**;
@@ -853,7 +906,16 @@ enabling broad code execution, durable credentials, or an autonomous lane.
 
 ### Global overview
 
-Show:
+The top of the page begins with a worker-host memory summary. For the initial
+single-host deployment it shows host name, sample time, physical total,
+available, used, cache/reclaimable memory when the OS reports it, swap use,
+memory pressure, and the amount attributable to active Claude process trees and
+LTVM VM processes. Configured guest RAM is shown alongside, but not added to
+physical usage. If values cannot be measured or reconciled, display **unknown**
+or **estimated** instead of manufacturing a total. The summary becomes warning
+or critical at configurable available-memory/pressure thresholds.
+
+The remainder of the overview shows:
 
 - observer/scheduler health and last successful poll;
 - global automation state and emergency stop;
@@ -864,13 +926,39 @@ Show:
 - recent errors and unsent notifications;
 - default policy and worker isolation mode.
 
+### Sessions and LTVM resources
+
+The overview includes a collapsible active-sessions section and a link to a
+full resources page:
+
+- One row per current Claude session: patch, run, profile, state, elapsed time,
+  last qualifying activity, most recent message summary, Claude process-tree
+  memory, and current step.
+- Expanding a session shows a bounded tail of recent messages/events, the full
+  timeout countdowns, **Send guidance**, **Interrupt and send**, and **Kill
+  session** controls.
+- Owner-associated VMs are nested under their session. Each shows name,
+  topology/role, state, age, configured guest memory, measured host memory when
+  available, CPU use, and cleanup state.
+- A separate **Other LTVM VMs** group shows every currently inventoried VM
+  that has no matching Patch Watcher session, including legacy unowned VMs.
+  These are observable but cannot be destroyed by Patch Watcher's automatic
+  cleanup.
+- Group and page totals avoid double counting. Claude process-tree memory and
+  VM-process memory are separate components; host used/available memory remains
+  the authoritative capacity view.
+
+Every metric includes its sample age. A collection failure leaves the last
+sample visible but clearly stale, logs the error, and prevents the inactivity
+detector from treating missing telemetry as positive activity.
+
 ### Patch table
 
 Keep the compact patch/review/CI presentation, and add:
 
 - effective automation summary (for example `Retest: auto`, `Research: manual`);
 - active-run badge and current step;
-- last agent/controller activity;
+- last agent/controller activity and a one-line most-recent-message summary;
 - prominent waiting-human/blocked/resource-exhausted/stale indicator;
 - one link to patch detail.
 
@@ -887,7 +975,8 @@ Sections:
    last qualifying activity, timeout countdown, full checkout,
    session-created VMs, capabilities, and isolation/network profile.
 4. Pending human question or blocker, displayed above routine logs.
-5. Conversation and message composer with delivery state and interrupt option.
+5. Conversation and message composer with a bounded recent tail, expandable
+   history, delivery state, **Send guidance**, and interrupt option.
 6. Timeline of observations, triggers, policy decisions, messages, worker
    reports, actions, errors, and recovery events.
 7. Artifacts and bounded/raw logs.
@@ -927,7 +1016,7 @@ Use distinct limits for:
 - triage wall-clock runtime (20 minutes by default);
 - engineering inactivity (30 minutes by default);
 - current command/step deadline;
-- optional total engineering-run runtime;
+- absolute agent-session runtime (48 hours, nonextendable);
 - Claude turn and continuation count;
 - adapter retries/backoff;
 - external action count;
@@ -947,6 +1036,9 @@ visible `blocked` or `failed` outcome, not an invisible loop.
 - Immediate notification for `waiting_human`, blocked infrastructure,
   LTVM resource exhaustion, agent runtime/inactivity timeout, repeated failure,
   emergency stop, and ambiguous external action.
+- Active engineering sessions send a status reminder after two hours and every
+  two hours thereafter. Reminders include bounded recent messages and an
+  authenticated link to the run's confirmed Kill-session control.
 - Daily email summarizes observations, runs, actions, errors, and unanswered
   questions.
 - Test-email remains available and contains a bounded recent summary.
@@ -984,6 +1076,8 @@ Build:
 - migrate seed-file/in-memory patches without losing the current UI;
 - independent scheduler/observer and manual Refresh All command;
 - persistent normalized history and error log;
+- worker-host resource sampler and top-level memory summary with freshness and
+  collection-error states;
 - global/patch automation flags, both off;
 - service health and last-poll display.
 
@@ -993,7 +1087,9 @@ Exit criteria:
 - no browser is required for scheduled polling;
 - concurrent refresh requests do not duplicate observations/triggers;
 - a changed patchset is represented as a new exact revision;
-- current tests plus migration/restart tests pass.
+- current tests plus migration/restart tests pass;
+- host memory totals are sourced, timestamped, and do not confuse configured
+  guest memory with physical host use.
 
 ### Phase 0B: run control and manual read-only agent
 
@@ -1005,9 +1101,12 @@ Build:
 - one manual **Investigate** run pinned to a revision with read-only tools;
 - run detail page, conversation, waiting-human question, message delivery,
   pause/interrupt/cancel/resume/follow-up controls;
+- active-session list with process-tree memory, recent-message summary/tail,
+  Send-guidance and confirmed Kill-session controls;
 - triage/engineering execution profiles, qualifying-activity tracking,
   timeout termination, owner-scoped cleanup, immediate timeout email, and
   visible countdown/failure reason;
+- two-hour engineering reminders and the nonextendable 48-hour absolute cap;
 - structured worker report validation;
 - clearly visible unsandboxed-worker label.
 
@@ -1022,6 +1121,10 @@ Exit criteria:
   fail exactly once, email exactly once, and clean only run-owned resources;
 - waiting-human/external and paused/blocked time does not consume an inactivity
   interval;
+- reminder intervals survive restart without duplicate email, and the 48-hour
+  cap cannot be extended;
+- an email Kill-session link cannot mutate state through GET and reaches the
+  authenticated confirmation flow;
 - no external write capability is present.
 
 ### Phase 1: deterministic automatic retest
@@ -1071,6 +1174,9 @@ Build:
 - full independent checkout lifecycle;
 - consume LTVM's existing session-scoped `owner_id` inventory and implement
   reconciliation;
+- inventory all current LTVM VMs, associate matching owner IDs beneath their
+  sessions, and show configured guest memory separately from measured host
+  process use;
 - agent-driven, on-demand VM/cluster creation with target
   list/fetch/validate guidance and recorded VM environment;
 - structured LTVM resource-exhaustion reporting, email, partial-resource
@@ -1164,8 +1270,13 @@ Build a fake-adapter test harness before enabling actions. Required suites:
 - external action success/failure/timeout/ambiguous/reconciliation;
 - LTVM owner propagation, terminal purge, orphan, cleanup retry, retention, and
   unrelated-VM protection;
+- host/session/VM memory attribution, process-tree accounting, stale samples,
+  missing telemetry, no-double-count totals, and unassociated VM display;
 - LTVM resource exhaustion versus ordinary create failure, email idempotency,
   partial-cluster cleanup, cooldown expiry, and manual override;
+- two-hour reminder cadence across restarts, bounded message excerpts,
+  authenticated kill-link behavior, confirmed human kill, and the 48-hour
+  absolute cap;
 - capability-denial, secret-redaction, prompt-injection, CSRF, and auth tests;
 - event replay: rebuild current projections from a recorded event sequence;
 - end-to-end dry-run with fake Gerrit/Maloo/Jenkins/JIRA/Claude/LTVM adapters.
