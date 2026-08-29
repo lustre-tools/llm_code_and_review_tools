@@ -69,6 +69,6 @@ When test-error handling is eventually enabled, the intended flow is:
 
 Build-failure handling is intentionally a stub in the first implementation.
 If enabled, it may record that a build failed and surface the failure, but it
-does not attempt diagnosis, retesting, bug linking, or any other follow-up.
-The build branch is therefore a deliberate dead end until its criteria and
-actions are designed separately.
+does not attempt diagnosis or any other follow-up. Retesting belongs to the
+test-error branch, not this build-failure stub. The build branch is therefore
+a deliberate dead end until its criteria and actions are designed separately.
