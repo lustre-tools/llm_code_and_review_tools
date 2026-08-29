@@ -4,6 +4,12 @@ This document describes the first step toward Patch Shepherd-style patch
 handling. It is a design plan only: the controls do not execute automated
 actions yet.
 
+The implementation-grade state, persistence, Claude Voice Control, human
+messaging, LTVM, security, recovery, and phased-delivery contracts are in
+`AGENT_ORCHESTRATION_DESIGN.md`. This document remains the product-policy flow;
+the orchestration design explains how the flow can be executed safely and made
+visible on the dashboard.
+
 ## Per-patch controls
 
 Each watched Gerrit patch gets its own action settings beside its status:
@@ -162,3 +168,9 @@ Only well-understood, narrow patch classes can progress without a human at
 every step. Those lanes must have named eligibility rules, strict budgets,
 reversible outcomes where possible, monitoring, and a clear escalation path.
 The default for all other patches remains human approval.
+
+The detailed plan deliberately adds durable-observer and manual read-only-agent
+foundation phases before automatic actions. It also records a later
+containerization track, including restricted-egress and offline-tool profiles.
+Initial read-only workers may run unsandboxed, visibly labeled as such, but
+isolation is required before broad code execution or autonomous operation.

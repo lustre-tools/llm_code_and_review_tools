@@ -85,6 +85,15 @@ simple comments, or asking Claude Code to attempt all comments. Neither option
 is selectable, invokes Claude, sends escalation email, or writes to Gerrit.
 Their proposed escalation behavior is documented in `DESIGN_ACTION_FLOW.md`.
 
+## Design documents
+
+- `DESIGN_ACTION_FLOW.md` defines the product-policy flow for test failures,
+  Jenkins failures, and future review handling.
+- `AGENT_ORCHESTRATION_DESIGN.md` defines the implementation architecture,
+  durable state machines, Claude Voice Control integration, human messaging,
+  LTVM/resource lifecycle, isolation roadmap, dashboard, recovery behavior,
+  and phased acceptance criteria.
+
 Use another local port with `python3 app.py --port 8090`.
 
 ## Seed a watch list
