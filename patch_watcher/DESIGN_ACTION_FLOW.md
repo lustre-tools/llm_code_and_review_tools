@@ -73,3 +73,22 @@ the Jenkins failure, but does not attempt diagnosis or other follow-up.
 Retesting belongs to the test-error branch, not this build-failure stub. The
 build branch is therefore a deliberate dead end until its criteria and
 actions are designed separately.
+
+## Handle reviews (future stubs)
+
+The page will eventually offer two review-handling choices. Both are stubs in
+the first implementation and are disabled: they do not invoke Claude Code or
+modify Gerrit.
+
+- **Handle simple comments:** shell out to Claude Code with a narrowly scoped
+  prompt. It may fix clearly trivial review comments, but must leave harder or
+  ambiguous comments unresolved, report them, and escalate to a human (for
+  example by email).
+- **Handle all comments:** shell out to Claude Code with permission to attempt
+  every review comment. If it cannot resolve a comment safely, or determines
+  that human judgment is needed, it leaves the comment unresolved and
+  escalates to a human.
+
+In both modes, the eventual integration must preserve the full review context,
+log Claude's result, and require explicit policy/configuration before any
+write action is enabled.
