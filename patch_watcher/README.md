@@ -1,29 +1,112 @@
 # Patch Watcher
 
-Patch Watcher is a tool for watching patches over time and handling their
-state and changes. It is intended to provide a shared foundation for patch
-tracking, review-state transitions, CI and test updates, and an operator-
-friendly website.
+Patch Watcher is a small, read-only web application for watching Gerrit
+changes over time. It presents the current lifecycle, review, and CI state,
+keeps a bounded in-process history, and recommends the next *human* action.
+It does not vote, post comments, trigger tests, or otherwise modify Gerrit.
 
-The project will keep a durable history of patch events and make the current
-state easy to inspect, while allowing automated watchers and human operators
-to act on changes.
+The status rules intentionally follow Marc Vef's Gerrit graph implementation:
 
-## Run it
+- Gerrit lifecycle, current patchset, WIP flag, and timestamps
+- Code-Review votes and unresolved-comment count
+- Jenkins and Maloo Verified votes and current-patchset result links
+- `Ready` only after both Jenkins and Maloo pass and enough non-owner
+  Code-Review votes exist (two for native changes, one for backports)
+- specific veto, Jenkins, Maloo, and other Verified failure states
+- a top-level review gate: a non-Maloo Code-Review `-1` records the reviewer,
+  patchset, and message, marks the patch for human attention, and prevents any
+  future test-query stage; a Maloo Verified `-1` remains a CI failure signal
 
-The current skeleton is dependency-free and stores watched patches in memory.
-Start it with:
+Patch Watcher's explicit watch state (`awaiting-ci`, `needs-review`,
+`needs-attention`, `ci-failed`, `ready`, or `terminal`) is an extension point
+inspired by Patch Shepherd. Recommendations are display-only; guarded actions
+may be added later.
+
+## Private configuration
+
+Patch Watcher reads only this private user file; it does not read credentials
+from environment variables or repository files:
+
+```text
+~/.config/patch-watcher/config
+```
+
+The file must have mode `0600` and contain:
+
+```ini
+GERRIT_URL=https://review.whamcloud.com
+GERRIT_USER=your-gerrit-user
+GERRIT_PASS=your-gerrit-http-password
+
+# Optional; defaults shown
+REFRESH_INTERVAL_SECONDS=300
+EMAIL_ENABLED=false
+EMAIL_TO=paf@mulberrytree.us
+SENDMAIL_PATH=/usr/sbin/sendmail
+```
+
+Generate the HTTP password in Gerrit under **Settings → HTTP Credentials**.
+Never add the private configuration to this repository. Email remains a dry
+run until `EMAIL_ENABLED=true` is explicitly configured.
+
+## Run locally
 
 ```bash
+cd ~/llm_code_and_review_tools/patch_watcher
 python3 app.py
 ```
 
-Then open <http://127.0.0.1:8080>. Add and remove buttons are provided on the
-page. URLs must be HTTPS changes hosted at `review.whamcloud.com/c/`; titles
-are optional and default to the Gerrit change number. Review status and last
-updated are displayed as placeholders for the future Gerrit watcher. The table
-also reserves fields for lifecycle, current patchset, WIP state, review votes,
-unresolved comments, Jenkins, and Maloo results—the status criteria surfaced
-by `gerrit_cli`. These remain demo values until a polling backend is added.
+Open <http://127.0.0.1:8080>. The server binds only to localhost. Adding a
+patch performs a read-only refresh. Each row also has a manual **Refresh**
+button, and **Refresh all** updates the full list. While the page is open, the
+browser visits a read-only refresh endpoint at the configured interval; no
+background thread is required.
 
-Run the tests with `python3 -m unittest -v`.
+The page shows clickable Gerrit and leading Jira-ticket links, current and
+historical status, last-checked and Gerrit last-changed times, and a short
+description of the newest upload or message. Refresh failures preserve the
+last known state and are written as private structured JSONL records under
+`~/.local/state/patch-watcher/errors.jsonl`.
+
+Use another local port with `python3 app.py --port 8090`.
+
+## Seed a watch list
+
+The default seed file is `~/.config/patch-watcher/patches.txt`. Each
+non-comment line is a Gerrit URL followed by an optional tab-separated title:
+
+```text
+https://review.whamcloud.com/c/fs/lustre-release/+/61965
+https://review.whamcloud.com/c/fs/lustre-release/+/61966	Optional temporary title
+```
+
+Gerrit replaces temporary titles during refresh. Select another file with
+`python3 app.py --seed-file /path/to/patches.txt`.
+
+## Daily email summary
+
+The **Send status email** button composes a bounded plain-text summary of
+checks, observed changes, current states, and recent errors. With email
+disabled it reports a dry run and never invokes sendmail. When explicitly
+enabled, Patch Watcher submits an RFC-822 message to the configured Linux
+sendmail binary using `sendmail -t -oi`; it never invokes a shell.
+
+For an external daily scheduler, run:
+
+```bash
+cd ~/llm_code_and_review_tools/patch_watcher
+python3 app.py --daily-summary
+```
+
+This loads and refreshes the seed list before composing the summary. Schedule
+that command with the host's normal cron or systemd timer rather than keeping
+scheduling logic inside the web process.
+
+## Tests
+
+All Gerrit and sendmail behavior is mocked; the test suite performs no network
+requests and sends no email:
+
+```bash
+python3 -m unittest discover -s . -v
+```

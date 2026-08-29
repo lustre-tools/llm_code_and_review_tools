@@ -1,24 +1,50 @@
 #!/usr/bin/env python3
-"""Small, dependency-free Patch Watcher web skeleton."""
+"""Small, dependency-free Patch Watcher web application."""
+import argparse
+import subprocess
 from html import escape
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from gerrit_status import (
+    GerritConfig,
+    GerritConfigError,
+    parse_change_number,
+    refresh_patch,
+)
+from reporting import send_daily_summary
+
 PATCHES = []
+DEFAULT_SEED_FILE = Path.home() / ".config" / "patch-watcher" / "patches.txt"
+JIRA_BASE_URL = "https://jira.whamcloud.com/browse"
+
+
+def configured_refresh_interval():
+    """Return the browser polling interval without exposing credentials."""
+    try:
+        return GerritConfig.load().refresh_interval
+    except GerritConfigError:
+        return 300
+
+
+def send_status_email(config=None, *, runner=subprocess.run):
+    """Send (or dry-run) the current bounded status summary."""
+    return send_daily_summary(
+        PATCHES,
+        config or GerritConfig.load(),
+        runner=runner,
+    )
 
 
 def valid_url(value):
     """Return true for canonical Whamcloud Gerrit change URLs only."""
-    parsed = urlparse(value.strip())
-    return (
-        parsed.scheme == "https"
-        and parsed.hostname == "review.whamcloud.com"
-        and not parsed.username
-        and not parsed.password
-        and parsed.path.startswith("/c/")
-        and bool(parsed.path.removeprefix("/c/").strip("/").split("/")[0])
-    )
+    try:
+        parse_change_number(value)
+    except ValueError:
+        return False
+    return True
 
 
 def add_patch(url, title=""):
@@ -35,45 +61,194 @@ def add_patch(url, title=""):
         "last_updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "lifecycle": "Open", "patchset": "—", "wip": False,
         "review": "—", "unresolved": 0, "jenkins": "—", "maloo": "—",
+        "watch_state": "uninitialized",
+        "recommendation": "Refresh to retrieve Gerrit status",
+        "last_checked": "—", "last_changed": "—", "change_summary": "—",
+        "history": [],
+        "errors": [], "check_count": 0,
     }
     PATCHES.append(patch)
     return patch, None
 
 
-def page(message=""):
+def ticket_from_title(title):
+    """Return the leading Jira issue key used by Lustre patch subjects."""
+    import re
+
+    match = re.match(r"([A-Z][A-Z0-9]*-[0-9]+)(?:\b|:)", title or "")
+    return match.group(1) if match else ""
+
+
+def _status_link(value, url):
+    value_html = escape(str(value or "—"))
+    if not url:
+        return value_html
+    return (
+        f"<a href='{escape(url, quote=True)}' target='_blank' "
+        f"rel='noreferrer'>{value_html}</a>"
+    )
+
+
+def _vote_summary(patch):
+    votes = patch.get("review_votes") or []
+    if not votes:
+        return "No CR votes"
+    return ", ".join(
+        f"{vote.get('name', '?')} {vote.get('value', 0):+d}"
+        for vote in votes
+    )
+
+
+def _history_html(patch):
+    history = patch.get("history") or []
+    if not history:
+        return ""
+    items = "".join(
+        "<li>"
+        f"<time>{escape(event.get('changed_at', '') or event.get('checked_at', ''))}</time> "
+        f"{escape(event.get('summary', 'Status changed'))} "
+        f"<span class='history-state'>[{escape(event.get('watch_state', ''))}]</span>"
+        "</li>"
+        for event in reversed(history)
+    )
+    return f"<details><summary>History ({len(history)})</summary><ol>{items}</ol></details>"
+
+
+def _patch_row(patch, jira_base=JIRA_BASE_URL):
+    title = patch.get("title", "")
+    ticket = ticket_from_title(title)
+    ticket_html = ""
+    if ticket:
+        ticket_html = (
+            f"<a class='ticket' href='{escape(jira_base.rstrip('/') + '/' + ticket, quote=True)}' "
+            f"target='_blank' rel='noreferrer'>{escape(ticket)}</a>"
+        )
+    error_html = ""
+    if patch.get("status_error"):
+        error_html = f"<div class='error'>{escape(patch['status_error'])}</div>"
+    return (
+        "<tr><td>"
+        f"<a href='{escape(patch['url'], quote=True)}' target='_blank' rel='noreferrer'>"
+        f"{escape(title)}</a>{ticket_html}"
+        f"<div class='url'>{escape(patch['url'])}</div>{error_html}</td>"
+        f"<td><span class='badge lifecycle-{escape(str(patch.get('lifecycle', 'unknown')).lower())}'>"
+        f"{escape(str(patch.get('lifecycle', patch.get('status', 'Pending'))))}</span></td>"
+        f"<td><strong>{escape(str(patch.get('watch_state', '—')))}</strong>"
+        f"<div class='detail'>{escape(str(patch.get('recommendation', '')))}</div></td>"
+        f"<td>{escape(str(patch.get('patchset', '—')))}"
+        f"<div class='detail'>WIP: {'Yes' if patch.get('wip') else 'No'}</div></td>"
+        f"<td><strong>{escape(str(patch.get('review', '—')))}</strong>"
+        f"<div class='detail'>{escape(_vote_summary(patch))} · "
+        f"{escape(str(patch.get('unresolved', 0)))} unresolved</div></td>"
+        f"<td>{_status_link(patch.get('jenkins', '—'), patch.get('jenkins_url', ''))} / "
+        f"{_status_link(patch.get('maloo', '—'), patch.get('maloo_url', ''))}</td>"
+        f"<td>{escape(patch.get('change_summary', '—') or '—')}"
+        f"<div class='detail'>Changed: {escape(patch.get('last_changed', '—') or '—')}</div>"
+        f"{_history_html(patch)}</td>"
+        f"<td>{escape(patch.get('last_checked', '—') or '—')}</td>"
+        "<td><div class='actions'>"
+        f"<form method='post' action='/refresh'><input type='hidden' name='url' "
+        f"value='{escape(patch['url'], quote=True)}'><button class='secondary'>Refresh</button></form>"
+        f"<form method='post' action='/remove'><input type='hidden' name='url' "
+        f"value='{escape(patch['url'], quote=True)}'><button class='danger'>Remove</button></form>"
+        "</div></td></tr>"
+    )
+
+
+def page(message="", jira_base=JIRA_BASE_URL):
+    refresh_interval = configured_refresh_interval()
     rows = "".join(
-        f"<tr><td><a href='{escape(p['url'])}'>{escape(p['title'])}</a><div class='url'>{escape(p['url'])}</div></td>"
-        f"<td><span class='badge'>{escape(p.get('lifecycle', p.get('status', 'Pending')))}</span></td>"
-        f"<td>{escape(str(p.get('patchset', '—')))}</td><td>{'Yes' if p.get('wip') else 'No'}</td>"
-        f"<td>{escape(str(p.get('review', '—')))} / {escape(str(p.get('unresolved', 0)))}</td>"
-        f"<td>{escape(str(p.get('jenkins', '—')))} / {escape(str(p.get('maloo', '—')))}</td>"
-        f"<td>{escape(p.get('last_updated', '—'))}</td>"
-        f"<td><form method='post' action='/remove'><input type='hidden' name='url' value='{escape(p['url'])}'><button class='danger'>Remove</button></form></td></tr>"
-        for p in PATCHES
+        _patch_row(patch, jira_base) for patch in PATCHES
     ) or "<tr><td colspan='8' class='empty'>No patches yet. Add a Gerrit change to start watching.</td></tr>"
-    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='{refresh_interval};url=/auto-refresh'>
 <title>Patch Watcher</title><style>
-body{{margin:0;background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1050px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px;flex:1;min-width:240px}}button{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}button.danger{{background:#fff;color:#b42318;border:1px solid #fecdca;padding:7px 11px}}table{{width:100%;border-collapse:collapse;margin-top:18px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url{{color:#667085;font-size:12px;margin-top:4px;word-break:break-all}}.badge{{background:#eef4ff;color:#315efb;border-radius:999px;padding:4px 9px;font-size:12px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}</style></head>
+body{{margin:0;background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1450px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a;overflow-x:auto}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px;flex:1;min-width:240px}}button{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}button.danger,button.secondary{{background:#fff;padding:7px 11px}}button.danger{{color:#b42318;border:1px solid #fecdca}}button.secondary{{color:#344054;border:1px solid #d0d5dd}}table{{width:100%;border-collapse:collapse;margin-top:18px;min-width:1280px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url,.detail{{color:#667085;font-size:12px;margin-top:4px;word-break:break-word}}.badge{{background:#eef4ff;color:#315efb;border-radius:999px;padding:4px 9px;font-size:12px}}.ticket{{display:inline-block;margin-left:8px;font-size:12px}}.actions{{display:flex;gap:6px}}.actions form{{margin:0}}.error{{color:#b42318;font-size:12px;margin-top:5px;max-width:340px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}.section-title{{display:flex;justify-content:space-between;align-items:center;gap:16px}}small{{color:#667085}}details{{margin-top:7px;font-size:12px;color:#475467}}details ol{{padding-left:18px;max-height:140px;overflow:auto}}details li{{margin:5px 0}}details time{{font-variant-numeric:tabular-nums}}.history-state{{color:#667085}}</style></head>
 <body><main><h1>Patch Watcher</h1><p class='sub'>Track Gerrit patches and follow their review state.</p>
 <section class='card'><h2>Add a patch</h2><form class='add' method='post' action='/add'><input name='url' required placeholder='https://review.whamcloud.com/c/...'><input name='title' placeholder='Patch title (optional)'><button>Add patch</button></form>{f"<div class='notice'>{escape(message)}</div>" if message else ''}</section>
-<section class='card'><h2>Watched patches <small>({len(PATCHES)})</small></h2><table><thead><tr><th>Patch</th><th>Lifecycle</th><th>Patchset</th><th>WIP</th><th>Review / unresolved</th><th>Jenkins / Maloo</th><th>Last updated</th><th></th></tr></thead><tbody>{rows}</tbody></table></section></main></body></html>"""
+<section class='card'><div class='section-title'><h2>Watched patches <small>({len(PATCHES)} · checks every {refresh_interval}s)</small></h2><div class='actions'><form method='post' action='/refresh-all'><button class='secondary'>Refresh all</button></form><form method='post' action='/email'><button class='secondary'>Send status email</button></form></div></div><table><thead><tr><th>Patch</th><th>Lifecycle</th><th>Watch state</th><th>Patchset</th><th>Review</th><th>Jenkins / Maloo</th><th>Latest change</th><th>Last checked</th><th></th></tr></thead><tbody>{rows}</tbody></table></section></main></body></html>"""
+
+
+def load_seed_file(path=DEFAULT_SEED_FILE):
+    """Load ``URL<TAB>optional title`` lines into the in-memory watch list."""
+    seed_path = Path(path)
+    if not seed_path.exists():
+        return []
+    loaded = []
+    for raw_line in seed_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        url, _, title = line.partition("\t")
+        patch, error = add_patch(url, title)
+        if error and "already" not in error:
+            raise ValueError(f"Invalid seed entry {url!r}: {error}")
+        if patch:
+            refresh_patch(patch)
+            loaded.append(patch)
+    return loaded
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        path = urlparse(self.path).path
+        if path == "/auto-refresh":
+            for patch in PATCHES:
+                refresh_patch(patch)
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.end_headers()
+            return
+        if path != "/":
+            self.send_error(404)
+            return
         self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.end_headers(); self.wfile.write(page().encode())
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0)); data = parse_qs(self.rfile.read(length).decode()); path = urlparse(self.path).path
         if path == "/add":
             url = data.get("url", [""])[0]; title = data.get("title", [""])[0]
-            _, error = add_patch(url, title)
+            patch, error = add_patch(url, title)
             if error: self.respond(page(error)); return
+            refresh_patch(patch)
         elif path == "/remove": PATCHES[:] = [p for p in PATCHES if p["url"] != data.get("url", [""])[0]]
+        elif path == "/refresh":
+            url = data.get("url", [""])[0]
+            patch = next((patch for patch in PATCHES if patch["url"] == url), None)
+            if patch:
+                refresh_patch(patch)
+        elif path == "/refresh-all":
+            for patch in PATCHES:
+                refresh_patch(patch)
+        elif path == "/email":
+            try:
+                config = GerritConfig.load()
+                result = send_status_email(config)
+                self.respond(page(result.message))
+            except GerritConfigError as exc:
+                self.respond(page(str(exc)))
+            return
+        else:
+            self.send_error(404)
+            return
         self.send_response(303); self.send_header("Location", "/"); self.end_headers()
     def respond(self, body):
         self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.end_headers(); self.wfile.write(body.encode())
 
 
 if __name__ == "__main__":
-    print("Patch Watcher listening on http://127.0.0.1:8080")
-    HTTPServer(("127.0.0.1", 8080), Handler).serve_forever()
+    parser = argparse.ArgumentParser(description="Run the local Patch Watcher web app")
+    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--seed-file", type=Path, default=DEFAULT_SEED_FILE)
+    parser.add_argument(
+        "--daily-summary",
+        action="store_true",
+        help="refresh seeds, then send/dry-run the configured daily email",
+    )
+    args = parser.parse_args()
+    load_seed_file(args.seed_file)
+    if args.daily_summary:
+        config = GerritConfig.load()
+        result = send_daily_summary(PATCHES, config)
+        print(result.message)
+        raise SystemExit(0 if result.sent or not config.email_enabled else 1)
+    print(f"Patch Watcher listening on http://127.0.0.1:{args.port}")
+    HTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
