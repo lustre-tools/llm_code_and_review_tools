@@ -38,3 +38,25 @@ enable an automated action for existing patches.
 Until that later phase is designed and approved, Patch Watcher remains
 read-only: checking a box records intent but does not post comments, request
 retests, alter Gerrit state, or send other external actions.
+
+## Test-error workflow (modeled on Patch Shepherd)
+
+When test-error handling is eventually enabled, the intended flow is:
+
+1. Check the patch's current Gerrit patchset and fetch its Maloo results.
+2. Consider only enforced test failures; record the test, session, suite, and
+   failing subtests in the error log.
+3. If a retest is already pending for a test group, wait and do not duplicate
+   it.
+4. Inspect each failed suite for linked bugs. A linked bug provides the
+   explanation to carry forward and is the basis for a later retest request.
+5. If no bug is linked, collect the failure details for research rather than
+   guessing. Patch Shepherd sends those unknown failures to its JIRA research
+   agent, which searches for a matching issue and assesses whether the patch
+   is related.
+6. Record the resulting recommendation (retest, needs review, stop, or
+   investigate) and include it in the next status report.
+
+Build-error handling will follow the same observe, classify, log, and
+recommend pattern, with its own criteria added when that checkbox is
+implemented.
