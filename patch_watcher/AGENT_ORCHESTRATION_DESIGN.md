@@ -208,7 +208,7 @@ Minimum entities:
 | `patch_policy` | version, triggers, capabilities, approvals, budgets, notification settings |
 | `observation` | patch/revision, checked time, normalized review/CI state, source fingerprints |
 | `trigger` | patch/revision, type, fingerprint, state, reason, first/last observed |
-| `run` | patch/revision, trigger, policy snapshot, type, state, summary/question/error, timestamps/version |
+| `run` | patch/revision, trigger, policy snapshot, type, execution profile, effective timeout limits, state, summary/question/error, started/last-qualifying-activity/deadline timestamps, version |
 | `run_event` | run, monotonic sequence, actor, type, structured payload, timestamp |
 | `run_message` | run, author, body, urgency, delivery state, target question/turn, timestamps |
 | `action_attempt` | run, action type, idempotency key, state, request/result, timestamps |
@@ -267,9 +267,12 @@ new work.
 
 All transitions use optimistic concurrency (`run.version`) and are recorded in
 `run_event`. `waiting_human`, `waiting_external`, `paused`, and `blocked` keep
-the logical one-active-run-per-patch claim. If a new patchset appears, the reconciler
-marks the old run `stale`, releases mutable resources according to policy, and
-allows evaluation of the new revision.
+the logical one-active-run-per-patch claim. If a new patchset appears during an
+active Claude session, the reconciler sets a separate `superseded_revision`
+flag but does not interrupt or inject a message into the session. The active
+run keeps the patch claim until the session ends; it then becomes `stale`,
+releases mutable resources according to policy, and permits evaluation of the
+new revision.
 
 ### Claude state mapping
 
@@ -338,6 +341,7 @@ Policy fields should include:
 - enabled workflow categories: test, Jenkins build, simple review comments,
   all review comments;
 - runner type and model/effort preference;
+- execution profile (`triage` or `engineering`) and timeout overrides;
 - capability grant;
 - runtime, turn, retry, external-action, and optional cost budgets;
 - initial/maximum LTVM resource-exhaustion cooldown and retry policy;
@@ -392,11 +396,16 @@ current Gerrit revision and compare patchset and SHA. A mismatch:
 
 1. records a `revision_changed` event;
 2. prevents the action;
-3. marks the run stale;
-4. preserves its logs and artifacts;
-5. cleans its checkout and session-created VMs, unless an operator has
+3. records the active run as superseded without sending an unsolicited message
+   into its Claude session;
+4. lets the worker finish producing logs or artifacts against its original
+   revision, but allows no external write;
+5. marks the run `stale` when its session ends;
+6. preserves its logs and artifacts;
+7. cleans its checkout and session-created VMs, unless an operator has
    explicitly retained a resource for debugging; and
-6. lets the new revision create its own trigger/run.
+8. lets the new revision create its own trigger/run after the old run releases
+   the per-patch active-run claim.
 
 An operator may view or download stale artifacts, but cannot “resume anyway.”
 They can start a new run whose prompt includes a bounded summary or selected
@@ -449,6 +458,23 @@ cause the dispatcher to send the next bounded prompt after checking revision,
 policy, budgets, and pending operator messages. Write-capable runs cross that
 controller policy boundary between every turn.
 
+### New patch activity while a session is running
+
+New Gerrit, review, or CI observations are recorded and shown while a Claude
+session is running, but they are not injected into that session. Patch Watcher
+does not interrupt, restart, redirect, or otherwise interact with the session
+in response to the new observation. The worker continues against the revision
+and evidence snapshot with which it started.
+
+If the observation contains a newer patchset, the active run receives a
+visible **Superseded revision** flag while the worker finishes its current
+bounded work. This is a flag, not a new run state. The worker may still produce
+logs or artifacts, but the mandatory pre-write revision guard rejects all
+external side effects from the old revision and its result is ultimately
+recorded as stale. After the run reaches a terminal state, the evaluator
+considers the newest observation and may create a new run. This deliberately
+avoids trying to merge new context into a live engineering session.
+
 ### Worker report protocol
 
 The familiar `WORKER_STATUS` marker may remain as a human-readable fallback,
@@ -478,6 +504,71 @@ versioned envelope should contain:
 The controller validates schema, `run_id`, paths, capability, and revision.
 Invalid or missing reports are visible protocol errors; they do not authorize
 actions. Text and tool-stream events remain available as activity and logs.
+
+## Agent execution profiles and timeouts
+
+Agent-backed work uses one of two explicit execution profiles. The profile and
+its effective limits are snapshotted into the run so later configuration
+changes cannot silently change an active session.
+
+### Triage profile
+
+Use `triage` for short sessions that inspect Gerrit, review, CI, JIRA, or source
+information and may request a small number of controller-mediated actions. A
+triage run must not create LTVM VMs. Its default maximum wall-clock runtime is
+20 minutes, measured from successful Claude process start. Reaching that
+deadline fails the run with `agent_runtime_timeout`; activity does not extend
+the deadline. An operator may explicitly extend the deadline before it expires,
+and that change is recorded as an event.
+
+### Engineering profile
+
+Use `engineering` for debugging, patch development, builds, tests, and other
+work that may create LTVM VMs. These runs do not have a short wall-clock limit.
+Instead, the default failure threshold is 30 minutes without qualifying
+activity while the run is `preparing` or `running`. Reaching the threshold
+fails the run with `agent_inactivity_timeout`. A separate total-runtime safety
+cap may be introduced later, but it must be independently named and displayed.
+
+Qualifying activity is evidence that the owned work is advancing, including:
+
+- new Claude output or a valid structured worker-status event;
+- an owned tool or command starting or completing;
+- new output from an owned command;
+- changing CPU, I/O, or explicit progress counters for an owned long-running
+  command; or
+- a state transition from an owner-attributed session VM or VM cluster.
+
+A dashboard refresh, observer poll, repeated unchanged process/VM status, or
+activity from an unrelated process does not reset the clock. Long-running
+wrappers must expose enough bounded progress or owned-process telemetry to
+avoid treating a legitimately active build or test as silent.
+
+The inactivity clock runs only in `preparing` and `running`. It is suspended in
+`waiting_human`, `waiting_external`, `paused`, and `blocked`, because those
+states already identify why progress is intentionally stopped. Resumption
+starts a fresh inactivity interval and records that transition.
+
+### Timeout response
+
+When either timeout fires, Patch Watcher must:
+
+1. transactionally re-read the run version, state, deadline, and last
+   qualifying activity so activity racing with the timeout wins; if the
+   deadline is still expired, atomically mark the run `failed` with the exact
+   timeout code, configured limit, start time, and last activity time;
+2. interrupt Claude and, after a bounded grace period, stop the process if it
+   has not exited;
+3. collect available logs and artifacts before terminal cleanup;
+4. purge only the checkout and LTVM resources owned by that run/session;
+5. send one immediate idempotent email with the patch, run, timeout reason,
+   last activity, cleanup state, and dashboard link; and
+6. show **Failed — 20-minute runtime limit** or **Failed — inactive for 30
+   minutes** on the patch and run pages.
+
+The dashboard shows the profile, start time, last qualifying activity, current
+step, and remaining runtime or inactivity time for every active agent run. A
+timeout never silently restarts or resumes a session; retry creates a new run.
 
 ## Human messaging and control
 
@@ -792,8 +883,9 @@ Sections:
 
 1. Current Gerrit/review/CI observation and exact revision.
 2. Effective policy, inherited defaults, pending edits, and safety budgets.
-3. Active run card: state, reason, step, model, runtime, last activity,
-   full checkout, session-created VMs, capabilities, isolation/network profile.
+3. Active run card: state, reason, step, model, execution profile, runtime,
+   last qualifying activity, timeout countdown, full checkout,
+   session-created VMs, capabilities, and isolation/network profile.
 4. Pending human question or blocker, displayed above routine logs.
 5. Conversation and message composer with delivery state and interrupt option.
 6. Timeline of observations, triggers, policy decisions, messages, worker
@@ -832,17 +924,20 @@ On startup and periodically:
 
 Use distinct limits for:
 
-- no-agent-output warning;
+- triage wall-clock runtime (20 minutes by default);
+- engineering inactivity (30 minutes by default);
 - current command/step deadline;
-- total run runtime;
+- optional total engineering-run runtime;
 - Claude turn and continuation count;
 - adapter retries/backoff;
 - external action count;
 - retained log/artifact size.
 
-No-output alone is not proof of a hung build or test. A worker can report a
-long-running command identifier/deadline, and the reconciler checks the owned
-process or VM before escalating. Never use self-matching process polls.
+No-output alone is not proof of a hung build or test. For the engineering
+profile, the reconciler also checks changing telemetry from the owned process
+or owner-attributed VM before declaring inactivity. A worker can report a
+long-running command identifier/deadline. Never use self-matching process
+polls.
 
 Retry only operations known to be safe and idempotent. Exhaustion becomes a
 visible `blocked` or `failed` outcome, not an invisible loop.
@@ -850,8 +945,8 @@ visible `blocked` or `failed` outcome, not an invisible loop.
 ## Notifications and reports
 
 - Immediate notification for `waiting_human`, blocked infrastructure,
-  LTVM resource exhaustion, repeated failure, emergency stop, and ambiguous
-  external action.
+  LTVM resource exhaustion, agent runtime/inactivity timeout, repeated failure,
+  emergency stop, and ambiguous external action.
 - Daily email summarizes observations, runs, actions, errors, and unanswered
   questions.
 - Test-email remains available and contains a bounded recent summary.
@@ -910,6 +1005,9 @@ Build:
 - one manual **Investigate** run pinned to a revision with read-only tools;
 - run detail page, conversation, waiting-human question, message delivery,
   pause/interrupt/cancel/resume/follow-up controls;
+- triage/engineering execution profiles, qualifying-activity tracking,
+  timeout termination, owner-scoped cleanup, immediate timeout email, and
+  visible countdown/failure reason;
 - structured worker report validation;
 - clearly visible unsandboxed-worker label.
 
@@ -920,6 +1018,10 @@ Exit criteria:
 - waiting-human survives service restart and resumes only after a valid answer;
 - terminal/stale runs cannot be silently resumed;
 - a live Claude runner session is adopted after Patch Watcher restart;
+- simulated 20-minute triage runtime and 30-minute engineering inactivity each
+  fail exactly once, email exactly once, and clean only run-owned resources;
+- waiting-human/external and paused/blocked time does not consume an inactivity
+  interval;
 - no external write capability is present.
 
 ### Phase 1: deterministic automatic retest
@@ -1054,6 +1156,9 @@ Build a fake-adapter test harness before enabling actions. Required suites:
 - stale patchset at every transition and immediately before writes;
 - Claude runner lost process, idle turn, invalid marker/report, needs-input, interrupt, and
   resume behavior;
+- triage wall-clock and engineering inactivity boundaries, qualifying versus
+  irrelevant activity, suspended waiting-state clocks, one-time notification,
+  stop escalation, and owner-scoped timeout cleanup;
 - human message idempotency, stale question, queued delivery, and terminal-run
   follow-up behavior;
 - external action success/failure/timeout/ambiguous/reconciliation;
