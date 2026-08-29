@@ -92,3 +92,73 @@ modify Gerrit.
 In both modes, the eventual integration must preserve the full review context,
 log Claude's result, and require explicit policy/configuration before any
 write action is enabled.
+
+## Agent orchestration roadmap
+
+Patch Watcher will grow from an observer into a controlled engineering-agent
+orchestrator. The design must remain incremental: a capability is unavailable
+until its policy, trigger, execution boundary, reporting, and recovery path
+are all implemented.
+
+### Common control model
+
+Each patch owns an independent policy and, at most, one active agent run.
+The page will eventually show:
+
+- enabled capabilities (for example, automatic retest or review handling);
+- triggering mode: manual only, on matching state change, or scheduled;
+- the active run's state: queued, running, waiting for human, complete,
+  failed, or cancelled;
+- started time, last activity, current step, and a bounded human-readable
+  activity log;
+- a durable run history containing inputs, decisions, tool actions, results,
+  errors, and links to artifacts.
+
+Before starting a run, the controller obtains a per-patch execution lease. If
+an active run already owns that patch, the trigger is recorded as coalesced and
+does not start a second agent. A newer patchset invalidates stale work and is
+shown clearly; it never silently applies an old run's result to the new
+patchset.
+
+All agent actions have an explicit capability grant. The agent receives only
+the tools needed for its enabled capability, and every external action is
+logged with the patchset, reason, and result. Human escalation moves the run
+to **waiting for human** and sends the configured notification; it does not
+retry indefinitely.
+
+### Phase 1: automatic retest
+
+This is the first executable capability, modeled closely on Patch Shepherd.
+
+1. On refresh, evaluate the review `-1` gate and test-error policy.
+2. Inspect enforced Maloo failures and detect any already-pending retest.
+3. For a failed suite with a linked bug, queue one bounded retest request.
+4. For an unknown failure, record the evidence and recommend or request
+   human/agent investigation according to policy; do not invent a bug link.
+5. Record each request and its outcome in the run history, then include it in
+   the daily report.
+
+Initial permissions are limited to read-only Gerrit/Maloo inspection and a
+single Maloo retest request. No Gerrit write, code change, or patch upload is
+part of this phase.
+
+### Phase 2: investigation agents
+
+An agent can investigate an unknown test failure or review feedback. It may
+read patch context, CI details, and linked issue data; it produces an evidence
+report and either a recommendation or a human escalation. It still does not
+modify source or Gerrit.
+
+### Phase 3: controlled patch work
+
+An agent can create an isolated checkout/worktree for a pinned patchset,
+build, run prescribed tests, and prepare a proposed patch revision. Any
+change remains an artifact for review; uploading a Gerrit patchset requires a
+separate, explicit capability and policy.
+
+### Phase 4: autonomous lanes
+
+Only well-understood, narrow patch classes can progress without a human at
+every step. Those lanes must have named eligibility rules, strict budgets,
+reversible outcomes where possible, monitoring, and a clear escalation path.
+The default for all other patches remains human approval.
