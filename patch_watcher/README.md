@@ -21,6 +21,9 @@ python3 app.py
 Then open <http://127.0.0.1:8080>. Add and remove buttons are provided on the
 page. URLs must be HTTPS changes hosted at `review.whamcloud.com/c/`; titles
 are optional and default to the Gerrit change number. Review status and last
-updated are displayed as placeholders for the future Gerrit watcher.
+updated are displayed as placeholders for the future Gerrit watcher. The table
+also reserves fields for lifecycle, current patchset, WIP state, review votes,
+unresolved comments, Jenkins, and Maloo results—the status criteria surfaced
+by `gerrit_cli`. These remain demo values until a polling backend is added.
 
 Run the tests with `python3 -m unittest -v`.

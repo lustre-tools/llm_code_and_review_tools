@@ -13,6 +13,7 @@ class PatchWatcherTests(unittest.TestCase):
         self.assertEqual(patch["url"], "https://review.whamcloud.com/c/123")
         self.assertEqual(patch["title"], "123")
         self.assertEqual(patch["status"], "Pending")
+        self.assertEqual(patch["lifecycle"], "Open")
         self.assertIn("last_updated", patch)
 
     def test_rejects_non_whamcloud_urls(self):
@@ -30,6 +31,13 @@ class PatchWatcherTests(unittest.TestCase):
         rendered = app.page()
         self.assertIn("&lt;unsafe&gt;", rendered)
         self.assertNotIn("<unsafe>", rendered)
+
+    def test_page_displays_review_and_ci_criteria(self):
+        patch, _ = app.add_patch("https://review.whamcloud.com/c/7", "Series")
+        patch.update(patchset=3, wip=True, review="+2", unresolved=2, jenkins="PASS", maloo="RUNNING")
+        rendered = app.page()
+        for value in ("Open", "3", "Yes", "+2 / 2", "PASS / RUNNING"):
+            self.assertIn(value, rendered)
 
 
 if __name__ == "__main__":
