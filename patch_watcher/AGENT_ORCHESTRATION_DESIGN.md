@@ -257,6 +257,9 @@ new work.
 - `paused`: explicitly paused by an operator without an unanswered question.
 - `blocked`: cannot proceed because of infrastructure, authentication, or an
   unmet dependency; operator intervention is required.
+- `resource_exhausted`: terminal outcome for a run that could not obtain the
+  local LTVM CPU, memory, disk, address, or other host capacity it requested.
+  It schedules session-resource cleanup and a per-patch retry cooldown.
 - `succeeded`: intended bounded outcome completed.
 - `failed`: attempt ended unsuccessfully and is not automatically continuing.
 - `cancelled`: operator stopped the run.
@@ -279,6 +282,7 @@ between turn state and task state rather than collapsing them:
 | turn `waiting`/`idle`, task `in_progress` | turn ended; controller evaluates the structured report before continuing |
 | task `needs_input` | validate question and move run to `waiting_human` |
 | task `blocked` | move to `blocked`, unless a clear human question makes `waiting_human` more accurate |
+| structured `resource_exhausted` report | validate the LTVM evidence, mark the run `resource_exhausted`, notify, clean up, and start cooldown |
 | task `complete` | validate requested outcome and artifacts before `succeeded` |
 | failed/stopped process | reconcile as `blocked`, `failed`, `paused`, or `cancelled` according to cause |
 
@@ -336,6 +340,7 @@ Policy fields should include:
 - runner type and model/effort preference;
 - capability grant;
 - runtime, turn, retry, external-action, and optional cost budgets;
+- initial/maximum LTVM resource-exhaustion cooldown and retry policy;
 - stale-run behavior and timeout behavior;
 - approval requirements;
 - immediate and daily notification settings;
@@ -454,11 +459,18 @@ versioned envelope should contain:
 {
   "schema": "patch-watcher-worker/v1",
   "run_id": "...",
-  "state": "in_progress|waiting_human|blocked|complete",
+  "state": "in_progress|waiting_human|blocked|resource_exhausted|complete",
   "summary": "short human-readable summary",
   "current_step": "what is happening now",
   "question": {"id": "optional-stable-id", "text": "...", "choices": []},
   "artifacts": [{"kind": "report", "path": "...", "description": "..."}],
+  "error": {
+    "code": "optional-machine-readable-code",
+    "operation": "optional failed operation",
+    "requested": {},
+    "evidence": "bounded sanitized evidence",
+    "retryable": true
+  },
   "requested_actions": [{"type": "...", "parameters": {}}]
 }
 ```
@@ -576,6 +588,49 @@ Early workers should not receive raw credential files. The controller can
 prefetch inputs or expose a narrow tool broker. Later direct tool access must
 mount or inject only the credentials required by the capability profile.
 
+### Worker rule: LTVM resource exhaustion
+
+The generated instructions for every worker with `start_ltvm` capability must
+include this rule:
+
+1. If `ltvm create` or `ltvm cluster create` fails, inspect the bounded error
+   once and distinguish resource exhaustion from invalid arguments, missing
+   artifacts, authentication, or another infrastructure error.
+2. Resource exhaustion means evidence such as insufficient host memory, disk,
+   CPU/allocation capacity, address/slot capacity, or an explicit resource
+   limit. Do not label an unknown creation failure as exhaustion.
+3. Do not repeatedly retry with arbitrary variants, destroy other sessions'
+   VMs, or attempt to free host resources.
+4. Stop VM-dependent work and emit a structured worker report with:
+   - state `resource_exhausted`;
+   - error code `ltvm_resource_exhausted`;
+   - failed LTVM operation;
+   - requested topology/resources;
+   - bounded, sanitized command output establishing the shortage; and
+   - identifiers of any resources already created under this session owner.
+5. For a non-resource creation failure, report `blocked` with a more accurate
+   error code such as `ltvm_create_failed` instead.
+
+On a validated `ltvm_resource_exhausted` report, Patch Watcher:
+
+- records a first-class `resource_exhausted` run outcome and timeline event;
+- stops that agent attempt and collects its diagnostics;
+- purges any complete or partial VM/cluster resources carrying the session's
+  `owner_id`, so the failed attempt does not worsen capacity pressure;
+- sends an immediate status email containing the patch, run, requested
+  resources, evidence, cleanup state, and dashboard link;
+- sets a configurable `vm_retry_not_before` cooldown for that patch and
+  suppresses automatic VM-backed runs until it expires;
+- continues ordinary read-only patch observation during the cooldown; and
+- exposes **Retry now**, **extend cooldown**, and **disable VM automation** to
+  the operator. Manual retry requires confirmation and starts a new run rather
+  than reviving the failed one.
+
+Repeated exhaustion increases the cooldown up to a configured maximum and
+raises a global LTVM-capacity warning on the dashboard. It does not silently
+loop. The global warning is informational initially; it does not stop
+unrelated read-only or non-VM workflows.
+
 ## Full checkouts and ephemeral LTVM resources
 
 An agent that edits or executes code needs a resource manifest stored with the
@@ -651,10 +706,10 @@ Operational rules:
   vCPU, memory, disks, create command/result, and deployment revision.
 - Capture commands, exit status, bounded output, console logs, and result
   artifacts.
-- On `succeeded`, `failed`, `cancelled`, or `stale`, first collect configured
-  artifacts and then purge every VM/cluster owned by the session. Cleanup is a
-  durable, retried finalization step; the run remains visibly cleaning until
-  LTVM confirms removal.
+- On `succeeded`, `failed`, `resource_exhausted`, `cancelled`, or `stale`, first
+  collect configured artifacts and then purge every VM/cluster owned by the
+  session. Cleanup is a durable, retried finalization step; the run remains
+  visibly cleaning until LTVM confirms removal.
 - `waiting_human`, `waiting_external`, `paused`, and recoverable `blocked`
   sessions retain their VMs because the session is not finished.
 - Retention is an explicit operator exception with a visible expiry. After the
@@ -712,7 +767,7 @@ Show:
 - observer/scheduler health and last successful poll;
 - global automation state and emergency stop;
 - counts of queued, running, waiting-human, waiting-external, blocked, failed,
-  and stale runs;
+  resource-exhausted, and stale runs;
 - available/busy Claude slots plus active, retained, orphaned, and
   cleanup-failed LTVM resources;
 - recent errors and unsent notifications;
@@ -725,7 +780,7 @@ Keep the compact patch/review/CI presentation, and add:
 - effective automation summary (for example `Retest: auto`, `Research: manual`);
 - active-run badge and current step;
 - last agent/controller activity;
-- prominent waiting-human/blocked/stale indicator;
+- prominent waiting-human/blocked/resource-exhausted/stale indicator;
 - one link to patch detail.
 
 Merged or abandoned patches retain terminal watch-state behavior and do not
@@ -744,7 +799,7 @@ Sections:
 6. Timeline of observations, triggers, policy decisions, messages, worker
    reports, actions, errors, and recovery events.
 7. Artifacts and bounded/raw logs.
-8. Prior runs, including stale and cancelled runs.
+8. Prior runs, including resource-exhausted, stale, and cancelled runs.
 
 ### Controls and safety in the UI
 
@@ -795,7 +850,8 @@ visible `blocked` or `failed` outcome, not an invisible loop.
 ## Notifications and reports
 
 - Immediate notification for `waiting_human`, blocked infrastructure,
-  repeated failure, emergency stop, and ambiguous external action.
+  LTVM resource exhaustion, repeated failure, emergency stop, and ambiguous
+  external action.
 - Daily email summarizes observations, runs, actions, errors, and unanswered
   questions.
 - Test-email remains available and contains a bounded recent summary.
@@ -915,6 +971,8 @@ Build:
   reconciliation;
 - agent-driven, on-demand VM/cluster creation with target
   list/fetch/validate guidance and recorded VM environment;
+- structured LTVM resource-exhaustion reporting, email, partial-resource
+  cleanup, per-patch cooldown, and operator retry controls;
 - safe command/test manifests rather than arbitrary dashboard shell text;
 - artifact collection, cleanup, quarantine, and orphan reconciliation;
 - rootless worker container prototype and network-profile display.
@@ -926,6 +984,9 @@ Exit criteria:
 - two runs cannot share a writable checkout or owner-attributed VM;
 - cancellation and restart do not destroy unrelated VMs;
 - environment and test results are reproducible from the run manifest;
+- a simulated LTVM capacity failure creates no retry loop, purges only
+  owner-matched partial resources, emails once, and suppresses that patch until
+  cooldown or confirmed manual retry;
 - restricted-egress behavior is tested and honestly represented.
 
 ### Phase 4: review handling and proposed edits
@@ -998,6 +1059,8 @@ Build a fake-adapter test harness before enabling actions. Required suites:
 - external action success/failure/timeout/ambiguous/reconciliation;
 - LTVM owner propagation, terminal purge, orphan, cleanup retry, retention, and
   unrelated-VM protection;
+- LTVM resource exhaustion versus ordinary create failure, email idempotency,
+  partial-cluster cleanup, cooldown expiry, and manual override;
 - capability-denial, secret-redaction, prompt-injection, CSRF, and auth tests;
 - event replay: rebuild current projections from a recorded event sequence;
 - end-to-end dry-run with fake Gerrit/Maloo/Jenkins/JIRA/Claude/LTVM adapters.
