@@ -487,8 +487,10 @@ def _watch_classification(
     separate makes a future guarded action workflow possible without mixing
     mutations into the polling layer.
     """
-    if lifecycle in {"Merged", "Abandoned"}:
-        return "terminal", "Patch is no longer active; consider stopping the watch"
+    if lifecycle == "Merged":
+        return "merged", "Patch is merged; consider stopping the watch"
+    if lifecycle == "Abandoned":
+        return "abandoned", "Patch is abandoned; consider stopping the watch"
     if wip:
         return "work-in-progress", "Wait for the author to remove WIP"
     if review_health == "Veto":
@@ -600,6 +602,7 @@ def refresh_patch(
             "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "message": str(exc),
         }
+        patch["last_checked"] = error_event["checked_at"]
         errors.append(error_event)
         patch["errors"] = errors[-50:]
         try:

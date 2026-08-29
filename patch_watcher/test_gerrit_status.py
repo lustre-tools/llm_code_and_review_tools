@@ -196,11 +196,17 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(result["maloo"], "FAIL")
         self.assertEqual(result["watch_state"], "ci-failed")
 
-    def test_merged_change_is_terminal(self):
+    def test_merged_change_folds_lifecycle_into_watch_state(self):
         result = status.summarize_change(sample_change(raw_status="MERGED"))
         self.assertEqual(result["lifecycle"], "Merged")
         self.assertEqual(result["review"], "—")
-        self.assertEqual(result["watch_state"], "terminal")
+        self.assertEqual(result["watch_state"], "merged")
+
+    def test_abandoned_change_folds_lifecycle_into_watch_state(self):
+        result = status.summarize_change(sample_change(raw_status="ABANDONED"))
+        self.assertEqual(result["lifecycle"], "Abandoned")
+        self.assertEqual(result["review"], "—")
+        self.assertEqual(result["watch_state"], "abandoned")
 
     def test_client_uses_basic_auth_and_strips_gerrit_xssi_prefix(self):
         change = sample_change()
@@ -238,6 +244,7 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(error, "temporary failure")
         self.assertEqual(patch_record["review"], "Ready")
         self.assertEqual(patch_record["status_error"], "temporary failure")
+        self.assertNotEqual(patch_record["last_checked"], "—")
 
     def test_refresh_records_bounded_history_and_state_transition(self):
         patch_record = {

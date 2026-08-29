@@ -56,7 +56,7 @@ def add_patch(url, title=""):
         return None, "That patch is already being watched."
     patch = {
         "url": url,
-        "title": title.strip() or url.rsplit("/", 1)[-1],
+        "title": title.strip() or str(parse_change_number(url)),
         "status": "Pending",
         "last_updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "lifecycle": "Open", "patchset": "—", "wip": False,
@@ -86,11 +86,6 @@ def _chip(text, tone, *, title=""):
         f"<span class='status-chip tone-{tone}'{title_attr}>"
         f"{escape(str(text))}</span>"
     )
-
-
-def _lifecycle_chip(value):
-    tones = {"Open": "info", "Merged": "good", "Abandoned": "bad"}
-    return _chip(value or "Unknown", tones.get(value, "neutral"), title="Lifecycle")
 
 
 def _review_chip(patch):
@@ -136,6 +131,8 @@ def _ci_chip(service, value, url=""):
 def _watch_chip(value):
     tones = {
         "ready": "good",
+        "merged": "good",
+        "abandoned": "bad",
         "terminal": "neutral",
         "ci-failed": "bad",
         "needs-attention": "bad",
@@ -178,6 +175,16 @@ def _history_html(patch):
     return f"<details><summary>History ({len(history)})</summary><ol>{items}</ol></details>"
 
 
+def overall_last_checked():
+    """Return the newest successful or attempted check shown on the page."""
+    checked = [
+        str(patch.get("last_checked", ""))
+        for patch in PATCHES
+        if patch.get("last_checked") not in {None, "", "—"}
+    ]
+    return max(checked) if checked else "Never"
+
+
 def _patch_row(patch, jira_base=JIRA_BASE_URL):
     title = patch.get("title", "")
     ticket = ticket_from_title(title)
@@ -195,23 +202,19 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         f"<a href='{escape(patch['url'], quote=True)}' target='_blank' rel='noreferrer'>"
         f"{escape(title)}</a>{ticket_html}"
         f"<div class='url'>{escape(patch['url'])}</div>{error_html}</td>"
-        f"<td>{_lifecycle_chip(str(patch.get('lifecycle', patch.get('status', 'Pending'))))}</td>"
         f"<td>{_watch_chip(patch.get('watch_state', 'uninitialized'))}"
         f"<div class='detail'>{escape(str(patch.get('recommendation', '')))}</div></td>"
-        f"<td>{escape(str(patch.get('patchset', '—')))}"
-        f"<div class='detail'>{_chip('! WIP', 'warn', title='Work in progress') if patch.get('wip') else _chip('Active', 'neutral', title='Not marked WIP')}</div></td>"
         f"<td>{_review_chip(patch)}"
         f"<div class='detail'>{escape(_vote_summary(patch))} · "
         f"{escape(str(patch.get('unresolved', 0)))} unresolved</div></td>"
         f"<td><div class='ci-stack'>{_ci_chip('Jenkins', patch.get('jenkins', '—'), patch.get('jenkins_url', ''))}"
         f"{_ci_chip('Maloo', patch.get('maloo', '—'), patch.get('maloo_url', ''))}</div></td>"
+        f"<td>{escape(str(patch.get('patchset', '—')))}"
+        f"<div class='detail'>{_chip('! WIP', 'warn', title='Work in progress') if patch.get('wip') else _chip('Active', 'neutral', title='Not marked WIP')}</div></td>"
         f"<td>{escape(patch.get('change_summary', '—') or '—')}"
         f"<div class='detail'>Changed: {escape(patch.get('last_changed', '—') or '—')}</div>"
         f"{_history_html(patch)}</td>"
-        f"<td>{escape(patch.get('last_checked', '—') or '—')}</td>"
         "<td><div class='actions'>"
-        f"<form method='post' action='/refresh'><input type='hidden' name='url' "
-        f"value='{escape(patch['url'], quote=True)}'><button class='secondary'>Refresh</button></form>"
         f"<form method='post' action='/remove'><input type='hidden' name='url' "
         f"value='{escape(patch['url'], quote=True)}'><button class='danger'>Remove</button></form>"
         "</div></td></tr>"
@@ -222,13 +225,13 @@ def page(message="", jira_base=JIRA_BASE_URL):
     refresh_interval = configured_refresh_interval()
     rows = "".join(
         _patch_row(patch, jira_base) for patch in PATCHES
-    ) or "<tr><td colspan='8' class='empty'>No patches yet. Add a Gerrit change to start watching.</td></tr>"
+    ) or "<tr><td colspan='7' class='empty'>No patches yet. Add a Gerrit change to start watching.</td></tr>"
     return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='{refresh_interval};url=/auto-refresh'>
 <title>Patch Watcher</title><style>
 body{{margin:0;background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1450px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a;overflow-x:auto}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px;flex:1;min-width:240px}}button{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}button:disabled{{cursor:not-allowed;opacity:.68}}button.danger,button.secondary{{background:#fff;padding:7px 11px}}button.danger{{color:#b42318;border:1px solid #fecdca}}button.secondary{{color:#344054;border:1px solid #d0d5dd}}table{{width:100%;border-collapse:collapse;margin-top:18px;min-width:1280px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url,.detail{{color:#667085;font-size:12px;margin-top:4px;word-break:break-word}}.ticket{{display:inline-block;margin-left:8px;font-size:12px}}.actions{{display:flex;gap:6px}}.actions form{{margin:0}}.error{{color:#b42318;font-size:12px;margin-top:5px;max-width:340px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}.section-title{{display:flex;justify-content:space-between;align-items:center;gap:16px}}small{{color:#667085}}details{{margin-top:7px;font-size:12px;color:#475467}}details ol{{padding-left:18px;max-height:140px;overflow:auto}}details li{{margin:5px 0}}details time{{font-variant-numeric:tabular-nums}}.history-state{{color:#667085}}.status-chip{{display:inline-block;border:1px solid transparent;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;line-height:1.35;white-space:nowrap}}.tone-good{{background:#dcfce7;border-color:#86efac;color:#166534}}.tone-bad{{background:#fee2e2;border-color:#fca5a5;color:#991b1b}}.tone-warn{{background:#fef3c7;border-color:#fcd34d;color:#78350f}}.tone-info{{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}}.tone-neutral{{background:#f2f4f7;border-color:#d0d5dd;color:#344054}}.status-link{{text-decoration:none}}.status-link:focus-visible .status-chip{{outline:3px solid #315efb;outline-offset:2px}}.ci-stack{{display:flex;align-items:flex-start;gap:5px;flex-direction:column}}.stub-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}}.stub-option{{display:flex;align-items:flex-start;gap:10px;text-align:left;background:#f8fafc;color:#344054;border:1px solid #d0d5dd;padding:14px}}.stub-label{{display:block;color:#667085;font-size:12px;font-weight:500;margin-top:4px}}.stub-tag{{display:inline-block;margin-left:6px;border:1px solid #d0d5dd;border-radius:999px;padding:1px 6px;font-size:10px;text-transform:uppercase}}</style></head>
 <body><main><h1>Patch Watcher</h1><p class='sub'>Track Gerrit patches and follow their review state.</p>
-<section class='card'><h2>Add a patch</h2><form class='add' method='post' action='/add'><input name='url' required placeholder='https://review.whamcloud.com/c/...'><input name='title' placeholder='Patch title (optional)'><button>Add patch</button></form>{f"<div class='notice'>{escape(message)}</div>" if message else ''}</section>
-<section class='card'><div class='section-title'><h2>Watched patches <small>({len(PATCHES)} · checks every {refresh_interval}s)</small></h2><div class='actions'><form method='post' action='/refresh-all'><button class='secondary'>Refresh all</button></form><form method='post' action='/email'><button class='secondary'>Send status email</button></form></div></div><table><thead><tr><th>Patch</th><th>Lifecycle</th><th>Watch state</th><th>Patchset</th><th>Review</th><th>Jenkins / Maloo</th><th>Latest change</th><th>Last checked</th><th></th></tr></thead><tbody>{rows}</tbody></table></section>
+<section class='card'><h2>Add a patch</h2><form class='add' method='post' action='/add'><input name='url' required placeholder='https://review.whamcloud.com/c/...'><button>Add patch</button></form>{f"<div class='notice'>{escape(message)}</div>" if message else ''}</section>
+<section class='card'><div class='section-title'><div><h2>Watched patches <small>({len(PATCHES)} · checks every {refresh_interval}s)</small></h2><div class='detail'>Overall last checked: {escape(overall_last_checked())}</div></div><div class='actions'><form method='post' action='/refresh-all'><button class='secondary'>Refresh all</button></form><form method='post' action='/email'><button class='secondary'>Send status email</button></form></div></div><table><thead><tr><th>Patch</th><th>Watch state</th><th>Review</th><th>Jenkins / Maloo</th><th>Patchset</th><th>Latest change</th><th></th></tr></thead><tbody>{rows}</tbody></table></section>
 <section class='card' aria-labelledby='handle-reviews-title'><h2 id='handle-reviews-title'>Handle reviews <span class='stub-tag'>Stub · disabled</span></h2><p class='sub'>Planned Claude Code workflows are visible for design review only. They cannot be selected and perform no Gerrit writes or Claude invocation.</p><div class='stub-grid'><button class='stub-option' type='button' disabled aria-disabled='true'><span>Handle simple comments<span class='stub-label'>Future: ask Claude to fix only clearly trivial comments; report and email-escalate everything complex or ambiguous.</span></span></button><button class='stub-option' type='button' disabled aria-disabled='true'><span>Handle all comments<span class='stub-label'>Future: ask Claude to attempt every comment; escalate whenever it cannot resolve one safely or requests human judgment.</span></span></button></div></section></main></body></html>"""
 
 
@@ -269,16 +272,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0)); data = parse_qs(self.rfile.read(length).decode()); path = urlparse(self.path).path
         if path == "/add":
-            url = data.get("url", [""])[0]; title = data.get("title", [""])[0]
-            patch, error = add_patch(url, title)
+            url = data.get("url", [""])[0]
+            patch, error = add_patch(url)
             if error: self.respond(page(error)); return
             refresh_patch(patch)
         elif path == "/remove": PATCHES[:] = [p for p in PATCHES if p["url"] != data.get("url", [""])[0]]
-        elif path == "/refresh":
-            url = data.get("url", [""])[0]
-            patch = next((patch for patch in PATCHES if patch["url"] == url), None)
-            if patch:
-                refresh_patch(patch)
         elif path == "/refresh-all":
             for patch in PATCHES:
                 refresh_patch(patch)

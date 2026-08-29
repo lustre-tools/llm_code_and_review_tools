@@ -1,7 +1,7 @@
 # Patch Watcher
 
 Patch Watcher is a small, read-only web application for watching Gerrit
-changes over time. It presents the current lifecycle, review, and CI state,
+changes over time. It presents the current watch, review, and CI state,
 keeps a bounded in-process history, and recommends the next *human* action.
 It does not vote, post comments, trigger tests, or otherwise modify Gerrit.
 
@@ -57,8 +57,10 @@ python3 app.py
 ```
 
 Open <http://127.0.0.1:8080>. The server binds only to localhost. Adding a
-patch performs a read-only refresh. Each row also has a manual **Refresh**
-button, and **Refresh all** updates the full list. While the page is open, the
+patch requires only its Gerrit URL; the title comes from Gerrit, with the
+change number as a temporary fallback. Adding performs a read-only refresh.
+**Refresh all** updates the full list, and
+the heading shows the overall last-checked time. While the page is open, the
 browser visits a read-only refresh endpoint at the configured interval; no
 background thread is required.
 
@@ -68,11 +70,15 @@ description of the newest upload or message. Refresh failures preserve the
 last known state and are written as private structured JSONL records under
 `~/.local/state/patch-watcher/errors.jsonl`.
 
-Lifecycle, review health, CI, WIP, and watch states use the same green/red/
-amber/blue visual vocabulary as the Gerrit graph. Every colored chip also
+Review health, CI, WIP, and watch states use the same green/red/amber/blue
+visual vocabulary as the Gerrit graph. Every colored chip also
 contains explicit text and a symbol, so meaning never depends on color alone.
 Review health is summarized as **Ready**, **Clean**, **Needs**, or **Veto**;
 Jenkins and Maloo retain their explicit pass/fail/running labels.
+The lifecycle remains in the status model, but the table folds terminal
+lifecycle into watch state: merged patches display **Merged** and abandoned
+patches display **Abandoned** rather than occupying a separate column. The
+compact table places patchset/WIP immediately after Jenkins and Maloo status.
 
 The **Handle reviews** section shows two disabled design stubs: handling only
 simple comments, or asking Claude Code to attempt all comments. Neither option
