@@ -378,7 +378,7 @@ exactly-once delivery cannot be assumed from an HTTP or CLI call.
 For example, a Maloo retest key may be:
 
 ```text
-maloo-retest:<change>:<revision-sha>:<session-id>:<test-group>
+maloo-retest:<change>:<revision-sha>:<session-id>
 ```
 
 ## Trigger and dispatch algorithm
@@ -1157,10 +1157,12 @@ restart adoption, structured completion, timeouts and reminders, and
 owner-scoped cleanup. It deliberately grants no Gerrit, CI, Jira, LTVM,
 source-editing, shell, or upload capability.
 
-The next development slice is Phase 1's deterministic automatic-retest path.
-It should reuse the durable trigger/outbox/event machinery but keep the
-mechanical decision and idempotent remote action in the controller; it must
-not require a Claude session for an already-understood retest decision.
+Phase 1's deterministic automatic-retest path is now implemented. It reuses a
+separate durable trigger/outbox/event ledger and keeps the mechanical decision
+and idempotent remote action in the controller; it does not require a Claude
+session for an already-understood retest decision. The next slice is Phase 2's
+read-only research agent for failures that cannot pass Phase 1's evidence
+rules.
 
 ### Phase 0A: durable observer
 
@@ -1252,6 +1254,11 @@ Exit criteria:
 - no external write capability is present.
 
 ### Phase 1: deterministic automatic retest
+
+**Implementation status: complete.** The checked-in controller, Maloo adapter,
+pure policy evaluator, background observer, durable automation ledger,
+dashboard confirmations/timeline, and notification projections implement this
+phase. External execution still defaults off globally and per patch.
 
 Build:
 

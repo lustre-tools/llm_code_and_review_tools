@@ -1,9 +1,13 @@
 # Patch Watcher
 
-Patch Watcher is a small, read-only web application for watching Gerrit
-changes over time. It presents the current watch, review, and CI state,
-keeps a bounded in-process history, and recommends the next *human* action.
-It does not vote, post comments, trigger tests, or otherwise modify Gerrit.
+Patch Watcher watches Gerrit changes over time and provides a deliberately
+bounded engineering-control surface. It presents current review and CI state,
+persists decisions and action history, and recommends the next human action.
+Its first executable capability is one deterministic Maloo retest for a
+revision whose enforced failures all have accepted Jira evidence. It does not
+vote, post comments, modify source, upload patchsets, or invoke Claude for that
+mechanical flow. Every patch starts Disabled and automatic external execution
+also starts globally Disabled.
 
 The status rules intentionally follow Marc Vef's Gerrit graph implementation:
 
@@ -59,10 +63,10 @@ python3 app.py
 Open <http://127.0.0.1:8080>. The server binds only to localhost. Adding a
 patch requires only its Gerrit URL; the title comes from Gerrit, with the
 change number as a temporary fallback. Adding performs a read-only refresh.
-**Refresh all** updates the full list, and
-the heading shows the overall last-checked time. While the page is open, the
-browser visits a read-only refresh endpoint at the configured interval; no
-background thread is required.
+**Refresh all** updates the full list, and the heading shows the overall
+last-checked time. A service-owned background observer performs the same
+bounded polling at the configured interval, so observation continues when no
+browser is open. Concurrent manual and scheduled polls coalesce.
 
 The top of the page shows a live worker-host memory summary and the current
 LTVM inventory. Physical used/available memory, configured VM guest memory,
@@ -118,6 +122,41 @@ stop controls. Destructive controls require a one-time POST confirmation;
 links and GET requests cannot mutate a run. Phase 0C grants no Gerrit, CI,
 Jira, LTVM, source-editing, shell, or upload capability.
 
+Phase 1 adds deterministic Maloo test-error handling without a Claude
+session. Each exact patch revision has one of four explicit policies:
+
+- **Disabled**: apply the Gerrit gates and record why no flow ran;
+- **Advise**: show the exact session-level retest that would be requested;
+- **Approval**: prepare one exact action and wait for a separate operator
+  confirmation tied to the revision and policy snapshot; or
+- **Automatic**: execute only when the independently confirmed global gate is
+  also enabled.
+
+The controller checks the non-Maloo Code-Review `-1` gate before querying
+Maloo, groups enforced failures by Maloo session, requires accepted Jira
+evidence for every failed suite in that session, detects pending requests,
+enforces a per-revision budget, and revalidates Gerrit and remote Maloo state
+at the final write boundary. The durable outbox prevents duplicate requests
+across repeated polls, concurrent controllers, and restarts. An uncertain
+mutation is never blindly retried; later polls only reconcile remote state.
+Outcomes and errors appear in the bounded timeline, daily report, and optional
+immediate sendmail notices.
+
+Maloo reads and retests use the installed `maloo` CLI. Configure that tool's
+private credentials in `~/.config/maloo-tool/.env` as documented by
+`maloo_tool`; Patch Watcher does not copy credentials into its database or
+logs. Missing credentials are reported as a definitive authentication error
+and cannot produce an ambiguous or retried mutation.
+
+The automation ledger is private WAL-backed SQLite state:
+
+```text
+~/.local/state/patch-watcher/automation.sqlite3
+```
+
+Automatic policy changes and the global execution switch each use a separate
+confirmation page. GET requests never enable or approve an external action.
+
 The page shows clickable Gerrit and leading Jira-ticket links, current and
 historical status, last-checked and Gerrit last-changed times, and a short
 description of the newest upload or message. Refresh failures preserve the
@@ -153,8 +192,9 @@ Their proposed escalation behavior is documented in `DESIGN_ACTION_FLOW.md`.
   engineer environment, what the controller injects, how a worker is admitted,
   and how the current Mac evolves into reproducible and isolated workers.
 
-Use another local port with `python3 app.py --port 8090`, or select an isolated
-session database with `--session-database /private/path/sessions.sqlite3`.
+Use another local port with `python3 app.py --port 8090`, or select isolated
+databases with `--session-database /private/path/sessions.sqlite3` and
+`--automation-database /private/path/automation.sqlite3`.
 
 ## Seed a watch list
 
@@ -174,7 +214,8 @@ Gerrit replaces temporary titles during refresh. Select another file with
 ## Daily email summary
 
 The **Send status email** button composes a bounded plain-text summary of
-checks, observed changes, current states, and recent errors. With email
+checks, observed changes, deterministic retest events, current states, and
+recent errors. With email
 disabled it reports a dry run and never invokes sendmail. When explicitly
 enabled, Patch Watcher submits an RFC-822 message to the configured Linux
 sendmail binary using `sendmail -t -oi`; it never invokes a shell.

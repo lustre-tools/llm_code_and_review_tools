@@ -67,6 +67,7 @@ def compose_daily_summary(
     *,
     day: date | None = None,
     errors: list[dict[str, Any]] | None = None,
+    automation_events: list[dict[str, Any]] | None = None,
 ) -> str:
     """Create a concise plain-text status report from in-memory history."""
     report_day = day or datetime.now(timezone.utc).date()
@@ -79,6 +80,7 @@ def compose_daily_summary(
     ]
     checks = sum(int(patch.get("check_count", 0)) for patch in patches)
     error_events = list(errors or [])[-10:]
+    retest_events = list(automation_events or [])[-25:]
 
     lines = [
         f"Patch Watcher daily status — {report_day.isoformat()}",
@@ -87,6 +89,7 @@ def compose_daily_summary(
         f"Checks performed in this process: {checks}",
         f"Changes noticed today: {len(changes)}",
         f"Recent errors included: {len(error_events)}",
+        f"Retest automation events included: {len(retest_events)}",
         "",
         "Current status",
         "--------------",
@@ -112,6 +115,17 @@ def compose_daily_summary(
             f"- {event.get('changed_at', 'unknown time')} "
             f"{patch.get('title', patch.get('url', 'patch'))}: "
             f"{event.get('summary', 'status changed')}"
+        )
+
+    lines.extend(["", "Retest automation", "-----------------"])
+    if not retest_events:
+        lines.append("No deterministic retest events were recorded.")
+    for event in retest_events:
+        lines.append(
+            f"- {event.get('created_at', 'unknown time')} "
+            f"change {event.get('patch_id', 'unknown')}: "
+            f"{event.get('event_type', 'event')} — "
+            f"{event.get('summary', 'Recorded')}"
         )
 
     lines.extend(["", "Recent errors", "-------------"])
@@ -177,13 +191,18 @@ def send_daily_summary(
     *,
     runner: Runner = subprocess.run,
     error_log: Path = DEFAULT_ERROR_LOG,
+    automation_events: list[dict[str, Any]] | None = None,
 ) -> MailResult:
     """Compose and optionally send today's report.
 
     Email is a dry run unless ``EMAIL_ENABLED`` is true in the private config.
     """
     errors = recent_error_events(path=error_log, limit=10)
-    body = compose_daily_summary(patches, errors=errors)
+    body = compose_daily_summary(
+        patches,
+        errors=errors,
+        automation_events=automation_events,
+    )
     if not config.email_enabled:
         return MailResult(
             False,
@@ -192,6 +211,75 @@ def send_daily_summary(
     return SendmailMailer(config.sendmail_path, runner=runner).send(
         config.email_to,
         f"Patch Watcher daily status — {datetime.now(timezone.utc).date().isoformat()}",
+        body,
+    )
+
+
+def compose_automation_alert(
+    *,
+    patch_id: str,
+    revision: str,
+    state: str,
+    summary: str,
+    timeline: list[Any] | None = None,
+) -> str:
+    """Compose a bounded operator notice for a deterministic retest run."""
+
+    lines = [
+        "Patch Watcher deterministic-retest notice",
+        "",
+        f"Patch: {str(patch_id)[:200]}",
+        f"Revision: {str(revision)[:80]}",
+        f"State: {str(state)[:80]}",
+        f"Summary: {str(summary)[:500]}",
+        "",
+        "Recent timeline",
+        "---------------",
+    ]
+    bounded = list(timeline or [])[-8:]
+    if not bounded:
+        lines.append("No timeline events were recorded.")
+    for event in bounded:
+        if isinstance(event, dict):
+            created_at = event.get("created_at", "unknown time")
+            event_type = event.get("event_type", "event")
+            detail = event.get("summary", "Recorded")
+        else:
+            created_at = getattr(event, "created_at", "unknown time")
+            event_type = getattr(event, "event_type", "event")
+            payload = getattr(event, "payload", {}) or {}
+            detail = payload.get("summary", "Recorded")
+        lines.append(
+            f"- {str(created_at)[:80]} {str(event_type)[:80]}: "
+            f"{' '.join(str(detail).split())[:500]}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def send_automation_alert(
+    config: Any,
+    *,
+    patch_id: str,
+    revision: str,
+    state: str,
+    summary: str,
+    timeline: list[Any] | None = None,
+    runner: Runner = subprocess.run,
+) -> MailResult:
+    """Send one immediate deterministic-retest notice through sendmail."""
+
+    if not config.email_enabled:
+        return MailResult(False, "Email is disabled; the retest notice was recorded only.")
+    body = compose_automation_alert(
+        patch_id=patch_id,
+        revision=revision,
+        state=state,
+        summary=summary,
+        timeline=timeline,
+    )
+    return SendmailMailer(config.sendmail_path, runner=runner).send(
+        config.email_to,
+        f"Patch Watcher retest notice — {str(patch_id)[:120]}",
         body,
     )
 

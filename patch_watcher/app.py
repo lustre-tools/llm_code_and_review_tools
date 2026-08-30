@@ -5,6 +5,7 @@ import hmac
 import platform
 import secrets
 import subprocess
+import threading
 import time
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,10 +16,18 @@ from urllib.parse import parse_qs, urlparse
 from gerrit_status import (
     GerritConfig,
     GerritConfigError,
+    GerritStatusClient,
     parse_change_number,
     refresh_patch,
 )
+from automation_state import (
+    AutomationConflict,
+    AutomationNotFound,
+    AutomationStateStore,
+)
+from reporting import log_structured_error
 from reporting import send_daily_summary
+from reporting import send_automation_alert
 from reporting import send_session_alert
 from resource_status import collect_process_tree_rss, collect_resource_snapshot
 from resource_views import render_resource_dashboard
@@ -39,24 +48,153 @@ from run_views import (
     render_run_detail,
     render_run_summary,
 )
+from maloo_adapter import MalooAdapter
+from observer import BackgroundObserver
+from retest_controller import ControllerNotification, PatchRevision, RetestController
+from retest_views import (
+    render_action_confirmation,
+    render_enable_confirmation,
+    render_global_retest_status,
+    render_policy_confirmation,
+    render_retest_control,
+)
 
 PATCHES = []
 DEFAULT_SEED_FILE = Path.home() / ".config" / "patch-watcher" / "patches.txt"
 DEFAULT_SESSION_DATABASE = (
     Path.home() / ".local" / "state" / "patch-watcher" / "sessions.sqlite3"
 )
+DEFAULT_AUTOMATION_DATABASE = (
+    Path.home() / ".local" / "state" / "patch-watcher" / "automation.sqlite3"
+)
 DEFAULT_WORKER_PROFILE_ID = "host-unsandboxed-mac-v1"
 ACTIVE_WATCH_FILE = DEFAULT_SEED_FILE
 ACTIVE_SESSION_DATABASE = DEFAULT_SESSION_DATABASE
+ACTIVE_AUTOMATION_DATABASE = DEFAULT_AUTOMATION_DATABASE
 JIRA_BASE_URL = "https://jira.whamcloud.com/browse"
 SESSION_STORE = None
 WORKER_PROFILE = None
 RUN_CONTROLLER = None
+AUTOMATION_STORE = None
+RETEST_CONTROLLER = None
+AUTOMATION_OBSERVER = None
+PATCHES_LOCK = threading.RLock()
 CSRF_TOKEN = secrets.token_urlsafe(32)
 RESOURCE_COLLECTION_ENABLED = False
 RESOURCE_CACHE_SECONDS = 15
 _RESOURCE_SNAPSHOT = None
 _RESOURCE_SNAPSHOT_MONOTONIC = 0.0
+
+
+def initialize_automation_store(database=DEFAULT_AUTOMATION_DATABASE):
+    """Open the private durable deterministic-automation ledger."""
+    global AUTOMATION_STORE, ACTIVE_AUTOMATION_DATABASE
+    ACTIVE_AUTOMATION_DATABASE = Path(database)
+    AUTOMATION_STORE = AutomationStateStore(ACTIVE_AUTOMATION_DATABASE)
+    return AUTOMATION_STORE
+
+
+def _fresh_patch_revision(gerrit_url):
+    """Fetch the exact current revision immediately before an external write."""
+    status = GerritStatusClient.configured().fetch(gerrit_url)
+    return RetestController._coerce_patch({
+        **status,
+        "patch_id": str(status.get("change_number") or ""),
+        "gerrit_url": gerrit_url,
+        "url": gerrit_url,
+        "is_current": True,
+        "revision_state_complete": bool(
+            status.get("revision_sha") and status.get("patchset")
+        ),
+    })
+
+
+def _send_retest_notification(event: ControllerNotification):
+    """Record every notice and optionally deliver it through host sendmail."""
+    log_structured_error(
+        f"retest_{event.kind}",
+        event.summary,
+        next((
+            patch.get("url", "") for patch in PATCHES
+            if str(patch.get("change_number")) == event.patch_id
+        ), ""),
+    )
+    try:
+        config = GerritConfig.load()
+    except GerritConfigError:
+        return False
+    timeline = []
+    revision = str(event.details.get("revision") or "")
+    if AUTOMATION_STORE is not None and event.run_id:
+        try:
+            timeline = AUTOMATION_STORE.list_timeline(event.run_id)
+            revision = revision or AUTOMATION_STORE.get_run(event.run_id).revision
+        except AutomationNotFound:
+            timeline = []
+    return send_automation_alert(
+        config,
+        patch_id=event.patch_id,
+        revision=revision,
+        state=event.kind,
+        summary=event.summary,
+        timeline=timeline,
+    ).sent
+
+
+def _automation_error(patch, error):
+    log_structured_error(
+        "retest_observer",
+        str(error),
+        str(patch.get("url") or ""),
+    )
+
+
+def initialize_retest_controller(*, start_observer=True, maloo=None):
+    """Start browser-independent deterministic retest observation."""
+    global RETEST_CONTROLLER, AUTOMATION_OBSERVER
+    if AUTOMATION_STORE is None:
+        initialize_automation_store()
+    RETEST_CONTROLLER = RetestController(
+        AUTOMATION_STORE,
+        maloo or MalooAdapter(),
+        revalidate=_fresh_patch_revision,
+        notify=_send_retest_notification,
+    )
+    RETEST_CONTROLLER.reconcile_startup()
+    AUTOMATION_OBSERVER = BackgroundObserver(
+        lambda: _patch_snapshot(),
+        refresh_watched_patch,
+        lambda patch: RETEST_CONTROLLER.tick_patch(patch),
+        interval_seconds=configured_refresh_interval(),
+        error_handler=_automation_error,
+    )
+    if start_observer:
+        AUTOMATION_OBSERVER.start()
+    return RETEST_CONTROLLER
+
+
+def _patch_snapshot():
+    with PATCHES_LOCK:
+        return list(PATCHES)
+
+
+def sync_automation_patch(patch):
+    """Persist one exact Gerrit revision without changing its safe policy."""
+    if AUTOMATION_STORE is None:
+        return None
+    revision = str(patch.get("revision_sha") or "")
+    patchset = int(patch.get("patchset") or 0)
+    change_number = int(patch.get("change_number") or 0)
+    if not revision or not patchset or not change_number:
+        return None
+    return AUTOMATION_STORE.upsert_patch(
+        str(change_number),
+        gerrit_url=patch["url"],
+        change_number=change_number,
+        revision=revision,
+        patchset=patchset,
+        status=str(patch.get("lifecycle") or patch.get("status") or "open").lower(),
+    )
 
 
 def configured_refresh_interval():
@@ -242,16 +380,37 @@ def resource_dashboard_html(*, force=False):
 
 def send_status_email(config=None, *, runner=subprocess.run):
     """Send (or dry-run) the current bounded status summary."""
+    with PATCHES_LOCK:
+        patches = [dict(patch) for patch in PATCHES]
     return send_daily_summary(
-        PATCHES,
+        patches,
         config or GerritConfig.load(),
         runner=runner,
+        automation_events=automation_daily_events(),
     )
+
+
+def automation_daily_events(limit=25):
+    """Project recent deterministic-run events for reports without secrets."""
+    if AUTOMATION_STORE is None:
+        return []
+    events = []
+    for run in AUTOMATION_STORE.list_runs():
+        for event in AUTOMATION_STORE.list_timeline(run.run_id):
+            events.append({
+                "created_at": event.created_at.isoformat(),
+                "patch_id": run.patch_id,
+                "event_type": event.event_type,
+                "summary": str(event.payload.get("summary") or "Recorded")[:500],
+            })
+    return sorted(events, key=lambda item: item["created_at"])[-limit:]
 
 
 def refresh_watched_patch(patch):
     """Refresh once and stale any run no longer pinned to the current revision."""
     result = refresh_patch(patch)
+    if result is None:
+        sync_automation_patch(patch)
     if RUN_CONTROLLER is not None and patch.get("revision_sha"):
         RUN_CONTROLLER.reconcile_patch_revision(patch)
     return result
@@ -271,8 +430,9 @@ def add_patch(url, title=""):
     url = url.strip().rstrip("/")
     if not valid_url(url):
         return None, "Use an HTTPS Whamcloud Gerrit URL containing /c/."
-    if any(p["url"] == url for p in PATCHES):
-        return None, "That patch is already being watched."
+    with PATCHES_LOCK:
+        if any(p["url"] == url for p in PATCHES):
+            return None, "That patch is already being watched."
     patch = {
         "url": url,
         "title": title.strip() or str(parse_change_number(url)),
@@ -288,7 +448,8 @@ def add_patch(url, title=""):
         "history": [],
         "errors": [], "check_count": 0,
     }
-    PATCHES.append(patch)
+    with PATCHES_LOCK:
+        PATCHES.append(patch)
     return patch, None
 
 
@@ -398,11 +559,12 @@ def _history_html(patch):
 
 def overall_last_checked():
     """Return the newest successful or attempted check shown on the page."""
-    checked = [
-        str(patch.get("last_checked", ""))
-        for patch in PATCHES
-        if patch.get("last_checked") not in {None, "", "—"}
-    ]
+    with PATCHES_LOCK:
+        checked = [
+            str(patch.get("last_checked", ""))
+            for patch in PATCHES
+            if patch.get("last_checked") not in {None, "", "—"}
+        ]
     return max(checked) if checked else "Never"
 
 
@@ -413,6 +575,85 @@ def _active_session_for_patch(change_number):
         if session.patch_id == str(change_number):
             return session
     return None
+
+
+def _retest_context(patch):
+    """Return the persisted policy, latest decision, and bounded timeline."""
+    default_policy = {"mode": "disabled", "action_budget": 0}
+    if AUTOMATION_STORE is None or not patch.get("revision_sha"):
+        return default_policy, None, [], None
+    patch_id = str(patch.get("change_number") or "")
+    try:
+        policy = AUTOMATION_STORE.get_policy(patch_id)
+        runs = AUTOMATION_STORE.list_runs(patch_id=patch_id)
+    except (AutomationNotFound, ValueError):
+        return default_policy, None, [], None
+    if not runs:
+        return policy, None, [], None
+    run = runs[-1]
+    timeline = AUTOMATION_STORE.list_timeline(run.run_id)
+    evaluation = {
+        "status": run.status,
+        "reason_code": run.failure_code or "",
+        "reason": run.failure_summary or "",
+    }
+    for event in reversed(timeline):
+        candidate = event.payload.get("evaluation")
+        if isinstance(candidate, dict):
+            evaluation = candidate
+            break
+        if event.event_type in {
+            "decision_recorded", "evaluation_recorded", "retest_evaluated"
+        }:
+            evaluation = dict(event.payload)
+            break
+    timeline_view = [
+        {
+            "created_at": event.created_at.isoformat(),
+            "event_type": event.event_type,
+            "summary": event.payload.get("summary")
+            or event.payload.get("reason")
+            or "Recorded",
+        }
+        for event in timeline
+    ]
+    approval_action = None
+    if run.policy_snapshot.get("mode") == "approval":
+        for action in AUTOMATION_STORE.list_actions(run.run_id):
+            if (
+                action.status == "planned"
+                and AUTOMATION_STORE.get_action_approval(action.action_id) is None
+            ):
+                approval_action = {
+                    "action_id": action.action_id,
+                    "session_id": action.request.get("session_id", ""),
+                    "jira_ticket": action.request.get("jira_ticket", ""),
+                }
+                break
+    return policy, evaluation, timeline_view, approval_action
+
+
+def global_retest_html():
+    if AUTOMATION_STORE is None:
+        return render_global_retest_status(
+            execution_enabled=False,
+            csrf_token=CSRF_TOKEN,
+            recent_summary="Automation state is not initialized.",
+        )
+    setting = AUTOMATION_STORE.get_global_automation()
+    events = automation_daily_events(limit=1)
+    summary = ""
+    if events:
+        latest = events[-1]
+        summary = (
+            f"Latest: change {latest['patch_id']} · "
+            f"{latest['event_type'].replace('_', ' ')} · {latest['summary']}"
+        )
+    return render_global_retest_status(
+        execution_enabled=setting.enabled,
+        csrf_token=CSRF_TOKEN,
+        recent_summary=summary,
+    )
 
 
 def _run_projection(session, *, now=None):
@@ -573,6 +814,20 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         csrf_token=CSRF_TOKEN,
         idempotency_token=secrets.token_urlsafe(18),
     )
+    (
+        retest_policy,
+        retest_evaluation,
+        retest_timeline,
+        retest_approval,
+    ) = _retest_context(patch)
+    retest_html = render_retest_control(
+        patch,
+        retest_policy,
+        evaluation=retest_evaluation,
+        timeline=retest_timeline,
+        approval_action=retest_approval,
+        csrf_token=CSRF_TOKEN,
+    )
     return (
         "<tr><td>"
         f"<a href='{escape(patch['url'], quote=True)}' target='_blank' rel='noreferrer'>"
@@ -593,6 +848,7 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         f"<form method='post' action='/remove'><input type='hidden' name='url' "
         f"value='{escape(patch['url'], quote=True)}'><button class='danger'>Remove</button></form>"
         f"{investigate_html}"
+        f"{retest_html}"
         "</div></td></tr>"
     )
 
@@ -601,16 +857,18 @@ def page(message="", jira_base=JIRA_BASE_URL):
     refresh_interval = configured_refresh_interval()
     resources = resource_dashboard_html()
     worker_admission = worker_admission_html()
+    with PATCHES_LOCK:
+        patches = [dict(patch) for patch in PATCHES]
     rows = "".join(
-        _patch_row(patch, jira_base) for patch in PATCHES
+        _patch_row(patch, jira_base) for patch in patches
     ) or "<tr><td colspan='5' class='empty'>No patches yet. Add a Gerrit change to start watching.</td></tr>"
-    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='{refresh_interval};url=/auto-refresh'>
+    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>Patch Watcher</title><style>
-body{{margin:0;background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1450px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card,.resource-card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a;overflow-x:auto}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input,textarea{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px;flex:1;min-width:240px}}textarea{{display:block;width:min(620px,95%);min-height:70px;margin:7px 0 10px}}button{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}button:disabled{{cursor:not-allowed;opacity:.68}}button.danger,button.secondary{{background:#fff;padding:7px 11px}}button.danger{{color:#b42318;border:1px solid #fecdca}}button.secondary{{color:#344054;border:1px solid #d0d5dd}}table{{width:100%;border-collapse:collapse;margin-top:18px;min-width:1050px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url,.detail{{color:#667085;font-size:12px;margin-top:4px;word-break:break-word}}.patch-meta{{display:flex;align-items:center;gap:6px;color:#667085;font-size:12px;margin-top:7px}}.ticket{{display:inline-block;margin-left:8px;font-size:12px}}.actions{{display:flex;gap:6px;flex-wrap:wrap}}.actions form{{margin:0}}.error{{color:#b42318;font-size:12px;margin-top:5px;max-width:340px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}.section-title{{display:flex;justify-content:space-between;align-items:center;gap:16px}}small{{display:block;color:#667085;margin-top:4px}}details{{margin-top:7px;font-size:12px;color:#475467}}details ol{{padding-left:18px;max-height:140px;overflow:auto}}details li{{margin:5px 0}}details time{{font-variant-numeric:tabular-nums}}.history-state{{color:#667085}}.status-chip,.resource-status,.admission-status,.worker-boundary{{display:inline-block;border:1px solid transparent;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;line-height:1.35;white-space:nowrap}}.tone-good{{background:#dcfce7;border-color:#86efac;color:#166534}}.tone-bad{{background:#fee2e2;border-color:#fca5a5;color:#991b1b}}.tone-warn{{background:#fef3c7;border-color:#fcd34d;color:#78350f}}.tone-info{{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}}.tone-neutral{{background:#f2f4f7;border-color:#d0d5dd;color:#344054}}.status-link{{text-decoration:none}}.status-link:focus-visible .status-chip{{outline:3px solid #315efb;outline-offset:2px}}.ci-stack{{display:flex;align-items:flex-start;gap:5px;flex-wrap:wrap;margin-top:8px}}.stub-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}}.stub-option{{display:flex;align-items:flex-start;gap:10px;text-align:left;background:#f8fafc;color:#344054;border:1px solid #d0d5dd;padding:14px}}.stub-label{{display:block;color:#667085;font-size:12px;font-weight:500;margin-top:4px}}.stub-tag{{display:inline-block;margin-left:6px;border:1px solid #d0d5dd;border-radius:999px;padding:1px 6px;font-size:10px;text-transform:uppercase}}.resource-toolbar{{display:flex;justify-content:flex-end;margin-top:20px}}.resource-dashboard{{display:grid;gap:18px}}.resource-card{{margin-top:0}}.resource-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}}.resource-metric{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:12px}}.resource-metric dt{{font-size:12px;color:#667085}}.resource-metric dd{{margin:5px 0 0;font-size:18px;font-weight:700}}.resource-errors{{color:#b42318}}.resource-ok{{color:#027a48}}.session-controls{{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-top:16px}}fieldset{{border:1px solid #fecdca;border-radius:8px}}.message-content{{white-space:pre-wrap;margin-top:3px}}.worker-admission{{margin-top:18px}}.worker-admission-heading{{display:flex;justify-content:space-between;gap:12px;align-items:center}}.worker-boundaries{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}.worker-provenance{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}}.worker-provenance div{{background:#f8fafc;border:1px solid #eaecf0;border-radius:8px;padding:10px}}.worker-provenance dt{{font-size:12px;color:#667085}}.worker-provenance dd{{margin:4px 0 0;word-break:break-word}}.admission-failures{{color:#b42318}}@media(max-width:760px){{.session-controls{{grid-template-columns:1fr}}}}</style></head>
+body{{margin:0;background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1450px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card,.resource-card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a;overflow-x:auto}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input,textarea,select{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px}}input,textarea{{flex:1;min-width:240px}}textarea{{display:block;width:min(620px,95%);min-height:70px;margin:7px 0 10px}}button,.button-link{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}.button-link{{display:inline-block;text-decoration:none}}button:disabled{{cursor:not-allowed;opacity:.68}}button.danger,button.secondary,.button-link.danger-link{{background:#fff;padding:7px 11px}}button.danger,.button-link.danger-link{{color:#b42318;border:1px solid #fecdca}}button.secondary{{color:#344054;border:1px solid #d0d5dd}}table{{width:100%;border-collapse:collapse;margin-top:18px;min-width:1050px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url,.detail{{color:#667085;font-size:12px;margin-top:4px;word-break:break-word}}.patch-meta{{display:flex;align-items:center;gap:6px;color:#667085;font-size:12px;margin-top:7px}}.ticket{{display:inline-block;margin-left:8px;font-size:12px}}.actions{{display:flex;gap:6px;flex-wrap:wrap}}.actions form{{margin:0}}.error{{color:#b42318;font-size:12px;margin-top:5px;max-width:340px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}.section-title{{display:flex;justify-content:space-between;align-items:center;gap:16px}}small{{display:block;color:#667085;margin-top:4px}}details{{margin-top:7px;font-size:12px;color:#475467}}details ol{{padding-left:18px;max-height:140px;overflow:auto}}details li{{margin:5px 0}}details time{{font-variant-numeric:tabular-nums}}.history-state{{color:#667085}}.status-chip,.resource-status,.admission-status,.worker-boundary{{display:inline-block;border:1px solid transparent;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;line-height:1.35;white-space:nowrap}}.tone-good{{background:#dcfce7;border-color:#86efac;color:#166534}}.tone-bad{{background:#fee2e2;border-color:#fca5a5;color:#991b1b}}.tone-warn{{background:#fef3c7;border-color:#fcd34d;color:#78350f}}.tone-info{{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}}.tone-neutral{{background:#f2f4f7;border-color:#d0d5dd;color:#344054}}.status-link{{text-decoration:none}}.status-link:focus-visible .status-chip{{outline:3px solid #315efb;outline-offset:2px}}.ci-stack{{display:flex;align-items:flex-start;gap:5px;flex-wrap:wrap;margin-top:8px}}.retest-control{{width:min(390px,85vw);padding:6px 8px;border:1px solid #d0d5dd;border-radius:8px}}.retest-control form{{display:grid;gap:7px;margin-top:9px}}.retest-control label{{display:grid;gap:4px}}.retest-control input,.retest-control select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.retest-decision,.retest-approval{{display:grid;gap:6px;margin-top:9px;padding:8px;background:#f8fafc;border-radius:7px}}.retest-approval{{background:#fffaeb}}.retest-timeline{{padding-left:18px}}.retest-global form{{margin-top:12px}}.stub-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}}.stub-option{{display:flex;align-items:flex-start;gap:10px;text-align:left;background:#f8fafc;color:#344054;border:1px solid #d0d5dd;padding:14px}}.stub-label{{display:block;color:#667085;font-size:12px;font-weight:500;margin-top:4px}}.stub-tag{{display:inline-block;margin-left:6px;border:1px solid #d0d5dd;border-radius:999px;padding:1px 6px;font-size:10px;text-transform:uppercase}}.resource-toolbar{{display:flex;justify-content:flex-end;margin-top:20px}}.resource-dashboard{{display:grid;gap:18px}}.resource-card{{margin-top:0}}.resource-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}}.resource-metric{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:12px}}.resource-metric dt{{font-size:12px;color:#667085}}.resource-metric dd{{margin:5px 0 0;font-size:18px;font-weight:700}}.resource-errors{{color:#b42318}}.resource-ok{{color:#027a48}}.session-controls{{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-top:16px}}fieldset{{border:1px solid #fecdca;border-radius:8px}}.message-content{{white-space:pre-wrap;margin-top:3px}}.worker-admission{{margin-top:18px}}.worker-admission-heading{{display:flex;justify-content:space-between;gap:12px;align-items:center}}.worker-boundaries{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}.worker-provenance{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}}.worker-provenance div{{background:#f8fafc;border:1px solid #eaecf0;border-radius:8px;padding:10px}}.worker-provenance dt{{font-size:12px;color:#667085}}.worker-provenance dd{{margin:4px 0 0;word-break:break-word}}.admission-failures{{color:#b42318}}@media(max-width:760px){{.session-controls{{grid-template-columns:1fr}}}}</style></head>
 <body><main><h1>Patch Watcher</h1><p class='sub'>Track Gerrit patches, managed sessions, and worker resources.</p>
-<div class='resource-toolbar'><form method='post' action='/resources/refresh'><button class='secondary'>Refresh resource status</button></form></div>{resources}{worker_admission}
+<div class='resource-toolbar'><form method='post' action='/resources/refresh'><button class='secondary'>Refresh resource status</button></form></div>{resources}{worker_admission}{global_retest_html()}
 {active_runs_html()}<section class='card'><h2>Add a patch</h2><form class='add' method='post' action='/add'><input name='url' required placeholder='https://review.whamcloud.com/c/...'><button>Add patch</button></form>{f"<div class='notice'>{escape(message)}</div>" if message else ''}</section>
-<section class='card'><div class='section-title'><div><h2>Watched patches <small>({len(PATCHES)} · checks every {refresh_interval}s)</small></h2><div class='detail'>Overall last checked: {escape(overall_last_checked())}</div></div><div class='actions'><form method='post' action='/refresh-all'><button class='secondary'>Refresh all</button></form><form method='post' action='/email'><button class='secondary'>Send status email</button></form></div></div><table><thead><tr><th>Patch</th><th>Watch state / CI</th><th>Review</th><th>Latest change</th><th></th></tr></thead><tbody>{rows}</tbody></table></section>
+<section class='card'><div class='section-title'><div><h2>Watched patches <small>({len(patches)} · checks every {refresh_interval}s)</small></h2><div class='detail'>Overall last checked: {escape(overall_last_checked())}</div></div><div class='actions'><form method='post' action='/refresh-all'><button class='secondary'>Refresh all</button></form><form method='post' action='/email'><button class='secondary'>Send status email</button></form></div></div><table><thead><tr><th>Patch</th><th>Watch state / CI</th><th>Review</th><th>Latest change</th><th></th></tr></thead><tbody>{rows}</tbody></table></section>
 <section class='card' aria-labelledby='handle-reviews-title'><h2 id='handle-reviews-title'>Handle reviews <span class='stub-tag'>Stub · disabled</span></h2><p class='sub'>Planned Claude Code workflows are visible for design review only. They cannot be selected and perform no Gerrit writes or Claude invocation.</p><div class='stub-grid'><button class='stub-option' type='button' disabled aria-disabled='true'><span>Handle simple comments<span class='stub-label'>Future: ask Claude to fix only clearly trivial comments; report and email-escalate everything complex or ambiguous.</span></span></button><button class='stub-option' type='button' disabled aria-disabled='true'><span>Handle all comments<span class='stub-label'>Future: ask Claude to attempt every comment; escalate whenever it cannot resolve one safely or requests human judgment.</span></span></button></div></section></main></body></html>"""
 
 
@@ -629,7 +887,7 @@ def load_seed_file(path=DEFAULT_SEED_FILE):
         if error and "already" not in error:
             raise ValueError(f"Invalid seed entry {url!r}: {error}")
         if patch:
-            refresh_patch(patch)
+            refresh_watched_patch(patch)
             loaded.append(patch)
     return loaded
 
@@ -639,7 +897,8 @@ def save_watch_file(path=DEFAULT_SEED_FILE):
     watch_path = Path(path)
     watch_path.parent.mkdir(parents=True, exist_ok=True)
     pending = watch_path.with_name(f".{watch_path.name}.tmp")
-    contents = "".join(f"{patch['url']}\n" for patch in PATCHES)
+    with PATCHES_LOCK:
+        contents = "".join(f"{patch['url']}\n" for patch in PATCHES)
     pending.write_text(contents, encoding="utf-8")
     pending.chmod(0o600)
     pending.replace(watch_path)
@@ -649,14 +908,58 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        parts = [item for item in path.split("/") if item]
+        if (
+            len(parts) == 4
+            and parts[:2] == ["automation", "actions"]
+            and parts[3] == "confirm"
+        ):
+            if AUTOMATION_STORE is None:
+                self.send_error(503, "Deterministic retest state is not initialized")
+                return
+            try:
+                action = AUTOMATION_STORE.get_action(parts[2])
+                run = AUTOMATION_STORE.get_run(action.run_id)
+            except AutomationNotFound:
+                self.send_error(404)
+                return
+            if (
+                action.status != "planned"
+                or run.policy_snapshot.get("mode") != "approval"
+                or AUTOMATION_STORE.get_action_approval(action.action_id) is not None
+            ):
+                self.respond(_standalone_document(
+                    "Retest approval unavailable",
+                    "<main><h1>This action is no longer awaiting approval.</h1>"
+                    "<p><a href='/'>Return to Patch Watcher</a></p></main>",
+                ))
+                return
+            body = render_action_confirmation(
+                action_id=action.action_id,
+                change_number=run.patch_id,
+                revision_sha=run.revision,
+                session_id=str(action.request.get("session_id") or ""),
+                jira_ticket=str(action.request.get("jira_ticket") or ""),
+                csrf_token=CSRF_TOKEN,
+            )
+            self.respond(_standalone_document("Approve Maloo retest", body))
+            return
+        if path == "/automation/global/confirm-enable":
+            self.respond(_standalone_document(
+                "Enable automatic retests",
+                render_enable_confirmation(csrf_token=CSRF_TOKEN),
+            ))
+            return
         if path == "/auto-refresh":
-            for patch in PATCHES:
-                refresh_watched_patch(patch)
+            if AUTOMATION_OBSERVER is not None:
+                AUTOMATION_OBSERVER.tick()
+            else:
+                for patch in _patch_snapshot():
+                    refresh_watched_patch(patch)
             self.send_response(303)
             self.send_header("Location", "/")
             self.end_headers()
             return
-        parts = [item for item in path.split("/") if item]
         if len(parts) >= 2 and parts[0] == "runs":
             try:
                 session = _find_session_by_run_id(parts[1])
@@ -694,6 +997,124 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0)); data = parse_qs(self.rfile.read(length).decode()); path = urlparse(self.path).path
         parts = [item for item in path.split("/") if item]
+        if parts and parts[0] == "automation":
+            token = data.get("csrf_token", [""])[0]
+            if not hmac.compare_digest(token, CSRF_TOKEN):
+                self.send_error(403, "Invalid request token")
+                return
+            if AUTOMATION_STORE is None:
+                self.respond(page("Deterministic retest state is not initialized."))
+                return
+            if path == "/automation/global/disable":
+                AUTOMATION_STORE.set_global_automation(
+                    False,
+                    changed_by="operator",
+                    reason="Disabled from the dashboard",
+                )
+                self.send_response(303); self.send_header("Location", "/"); self.end_headers()
+                return
+            if path == "/automation/global/enable":
+                AUTOMATION_STORE.set_global_automation(
+                    True,
+                    changed_by="operator",
+                    reason="Explicitly confirmed from the dashboard",
+                )
+                self.send_response(303); self.send_header("Location", "/"); self.end_headers()
+                return
+            if (
+                len(parts) == 4
+                and parts[:2] == ["automation", "actions"]
+                and parts[3] == "approve"
+            ):
+                try:
+                    action = AUTOMATION_STORE.get_action(parts[2])
+                    run = AUTOMATION_STORE.get_run(action.run_id)
+                    expected_revision = data.get("revision_sha", [""])[0]
+                    AUTOMATION_STORE.approve_action(
+                        action.action_id,
+                        approved_by="operator",
+                        expected_revision=expected_revision,
+                        expected_policy_mode="approval",
+                    )
+                except (AutomationConflict, AutomationNotFound, ValueError) as exc:
+                    self.respond(page(f"Retest approval was not recorded: {exc}"))
+                    return
+                self.send_response(303); self.send_header("Location", "/"); self.end_headers()
+                return
+            if path in {"/automation/policy", "/automation/policy/confirm"}:
+                try:
+                    change = int(data.get("change_number", ["0"])[0])
+                    max_actions = int(data.get("max_actions", ["1"])[0])
+                except ValueError:
+                    self.send_error(400, "Invalid policy values")
+                    return
+                revision = data.get("revision_sha", [""])[0]
+                with PATCHES_LOCK:
+                    patch = next((
+                        item for item in PATCHES
+                        if int(item.get("change_number", 0) or 0) == change
+                        and item.get("revision_sha") == revision
+                    ), None)
+                if patch is None:
+                    self.respond(page("The patch changed; refresh before changing its policy."))
+                    return
+                if not 1 <= max_actions <= 20:
+                    self.send_error(400, "Action budget must be between 1 and 20")
+                    return
+                mode = (
+                    "automatic"
+                    if path == "/automation/policy/confirm"
+                    else data.get("mode", ["disabled"])[0]
+                )
+                if mode not in {"disabled", "advise", "approval", "automatic"}:
+                    self.send_error(400, "Unknown policy mode")
+                    return
+                if mode == "automatic" and path != "/automation/policy/confirm":
+                    body = render_policy_confirmation(
+                        change_number=str(change),
+                        revision_sha=revision,
+                        max_actions=max_actions,
+                        csrf_token=CSRF_TOKEN,
+                    )
+                    self.respond(_standalone_document("Confirm automatic policy", body))
+                    return
+                sync_automation_patch(patch)
+                AUTOMATION_STORE.set_policy(
+                    str(change),
+                    mode=mode,
+                    action_budget=max_actions,
+                    delivery_budget=4,
+                    updated_by="operator",
+                )
+                self.send_response(303); self.send_header("Location", "/"); self.end_headers()
+                return
+            if path == "/automation/dry-run":
+                try:
+                    change = int(data.get("change_number", ["0"])[0])
+                except ValueError:
+                    self.send_error(400, "Invalid change number")
+                    return
+                revision = data.get("revision_sha", [""])[0]
+                with PATCHES_LOCK:
+                    patch = next((
+                        item for item in PATCHES
+                        if int(item.get("change_number", 0) or 0) == change
+                        and item.get("revision_sha") == revision
+                    ), None)
+                if patch is None:
+                    self.respond(page("The patch changed; refresh before evaluating it."))
+                    return
+                if RETEST_CONTROLLER is None:
+                    self.respond(page("The deterministic retest controller is not initialized."))
+                    return
+                result = RETEST_CONTROLLER.tick_patch(patch, dry_run=True)
+                self.respond(page(
+                    "Dry run: " + result.evaluation.status.replace("_", " ")
+                    + " — " + result.evaluation.reason
+                ))
+                return
+            self.send_error(404)
+            return
         if parts and parts[0] == "runs":
             token = data.get("csrf_token", [""])[0]
             if not hmac.compare_digest(token, CSRF_TOKEN):
@@ -832,19 +1253,25 @@ class Handler(BaseHTTPRequestHandler):
             patch, error = add_patch(url)
             if error: self.respond(page(error)); return
             refresh_watched_patch(patch)
+            if RETEST_CONTROLLER is not None and patch.get("revision_sha"):
+                RETEST_CONTROLLER.tick_patch(patch)
             try:
                 save_watch_file(ACTIVE_WATCH_FILE)
             except OSError as exc:
                 self.respond(page(f"Could not save the watch list: {exc}")); return
         elif path == "/remove":
-            PATCHES[:] = [p for p in PATCHES if p["url"] != data.get("url", [""])[0]]
+            with PATCHES_LOCK:
+                PATCHES[:] = [p for p in PATCHES if p["url"] != data.get("url", [""])[0]]
             try:
                 save_watch_file(ACTIVE_WATCH_FILE)
             except OSError as exc:
                 self.respond(page(f"Could not save the watch list: {exc}")); return
         elif path == "/refresh-all":
-            for patch in PATCHES:
-                refresh_watched_patch(patch)
+            if AUTOMATION_OBSERVER is not None:
+                AUTOMATION_OBSERVER.tick()
+            else:
+                for patch in _patch_snapshot():
+                    refresh_watched_patch(patch)
         elif path == "/email":
             try:
                 config = GerritConfig.load()
@@ -872,6 +1299,12 @@ if __name__ == "__main__":
         help="private SQLite database for managed-session state",
     )
     parser.add_argument(
+        "--automation-database",
+        type=Path,
+        default=DEFAULT_AUTOMATION_DATABASE,
+        help="private SQLite database for deterministic retest state",
+    )
+    parser.add_argument(
         "--worker-profile",
         default=DEFAULT_WORKER_PROFILE_ID,
         help="checked-in worker profile ID for newly admitted runs",
@@ -884,15 +1317,21 @@ if __name__ == "__main__":
     args = parser.parse_args()
     ACTIVE_WATCH_FILE = args.seed_file
     initialize_session_store(args.session_database)
+    initialize_automation_store(args.automation_database)
     initialize_worker_profile(args.worker_profile)
     RESOURCE_COLLECTION_ENABLED = True
     refresh_resource_status(force=True)
     load_seed_file(args.seed_file)
     if args.daily_summary:
         config = GerritConfig.load()
-        result = send_daily_summary(PATCHES, config)
+        result = send_daily_summary(
+            PATCHES,
+            config,
+            automation_events=automation_daily_events(),
+        )
         print(result.message)
         raise SystemExit(0 if result.sent or not config.email_enabled else 1)
     initialize_run_controller()
+    initialize_retest_controller()
     print(f"Patch Watcher listening on http://127.0.0.1:{args.port}")
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()

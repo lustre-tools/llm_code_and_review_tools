@@ -1,8 +1,9 @@
 # Patch Watcher Action Flow
 
-This document describes the first step toward Patch Shepherd-style patch
-handling. It is a design plan only: the controls do not execute automated
-actions yet.
+This document describes the product flow toward Patch Shepherd-style patch
+handling. Phase 1's deterministic Maloo retest is implemented; later build,
+review, source-editing, and agent-driven actions remain designs or disabled
+stubs.
 
 The implementation-grade state, persistence, native Claude runner, human
 messaging, LTVM, security, recovery, and phased-delivery contracts are in
@@ -13,11 +14,17 @@ the admitted execution environment in which an agent may perform that flow.
 
 ## Per-patch controls
 
-Each watched Gerrit patch gets its own action settings beside its status:
+Each watched Gerrit patch gets its own test-error policy beside its status:
 
-- **Action:** a dropdown whose initial option is **Do nothing**.
-- **Handle build errors:** a checkbox.
-- **Handle test errors:** a checkbox.
+- **Disabled:** observe the safe top-level gates but create no action;
+- **Advise:** calculate and display the exact eligible action;
+- **Approval:** prepare a durable action and require a separate operator
+  confirmation; or
+- **Automatic:** permit an eligible action only while the separately confirmed
+  global external-execution gate is enabled.
+
+The control also sets a per-revision action budget and exposes a dry-run
+evaluation. Build and review handlers remain disabled stubs.
 
 The settings belong to the individual patch, not to the page globally. They
 must remain visible while the patch is refreshed so an operator can see both
@@ -27,24 +34,27 @@ the current Gerrit state and the selected handling policy.
 
 Newly added patches use safe defaults:
 
-- Action: **Do nothing**
-- Handle build errors: unchecked
-- Handle test errors: unchecked
+- Test-error policy: **Disabled**
+- Per-revision external-action budget: zero until an operator saves a policy
+- Global automatic-execution gate: **Disabled**
+- Build and review handlers: unavailable
 
 Defaults should be configurable later, but changing them must never silently
 enable an automated action for existing patches.
 
-## Planned flow
+## Implemented Phase 1 flow
 
 1. Refresh the patch and record its Gerrit, review, and CI state.
 2. Present the state and the patch's selected handling settings.
-3. If a checked error category matches, record a pending recommendation.
-4. In a later phase, add an explicit operator-approved action for that
-   recommendation (for example, investigate or request a retest).
+3. Apply the patch's Disabled, Advise, Approval, or Automatic policy.
+4. Record a fingerprinted decision, durable trigger/run, and exact action when
+   policy permits it.
+5. Before a Maloo request, re-fetch Gerrit and reconcile Maloo remote state.
+6. Request at most one session-level retest, enter `waiting_external`, and
+   observe its outcome without blind retries.
 
-Until that later phase is designed and approved, Patch Watcher remains
-read-only: checking a box records intent but does not post comments, request
-retests, alter Gerrit state, or send other external actions.
+This phase can request only a Maloo retest. It cannot post comments, alter
+Gerrit state, change source, upload a patchset, or grant an agent authority.
 
 ## Test-error workflow (modeled on Patch Shepherd)
 
@@ -56,7 +66,7 @@ patch: record the reviewer, patchset, and review message, mark the patch as
 **needs human review**, and do not query or process test failures. A Maloo
 `-1` is a CI signal and does not trigger this gate.
 
-When test-error handling is eventually enabled, the intended flow is:
+The implemented test-error flow is:
 
 1. Check the patch's current Gerrit patchset and fetch its Maloo results.
 2. Consider only enforced test failures; record the test, session, suite, and
@@ -109,7 +119,8 @@ are all implemented.
 
 ### Common control model
 
-Each patch owns an independent policy and, at most, one active agent run.
+Each patch owns an independent policy and, at most, one active run of each
+controller-managed workflow; deterministic Phase 1 runs do not start an agent.
 The page will eventually show:
 
 - enabled capabilities (for example, automatic retest or review handling);
@@ -136,11 +147,14 @@ retry indefinitely.
 
 ### Phase 1: automatic retest
 
-This is the first executable capability, modeled closely on Patch Shepherd.
+**Implemented.** This is the first executable capability, modeled closely on
+Patch Shepherd.
 
 1. On refresh, evaluate the review `-1` gate and test-error policy.
 2. Inspect enforced Maloo failures and detect any already-pending retest.
-3. For a failed suite with a linked bug, queue one bounded retest request.
+3. Group enforced failures by Maloo session. Queue one bounded session-level
+   retest only when every failed suite in that session has accepted Jira
+   evidence.
 4. For an unknown failure, record the evidence and recommend or request
    human/agent investigation according to policy; do not invent a bug link.
 5. Record each request and its outcome in the run history, then include it in

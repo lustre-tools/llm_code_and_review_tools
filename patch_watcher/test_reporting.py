@@ -94,6 +94,57 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("Alice uploaded patchset 2", body)
         self.assertIn("fetch: bad", body)
 
+    def test_summary_includes_bounded_retest_automation_events(self):
+        events = [
+            {
+                "created_at": f"2026-08-29T12:{index:02d}:00Z",
+                "patch_id": "68160",
+                "event_type": "decision_recorded",
+                "summary": f"decision {index}",
+            }
+            for index in range(30)
+        ]
+        body = reporting.compose_daily_summary(
+            [watched_patch()],
+            day=date(2026, 8, 29),
+            automation_events=events,
+        )
+        self.assertIn("Retest automation events included: 25", body)
+        self.assertNotIn("decision 0\n", body)
+        self.assertIn("decision 29", body)
+
+    def test_automation_alert_is_bounded(self):
+        body = reporting.compose_automation_alert(
+            patch_id="68160",
+            revision="a" * 40,
+            state="ambiguous",
+            summary="Remote outcome must be reconciled",
+            timeline=[
+                {"event_type": "event", "summary": f"item {index}"}
+                for index in range(12)
+            ],
+        )
+        self.assertNotIn("item 0", body)
+        self.assertIn("item 11", body)
+        self.assertIn("ambiguous", body)
+
+    def test_disabled_automation_alert_sends_nothing(self):
+        calls = []
+        result = reporting.send_automation_alert(
+            SimpleNamespace(
+                email_enabled=False,
+                email_to="paf@mulberrytree.us",
+                sendmail_path="/usr/sbin/sendmail",
+            ),
+            patch_id="68160",
+            revision="a" * 40,
+            state="failed",
+            summary="read failed",
+            runner=lambda *args, **kwargs: calls.append((args, kwargs)),
+        )
+        self.assertFalse(result.sent)
+        self.assertEqual(calls, [])
+
     def test_disabled_email_is_a_dry_run(self):
         calls = []
         config = SimpleNamespace(

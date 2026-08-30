@@ -16,9 +16,14 @@ class PatchWatcherTests(unittest.TestCase):
         app.PATCHES.clear()
 
     def tearDown(self):
+        if app.AUTOMATION_OBSERVER is not None:
+            app.AUTOMATION_OBSERVER.stop()
         if app.RUN_CONTROLLER is not None:
             app.RUN_CONTROLLER.stop()
         app.RUN_CONTROLLER = None
+        app.RETEST_CONTROLLER = None
+        app.AUTOMATION_OBSERVER = None
+        app.AUTOMATION_STORE = None
         app.SESSION_STORE = None
         app.WORKER_PROFILE = None
         app.RESOURCE_COLLECTION_ENABLED = False
@@ -175,6 +180,90 @@ class PatchWatcherTests(unittest.TestCase):
         self.assertIn("Stub · disabled", rendered)
         self.assertEqual(rendered.count("aria-disabled='true'"), 2)
         self.assertNotIn("action='/handle-review", rendered)
+
+    def test_retest_automation_defaults_globally_and_per_patch_disabled(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_automation_store(Path(temp_dir) / "automation.sqlite3")
+            patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+            patch_record.update(
+                change_number=68160,
+                patchset=4,
+                revision_sha="d" * 40,
+                lifecycle="Open",
+            )
+            app.sync_automation_patch(patch_record)
+            rendered = app.page()
+            global_enabled = store.get_global_automation().enabled
+            policy_mode = store.get_policy("68160").mode
+        self.assertFalse(global_enabled)
+        self.assertEqual(policy_mode, "disabled")
+        self.assertIn("Global execution: Disabled", rendered)
+        self.assertIn("Test failure handling: <strong>Disabled", rendered)
+
+    def test_global_automation_enable_get_is_display_only_then_post_mutates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_automation_store(Path(temp_dir) / "automation.sqlite3")
+            server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                body = urlopen(base + "/automation/global/confirm-enable").read().decode()
+                self.assertIn("Enable automatic Maloo retests?", body)
+                self.assertFalse(store.get_global_automation().enabled)
+                request = Request(
+                    base + "/automation/global/enable",
+                    data=urlencode({"csrf_token": app.CSRF_TOKEN}).encode(),
+                    method="POST",
+                )
+                urlopen(request).read()
+                self.assertTrue(store.get_global_automation().enabled)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_automatic_patch_policy_requires_separate_confirmation_post(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_automation_store(Path(temp_dir) / "automation.sqlite3")
+            patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+            patch_record.update(
+                change_number=68160,
+                patchset=4,
+                revision_sha="d" * 40,
+                lifecycle="Open",
+            )
+            app.sync_automation_patch(patch_record)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            values = {
+                "csrf_token": app.CSRF_TOKEN,
+                "change_number": "68160",
+                "revision_sha": "d" * 40,
+                "max_actions": "1",
+            }
+            try:
+                request = Request(
+                    base + "/automation/policy",
+                    data=urlencode({**values, "mode": "automatic"}).encode(),
+                    method="POST",
+                )
+                body = urlopen(request).read().decode()
+                self.assertIn("Set this patch to Automatic?", body)
+                self.assertEqual(store.get_policy("68160").mode, "disabled")
+                request = Request(
+                    base + "/automation/policy/confirm",
+                    data=urlencode(values).encode(),
+                    method="POST",
+                )
+                urlopen(request).read()
+                self.assertEqual(store.get_policy("68160").mode, "automatic")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
 
     def test_refreshed_patch_offers_exact_read_only_investigation(self):
         patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
