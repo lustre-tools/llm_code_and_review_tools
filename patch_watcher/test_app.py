@@ -12,6 +12,7 @@ class PatchWatcherTests(unittest.TestCase):
 
     def tearDown(self):
         app.SESSION_STORE = None
+        app.WORKER_PROFILE = None
         app.RESOURCE_COLLECTION_ENABLED = False
         app._RESOURCE_SNAPSHOT = None
         app._RESOURCE_SNAPSHOT_MONOTONIC = 0.0
@@ -194,6 +195,51 @@ class PatchWatcherTests(unittest.TestCase):
         self.assertIn("Configured guest memory", rendered)
         self.assertLess(rendered.index("Worker host memory"), rendered.index("Add a patch"))
         self.assertIn("action='/resources/refresh'", rendered)
+
+    def test_page_shows_declared_worker_profile_before_patch_controls(self):
+        rendered = app.page()
+        self.assertIn("Worker admission and provenance", rendered)
+        self.assertIn("Admission: Not checked", rendered)
+        self.assertIn("host-unsandboxed-mac-v1", rendered)
+        self.assertIn("Declared only isolation: Unsandboxed host worker", rendered)
+        self.assertIn("Declared only network: General network access", rendered)
+        self.assertLess(
+            rendered.index("Worker admission and provenance"),
+            rendered.index("Add a patch"),
+        )
+
+    def test_page_shows_persisted_worker_admission_evidence(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_session_store(Path(temp_dir) / "sessions.sqlite3")
+            store.register_session(
+                "pw-session-1",
+                patch_id="LU-12345",
+                run_id="run-1",
+                profile="engineering",
+                state="queued",
+            )
+            store.record_worker_admission(
+                "pw-session-1",
+                profile_id="host-unsandboxed-mac-v1",
+                profile_hash="sha256:" + "a" * 64,
+                environment_instance_id="worker-build-7",
+                status="blocked",
+                isolation_profile="host_unsandboxed",
+                network_profile="host_ambient",
+                attestation={
+                    "failure_codes": ["tool_version_mismatch"],
+                    "warnings": [],
+                    "executables": [],
+                },
+                instruction_hash="sha256:" + "b" * 64,
+                failure_code="tool_version_mismatch",
+                failure_summary="Python is older than the selected profile permits",
+            )
+            rendered = app.page()
+        self.assertIn("Admission: Blocked", rendered)
+        self.assertIn("worker-build-7", rendered)
+        self.assertIn("tool_version_mismatch", rendered)
+        self.assertIn("Python is older than", rendered)
 
     def test_resource_snapshot_is_cached_until_forced(self):
         snapshot = {"host_memory": {}, "ltvm": {"vms": []}}

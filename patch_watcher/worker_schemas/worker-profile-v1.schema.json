@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://patch-watcher.local/schemas/worker-profile-v1.schema.json",
+  "title": "Patch Watcher WorkerProfile v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "profile_id", "profile_version", "content_hash",
+    "description", "supported_hosts", "runtimes", "tools", "capabilities",
+    "isolation_profiles", "network_profiles", "logical_paths", "host_services",
+    "default_limits", "ambient_home_allowed", "security_label"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "profile_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "profile_version": {"type": "integer", "minimum": 1},
+    "content_hash": {"$ref": "#/$defs/hash"},
+    "description": {"type": "string", "minLength": 1},
+    "supported_hosts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operating_systems", "architectures"],
+      "properties": {
+        "operating_systems": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "architectures": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "runtimes": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string", "minLength": 1}},
+    "tools": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "command", "required"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "command": {"type": "string", "minLength": 1},
+          "required": {"type": "boolean"},
+          "version_constraint": {"type": "string", "minLength": 1},
+          "api_version": {"type": "string", "minLength": 1},
+          "expected_path": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "capabilities": {"$ref": "#/$defs/capabilities"},
+    "isolation_profiles": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "network_profiles": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "logical_paths": {"$ref": "#/$defs/logicalPaths"},
+    "host_services": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "default_limits": {"$ref": "#/$defs/limits"},
+    "ambient_home_allowed": {"type": "boolean"},
+    "security_label": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "capabilities": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"}},
+    "logicalPaths": {
+      "type": "object", "minProperties": 1,
+      "propertyNames": {"pattern": "^/"},
+      "additionalProperties": {"enum": ["read_only", "read_write", "private_read_only", "private_read_write"]}
+    },
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "cpu_count": {"type": "integer", "minimum": 1},
+        "memory_bytes": {"type": "integer", "minimum": 1},
+        "disk_bytes": {"type": "integer", "minimum": 1},
+        "process_count": {"type": "integer", "minimum": 1},
+        "runtime_seconds": {"type": "integer", "minimum": 1},
+        "inactivity_seconds": {"type": "integer", "minimum": 1},
+        "output_bytes": {"type": "integer", "minimum": 1},
+        "action_count": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

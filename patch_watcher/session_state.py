@@ -8,9 +8,10 @@ that work.
 
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 import uuid
-import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -29,6 +30,9 @@ TERMINAL_STATES = frozenset(
     {"succeeded", "failed", "cancelled", "stale", "resource_exhausted"}
 )
 SESSION_STATES = ACTIVE_INACTIVITY_STATES | WAITING_STATES | TERMINAL_STATES
+WORKER_ADMISSION_STATES = frozenset(
+    {"not_checked", "checking", "ready", "degraded", "blocked"}
+)
 
 TRIAGE_WALL_LIMIT = timedelta(minutes=20)
 ENGINEERING_INACTIVITY_LIMIT = timedelta(minutes=30)
@@ -114,6 +118,23 @@ class ControlIntent:
         return self.confirmed_at is not None
 
 
+@dataclass(frozen=True)
+class WorkerAdmission:
+    session_id: str
+    profile_id: str
+    profile_hash: str
+    environment_instance_id: str
+    status: str
+    isolation_profile: str
+    network_profile: str
+    attestation: dict
+    instruction_hash: str
+    broker_session_id: str | None
+    failure_code: str | None
+    failure_summary: str | None
+    checked_at: datetime
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -144,7 +165,7 @@ def _validate_pid(pid: int | None) -> int | None:
 class SessionStateStore:
     """SQLite-backed state and policy evaluation for managed sessions."""
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     _MIGRATIONS = {
         1: (
@@ -214,6 +235,33 @@ class SessionStateStore:
             """
             CREATE INDEX pw_session_control_intent_session_idx
             ON pw_session_control_intent(session_id, requested_at DESC)
+            """,
+        ),
+        3: (
+            """
+            CREATE TABLE pw_worker_admission (
+                session_id TEXT PRIMARY KEY REFERENCES pw_managed_session(session_id)
+                    ON DELETE CASCADE,
+                profile_id TEXT NOT NULL,
+                profile_hash TEXT NOT NULL,
+                environment_instance_id TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN ('not_checked', 'checking', 'ready', 'degraded', 'blocked')
+                ),
+                isolation_profile TEXT NOT NULL,
+                network_profile TEXT NOT NULL,
+                attestation_json TEXT NOT NULL,
+                instruction_hash TEXT NOT NULL,
+                broker_session_id TEXT,
+                failure_code TEXT,
+                failure_summary TEXT,
+                checked_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """,
+            """
+            CREATE INDEX pw_worker_admission_status_idx
+            ON pw_worker_admission(status, checked_at DESC)
             """,
         ),
     }
@@ -337,6 +385,24 @@ class SessionStateStore:
         )
 
     @staticmethod
+    def _admission_from_row(row: sqlite3.Row) -> WorkerAdmission:
+        return WorkerAdmission(
+            session_id=row["session_id"],
+            profile_id=row["profile_id"],
+            profile_hash=row["profile_hash"],
+            environment_instance_id=row["environment_instance_id"],
+            status=row["status"],
+            isolation_profile=row["isolation_profile"],
+            network_profile=row["network_profile"],
+            attestation=json.loads(row["attestation_json"]),
+            instruction_hash=row["instruction_hash"],
+            broker_session_id=row["broker_session_id"],
+            failure_code=row["failure_code"],
+            failure_summary=row["failure_summary"],
+            checked_at=_as_datetime(row["checked_at"]),
+        )
+
+    @staticmethod
     def _require_session(
         connection: sqlite3.Connection, session_id: str
     ) -> sqlite3.Row:
@@ -421,6 +487,127 @@ class SessionStateStore:
         with self._connection() as connection:
             rows = connection.execute(query, parameters).fetchall()
         return [self._session_from_row(row) for row in rows]
+
+    def record_worker_admission(
+        self,
+        session_id: str,
+        *,
+        profile_id: str,
+        profile_hash: str,
+        environment_instance_id: str,
+        status: str,
+        isolation_profile: str,
+        network_profile: str,
+        attestation: dict | None = None,
+        instruction_hash: str,
+        broker_session_id: str | None = None,
+        failure_code: str | None = None,
+        failure_summary: str | None = None,
+        checked_at: datetime | None = None,
+    ) -> WorkerAdmission:
+        """Persist one redacted environment-admission result for a run."""
+        session_id = _required_text("session_id", session_id)
+        profile_id = _required_text("profile_id", profile_id)
+        profile_hash = _required_text("profile_hash", profile_hash)
+        environment_instance_id = _required_text(
+            "environment_instance_id", environment_instance_id
+        )
+        isolation_profile = _required_text(
+            "isolation_profile", isolation_profile
+        )
+        network_profile = _required_text("network_profile", network_profile)
+        instruction_hash = _required_text("instruction_hash", instruction_hash)
+        if status not in WORKER_ADMISSION_STATES:
+            raise ValueError(f"unknown worker admission state: {status}")
+        if status == "blocked" and not failure_code:
+            raise ValueError("blocked worker admission requires failure_code")
+        broker_session_id = (
+            _required_text("broker_session_id", broker_session_id)
+            if broker_session_id is not None
+            else None
+        )
+        failure_code = (
+            _required_text("failure_code", failure_code)
+            if failure_code is not None
+            else None
+        )
+        failure_summary = (
+            str(failure_summary)[:2_000] if failure_summary is not None else None
+        )
+        try:
+            attestation_json = json.dumps(
+                attestation or {}, sort_keys=True, separators=(",", ":")
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("attestation must be JSON serializable") from exc
+        if len(attestation_json.encode("utf-8")) > 256_000:
+            raise ValueError("attestation exceeds 256 KiB")
+        checked_epoch = _as_epoch(checked_at or _utc_now())
+        with self._connection() as connection, connection:
+            self._require_session(connection, session_id)
+            connection.execute(
+                """
+                INSERT INTO pw_worker_admission(
+                    session_id, profile_id, profile_hash,
+                    environment_instance_id, status, isolation_profile,
+                    network_profile, attestation_json, instruction_hash,
+                    broker_session_id, failure_code, failure_summary,
+                    checked_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    profile_id = excluded.profile_id,
+                    profile_hash = excluded.profile_hash,
+                    environment_instance_id = excluded.environment_instance_id,
+                    status = excluded.status,
+                    isolation_profile = excluded.isolation_profile,
+                    network_profile = excluded.network_profile,
+                    attestation_json = excluded.attestation_json,
+                    instruction_hash = excluded.instruction_hash,
+                    broker_session_id = excluded.broker_session_id,
+                    failure_code = excluded.failure_code,
+                    failure_summary = excluded.failure_summary,
+                    checked_at = excluded.checked_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    session_id,
+                    profile_id,
+                    profile_hash,
+                    environment_instance_id,
+                    status,
+                    isolation_profile,
+                    network_profile,
+                    attestation_json,
+                    instruction_hash,
+                    broker_session_id,
+                    failure_code,
+                    failure_summary,
+                    checked_epoch,
+                    checked_epoch,
+                ),
+            )
+        admission = self.get_worker_admission(session_id)
+        assert admission is not None
+        return admission
+
+    def get_worker_admission(self, session_id: str) -> WorkerAdmission | None:
+        with self._connection() as connection:
+            self._require_session(connection, session_id)
+            row = connection.execute(
+                "SELECT * FROM pw_worker_admission WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return self._admission_from_row(row) if row is not None else None
+
+    def list_worker_admissions(self) -> list[WorkerAdmission]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM pw_worker_admission
+                ORDER BY checked_at DESC, session_id
+                """
+            ).fetchall()
+        return [self._admission_from_row(row) for row in rows]
 
     def set_pid(self, session_id: str, pid: int | None) -> ManagedSession:
         pid = _validate_pid(pid)

@@ -80,6 +80,7 @@ class SessionStateStoreTests(unittest.TestCase):
 
     def test_schema_migrates_from_previous_private_version(self):
         with sqlite3.connect(self.database) as connection:
+            connection.execute("DROP TABLE pw_worker_admission")
             connection.execute("DROP TABLE pw_session_control_intent")
             connection.execute(
                 "UPDATE pw_session_schema SET version = 1 WHERE singleton = 1"
@@ -108,6 +109,76 @@ class SessionStateStoreTests(unittest.TestCase):
         self.assertIsNone(before.timeout)
         self.assertEqual(at_limit.timeout.code, AGENT_RUNTIME_TIMEOUT)
         self.assertEqual(at_limit.timeout.deadline_at, START + timedelta(minutes=20))
+
+    def test_worker_admission_persists_provenance_across_restart(self):
+        self.register(state="queued", pid=None)
+        stored = self.store.record_worker_admission(
+            "session-1",
+            profile_id="host-unsandboxed-mac-v1",
+            profile_hash="a" * 64,
+            environment_instance_id="macbook-pro",
+            status="degraded",
+            isolation_profile="host-unsandboxed",
+            network_profile="host-unrestricted",
+            attestation={
+                "schema": "patch-watcher-environment-attestation/v1",
+                "warnings": [{"code": "tool_optional_missing"}],
+            },
+            instruction_hash="b" * 64,
+            checked_at=START + timedelta(minutes=1),
+        )
+        self.assertEqual(stored.status, "degraded")
+        self.assertEqual(stored.attestation["warnings"][0]["code"], "tool_optional_missing")
+
+        reopened = SessionStateStore(self.database)
+        persisted = reopened.get_worker_admission("session-1")
+        self.assertEqual(persisted.profile_hash, "a" * 64)
+        self.assertEqual(persisted.instruction_hash, "b" * 64)
+        self.assertEqual(persisted.checked_at, START + timedelta(minutes=1))
+        self.assertEqual(reopened.list_worker_admissions(), [persisted])
+
+    def test_blocked_worker_admission_requires_precise_failure_code(self):
+        self.register(state="queued", pid=None)
+        arguments = dict(
+            profile_id="host-unsandboxed-mac-v1",
+            profile_hash="a" * 64,
+            environment_instance_id="macbook-pro",
+            status="blocked",
+            isolation_profile="host-unsandboxed",
+            network_profile="host-unrestricted",
+            instruction_hash="b" * 64,
+        )
+        with self.assertRaisesRegex(ValueError, "requires failure_code"):
+            self.store.record_worker_admission("session-1", **arguments)
+
+        stored = self.store.record_worker_admission(
+            "session-1",
+            **arguments,
+            failure_code="tool_version_mismatch",
+            failure_summary="selected Python is too old",
+        )
+        self.assertEqual(stored.failure_code, "tool_version_mismatch")
+        self.assertEqual(stored.failure_summary, "selected Python is too old")
+
+    def test_worker_admission_rejects_non_json_or_oversized_attestation(self):
+        self.register(state="queued", pid=None)
+        arguments = dict(
+            profile_id="host-unsandboxed-mac-v1",
+            profile_hash="a" * 64,
+            environment_instance_id="macbook-pro",
+            status="ready",
+            isolation_profile="host-unsandboxed",
+            network_profile="host-unrestricted",
+            instruction_hash="b" * 64,
+        )
+        with self.assertRaisesRegex(ValueError, "JSON serializable"):
+            self.store.record_worker_admission(
+                "session-1", **arguments, attestation={"bad": object()}
+            )
+        with self.assertRaisesRegex(ValueError, "256 KiB"):
+            self.store.record_worker_admission(
+                "session-1", **arguments, attestation={"large": "x" * 256_001}
+            )
 
     def test_engineering_inactivity_boundary_and_qualifying_activity(self):
         self.register(state="running")

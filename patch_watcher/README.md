@@ -85,6 +85,33 @@ other VMs separately. Guidance and kill controls currently record durable
 controller intent; process signalling and Claude message delivery arrive with
 the managed runner phase and are not falsely reported as completed actions.
 
+The next dashboard card is **Worker admission and provenance**. It shows the
+selected worker profile and hash, whether its execution boundaries are merely
+declared or have been attested, the resolved tool inventory, warnings, and the
+exact redacted reason for a blocked preflight. The checked-in compatibility
+profile is deliberately labeled **Unsandboxed host worker**; it grants only
+manual, read-only investigation capabilities and does not grant LTVM creation
+or external writes.
+
+Phase 0B worker inputs are strict versioned JSON contracts. A controller first
+creates a private per-run directory and revision-pinned run envelope, then
+runs the dependency-free doctor before starting Claude:
+
+```bash
+cd ~/llm_code_and_review_tools/patch_watcher
+python3 pw_worker.py doctor \
+  --profile host-unsandboxed-mac-v1 \
+  --run-envelope /private/run/path/run-envelope.json \
+  --json
+```
+
+Exit status `0` means the environment is admitted as `ready` or `degraded`;
+exit status `1` means it is `blocked`. The JSON result is suitable for the
+private session database only after audit redaction. The current web service
+displays persisted admission evidence but still does not start Claude. The
+manual read-only runner and live operator messaging are the following Phase
+0C slice.
+
 The page shows clickable Gerrit and leading Jira-ticket links, current and
 historical status, last-checked and Gerrit last-changed times, and a short
 description of the newest upload or message. Refresh failures preserve the

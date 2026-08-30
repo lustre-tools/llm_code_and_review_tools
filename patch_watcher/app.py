@@ -24,16 +24,20 @@ from session_state import (
     SessionNotFound,
     SessionStateStore,
 )
+from worker_admission_views import render_worker_admission
+from worker_contract import load_profile
 
 PATCHES = []
 DEFAULT_SEED_FILE = Path.home() / ".config" / "patch-watcher" / "patches.txt"
 DEFAULT_SESSION_DATABASE = (
     Path.home() / ".local" / "state" / "patch-watcher" / "sessions.sqlite3"
 )
+DEFAULT_WORKER_PROFILE_ID = "host-unsandboxed-mac-v1"
 ACTIVE_WATCH_FILE = DEFAULT_SEED_FILE
 ACTIVE_SESSION_DATABASE = DEFAULT_SESSION_DATABASE
 JIRA_BASE_URL = "https://jira.whamcloud.com/browse"
 SESSION_STORE = None
+WORKER_PROFILE = None
 RESOURCE_COLLECTION_ENABLED = False
 RESOURCE_CACHE_SECONDS = 15
 _RESOURCE_SNAPSHOT = None
@@ -54,6 +58,46 @@ def initialize_session_store(database=DEFAULT_SESSION_DATABASE):
     ACTIVE_SESSION_DATABASE = Path(database)
     SESSION_STORE = SessionStateStore(ACTIVE_SESSION_DATABASE)
     return SESSION_STORE
+
+
+def initialize_worker_profile(profile_id=DEFAULT_WORKER_PROFILE_ID):
+    """Load and validate the declared worker profile used for new runs."""
+    global WORKER_PROFILE
+    WORKER_PROFILE = load_profile(profile_id)
+    return WORKER_PROFILE
+
+
+def worker_admission_html():
+    """Render the newest persisted admission or the declared host profile."""
+    try:
+        profile = WORKER_PROFILE or initialize_worker_profile()
+    except (OSError, ValueError) as exc:
+        return render_worker_admission({
+            "status": "blocked",
+            "failure_code": "profile_unknown",
+            "failure_summary": str(exc)[:500],
+        })
+
+    profile_view = profile.to_dict()
+    if profile.isolation_profiles:
+        profile_view["isolation_profile"] = profile.isolation_profiles[0]
+    if profile.network_profiles:
+        profile_view["network_profile"] = profile.network_profiles[0]
+
+    admission = None
+    attestation = None
+    if SESSION_STORE is not None:
+        admissions = SESSION_STORE.list_worker_admissions()
+        if admissions:
+            admission = admissions[0]
+            attestation = admission.attestation
+    if admission is None:
+        admission = {"status": "not_checked"}
+    return render_worker_admission(
+        admission,
+        profile=profile_view,
+        attestation=attestation,
+    )
 
 
 def refresh_resource_status(*, force=False):
@@ -345,14 +389,15 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
 def page(message="", jira_base=JIRA_BASE_URL):
     refresh_interval = configured_refresh_interval()
     resources = resource_dashboard_html()
+    worker_admission = worker_admission_html()
     rows = "".join(
         _patch_row(patch, jira_base) for patch in PATCHES
     ) or "<tr><td colspan='5' class='empty'>No patches yet. Add a Gerrit change to start watching.</td></tr>"
     return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='{refresh_interval};url=/auto-refresh'>
 <title>Patch Watcher</title><style>
-body{{margin:0;background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1450px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card,.resource-card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a;overflow-x:auto}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input,textarea{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px;flex:1;min-width:240px}}textarea{{display:block;width:min(620px,95%);min-height:70px;margin:7px 0 10px}}button{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}button:disabled{{cursor:not-allowed;opacity:.68}}button.danger,button.secondary{{background:#fff;padding:7px 11px}}button.danger{{color:#b42318;border:1px solid #fecdca}}button.secondary{{color:#344054;border:1px solid #d0d5dd}}table{{width:100%;border-collapse:collapse;margin-top:18px;min-width:1050px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url,.detail{{color:#667085;font-size:12px;margin-top:4px;word-break:break-word}}.patch-meta{{display:flex;align-items:center;gap:6px;color:#667085;font-size:12px;margin-top:7px}}.ticket{{display:inline-block;margin-left:8px;font-size:12px}}.actions{{display:flex;gap:6px;flex-wrap:wrap}}.actions form{{margin:0}}.error{{color:#b42318;font-size:12px;margin-top:5px;max-width:340px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}.section-title{{display:flex;justify-content:space-between;align-items:center;gap:16px}}small{{display:block;color:#667085;margin-top:4px}}details{{margin-top:7px;font-size:12px;color:#475467}}details ol{{padding-left:18px;max-height:140px;overflow:auto}}details li{{margin:5px 0}}details time{{font-variant-numeric:tabular-nums}}.history-state{{color:#667085}}.status-chip,.resource-status{{display:inline-block;border:1px solid transparent;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;line-height:1.35;white-space:nowrap}}.tone-good{{background:#dcfce7;border-color:#86efac;color:#166534}}.tone-bad{{background:#fee2e2;border-color:#fca5a5;color:#991b1b}}.tone-warn{{background:#fef3c7;border-color:#fcd34d;color:#78350f}}.tone-info{{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}}.tone-neutral{{background:#f2f4f7;border-color:#d0d5dd;color:#344054}}.status-link{{text-decoration:none}}.status-link:focus-visible .status-chip{{outline:3px solid #315efb;outline-offset:2px}}.ci-stack{{display:flex;align-items:flex-start;gap:5px;flex-wrap:wrap;margin-top:8px}}.stub-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}}.stub-option{{display:flex;align-items:flex-start;gap:10px;text-align:left;background:#f8fafc;color:#344054;border:1px solid #d0d5dd;padding:14px}}.stub-label{{display:block;color:#667085;font-size:12px;font-weight:500;margin-top:4px}}.stub-tag{{display:inline-block;margin-left:6px;border:1px solid #d0d5dd;border-radius:999px;padding:1px 6px;font-size:10px;text-transform:uppercase}}.resource-toolbar{{display:flex;justify-content:flex-end;margin-top:20px}}.resource-dashboard{{display:grid;gap:18px}}.resource-card{{margin-top:0}}.resource-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}}.resource-metric{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:12px}}.resource-metric dt{{font-size:12px;color:#667085}}.resource-metric dd{{margin:5px 0 0;font-size:18px;font-weight:700}}.resource-errors{{color:#b42318}}.resource-ok{{color:#027a48}}.session-controls{{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-top:16px}}fieldset{{border:1px solid #fecdca;border-radius:8px}}.message-content{{white-space:pre-wrap;margin-top:3px}}@media(max-width:760px){{.session-controls{{grid-template-columns:1fr}}}}</style></head>
+body{{margin:0;background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1450px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card,.resource-card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a;overflow-x:auto}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input,textarea{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px;flex:1;min-width:240px}}textarea{{display:block;width:min(620px,95%);min-height:70px;margin:7px 0 10px}}button{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}button:disabled{{cursor:not-allowed;opacity:.68}}button.danger,button.secondary{{background:#fff;padding:7px 11px}}button.danger{{color:#b42318;border:1px solid #fecdca}}button.secondary{{color:#344054;border:1px solid #d0d5dd}}table{{width:100%;border-collapse:collapse;margin-top:18px;min-width:1050px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url,.detail{{color:#667085;font-size:12px;margin-top:4px;word-break:break-word}}.patch-meta{{display:flex;align-items:center;gap:6px;color:#667085;font-size:12px;margin-top:7px}}.ticket{{display:inline-block;margin-left:8px;font-size:12px}}.actions{{display:flex;gap:6px;flex-wrap:wrap}}.actions form{{margin:0}}.error{{color:#b42318;font-size:12px;margin-top:5px;max-width:340px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}.section-title{{display:flex;justify-content:space-between;align-items:center;gap:16px}}small{{display:block;color:#667085;margin-top:4px}}details{{margin-top:7px;font-size:12px;color:#475467}}details ol{{padding-left:18px;max-height:140px;overflow:auto}}details li{{margin:5px 0}}details time{{font-variant-numeric:tabular-nums}}.history-state{{color:#667085}}.status-chip,.resource-status,.admission-status,.worker-boundary{{display:inline-block;border:1px solid transparent;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;line-height:1.35;white-space:nowrap}}.tone-good{{background:#dcfce7;border-color:#86efac;color:#166534}}.tone-bad{{background:#fee2e2;border-color:#fca5a5;color:#991b1b}}.tone-warn{{background:#fef3c7;border-color:#fcd34d;color:#78350f}}.tone-info{{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}}.tone-neutral{{background:#f2f4f7;border-color:#d0d5dd;color:#344054}}.status-link{{text-decoration:none}}.status-link:focus-visible .status-chip{{outline:3px solid #315efb;outline-offset:2px}}.ci-stack{{display:flex;align-items:flex-start;gap:5px;flex-wrap:wrap;margin-top:8px}}.stub-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}}.stub-option{{display:flex;align-items:flex-start;gap:10px;text-align:left;background:#f8fafc;color:#344054;border:1px solid #d0d5dd;padding:14px}}.stub-label{{display:block;color:#667085;font-size:12px;font-weight:500;margin-top:4px}}.stub-tag{{display:inline-block;margin-left:6px;border:1px solid #d0d5dd;border-radius:999px;padding:1px 6px;font-size:10px;text-transform:uppercase}}.resource-toolbar{{display:flex;justify-content:flex-end;margin-top:20px}}.resource-dashboard{{display:grid;gap:18px}}.resource-card{{margin-top:0}}.resource-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}}.resource-metric{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:12px}}.resource-metric dt{{font-size:12px;color:#667085}}.resource-metric dd{{margin:5px 0 0;font-size:18px;font-weight:700}}.resource-errors{{color:#b42318}}.resource-ok{{color:#027a48}}.session-controls{{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-top:16px}}fieldset{{border:1px solid #fecdca;border-radius:8px}}.message-content{{white-space:pre-wrap;margin-top:3px}}.worker-admission{{margin-top:18px}}.worker-admission-heading{{display:flex;justify-content:space-between;gap:12px;align-items:center}}.worker-boundaries{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}.worker-provenance{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}}.worker-provenance div{{background:#f8fafc;border:1px solid #eaecf0;border-radius:8px;padding:10px}}.worker-provenance dt{{font-size:12px;color:#667085}}.worker-provenance dd{{margin:4px 0 0;word-break:break-word}}.admission-failures{{color:#b42318}}@media(max-width:760px){{.session-controls{{grid-template-columns:1fr}}}}</style></head>
 <body><main><h1>Patch Watcher</h1><p class='sub'>Track Gerrit patches, managed sessions, and worker resources.</p>
-<div class='resource-toolbar'><form method='post' action='/resources/refresh'><button class='secondary'>Refresh resource status</button></form></div>{resources}
+<div class='resource-toolbar'><form method='post' action='/resources/refresh'><button class='secondary'>Refresh resource status</button></form></div>{resources}{worker_admission}
 <section class='card'><h2>Add a patch</h2><form class='add' method='post' action='/add'><input name='url' required placeholder='https://review.whamcloud.com/c/...'><button>Add patch</button></form>{f"<div class='notice'>{escape(message)}</div>" if message else ''}</section>
 <section class='card'><div class='section-title'><div><h2>Watched patches <small>({len(PATCHES)} · checks every {refresh_interval}s)</small></h2><div class='detail'>Overall last checked: {escape(overall_last_checked())}</div></div><div class='actions'><form method='post' action='/refresh-all'><button class='secondary'>Refresh all</button></form><form method='post' action='/email'><button class='secondary'>Send status email</button></form></div></div><table><thead><tr><th>Patch</th><th>Watch state / CI</th><th>Review</th><th>Latest change</th><th></th></tr></thead><tbody>{rows}</tbody></table></section>
 <section class='card' aria-labelledby='handle-reviews-title'><h2 id='handle-reviews-title'>Handle reviews <span class='stub-tag'>Stub · disabled</span></h2><p class='sub'>Planned Claude Code workflows are visible for design review only. They cannot be selected and perform no Gerrit writes or Claude invocation.</p><div class='stub-grid'><button class='stub-option' type='button' disabled aria-disabled='true'><span>Handle simple comments<span class='stub-label'>Future: ask Claude to fix only clearly trivial comments; report and email-escalate everything complex or ambiguous.</span></span></button><button class='stub-option' type='button' disabled aria-disabled='true'><span>Handle all comments<span class='stub-label'>Future: ask Claude to attempt every comment; escalate whenever it cannot resolve one safely or requests human judgment.</span></span></button></div></section></main></body></html>"""
@@ -480,6 +525,11 @@ if __name__ == "__main__":
         help="private SQLite database for managed-session state",
     )
     parser.add_argument(
+        "--worker-profile",
+        default=DEFAULT_WORKER_PROFILE_ID,
+        help="checked-in worker profile ID for newly admitted runs",
+    )
+    parser.add_argument(
         "--daily-summary",
         action="store_true",
         help="refresh seeds, then send/dry-run the configured daily email",
@@ -487,6 +537,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     ACTIVE_WATCH_FILE = args.seed_file
     initialize_session_store(args.session_database)
+    initialize_worker_profile(args.worker_profile)
     RESOURCE_COLLECTION_ENABLED = True
     refresh_resource_status(force=True)
     load_seed_file(args.seed_file)

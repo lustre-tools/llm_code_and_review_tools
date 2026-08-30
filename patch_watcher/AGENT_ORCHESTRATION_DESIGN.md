@@ -1102,6 +1102,20 @@ The next executable sequence is:
 This sequence keeps automatic retesting and all Gerrit/CI writes disabled while
 proving the complete human-visible engineer lifecycle.
 
+Phase 0B is now implemented in the repository: strict worker/run/attestation
+schemas, the truthful current-host profile, private run layouts and portable
+instructions, dependency-free admission doctor, durable provenance, and the
+read-only dashboard card are present and tested. Until Phase 0C adds the
+dispatcher, the card correctly remains **Not checked** unless a controller or
+test fixture has persisted an attestation; the web process does not launch a
+worker merely to make the card look ready.
+
+The next development slice is therefore Phase 0C's narrow vertical path: one
+operator-started, revision-pinned, read-only investigation with admission
+before launch, durable events/messages, live guidance, safe stop/kill,
+restart reconciliation, structured completion, and no Gerrit/CI write
+capability. That vertical path should precede automatic retesting.
+
 ### Phase 0A: durable observer
 
 Build:
