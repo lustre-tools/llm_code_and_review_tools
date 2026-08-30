@@ -33,6 +33,42 @@ unsandboxed, but the dashboard must say so explicitly.
   Maloo, Jenkins, checkout, build, or VM operations.
 - Keep the deployment simple enough to run as one local service initially.
 
+## Product surfaces and future work entry modes
+
+The current implementation is **patch-centric**, but the managed engineer
+infrastructure should not be permanently coupled to Gerrit observations. The
+long-term product has three distinct ways to create work:
+
+1. **Watched Gerrit patch.** Patch Watcher observes a change, applies its
+   configured policy, and may start a revision-pinned run to investigate or
+   advance that patch. This remains the primary workflow covered by the phased
+   plan below.
+2. **Jira-ticket engineering.** A person supplies a Jira issue key. The system
+   retrieves and snapshots the ticket, establishes the relevant project,
+   repositories, source baselines, acceptance criteria, and permitted actions,
+   and starts an engineering run whose goal is the ticket rather than an
+   already-existing Gerrit change. That run may eventually create one or more
+   patches, so its identity and lifecycle cannot be modeled as merely another
+   watched-patch run.
+3. **Free-form engineering.** A person supplies an arbitrary prompt plus
+   explicit project/repository and environment context. This is a separate,
+   more general entry point and must not be smuggled into the patch
+   investigation text box. It needs its own validation, provenance,
+   permissions, budgets, and approval behavior.
+
+The dashboard should eventually put the second and third modes on a separate
+**Engineering work** page or clearly separate section, not in each watched
+patch row. That surface can offer **Start from Jira ticket** and **Start from
+prompt** while reusing the same durable run, session, message, resource,
+timeout, human-intervention, and audit machinery.
+
+This is a design direction only. Neither new entry point is enabled in Phase
+0C, and the current **Investigate** action must remain narrowly pinned to an
+existing Gerrit revision. Jira content and a user-authored prompt are task
+inputs, not authority: they cannot grant tools, credentials, external writes,
+or broader network access. The controller must still create the capability
+envelope independently.
+
 ## Non-goals for the first executable phases
 
 - A general distributed workflow engine.
@@ -121,6 +157,9 @@ These are implementation rules, not suggestions.
 The UI and code should use these terms consistently:
 
 - **Patch:** a watched Gerrit change, independent of patchset.
+- **Work item:** the durable top-level objective for a run. It is a Gerrit
+  change today; future work items may instead be a snapshotted Jira ticket or
+  a user-authored free-form engineering request.
 - **Revision:** one observed Gerrit patchset and exact revision SHA.
 - **Policy:** operator-selected triggers, capabilities, budgets, and approval
   rules for a patch.
@@ -140,6 +179,11 @@ The UI and code should use these terms consistently:
 Patch status, run status, Claude turn status, and action status must be stored
 and displayed separately. For example, a patch may be `ci-failed`, its run may
 be `waiting_external`, and its Claude session may currently be `idle`.
+
+Future ticket and free-form modes also need a work-item state distinct from
+any patches they later create. A ticket run that produces two Gerrit changes
+must remain one ticket work item with two separately revision-pinned patch
+outputs; it must not silently turn into either patch's watcher state.
 
 ## Initial architecture
 
@@ -1331,6 +1375,39 @@ Exit criteria:
 - every autonomous result has a complete audit trail;
 - failures, uncertainty, policy drift, and unexpected external state fail to a
   human rather than improvising.
+
+### Future parallel surface: ticket and free-form engineering
+
+This work is intentionally not assigned to the patch-shepherding phases yet.
+Before enabling it, design and build:
+
+- an **Engineering work** page with separate Jira-ticket and free-form prompt
+  start forms;
+- a versioned work-item envelope that records input kind, immutable original
+  input, submitter, selected project/repositories, source baselines,
+  acceptance criteria, capability policy, budget, and approval policy;
+- Jira issue retrieval and snapshotting, including instance identity and
+  issue-version/change detection;
+- an explicit discovery or human-confirmation step when a ticket does not
+  unambiguously identify its repositories, branch, expected deliverable, or
+  test environment;
+- work-item concurrency rules and repository/patch write locks, since one
+  ticket may create multiple patches and multiple tickets may mention the same
+  repository;
+- first-class outputs linking proposed commits, Gerrit changes, tests,
+  artifacts, questions, and final outcome back to the originating work item;
+- distinct prompt-injection boundaries for Jira content and free-form task
+  text; and
+- dashboard history and controls equivalent to patch runs: current state,
+  recent messages, resource use, guidance, waiting-human questions, stop,
+  retry, follow-up, and cleanup.
+
+Initial acceptance should be read-only planning from a Jira ticket, followed
+by an isolated, approval-gated implementation lane. Free-form engineering
+should remain disabled until its required repository/environment selection
+and capability controls are explicit and tested. Neither mode should inherit
+automatic Gerrit, Jira, CI, or upload authority merely because the requested
+task mentions such an action.
 
 ## Test strategy
 
