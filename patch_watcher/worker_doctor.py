@@ -827,7 +827,22 @@ def _check_endpoints(builder: _AttestationBuilder, envelope_path: Path | None) -
         "tool_broker": "broker",
         "ltvm_bridge": "broker",
     }
-    required: dict[str, str] = {"broker": "broker", "report": "report"}
+    # Read-only Phase 0C runs have no typed external action to broker.  Making
+    # a broker mandatory in that case creates a bootstrap deadlock (and, more
+    # importantly, claims a write path exists when it deliberately does not).
+    # The broker becomes mandatory as soon as the grant includes an operation
+    # which can mutate external state or create worker resources.
+    broker_capabilities = {
+        "start_ltvm",
+        "request_retest",
+        "comment_gerrit",
+        "vote_gerrit",
+        "upload_patchset",
+        "write_external",
+    }
+    required: dict[str, str] = {"report": "report"}
+    if _capabilities(builder.envelope) & broker_capabilities:
+        required["broker"] = "broker"
     for service in services:
         if isinstance(service, Mapping):
             if service.get("required", True):

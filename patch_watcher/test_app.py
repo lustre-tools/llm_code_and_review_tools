@@ -1,7 +1,12 @@
 import tempfile
+import re
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+from http.server import ThreadingHTTPServer
 
 import app
 
@@ -11,6 +16,9 @@ class PatchWatcherTests(unittest.TestCase):
         app.PATCHES.clear()
 
     def tearDown(self):
+        if app.RUN_CONTROLLER is not None:
+            app.RUN_CONTROLLER.stop()
+        app.RUN_CONTROLLER = None
         app.SESSION_STORE = None
         app.WORKER_PROFILE = None
         app.RESOURCE_COLLECTION_ENABLED = False
@@ -168,6 +176,75 @@ class PatchWatcherTests(unittest.TestCase):
         self.assertEqual(rendered.count("aria-disabled='true'"), 2)
         self.assertNotIn("action='/handle-review", rendered)
 
+    def test_refreshed_patch_offers_exact_read_only_investigation(self):
+        patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+        patch_record.update(
+            change_number=68160,
+            project="fs/lustre-release",
+            patchset=4,
+            revision_sha="d" * 40,
+            revision_ref="refs/changes/60/68160/4",
+        )
+        rendered = app.page()
+        self.assertIn("Manual read-only investigation", rendered)
+        self.assertIn("action='/runs/investigate'", rendered)
+        self.assertIn("name='revision_sha'", rendered)
+        self.assertIn("Read-only:", rendered)
+        self.assertNotIn("name='revision_sha' value=''", rendered)
+
+    def test_kill_confirmation_get_is_display_only_and_final_post_uses_one_time_token(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_session_store(Path(temp_dir) / "sessions.sqlite3")
+            store.register_pinned_session(
+                "pw-session-1",
+                patch_id="68160",
+                run_id="run-1",
+                revision="d" * 40,
+                patchset=4,
+                profile="engineering",
+                state="running",
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                body = urlopen(base + "/runs/run-1/confirm?intent=kill").read().decode()
+                self.assertIn("No action has been taken", body)
+                self.assertEqual(store.list_control_intents("pw-session-1"), [])
+
+                request = Request(
+                    base + "/runs/run-1/confirm",
+                    data=urlencode({
+                        "intent": "kill", "csrf_token": app.CSRF_TOKEN,
+                    }).encode(),
+                    method="POST",
+                )
+                confirmation = urlopen(request).read().decode()
+                intents = store.list_control_intents("pw-session-1")
+                self.assertEqual(len(intents), 1)
+                self.assertEqual(intents[0].status, "recorded")
+                token = re.search(r"name='confirmation_token' value='([^']+)'", confirmation).group(1)
+                request_id = re.search(r"name='idempotency_token' value='([^']+)'", confirmation).group(1)
+                final = Request(
+                    base + "/runs/run-1/kill",
+                    data=urlencode({
+                        "confirmation_token": token,
+                        "idempotency_token": request_id,
+                        "csrf_token": app.CSRF_TOKEN,
+                    }).encode(),
+                    method="POST",
+                )
+                urlopen(final).read()
+                self.assertEqual(
+                    store.list_control_intents("pw-session-1")[0].status,
+                    "confirmed",
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
     def test_page_places_live_resource_summary_before_patch_controls(self):
         snapshot = {
             "host_memory": {
@@ -268,8 +345,10 @@ class PatchWatcherTests(unittest.TestCase):
         self.assertIn("LU-12345", rendered)
         self.assertIn("Need a human decision", rendered)
         self.assertIn("State: Waiting human", rendered)
-        self.assertIn("action='/sessions/guidance'", rendered)
-        self.assertIn("action='/sessions/kill'", rendered)
+        # Resource inventory is observation-only. Phase 0C controls live on
+        # the revision-pinned run detail page with token confirmation.
+        self.assertNotIn("action='/sessions/guidance'", rendered)
+        self.assertNotIn("action='/sessions/kill'", rendered)
 
     def test_ticket_requires_leading_issue_key(self):
         self.assertEqual(app.ticket_from_title("LU-12345: fix pages"), "LU-12345")

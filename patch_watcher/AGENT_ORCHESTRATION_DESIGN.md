@@ -1102,19 +1102,21 @@ The next executable sequence is:
 This sequence keeps automatic retesting and all Gerrit/CI writes disabled while
 proving the complete human-visible engineer lifecycle.
 
-Phase 0B is now implemented in the repository: strict worker/run/attestation
-schemas, the truthful current-host profile, private run layouts and portable
-instructions, dependency-free admission doctor, durable provenance, and the
-read-only dashboard card are present and tested. Until Phase 0C adds the
-dispatcher, the card correctly remains **Not checked** unless a controller or
-test fixture has persisted an attestation; the web process does not launch a
-worker merely to make the card look ready.
+Phases 0B and 0C are now implemented in the repository. Phase 0B supplies the
+strict worker/run/attestation contracts, truthful current-host profile,
+private run layouts, portable instructions, admission doctor, durable
+provenance, and dashboard evidence. Phase 0C supplies the narrow vertical
+path: an operator-started, exact-revision, read-only investigation with
+admission before launch, a reconnectable native runner, durable events and
+messages, waiting-human and live guidance, confirmed stop/kill controls,
+restart adoption, structured completion, timeouts and reminders, and
+owner-scoped cleanup. It deliberately grants no Gerrit, CI, Jira, LTVM,
+source-editing, shell, or upload capability.
 
-The next development slice is therefore Phase 0C's narrow vertical path: one
-operator-started, revision-pinned, read-only investigation with admission
-before launch, durable events/messages, live guidance, safe stop/kill,
-restart reconciliation, structured completion, and no Gerrit/CI write
-capability. That vertical path should precede automatic retesting.
+The next development slice is Phase 1's deterministic automatic-retest path.
+It should reuse the durable trigger/outbox/event machinery but keep the
+mechanical decision and idempotent remote action in the controller; it must
+not require a Claude session for an already-understood retest decision.
 
 ### Phase 0A: durable observer
 

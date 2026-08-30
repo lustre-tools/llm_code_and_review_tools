@@ -39,6 +39,9 @@ def _load_profile(specification: str) -> dict[str, Any]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pw-worker")
+    parser.add_argument(
+        "--version", action="version", version="pw-worker 1.0",
+    )
     subcommands = parser.add_subparsers(dest="command", required=True)
     doctor_parser = subcommands.add_parser("doctor", help="admit a worker environment")
     doctor_parser.add_argument("--profile", required=True, help="worker profile ID or JSON path")

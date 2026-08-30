@@ -553,6 +553,10 @@ def summarize_change(change: dict[str, Any]) -> dict[str, Any]:
     checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     return {
+        "change_number": int(change.get("_number", 0) or 0),
+        "project": str(change.get("project", "") or ""),
+        "revision_sha": str(current_revision or ""),
+        "revision_ref": str(current.get("ref", "") or ""),
         "title": change.get("subject", ""),
         "status": raw_status,
         "lifecycle": lifecycle,

@@ -78,12 +78,12 @@ Managed-session state is stored in the private SQLite database:
 ~/.local/state/patch-watcher/sessions.sqlite3
 ```
 
-The session foundation persists profiles, states, PIDs, recent messages,
-timeout calculations, two-hour reminder delivery, and confirmed cancel/kill
-intents. The page groups owner-matched LTVM VMs under active sessions and shows
-other VMs separately. Guidance and kill controls currently record durable
-controller intent; process signalling and Claude message delivery arrive with
-the managed runner phase and are not falsely reported as completed actions.
+The session foundation persists profiles, states, runner handles, recent
+messages, timeout calculations, two-hour reminder delivery, and confirmed
+cancel/kill actions. The page groups owner-matched LTVM VMs under active
+sessions and shows other VMs separately. Guidance, waiting-human answers,
+pause, interrupt, resume, follow-up, cancel, and kill operations are delivered
+through the managed runner and recorded as durable, exactly-once actions.
 
 The next dashboard card is **Worker admission and provenance**. It shows the
 selected worker profile and hash, whether its execution boundaries are merely
@@ -93,7 +93,7 @@ profile is deliberately labeled **Unsandboxed host worker**; it grants only
 manual, read-only investigation capabilities and does not grant LTVM creation
 or external writes.
 
-Phase 0B worker inputs are strict versioned JSON contracts. A controller first
+Worker inputs are strict versioned JSON contracts. The controller first
 creates a private per-run directory and revision-pinned run envelope, then
 runs the dependency-free doctor before starting Claude:
 
@@ -107,10 +107,16 @@ python3 pw_worker.py doctor \
 
 Exit status `0` means the environment is admitted as `ready` or `degraded`;
 exit status `1` means it is `blocked`. The JSON result is suitable for the
-private session database only after audit redaction. The current web service
-displays persisted admission evidence but still does not start Claude. The
-manual read-only runner and live operator messaging are the following Phase
-0C slice.
+private session database only after audit redaction.
+
+Phase 0C adds a manual **Investigate** action to each current patch revision.
+It checks out the exact Gerrit revision into a private run directory, admits
+the declared worker environment, and starts a reconnectable Claude process
+with only local source/evidence read tools. The run page exposes its durable
+timeline, recent output, waiting-human question, and operator guidance and
+stop controls. Destructive controls require a one-time POST confirmation;
+links and GET requests cannot mutate a run. Phase 0C grants no Gerrit, CI,
+Jira, LTVM, source-editing, shell, or upload capability.
 
 The page shows clickable Gerrit and leading Jira-ticket links, current and
 historical status, last-checked and Gerrit last-changed times, and a short

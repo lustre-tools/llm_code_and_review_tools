@@ -496,6 +496,7 @@ def render_active_sessions(
     kill_action="/sessions/kill",
     csrf_token=None,
     messages_by_session=None,
+    show_controls=True,
 ):
     """Render active managed-session rows and return ``(html, other_vms)``.
 
@@ -576,7 +577,7 @@ def render_active_sessions(
             "<section class='owned-vms' aria-label='Owned LTVM VMs'>"
             f"<h4>Owned LTVM VMs ({len(owned[index])})</h4>"
             f"{_render_vm_table(owned[index], show_owner=False)}</section>"
-            f"{_render_controls(session_id, index, guidance_action, kill_action, csrf_token)}"
+            f"{_render_controls(session_id, index, guidance_action, kill_action, csrf_token) if show_controls else ''}"
             "</details></td></tr>"
         )
 
@@ -619,6 +620,7 @@ def render_resource_dashboard(
     kill_action="/sessions/kill",
     csrf_token=None,
     messages_by_session=None,
+    show_controls=True,
 ):
     """Render host memory, active sessions with owned VMs, and other LTVM VMs."""
     host = _project(host)
@@ -633,6 +635,7 @@ def render_resource_dashboard(
         kill_action=kill_action,
         csrf_token=csrf_token,
         messages_by_session=messages_by_session,
+        show_controls=show_controls,
     )
     return (
         "<div class='resource-dashboard'>"

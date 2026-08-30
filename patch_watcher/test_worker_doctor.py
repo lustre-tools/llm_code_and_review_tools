@@ -280,19 +280,27 @@ class WorkerDoctorTests(unittest.TestCase):
         self.assertIn("insufficient_disk", result["failure_codes"])
         self.assertIn("insufficient_memory", result["failure_codes"])
 
-    def test_broker_and_report_channel_failures_are_distinct(self):
+    def test_read_only_grant_does_not_require_an_unused_write_broker(self):
         self.fixture.probes.endpoint = lambda endpoint: False
         result = self.fixture.attest()
-        self.assertIn("broker_unreachable", result["failure_codes"])
+        self.assertNotIn("broker_unreachable", result["failure_codes"])
+
+    def test_write_broker_and_report_channel_failures_are_distinct(self):
+        fixture = DoctorFixture(self, capabilities=(
+            "read_source", "report_status", "start_ltvm",
+        ))
+        fixture.probes.endpoint = lambda endpoint: False
         # Report is a writable logical file channel, so make its parent
         # inaccessible to exercise its independent failure code.
-        output = self.fixture.layout.resolve("/work/output")
+        output = fixture.layout.resolve("/work/output")
         os.chmod(output, 0o500)
         try:
-            result = self.fixture.attest()
+            result = fixture.attest()
+            self.assertIn("broker_unreachable", result["failure_codes"])
             self.assertIn("report_channel_failed", result["failure_codes"])
         finally:
             os.chmod(output, 0o700)
+            fixture.close()
 
     def test_credential_references_are_never_serialized(self):
         self.fixture.probes.credential = lambda reference, environment: "unavailable"

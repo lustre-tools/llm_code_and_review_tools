@@ -13,17 +13,20 @@ def sample_change(*, raw_status="NEW", backport=False):
     message = "LU-12345: fix compressed pages\n\nBody\n"
     if backport:
         message += "\nLustre-change: https://review.whamcloud.com/123\n"
+    revision = "d" * 40
     return {
         "_number": 61965,
+        "project": "fs/lustre-release",
         "subject": "LU-12345: fix compressed pages",
         "status": raw_status,
         "updated": "2026-08-29 12:34:56.000000000",
         "work_in_progress": False,
         "owner": {"name": "Owner"},
-        "current_revision": "deadbeef",
+        "current_revision": revision,
         "revisions": {
-            "deadbeef": {
+            revision: {
                 "_number": 4,
+                "ref": "refs/changes/65/61965/4",
                 "created": "2026-08-29 12:00:00.000000000",
                 "uploader": {"name": "Uploader"},
                 "commit": {
@@ -131,6 +134,10 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(result["review"], "Ready")
         self.assertEqual(result["lifecycle"], "Open")
         self.assertEqual(result["patchset"], 4)
+        self.assertEqual(result["change_number"], 61965)
+        self.assertEqual(result["project"], "fs/lustre-release")
+        self.assertEqual(result["revision_sha"], "d" * 40)
+        self.assertEqual(result["revision_ref"], "refs/changes/65/61965/4")
         self.assertEqual(result["unresolved"], 2)
         self.assertEqual(result["jenkins"], "PASS")
         self.assertEqual(result["maloo"], "PASS")

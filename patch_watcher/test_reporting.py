@@ -34,6 +34,41 @@ def watched_patch():
 
 
 class ReportingTests(unittest.TestCase):
+    def test_session_alert_is_bounded_and_kill_link_is_confirmation_only(self):
+        body = reporting.compose_session_alert(
+            session_id="session-1",
+            patch_id="68160",
+            state="failed",
+            reason="agent inactivity timeout",
+            messages=[
+                {"author": "agent", "body": f"message {index}"}
+                for index in range(12)
+            ],
+            confirmation_url="http://127.0.0.1:8080/runs/session-1/kill?token=opaque",
+        )
+        self.assertNotIn("message 0", body)
+        self.assertIn("message 11", body)
+        self.assertIn("opens a confirmation page", body)
+        self.assertIn("agent inactivity timeout", body)
+
+    def test_disabled_session_alert_sends_nothing(self):
+        calls = []
+        result = reporting.send_session_alert(
+            SimpleNamespace(
+                email_enabled=False,
+                email_to="paf@mulberrytree.us",
+                sendmail_path="/usr/sbin/sendmail",
+            ),
+            session_id="session-1",
+            patch_id="68160",
+            state="failed",
+            reason="timeout",
+            messages=[],
+            runner=lambda *args, **kwargs: calls.append((args, kwargs)),
+        )
+        self.assertFalse(result.sent)
+        self.assertEqual(calls, [])
+
     def test_private_structured_log_and_bounded_reader(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "state" / "errors.jsonl"

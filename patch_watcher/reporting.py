@@ -194,3 +194,82 @@ def send_daily_summary(
         f"Patch Watcher daily status — {datetime.now(timezone.utc).date().isoformat()}",
         body,
     )
+
+
+def compose_session_alert(
+    *,
+    session_id: str,
+    patch_id: str,
+    state: str,
+    reason: str,
+    messages: list[Any],
+    confirmation_url: str = "",
+) -> str:
+    """Compose one bounded operator alert for a managed Claude session.
+
+    The URL is a confirmation page only. It is deliberately described that
+    way so mail scanners and ordinary GET requests cannot stop a session.
+    """
+
+    lines = [
+        "Patch Watcher managed-session alert",
+        "",
+        f"Patch: {str(patch_id)[:200]}",
+        f"Session: {str(session_id)[:200]}",
+        f"State: {str(state)[:80]}",
+        f"Reason: {str(reason)[:500]}",
+        "",
+        "Recent messages",
+        "---------------",
+    ]
+    bounded = list(messages)[-8:]
+    if not bounded:
+        lines.append("No recent messages were recorded.")
+    for message in bounded:
+        if isinstance(message, dict):
+            author = message.get("author", "agent")
+            body = message.get("body", "")
+        else:
+            author = getattr(message, "author", "agent")
+            body = getattr(message, "body", "")
+        clean = " ".join(str(body).split())[:500]
+        lines.append(f"- {str(author)[:80]}: {clean}")
+    if confirmation_url:
+        lines.extend([
+            "",
+            "Stop this session",
+            "-----------------",
+            "Opening this link does not stop anything. It opens a confirmation page:",
+            str(confirmation_url)[:2_000],
+        ])
+    return "\n".join(lines) + "\n"
+
+
+def send_session_alert(
+    config: Any,
+    *,
+    session_id: str,
+    patch_id: str,
+    state: str,
+    reason: str,
+    messages: list[Any],
+    confirmation_url: str = "",
+    runner: Runner = subprocess.run,
+) -> MailResult:
+    """Send one managed-session alert through the configured host sendmail."""
+
+    if not config.email_enabled:
+        return MailResult(False, "Email is disabled; the session alert was recorded only.")
+    body = compose_session_alert(
+        session_id=session_id,
+        patch_id=patch_id,
+        state=state,
+        reason=reason,
+        messages=messages,
+        confirmation_url=confirmation_url,
+    )
+    return SendmailMailer(config.sendmail_path, runner=runner).send(
+        config.email_to,
+        f"Patch Watcher session alert — {str(patch_id)[:120]}",
+        body,
+    )
