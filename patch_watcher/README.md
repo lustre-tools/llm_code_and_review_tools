@@ -64,6 +64,27 @@ the heading shows the overall last-checked time. While the page is open, the
 browser visits a read-only refresh endpoint at the configured interval; no
 background thread is required.
 
+The top of the page shows a live worker-host memory summary and the current
+LTVM inventory. Physical used/available memory, configured VM guest memory,
+and measured QEMU RSS are deliberately separate figures. Running VM RSS is
+verified against both the QEMU process and exact VM name before attribution;
+stopped, legacy, or unowned VMs remain visible without becoming cleanup
+targets. Resource collection is cached for 15 seconds and can be refreshed
+explicitly from the page.
+
+Managed-session state is stored in the private SQLite database:
+
+```text
+~/.local/state/patch-watcher/sessions.sqlite3
+```
+
+The session foundation persists profiles, states, PIDs, recent messages,
+timeout calculations, two-hour reminder delivery, and confirmed cancel/kill
+intents. The page groups owner-matched LTVM VMs under active sessions and shows
+other VMs separately. Guidance and kill controls currently record durable
+controller intent; process signalling and Claude message delivery arrive with
+the managed runner phase and are not falsely reported as completed actions.
+
 The page shows clickable Gerrit and leading Jira-ticket links, current and
 historical status, last-checked and Gerrit last-changed times, and a short
 description of the newest upload or message. Refresh failures preserve the
@@ -96,7 +117,8 @@ Their proposed escalation behavior is documented in `DESIGN_ACTION_FLOW.md`.
   LTVM/resource lifecycle, isolation roadmap, dashboard, recovery behavior,
   and phased acceptance criteria.
 
-Use another local port with `python3 app.py --port 8090`.
+Use another local port with `python3 app.py --port 8090`, or select an isolated
+session database with `--session-database /private/path/sessions.sqlite3`.
 
 ## Seed a watch list
 

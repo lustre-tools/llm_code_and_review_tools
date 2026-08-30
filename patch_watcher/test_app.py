@@ -10,6 +10,12 @@ class PatchWatcherTests(unittest.TestCase):
     def setUp(self):
         app.PATCHES.clear()
 
+    def tearDown(self):
+        app.SESSION_STORE = None
+        app.RESOURCE_COLLECTION_ENABLED = False
+        app._RESOURCE_SNAPSHOT = None
+        app._RESOURCE_SNAPSHOT_MONOTONIC = 0.0
+
     def test_accepts_change_url_and_defaults_title(self):
         patch_record, error = app.add_patch(" https://review.whamcloud.com/c/123/ ")
         self.assertIsNone(error)
@@ -160,6 +166,64 @@ class PatchWatcherTests(unittest.TestCase):
         self.assertIn("Stub · disabled", rendered)
         self.assertEqual(rendered.count("aria-disabled='true'"), 2)
         self.assertNotIn("action='/handle-review", rendered)
+
+    def test_page_places_live_resource_summary_before_patch_controls(self):
+        snapshot = {
+            "host_memory": {
+                "sampled_at": "2026-08-30T18:00:00Z",
+                "quality": "good",
+                "total_bytes": 24 * 1024 ** 3,
+                "used_bytes": 16 * 1024 ** 3,
+                "available_bytes": 8 * 1024 ** 3,
+            },
+            "ltvm": {
+                "vms": [{
+                    "name": "worker-vm",
+                    "state": "running",
+                    "configured_guest_memory_bytes": 2 * 1024 ** 3,
+                    "host_rss_bytes": 512 * 1024 ** 2,
+                }],
+            },
+        }
+        app.RESOURCE_COLLECTION_ENABLED = True
+        with patch("app.collect_resource_snapshot", return_value=snapshot):
+            rendered = app.page()
+        self.assertIn("Worker host memory", rendered)
+        self.assertIn("24 GiB", rendered)
+        self.assertIn("worker-vm", rendered)
+        self.assertIn("Configured guest memory", rendered)
+        self.assertLess(rendered.index("Worker host memory"), rendered.index("Add a patch"))
+        self.assertIn("action='/resources/refresh'", rendered)
+
+    def test_resource_snapshot_is_cached_until_forced(self):
+        snapshot = {"host_memory": {}, "ltvm": {"vms": []}}
+        app.RESOURCE_COLLECTION_ENABLED = True
+        with patch("app.collect_resource_snapshot", return_value=snapshot) as collect:
+            self.assertIs(app.refresh_resource_status(), snapshot)
+            self.assertIs(app.refresh_resource_status(), snapshot)
+            self.assertIs(app.refresh_resource_status(force=True), snapshot)
+        self.assertEqual(collect.call_count, 2)
+
+    def test_managed_sessions_and_recent_messages_render_from_private_store(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_session_store(Path(temp_dir) / "sessions.sqlite3")
+            store.register_session(
+                "pw-session-1",
+                patch_id="LU-12345",
+                run_id="run-1",
+                profile="engineering",
+                state="waiting_human",
+            )
+            store.record_message("pw-session-1", "agent", "Need a human decision")
+            app._RESOURCE_SNAPSHOT = {"host_memory": {}, "ltvm": {"vms": []}}
+            app._RESOURCE_SNAPSHOT_MONOTONIC = app.time.monotonic()
+            rendered = app.resource_dashboard_html()
+        self.assertIn("Active managed sessions (1)", rendered)
+        self.assertIn("LU-12345", rendered)
+        self.assertIn("Need a human decision", rendered)
+        self.assertIn("State: Waiting human", rendered)
+        self.assertIn("action='/sessions/guidance'", rendered)
+        self.assertIn("action='/sessions/kill'", rendered)
 
     def test_ticket_requires_leading_issue_key(self):
         self.assertEqual(app.ticket_from_title("LU-12345: fix pages"), "LU-12345")
