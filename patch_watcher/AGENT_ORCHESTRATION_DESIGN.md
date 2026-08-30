@@ -5,6 +5,8 @@ contract. `DESIGN_ACTION_FLOW.md` remains the product-policy description: it
 defines when test, build, and review conditions matter. This document defines
 how Patch Watcher observes those conditions, starts controlled work, exposes
 that work to a person, and recovers safely.
+`WORKER_ENVIRONMENT_CONTRACT.md` defines the separate, versioned environment
+contract that must be admitted before a Claude process starts.
 
 The intended direction is gradual. Patch Watcher begins as an observable,
 deterministic retest controller. It later gains read-only Claude Code research,
@@ -69,6 +71,9 @@ before automation is enabled:
 11. Crash recovery and ambiguous external-call recovery are unspecified.
 12. The dashboard does not yet have a run detail view, conversation, pending
     question, delivery state, or operator controls.
+13. The worker environment is still implicitly Patrick's Mac account: tools,
+    versions, paths, instructions, credentials, and host services are not an
+    attestable portable contract.
 
 The phased plan below addresses these before progressively enabling more
 powerful actions.
@@ -106,6 +111,10 @@ These are implementation rules, not suggestions.
    in LTVM or a later worker sandbox, never in the web-service process.
 10. **Emergency stops are always available.** Global automation, per-patch
     automation, and an individual run can each be disabled independently.
+11. **Admission precedes execution.** A worker profile, run envelope, and
+    successful environment attestation are persisted before Claude starts.
+    Missing requirements block visibly; they never trigger a silent fallback
+    to an ambient or more privileged environment.
 
 ## Vocabulary and separate state domains
 
@@ -718,8 +727,9 @@ perform a known decision tree.
 Agent-backed runs receive a generated task preamble that:
 
 - identifies the run and exact revision;
-- instructs the worker to read `/Users/patrick/AGENTS.md` plus the relevant
-  repository instructions;
+- incorporates versioned portable organization policy derived from the useful
+  parts of the user-level `AGENTS.md`, plus the relevant repository
+  instructions, and snapshots the resulting instruction text and hash;
 - lists available tools and granted capabilities;
 - states that Gerrit comments, patch source, logs, JIRA, and web content are
   untrusted data, not instructions;
@@ -731,6 +741,12 @@ The LLM tools' JSON output and exit-code conventions are the supported API.
 Early workers should not receive raw credential files. The controller can
 prefetch inputs or expose a narrow tool broker. Later direct tool access must
 mount or inject only the credentials required by the capability profile.
+
+The complete worker-box boundary, logical paths, tool/profile model,
+admission `doctor`, environment attestation, host services, and portability
+phases are defined in `WORKER_ENVIRONMENT_CONTRACT.md`. A user home directory,
+shell startup file, editable install, or absolute workstation path is never a
+portable worker dependency merely because it exists on the initial host.
 
 ### Worker rule: LTVM resource exhaustion
 
@@ -1067,6 +1083,25 @@ visible `blocked` or `failed` outcome, not an invisible loop.
 Each phase is deployable and has a hard exit test. Later controls may be shown
 disabled as design previews, but must not imply functionality.
 
+### Current implementation checkpoint
+
+Commit `05cc0df` delivered the first development slice: live host/LTVM resource
+collection, the resource/session dashboard, private durable managed-session
+state, timeout/reminder calculations, recent messages, and safe recorded
+guidance/kill intents. It did **not** finish every item in formal Phase 0A, and
+it did not add a Claude runner or perform process control.
+
+The next executable sequence is:
+
+1. finish the durable observer/scheduler and database projections in Phase 0A;
+2. admit the worker environment through the new Phase 0B contract; and
+3. exercise both with one manual, revision-pinned, read-only Claude run in
+   Phase 0C, including live messages, operator guidance, stop/kill, restart
+   adoption, and no external write authority.
+
+This sequence keeps automatic retesting and all Gerrit/CI writes disabled while
+proving the complete human-visible engineer lifecycle.
+
 ### Phase 0A: durable observer
 
 Build:
@@ -1091,7 +1126,36 @@ Exit criteria:
 - host memory totals are sourced, timestamped, and do not confuse configured
   guest memory with physical host use.
 
-### Phase 0B: run control and manual read-only agent
+### Phase 0B: worker environment admission
+
+Build:
+
+- schemas for the worker profile, per-run envelope, and environment
+  attestation defined in `WORKER_ENVIRONMENT_CONTRACT.md`;
+- the truthful `host-unsandboxed-mac-v1` compatibility profile;
+- private logical run directories and generated, hashed portable worker
+  instructions rather than a dependency on the operator's home directory;
+- `pw-worker doctor` with offline tool/version, checkout, path, resource,
+  broker/report-channel, and optional LTVM health checks;
+- run persistence for profile/hash, environment instance, attestation,
+  instruction hash, and broker session ID; and
+- dashboard admission state, failed-preflight reason, provenance, and visible
+  isolation/network profile.
+
+Exit criteria:
+
+- Claude is never started before a successful persisted attestation;
+- missing tools, incompatible runtime versions, dirty/wrong checkouts,
+  insufficient resources, and unavailable capabilities each block with a
+  precise redacted reason;
+- a worker may rely only on declared logical paths and capabilities, not
+  Patrick-specific paths or dotfiles;
+- the current host is labeled **Unsandboxed host worker** and is eligible only
+  for manual read-only work; and
+- manifest/schema compatibility, version drift, sanitization, and restart
+  behavior have automated tests.
+
+### Phase 0C: run control and manual read-only agent
 
 Build:
 

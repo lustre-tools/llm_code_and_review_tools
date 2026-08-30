@@ -8,7 +8,8 @@ The implementation-grade state, persistence, native Claude runner, human
 messaging, LTVM, security, recovery, and phased-delivery contracts are in
 `AGENT_ORCHESTRATION_DESIGN.md`. This document remains the product-policy flow;
 the orchestration design explains how the flow can be executed safely and made
-visible on the dashboard.
+visible on the dashboard. `WORKER_ENVIRONMENT_CONTRACT.md` separately defines
+the admitted execution environment in which an agent may perform that flow.
 
 ## Per-patch controls
 

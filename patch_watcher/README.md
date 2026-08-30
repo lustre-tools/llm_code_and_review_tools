@@ -116,6 +116,9 @@ Their proposed escalation behavior is documented in `DESIGN_ACTION_FLOW.md`.
   durable state machines, native Claude runner, human messaging,
   LTVM/resource lifecycle, isolation roadmap, dashboard, recovery behavior,
   and phased acceptance criteria.
+- `WORKER_ENVIRONMENT_CONTRACT.md` defines what lives in the portable AI
+  engineer environment, what the controller injects, how a worker is admitted,
+  and how the current Mac evolves into reproducible and isolated workers.
 
 Use another local port with `python3 app.py --port 8090`, or select an isolated
 session database with `--session-database /private/path/sessions.sqlite3`.
