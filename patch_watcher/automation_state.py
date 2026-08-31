@@ -19,6 +19,8 @@ from typing import Any, Iterator
 
 
 POLICY_MODES = frozenset({"disabled", "advise", "approval", "automatic"})
+RESEARCH_MODES = frozenset({"disabled", "manual", "automatic"})
+RESEARCH_ADMISSION_STATES = frozenset({"reserved", "registered", "released"})
 TRIGGER_STATES = frozenset({"pending", "claimed", "consumed", "stale"})
 RUN_ACTIVE_STATES = frozenset({"planned", "executing", "waiting_external"})
 RUN_TERMINAL_STATES = frozenset(
@@ -81,6 +83,39 @@ class AutomationPolicy:
     delivery_budget: int
     updated_by: str
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class ResearchPolicy:
+    patch_id: str
+    mode: str
+    run_budget: int
+    updated_by: str
+    updated_at: datetime
+
+    @property
+    def version(self) -> str:
+        return self.updated_at.isoformat()
+
+
+@dataclass(frozen=True)
+class ResearchAdmission:
+    """One durable per-revision budget slot reserved for a research attempt."""
+
+    admission_id: str
+    patch_id: str
+    revision: str
+    patchset: int
+    policy_version: str
+    mode: str
+    slot: int
+    attempt_id: str
+    evidence_fingerprint: str
+    state: str
+    session_id: str | None
+    created_at: datetime
+    updated_at: datetime
+    failure_summary: str | None
 
 
 @dataclass(frozen=True)
@@ -232,7 +267,7 @@ def _json(name: str, value: Any, *, maximum_bytes: int = 256_000) -> str:
 class AutomationStateStore:
     """SQLite automation ledger with transactional claims and no external I/O."""
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 4
 
     _MIGRATIONS = {
         1: (
@@ -452,6 +487,64 @@ class AutomationStateStore:
             )
             """,
         ),
+        3: (
+            """
+            CREATE TABLE pw_research_policy (
+                patch_id TEXT PRIMARY KEY REFERENCES pw_automation_patch(patch_id)
+                    ON DELETE CASCADE,
+                mode TEXT NOT NULL DEFAULT 'disabled' CHECK (
+                    mode IN ('disabled', 'manual', 'automatic')
+                ),
+                run_budget INTEGER NOT NULL DEFAULT 0 CHECK (run_budget >= 0),
+                updated_by TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """,
+            """
+            INSERT INTO pw_research_policy(
+                patch_id, mode, run_budget, updated_by, updated_at
+            )
+            SELECT patch_id, 'disabled', 0, 'system', updated_at
+            FROM pw_automation_patch
+            """,
+        ),
+        4: (
+            """
+            CREATE TABLE pw_research_admission (
+                admission_id TEXT PRIMARY KEY,
+                patch_id TEXT NOT NULL REFERENCES pw_automation_patch(patch_id)
+                    ON DELETE CASCADE,
+                revision TEXT NOT NULL,
+                patchset INTEGER NOT NULL CHECK (patchset > 0),
+                policy_version TEXT NOT NULL,
+                mode TEXT NOT NULL CHECK (mode IN ('manual', 'automatic')),
+                slot INTEGER NOT NULL CHECK (slot > 0),
+                attempt_id TEXT NOT NULL,
+                evidence_fingerprint TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (
+                    state IN ('reserved', 'registered', 'released')
+                ),
+                session_id TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                failure_summary TEXT,
+                UNIQUE(patch_id, revision, attempt_id),
+                CHECK (
+                    (state = 'registered' AND session_id IS NOT NULL) OR
+                    (state <> 'registered' AND session_id IS NULL)
+                )
+            )
+            """,
+            """
+            CREATE UNIQUE INDEX pw_research_active_slot
+            ON pw_research_admission(patch_id, revision, slot)
+            WHERE state IN ('reserved', 'registered')
+            """,
+            """
+            CREATE INDEX pw_research_admission_state
+            ON pw_research_admission(state, updated_at, admission_id)
+            """,
+        ),
     }
 
     def __init__(self, database: str | Path) -> None:
@@ -535,6 +628,35 @@ class AutomationStateStore:
             delivery_budget=row["delivery_budget"],
             updated_by=row["updated_by"],
             updated_at=_datetime(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _research_policy(row: sqlite3.Row) -> ResearchPolicy:
+        return ResearchPolicy(
+            patch_id=row["patch_id"],
+            mode=row["mode"],
+            run_budget=row["run_budget"],
+            updated_by=row["updated_by"],
+            updated_at=_datetime(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _research_admission(row: sqlite3.Row) -> ResearchAdmission:
+        return ResearchAdmission(
+            admission_id=row["admission_id"],
+            patch_id=row["patch_id"],
+            revision=row["revision"],
+            patchset=row["patchset"],
+            policy_version=row["policy_version"],
+            mode=row["mode"],
+            slot=row["slot"],
+            attempt_id=row["attempt_id"],
+            evidence_fingerprint=row["evidence_fingerprint"],
+            state=row["state"],
+            session_id=row["session_id"],
+            created_at=_datetime(row["created_at"]),
+            updated_at=_datetime(row["updated_at"]),
+            failure_summary=row["failure_summary"],
         )
 
     @staticmethod
@@ -731,6 +853,14 @@ class AutomationStateStore:
                         """,
                         (patch_id, at_epoch),
                     )
+                    connection.execute(
+                        """
+                        INSERT INTO pw_research_policy(
+                            patch_id, mode, run_budget, updated_by, updated_at
+                        ) VALUES (?, 'disabled', 0, 'system', ?)
+                        """,
+                        (patch_id, at_epoch),
+                    )
                 else:
                     if patchset < existing["current_patchset"]:
                         raise AutomationConflict("patchset cannot move backwards")
@@ -880,6 +1010,358 @@ class AutomationStateStore:
             ).fetchone()
         assert row is not None
         return self._policy(row)
+
+    def set_research_policy(
+        self,
+        patch_id: str,
+        *,
+        mode: str,
+        run_budget: int,
+        updated_by: str,
+        expected_version: str | None = None,
+        at: datetime | None = None,
+    ) -> ResearchPolicy:
+        """Set investigation authority independently from retest authority."""
+
+        if mode not in RESEARCH_MODES:
+            raise ValueError(f"unknown research policy mode: {mode}")
+        run_budget = _budget("run_budget", run_budget)
+        if run_budget > 20:
+            raise ValueError("run_budget must not exceed 20")
+        if mode != "disabled" and run_budget < 1:
+            raise ValueError("enabled research modes require at least one run")
+        updated_by = _text("updated_by", updated_by)
+        at_epoch = _epoch(at or _utc_now())
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                self._require_patch(connection, patch_id)
+                current = connection.execute(
+                    "SELECT * FROM pw_research_policy WHERE patch_id = ?",
+                    (patch_id,),
+                ).fetchone()
+                assert current is not None
+                if (
+                    expected_version is not None
+                    and self._research_policy(current).version != expected_version
+                ):
+                    raise AutomationConflict(
+                        "research policy changed after the proposal was prepared"
+                    )
+                connection.execute(
+                    """
+                    UPDATE pw_research_policy
+                    SET mode = ?, run_budget = ?, updated_by = ?, updated_at = ?
+                    WHERE patch_id = ?
+                    """,
+                    (mode, run_budget, updated_by, at_epoch, patch_id),
+                )
+                row = connection.execute(
+                    "SELECT * FROM pw_research_policy WHERE patch_id = ?",
+                    (patch_id,),
+                ).fetchone()
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        assert row is not None
+        return self._research_policy(row)
+
+    def get_research_policy(self, patch_id: str) -> ResearchPolicy:
+        with self._connection() as connection:
+            self._require_patch(connection, patch_id)
+            row = connection.execute(
+                "SELECT * FROM pw_research_policy WHERE patch_id = ?",
+                (patch_id,),
+            ).fetchone()
+        assert row is not None
+        return self._research_policy(row)
+
+    def claim_research_admission(
+        self,
+        patch_id: str,
+        *,
+        revision: str,
+        patchset: int,
+        expected_policy_version: str,
+        mode: str,
+        attempt_id: str,
+        evidence_fingerprint: str,
+        admission_id: str | None = None,
+        at: datetime | None = None,
+    ) -> tuple[ResearchAdmission, bool]:
+        """Atomically reserve one policy-versioned per-revision run slot."""
+
+        patch_id = _text("patch_id", patch_id)
+        revision = _text("revision", revision).lower()
+        patchset = _positive_int("patchset", patchset)
+        expected_policy_version = _text(
+            "expected_policy_version", expected_policy_version
+        )
+        if mode not in RESEARCH_MODES - {"disabled"}:
+            raise ValueError("research admission mode must be manual or automatic")
+        attempt_id = _text("attempt_id", attempt_id)
+        if len(attempt_id.encode("utf-8")) > 256:
+            raise ValueError("attempt_id is too large")
+        evidence_fingerprint = _text(
+            "evidence_fingerprint", evidence_fingerprint
+        )
+        admission_id = _text(
+            "admission_id", admission_id or str(uuid.uuid4())
+        )
+        at_epoch = _epoch(at or _utc_now())
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                patch = self._require_patch(connection, patch_id)
+                existing = connection.execute(
+                    """
+                    SELECT * FROM pw_research_admission
+                    WHERE patch_id = ? AND revision = ? AND attempt_id = ?
+                    """,
+                    (patch_id, revision, attempt_id),
+                ).fetchone()
+                if existing is not None:
+                    if (
+                        existing["patchset"] != patchset
+                        or existing["policy_version"] != expected_policy_version
+                        or existing["mode"] != mode
+                        or existing["evidence_fingerprint"] != evidence_fingerprint
+                    ):
+                        raise AutomationConflict(
+                            "research attempt identity was reused with different admission data"
+                        )
+                    if existing["state"] == "reserved":
+                        if (
+                            patch["current_revision"].lower() != revision
+                            or patch["current_patchset"] != patchset
+                        ):
+                            raise AutomationConflict(
+                                "research admission revision is no longer current"
+                            )
+                        current = connection.execute(
+                            "SELECT * FROM pw_research_policy WHERE patch_id = ?",
+                            (patch_id,),
+                        ).fetchone()
+                        assert current is not None
+                        current_policy = self._research_policy(current)
+                        if current_policy.version != expected_policy_version:
+                            raise AutomationConflict(
+                                "research policy changed before admission"
+                            )
+                        if current_policy.mode != mode:
+                            raise AutomationConflict(
+                                f"unknown-failure research policy is "
+                                f"{current_policy.mode}, not {mode}"
+                            )
+                        if mode == "automatic":
+                            enabled = connection.execute(
+                                "SELECT enabled FROM pw_automation_setting "
+                                "WHERE singleton = 1"
+                            ).fetchone()["enabled"]
+                            if not enabled:
+                                raise GlobalAutomationDisabled(
+                                    "global automation execution is disabled"
+                                )
+                    connection.commit()
+                    return self._research_admission(existing), False
+                if (
+                    patch["current_revision"].lower() != revision
+                    or patch["current_patchset"] != patchset
+                ):
+                    raise AutomationConflict(
+                        "research admission revision is no longer current"
+                    )
+                policy = connection.execute(
+                    "SELECT * FROM pw_research_policy WHERE patch_id = ?",
+                    (patch_id,),
+                ).fetchone()
+                assert policy is not None
+                current_policy = self._research_policy(policy)
+                if current_policy.version != expected_policy_version:
+                    raise AutomationConflict(
+                        "research policy changed before admission"
+                    )
+                if current_policy.mode != mode:
+                    raise AutomationConflict(
+                        f"unknown-failure research policy is {current_policy.mode}, not {mode}"
+                    )
+                if mode == "automatic":
+                    enabled = connection.execute(
+                        "SELECT enabled FROM pw_automation_setting WHERE singleton = 1"
+                    ).fetchone()["enabled"]
+                    if not enabled:
+                        raise GlobalAutomationDisabled(
+                            "global automation execution is disabled"
+                        )
+                used = {
+                    int(row["slot"])
+                    for row in connection.execute(
+                        """
+                        SELECT slot FROM pw_research_admission
+                        WHERE patch_id = ? AND revision = ?
+                          AND state IN ('reserved', 'registered')
+                        """,
+                        (patch_id, revision),
+                    ).fetchall()
+                }
+                slot = next(
+                    (
+                        candidate
+                        for candidate in range(1, current_policy.run_budget + 1)
+                        if candidate not in used
+                    ),
+                    None,
+                )
+                if slot is None:
+                    raise BudgetExhausted(
+                        "the per-revision research run budget is exhausted"
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO pw_research_admission(
+                        admission_id, patch_id, revision, patchset,
+                        policy_version, mode, slot, attempt_id,
+                        evidence_fingerprint, state, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
+                    """,
+                    (
+                        admission_id, patch_id, revision, patchset,
+                        expected_policy_version, mode, slot, attempt_id,
+                        evidence_fingerprint, at_epoch, at_epoch,
+                    ),
+                )
+                row = connection.execute(
+                    "SELECT * FROM pw_research_admission WHERE admission_id = ?",
+                    (admission_id,),
+                ).fetchone()
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        assert row is not None
+        return self._research_admission(row), True
+
+    def register_research_admission(
+        self,
+        admission_id: str,
+        session_id: str,
+        *,
+        at: datetime | None = None,
+    ) -> ResearchAdmission:
+        """Bind a reserved slot to the durable session created for it."""
+
+        session_id = _text("session_id", session_id)
+        at_epoch = _epoch(at or _utc_now())
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = connection.execute(
+                    "SELECT * FROM pw_research_admission WHERE admission_id = ?",
+                    (admission_id,),
+                ).fetchone()
+                if row is None:
+                    raise AutomationNotFound(
+                        f"unknown research admission: {admission_id}"
+                    )
+                if row["state"] == "registered":
+                    if row["session_id"] != session_id:
+                        raise AutomationConflict(
+                            "research admission is registered to another session"
+                        )
+                    connection.commit()
+                    return self._research_admission(row)
+                if row["state"] != "reserved":
+                    raise AutomationConflict("research admission is no longer reserved")
+                connection.execute(
+                    """
+                    UPDATE pw_research_admission
+                    SET state = 'registered', session_id = ?, updated_at = ?,
+                        failure_summary = NULL
+                    WHERE admission_id = ? AND state = 'reserved'
+                    """,
+                    (session_id, at_epoch, admission_id),
+                )
+                row = connection.execute(
+                    "SELECT * FROM pw_research_admission WHERE admission_id = ?",
+                    (admission_id,),
+                ).fetchone()
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        assert row is not None
+        return self._research_admission(row)
+
+    def release_research_admission(
+        self,
+        admission_id: str,
+        *,
+        reason: str,
+        at: datetime | None = None,
+    ) -> ResearchAdmission:
+        """Release an unregistered slot after session creation failed."""
+
+        reason = _text("reason", reason)[:2000]
+        at_epoch = _epoch(at or _utc_now())
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = connection.execute(
+                    "SELECT * FROM pw_research_admission WHERE admission_id = ?",
+                    (admission_id,),
+                ).fetchone()
+                if row is None:
+                    raise AutomationNotFound(
+                        f"unknown research admission: {admission_id}"
+                    )
+                if row["state"] == "released":
+                    connection.commit()
+                    return self._research_admission(row)
+                if row["state"] == "registered":
+                    raise AutomationConflict(
+                        "registered research admission cannot be released"
+                    )
+                connection.execute(
+                    """
+                    UPDATE pw_research_admission
+                    SET state = 'released', updated_at = ?, failure_summary = ?
+                    WHERE admission_id = ? AND state = 'reserved'
+                    """,
+                    (at_epoch, reason, admission_id),
+                )
+                row = connection.execute(
+                    "SELECT * FROM pw_research_admission WHERE admission_id = ?",
+                    (admission_id,),
+                ).fetchone()
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        assert row is not None
+        return self._research_admission(row)
+
+    def list_research_admissions(
+        self,
+        *,
+        patch_id: str | None = None,
+        revision: str | None = None,
+    ) -> list[ResearchAdmission]:
+        clauses = []
+        parameters = []
+        if patch_id is not None:
+            clauses.append("patch_id = ?")
+            parameters.append(str(patch_id))
+        if revision is not None:
+            clauses.append("revision = ?")
+            parameters.append(str(revision).lower())
+        query = "SELECT * FROM pw_research_admission"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY patch_id, revision, slot, created_at, admission_id"
+        with self._connection() as connection:
+            rows = connection.execute(query, tuple(parameters)).fetchall()
+        return [self._research_admission(row) for row in rows]
 
     def get_global_automation(self) -> GlobalAutomationSetting:
         with self._connection() as connection:

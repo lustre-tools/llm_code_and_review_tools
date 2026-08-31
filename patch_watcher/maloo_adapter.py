@@ -326,6 +326,19 @@ class MalooRetestResult:
 
 
 @dataclass(frozen=True)
+class MalooLinkBugResult:
+    buggable_id: str
+    jira_ticket: str
+    buggable_class: str
+    state: str
+    linked: bool
+    response: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class MalooRetestReconciliation:
     session_id: str
     already_requested: bool
@@ -709,7 +722,7 @@ class MalooAdapter:
             if mutation:
                 raise MalooAdapterError(
                     MalooErrorCode.AMBIGUOUS_MUTATION, operation,
-                    "Maloo retest timed out; the remote outcome is unknown and must be reconciled",
+                    f"Maloo {operation} timed out; the remote outcome is unknown and must be reconciled",
                     ambiguous=True,
                 ) from exc
             raise MalooAdapterError(
@@ -723,7 +736,7 @@ class MalooAdapter:
             if mutation:
                 raise MalooAdapterError(
                     MalooErrorCode.AMBIGUOUS_MUTATION, operation,
-                    "Maloo retest transport failed; the remote outcome is unknown and must be reconciled",
+                    f"Maloo {operation} transport failed; the remote outcome is unknown and must be reconciled",
                     ambiguous=True,
                 ) from exc
             raise MalooAdapterError(
@@ -764,7 +777,7 @@ class MalooAdapter:
             if mutation:
                 raise MalooAdapterError(
                     MalooErrorCode.AMBIGUOUS_MUTATION, operation,
-                    "Maloo retest returned an unreadable response; the remote outcome is unknown and must be reconciled",
+                    f"Maloo {operation} returned an unreadable response; the remote outcome is unknown and must be reconciled",
                     ambiguous=True, exit_code=return_code,
                 ) from exc
             raise MalooAdapterError(
@@ -795,10 +808,13 @@ class MalooAdapter:
                 "TIMEOUT": (MalooErrorCode.TIMEOUT, True),
             }
             classified = classifications.get(remote_code)
-            if mutation and classified is None:
+            if mutation and (
+                classified is None
+                or remote_code in {"CONNECTION_ERROR", "TIMEOUT"}
+            ):
                 raise MalooAdapterError(
                     MalooErrorCode.AMBIGUOUS_MUTATION, operation,
-                    "Maloo retest failed without a definitive rejection; reconcile remote state before another request",
+                    f"Maloo {operation} failed without a definitive rejection; reconcile remote state before another request",
                     ambiguous=True, exit_code=return_code,
                 )
             code, retryable = classified or (MalooErrorCode.CLI_FAILED, False)
@@ -917,6 +933,63 @@ class MalooAdapter:
             jira_ticket=ticket,
             option=option,
             requested=bool(data.get("success", True)),
+            response=redact_text(data.get("response", "")),
+        )
+
+    def link_bug(
+        self,
+        buggable_id: str,
+        jira_ticket: str,
+        *,
+        buggable_class: str = "TestSet",
+        state: str = "accepted",
+    ) -> MalooLinkBugResult:
+        """Associate one existing Jira key without an automatic retry."""
+        target = _identifier(buggable_id, "buggable ID")
+        ticket = _text(jira_ticket).upper()
+        if not JIRA_RE.fullmatch(ticket):
+            raise MalooAdapterError(
+                MalooErrorCode.INVALID_INPUT,
+                "link-bug",
+                "A valid existing JIRA ticket is required",
+            )
+        if buggable_class not in {"TestSet", "SubTest"}:
+            raise MalooAdapterError(
+                MalooErrorCode.INVALID_INPUT, "link-bug", "Invalid buggable type"
+            )
+        if state not in {"accepted", "pending"}:
+            raise MalooAdapterError(
+                MalooErrorCode.INVALID_INPUT, "link-bug", "Invalid bug-link state"
+            )
+        data = self._invoke(
+            "link-bug",
+            [target, ticket, "--type", buggable_class, "--state", state],
+            mutation=True,
+        )
+        returned_target = _identifier(
+            _text(data.get("buggable_id", target)), "buggable ID"
+        )
+        returned_ticket = _text(data.get("bug", data.get("ticket", ticket))).upper()
+        returned_class = _text(data.get("buggable_class", buggable_class))
+        returned_state = _text(data.get("state", state)).casefold()
+        if (
+            returned_target != target
+            or returned_ticket != ticket
+            or returned_class != buggable_class
+            or returned_state != state
+        ):
+            raise MalooAdapterError(
+                MalooErrorCode.AMBIGUOUS_MUTATION,
+                "link-bug",
+                "Maloo acknowledged a different bug association; reconcile remote state",
+                ambiguous=True,
+            )
+        return MalooLinkBugResult(
+            buggable_id=target,
+            jira_ticket=ticket,
+            buggable_class=buggable_class,
+            state=state,
+            linked=bool(data.get("success", True)),
             response=redact_text(data.get("response", "")),
         )
 

@@ -1160,9 +1160,12 @@ source-editing, shell, or upload capability.
 Phase 1's deterministic automatic-retest path is now implemented. It reuses a
 separate durable trigger/outbox/event ledger and keeps the mechanical decision
 and idempotent remote action in the controller; it does not require a Claude
-session for an already-understood retest decision. The next slice is Phase 2's
-read-only research agent for failures that cannot pass Phase 1's evidence
-rules.
+session for an already-understood retest decision. Phase 2's read-only research
+agent is also implemented for failures that cannot pass Phase 1's evidence
+rules. Its report cannot write externally. A narrow follow-on workflow can
+associate an operator-supplied existing Jira key and then request a retest,
+but those are separately approved controller actions with no agent authority.
+The next implementation slice is Phase 3's isolated execution foundation.
 
 ### Phase 0A: durable observer
 
@@ -1282,13 +1285,21 @@ Exit criteria:
 
 ### Phase 2: unknown-failure research agent
 
-Build:
+Implemented:
 
 - automatic or manual investigation trigger for failures without linked bugs;
-- read-only Gerrit/Maloo/JIRA/repository evidence bundle;
+- controller-captured, immutable Maloo evidence plus a pinned source checkout;
 - evidence report, recommendation, and human escalation;
 - runtime/turn budgets and bounded artifact/log display;
 - prompt-injection defenses and controller-owned tool access.
+
+The agent gets no Gerrit, Maloo, Jira, Jenkins, LTVM, shell, or file-write
+tool. Identical evidence deduplicates across retries and restarts. Automatic
+triggering has its own confirmed per-patch policy and budget and also respects
+the global execution switch. Existing-Jira association and the subsequent
+retest are a separate two-step operator-approved controller workflow: each
+action is revision-pinned, independently confirmed, remotely reconciled, and
+never retried after an ambiguous outcome.
 
 Exit criteria:
 

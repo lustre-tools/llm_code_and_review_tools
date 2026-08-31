@@ -142,6 +142,23 @@ mutation is never blindly retried; later polls only reconcile remote state.
 Outcomes and errors appear in the bounded timeline, daily report, and optional
 immediate sendmail notices.
 
+Phase 2 adds bounded Claude research for enforced Maloo failures that do not
+have accepted Jira evidence. Its policy is independent from retest authority:
+Disabled, Manual, or Automatic, with a maximum of 20 runs per exact revision.
+Automatic starts also require the global execution switch. Every run receives
+an immutable normalized evidence bundle, a pinned source checkout, and only
+Read/Glob/Grep capabilities. It must return one of five classifications with
+citations to captured evidence; malformed or invented citations fail closed.
+
+The dashboard can then prepare a two-step operator-approved write workflow
+for an existing Jira key. First, associate that key with the exact currently
+observed failed Maloo suite. After Maloo reports the association accepted,
+Patch Watcher prepares a separate approval for one session-level retest. Each
+step has its own signed confirmation and revision revalidation. Planning does
+nothing remotely, approvals are consumed by the background controller, and
+ambiguous outcomes are never resubmitted blindly. Patch Watcher still cannot
+create Jira issues, post Gerrit comments, edit source, or upload patchsets.
+
 Maloo reads and retests use the installed `maloo` CLI. Configure that tool's
 private credentials in `~/.config/maloo-tool/.env` as documented by
 `maloo_tool`; Patch Watcher does not copy credentials into its database or

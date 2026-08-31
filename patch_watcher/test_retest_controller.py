@@ -163,6 +163,24 @@ def test_automatic_global_off_is_preview_only(tmp_path):
     assert len(store.list_observations(patch().patch_id)) == 1
 
 
+def test_research_evidence_can_be_collected_while_retest_policy_is_disabled(tmp_path):
+    store = configured_store(tmp_path, mode="disabled", global_enabled=False)
+    maloo = FakeMaloo()
+
+    ordinary = controller(store, maloo).tick_patch(patch())
+    research = controller(store, maloo).tick_patch(
+        patch(), collect_research_evidence=True
+    )
+
+    assert ordinary.evaluation.reason_code == "policy_disabled"
+    assert research.evaluation.reason_code == "policy_disabled"
+    assert maloo.reads == 1
+    latest = store.list_observations(patch().patch_id)[-1]
+    assert latest.payload["snapshot"]["maloo_state_complete"] is True
+    assert latest.payload["snapshot"]["maloo_failures"][0]["suite"] == "sanity"
+    assert maloo.requests == []
+
+
 def test_repeated_identical_maloo_read_failure_notifies_once(tmp_path):
     store = configured_store(tmp_path, mode="advise")
     maloo = FakeMaloo()
@@ -415,6 +433,11 @@ class RetestControllerUnittestTests(unittest.TestCase):
 
     def test_automatic_global_off(self):
         self.run_case(test_automatic_global_off_is_preview_only)
+
+    def test_research_evidence_with_retest_disabled(self):
+        self.run_case(
+            test_research_evidence_can_be_collected_while_retest_policy_is_disabled
+        )
 
     def test_identical_read_failure_notifies_once(self):
         self.run_case(test_repeated_identical_maloo_read_failure_notifies_once)

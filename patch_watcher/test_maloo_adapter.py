@@ -185,6 +185,57 @@ class MalooAdapterTests(unittest.TestCase):
         self.assertTrue(retest.requested)
         self.assertEqual(retest.jira_ticket, "LU-19487")
 
+    def test_link_bug_is_one_shell_free_exact_call_and_normalized(self):
+        data = {
+            "success": True,
+            "buggable_class": "TestSet",
+            "buggable_id": SUITE,
+            "bug": "LU-19487",
+            "state": "accepted",
+            "response": "OK",
+        }
+        runner = FakeRunner([result("link-bug", data)])
+        linked = maloo_adapter.MalooAdapter(runner=runner).link_bug(
+            SUITE, "lu-19487"
+        )
+        self.assertEqual(
+            runner.calls,
+            [(
+                "maloo", "--envelope", "link-bug", SUITE, "LU-19487",
+                "--type", "TestSet", "--state", "accepted",
+            )],
+        )
+        self.assertTrue(linked.linked)
+        self.assertEqual(linked.state, "accepted")
+
+    def test_link_bug_timeout_is_ambiguous_and_never_retried(self):
+        runner = FakeRunner([subprocess.TimeoutExpired(["maloo"], 45)])
+        with self.assertRaises(maloo_adapter.MalooAdapterError) as caught:
+            maloo_adapter.MalooAdapter(runner=runner).link_bug(SUITE, "LU-100")
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(
+            caught.exception.code,
+            maloo_adapter.MalooErrorCode.AMBIGUOUS_MUTATION,
+        )
+        self.assertTrue(caught.exception.ambiguous)
+
+    def test_link_bug_structured_transport_failure_is_also_ambiguous(self):
+        failure = envelope(
+            "link-bug",
+            ok=False,
+            error={"code": "TIMEOUT", "message": "remote response timed out"},
+        )
+        runner = FakeRunner([maloo_adapter.CommandResult(1, failure, "")])
+        with self.assertRaises(maloo_adapter.MalooAdapterError) as caught:
+            maloo_adapter.MalooAdapter(runner=runner).link_bug(SUITE, "LU-100")
+        self.assertEqual(
+            caught.exception.code,
+            maloo_adapter.MalooErrorCode.AMBIGUOUS_MUTATION,
+        )
+        self.assertTrue(caught.exception.ambiguous)
+        self.assertFalse(caught.exception.retryable)
+        self.assertEqual(len(runner.calls), 1)
+
     def test_retest_never_retries_timeout_and_marks_outcome_ambiguous(self):
         runner = FakeRunner([subprocess.TimeoutExpired(["maloo"], 45)])
         with self.assertRaises(maloo_adapter.MalooAdapterError) as caught:

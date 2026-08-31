@@ -174,13 +174,21 @@ class RetestController:
             return tuple(results)
 
     def tick_patch(
-        self, patch: PatchRevision | Mapping[str, Any], *, dry_run: bool = False
+        self,
+        patch: PatchRevision | Mapping[str, Any],
+        *,
+        dry_run: bool = False,
+        collect_research_evidence: bool = False,
     ) -> TickResult:
         """Observe one patch mapping; ``dry_run`` persists no trigger or action."""
 
         revision = self._coerce_patch(patch)
         with self._tick_lock:
-            result = self._tick_patch_locked(revision, dry_run=dry_run)
+            result = self._tick_patch_locked(
+                revision,
+                dry_run=dry_run,
+                collect_research_evidence=collect_research_evidence,
+            )
             if not dry_run:
                 self._reconcile_ambiguous_history(revision.patch_id)
             return result
@@ -252,7 +260,13 @@ class RetestController:
             review_votes=tuple(votes),
         )
 
-    def _tick_patch_locked(self, patch: PatchRevision, *, dry_run: bool = False) -> TickResult:
+    def _tick_patch_locked(
+        self,
+        patch: PatchRevision,
+        *,
+        dry_run: bool = False,
+        collect_research_evidence: bool = False,
+    ) -> TickResult:
         self._validate_patch_input(patch)
         self.store.upsert_patch(
             patch.patch_id,
@@ -269,7 +283,11 @@ class RetestController:
         policy_record = self.store.get_policy(patch.patch_id)
         global_setting = self.store.get_global_automation()
         observation_notice = None
-        if self._should_read_maloo(patch, policy_record.mode):
+        if self._should_read_maloo(
+            patch,
+            policy_record.mode,
+            collect_research_evidence=collect_research_evidence,
+        ):
             snapshot, session_submissions, observation_notice = self._collect_snapshot(patch)
         else:
             snapshot = RevisionSnapshot(
@@ -331,14 +349,19 @@ class RetestController:
         return TickResult(patch.patch_id, evaluation, created, tuple(run_ids))
 
     @staticmethod
-    def _should_read_maloo(patch: PatchRevision, policy_mode: str) -> bool:
+    def _should_read_maloo(
+        patch: PatchRevision,
+        policy_mode: str,
+        *,
+        collect_research_evidence: bool = False,
+    ) -> bool:
         """Apply Gerrit and operator gates before entering the test flow."""
 
         return (
             patch.revision_state_complete
             and patch.is_current
             and patch.lifecycle == "open"
-            and policy_mode != "disabled"
+            and (policy_mode != "disabled" or collect_research_evidence)
             and not any(vote.is_non_maloo_veto for vote in patch.review_votes)
         )
 

@@ -62,6 +62,43 @@ READ_ONLY_REPORT_SCHEMA: Mapping[str, Any] = {
         }
     ],
 }
+UNKNOWN_FAILURE_RECOMMENDATIONS = frozenset(
+    {"known_failure", "transient", "patch_caused", "needs_human", "inconclusive"}
+)
+UNKNOWN_FAILURE_REPORT_SCHEMA: Mapping[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "schema": {"const": "patch-watcher-unknown-failure-report/v1"},
+        "state": {"enum": ["complete", "needs_input", "failed"]},
+        "recommendation": {"enum": sorted(UNKNOWN_FAILURE_RECOMMENDATIONS)},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "evidence_references": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "evidence_ref": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "locator": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "supports": {"type": "string", "minLength": 1, "maxLength": 2000},
+                },
+                "required": ["evidence_ref", "locator", "supports"],
+            },
+        },
+        "question": {"type": "string", "minLength": 1, "maxLength": 2000},
+    },
+    "required": ["schema", "state", "recommendation", "summary", "evidence_references"],
+    "allOf": [
+        {
+            "if": {"properties": {"state": {"const": "needs_input"}}, "required": ["state"]},
+            "then": {"required": ["question"]},
+        }
+    ],
+}
 
 
 class ClaudeRunnerError(RuntimeError):
@@ -117,6 +154,7 @@ class ReadOnlyRunSpec:
     model: str = ""
     effort: str = ""
     claude_binary: str = "claude"
+    report_kind: str = "read_only"
 
     def validate(self) -> None:
         if not RUN_ID_RE.fullmatch(self.run_id):
@@ -141,6 +179,8 @@ class ReadOnlyRunSpec:
             raise ValueError("claude_binary must identify the Claude Code executable")
         if self.effort and self.effort not in {"low", "medium", "high", "xhigh", "max"}:
             raise ValueError("unsupported effort")
+        if self.report_kind not in {"read_only", "unknown_failure_research"}:
+            raise ValueError("unsupported report kind")
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -333,6 +373,11 @@ def build_read_only_claude_command(spec: ReadOnlyRunSpec) -> List[str]:
     """Return a shell-free command with no external-write-capable tools."""
 
     spec.validate()
+    report_schema = (
+        UNKNOWN_FAILURE_REPORT_SCHEMA
+        if spec.report_kind == "unknown_failure_research"
+        else READ_ONLY_REPORT_SCHEMA
+    )
     command = [
         spec.claude_binary,
         "--print",
@@ -355,7 +400,7 @@ def build_read_only_claude_command(spec: ReadOnlyRunSpec) -> List[str]:
         "--mcp-config",
         "{}",
         "--json-schema",
-        json.dumps(READ_ONLY_REPORT_SCHEMA, sort_keys=True, separators=(",", ":")),
+        json.dumps(report_schema, sort_keys=True, separators=(",", ":")),
     ]
     if spec.name:
         command.extend(["--name", spec.name])
@@ -405,6 +450,72 @@ def validate_read_only_report(value: Any) -> Mapping[str, Any]:
         "state": state,
         "summary": summary.strip(),
         "findings": [finding.strip() for finding in findings],
+    }
+    if question is not None:
+        normalized["question"] = question.strip()
+    return normalized
+
+
+def validate_unknown_failure_report(value: Any) -> Mapping[str, Any]:
+    """Validate the bounded syntactic Phase 2 research report.
+
+    The workflow controller separately verifies that every evidence reference
+    names a record captured in the immutable request bundle.
+    """
+
+    if not isinstance(value, Mapping):
+        raise RunnerProtocolError("unknown-failure report must be an object")
+    allowed = {
+        "schema", "state", "recommendation", "summary",
+        "evidence_references", "question",
+    }
+    unknown = set(value) - allowed
+    if unknown:
+        raise RunnerProtocolError(
+            "unknown-failure report has unknown fields: " + ", ".join(sorted(unknown))
+        )
+    if value.get("schema") != "patch-watcher-unknown-failure-report/v1":
+        raise RunnerProtocolError("unknown-failure report has unsupported schema")
+    state = value.get("state")
+    if state not in {"complete", "needs_input", "failed"}:
+        raise RunnerProtocolError("unknown-failure report has invalid state")
+    recommendation = value.get("recommendation")
+    if recommendation not in UNKNOWN_FAILURE_RECOMMENDATIONS:
+        raise RunnerProtocolError("unknown-failure report has invalid recommendation")
+    summary = value.get("summary")
+    if not isinstance(summary, str) or not summary.strip() or len(summary) > 2000:
+        raise RunnerProtocolError("unknown-failure report summary is invalid")
+    references = value.get("evidence_references")
+    if not isinstance(references, list) or not 1 <= len(references) <= 50:
+        raise RunnerProtocolError("unknown-failure report evidence references are invalid")
+    normalized_references = []
+    for reference in references:
+        if not isinstance(reference, Mapping):
+            raise RunnerProtocolError("unknown-failure evidence reference must be an object")
+        if set(reference) != {"evidence_ref", "locator", "supports"}:
+            raise RunnerProtocolError("unknown-failure evidence reference fields are invalid")
+        normalized_reference = {}
+        for field, maximum in (("evidence_ref", 256), ("locator", 1000), ("supports", 2000)):
+            item = reference.get(field)
+            if not isinstance(item, str) or not item.strip() or len(item) > maximum:
+                raise RunnerProtocolError(
+                    "unknown-failure evidence reference %s is invalid" % field
+                )
+            normalized_reference[field] = item.strip()
+        normalized_references.append(normalized_reference)
+    question = value.get("question")
+    if question is not None and (
+        not isinstance(question, str) or not question.strip() or len(question) > 2000
+    ):
+        raise RunnerProtocolError("unknown-failure report question is invalid")
+    if state == "needs_input" and question is None:
+        raise RunnerProtocolError("needs_input unknown-failure report requires question")
+    normalized: Dict[str, Any] = {
+        "schema": value["schema"],
+        "state": state,
+        "recommendation": recommendation,
+        "summary": summary.strip(),
+        "evidence_references": normalized_references,
     }
     if question is not None:
         normalized["question"] = question.strip()
@@ -724,7 +835,12 @@ class ClaudeHost:
                     )
                 else:
                     try:
-                        report = validate_read_only_report(raw.get("structured_output"))
+                        validator = (
+                            validate_unknown_failure_report
+                            if self.spec.report_kind == "unknown_failure_research"
+                            else validate_read_only_report
+                        )
+                        report = validator(raw.get("structured_output"))
                     except RunnerProtocolError as exc:
                         self._append_event(
                             "worker_report_invalid", {"reason": str(exc)[:1000]}

@@ -3,12 +3,19 @@ import re
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import urlencode
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from http.server import ThreadingHTTPServer
 
 import app
+from failure_actions import FailureActionController, FailurePatchRevision
+from maloo_adapter import (
+    MalooBugLinks,
+    MalooLinkBugResult,
+)
 
 
 class PatchWatcherTests(unittest.TestCase):
@@ -22,6 +29,7 @@ class PatchWatcherTests(unittest.TestCase):
             app.RUN_CONTROLLER.stop()
         app.RUN_CONTROLLER = None
         app.RETEST_CONTROLLER = None
+        app.FAILURE_ACTION_CONTROLLER = None
         app.AUTOMATION_OBSERVER = None
         app.AUTOMATION_STORE = None
         app.SESSION_STORE = None
@@ -68,6 +76,40 @@ class PatchWatcherTests(unittest.TestCase):
         rendered = app.page()
         self.assertIn("&lt;unsafe&gt;", rendered)
         self.assertNotIn("<unsafe>", rendered)
+
+    def test_post_parser_rejects_unsupported_oversized_and_invalid_forms(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        requests = [
+            Request(
+                base + "/add",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            ),
+            Request(
+                base + "/add",
+                data=b"x" * (app.MAX_FORM_BODY_BYTES + 1),
+                method="POST",
+            ),
+            Request(
+                base + "/add",
+                data=b"url=\xff",
+                method="POST",
+            ),
+        ]
+        try:
+            for request, expected in zip(requests, (415, 413, 400)):
+                with self.subTest(expected=expected):
+                    with self.assertRaises(HTTPError) as caught:
+                        urlopen(request)
+                    self.assertEqual(caught.exception.code, expected)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_page_displays_review_and_ci_criteria_as_links(self):
         patch_record, _ = app.add_patch(
@@ -264,6 +306,511 @@ class PatchWatcherTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=2)
+
+    def test_unknown_failure_research_defaults_disabled_and_is_visible(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_automation_store(
+                Path(temp_dir) / "automation.sqlite3"
+            )
+            patch_record, _ = app.add_patch(
+                "https://review.whamcloud.com/c/68160"
+            )
+            patch_record.update(
+                change_number=68160,
+                project="fs/lustre-release",
+                patchset=4,
+                revision_sha="d" * 40,
+                revision_ref="refs/changes/60/68160/4",
+                lifecycle="Open",
+            )
+            app.sync_automation_patch(patch_record)
+            rendered = app.page()
+            policy = store.get_research_policy("68160")
+        self.assertEqual(policy.mode, "disabled")
+        self.assertEqual(policy.run_budget, 0)
+        self.assertIn("Research trigger policy", rendered)
+        self.assertIn("Unknown-failure investigation", rendered)
+        self.assertIn("Read-only", rendered)
+
+    def test_automatic_research_policy_uses_display_only_get_confirmation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_automation_store(
+                Path(temp_dir) / "automation.sqlite3"
+            )
+            patch_record, _ = app.add_patch(
+                "https://review.whamcloud.com/c/68160"
+            )
+            patch_record.update(
+                change_number=68160,
+                project="fs/lustre-release",
+                patchset=4,
+                revision_sha="d" * 40,
+                revision_ref="refs/changes/60/68160/4",
+                lifecycle="Open",
+            )
+            app.sync_automation_patch(patch_record)
+            version = store.get_research_policy("68160").version
+            server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            values = {
+                "csrf_token": app.CSRF_TOKEN,
+                "change_number": "68160",
+                "patchset": "4",
+                "revision_sha": "d" * 40,
+                "research_mode": "automatic",
+                "per_revision_run_budget": "2",
+                "expected_policy_version": version,
+                "idempotency_token": "policy-proposal-1",
+            }
+            try:
+                request = Request(
+                    base + "/research/policy/prepare",
+                    data=urlencode(values).encode(),
+                    method="POST",
+                )
+                confirmation = urlopen(request).read().decode()
+                self.assertIn("Confirm automatic unknown-failure research", confirmation)
+                self.assertEqual(store.get_research_policy("68160").mode, "disabled")
+                confirm_token = re.search(
+                    r"name='confirmation_token' value='([^']+)'", confirmation
+                ).group(1)
+                final = Request(
+                    base + "/research/policy/confirm",
+                    data=urlencode({
+                        **values,
+                        "confirmation_token": confirm_token,
+                    }).encode(),
+                    method="POST",
+                )
+                urlopen(final).read()
+                policy = store.get_research_policy("68160")
+                self.assertEqual(policy.mode, "automatic")
+                self.assertEqual(policy.run_budget, 2)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_manual_unknown_failure_starts_with_pinned_normalized_evidence(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_automation_store(
+                Path(temp_dir) / "automation.sqlite3"
+            )
+            app.initialize_session_store(Path(temp_dir) / "sessions.sqlite3")
+            patch_record, _ = app.add_patch(
+                "https://review.whamcloud.com/c/68160"
+            )
+            patch_record.update(
+                change_number=68160,
+                project="fs/lustre-release",
+                patchset=4,
+                revision_sha="d" * 40,
+                revision_ref="refs/changes/60/68160/4",
+                lifecycle="Open",
+            )
+            app.sync_automation_patch(patch_record)
+            store.set_research_policy(
+                "68160", mode="manual", run_budget=1, updated_by="operator"
+            )
+            store.record_observation(
+                "68160",
+                revision="d" * 40,
+                source="gerrit+maloo",
+                kind="maloo_retest_evaluation",
+                fingerprint="sha256:" + "a" * 64,
+                payload={
+                    "snapshot": {
+                        "maloo_state_complete": True,
+                        "maloo_failures": [{
+                            "session_id": "session-1",
+                            "test_group": "review-dne-part-1",
+                            "suite": "sanity",
+                            "enforced": True,
+                            "linked_bugs": [],
+                            "failing_subtests": ["101"],
+                            "remote_failure_id": "suite-1",
+                        }],
+                    }
+                },
+            )
+
+            class FakeRunController:
+                def __init__(self):
+                    self.calls = []
+
+                def stop(self):
+                    return None
+
+                def request_unknown_failure_investigation(
+                    self, evidence, *, attempt_id, trigger
+                ):
+                    self.calls.append((evidence, attempt_id, trigger))
+                    return SimpleNamespace(
+                        run_id="research-1", session_id="session-1", created=True
+                    )
+
+            controller = FakeRunController()
+            app.RUN_CONTROLLER = controller
+            request = app._start_unknown_failure_research(
+                patch_record, automatic=False
+            )
+            evidence, attempt_id, trigger = controller.calls[0]
+            admission = store.list_research_admissions(
+                patch_id="68160", revision="d" * 40
+            )[0]
+            self.assertEqual(admission.state, "registered")
+            self.assertEqual(admission.session_id, "session-1")
+
+            store.set_research_policy(
+                "68160", mode="manual", run_budget=2, updated_by="operator"
+            )
+
+            class FailingRunController:
+                def request_unknown_failure_investigation(self, *args, **kwargs):
+                    raise RuntimeError("session database unavailable")
+
+            app.RUN_CONTROLLER = FailingRunController()
+            with self.assertRaisesRegex(RuntimeError, "session database"):
+                app._start_unknown_failure_research(
+                    patch_record, automatic=False, attempt_id="manual-retry-2"
+                )
+            released = store.list_research_admissions(
+                patch_id="68160", revision="d" * 40
+            )[-1]
+            self.assertEqual(released.state, "released")
+            self.assertIn("RuntimeError", released.failure_summary)
+
+            store.set_research_policy(
+                "68160", mode="manual", run_budget=3, updated_by="operator"
+            )
+
+            class ReconciledRunController:
+                def __init__(self):
+                    self.calls = 0
+
+                def stop(self):
+                    return None
+
+                def request_unknown_failure_investigation(self, *args, **kwargs):
+                    self.calls += 1
+                    return SimpleNamespace(
+                        run_id="research-3",
+                        session_id="session-3",
+                        created=self.calls == 1,
+                    )
+
+            app.RUN_CONTROLLER = ReconciledRunController()
+            register = store.register_research_admission
+            failures = [True]
+
+            def fail_registration_once(*args, **kwargs):
+                if failures.pop():
+                    raise OSError("admission database interrupted")
+                return register(*args, **kwargs)
+
+            store.register_research_admission = fail_registration_once
+            with self.assertRaisesRegex(OSError, "admission database"):
+                app._start_unknown_failure_research(
+                    patch_record, automatic=False, attempt_id="manual-retry-3"
+                )
+            store.register_research_admission = register
+            reconciled = app._start_unknown_failure_research(
+                patch_record, automatic=False, attempt_id="manual-retry-3"
+            )
+            self.assertFalse(reconciled.created)
+            admission = store.list_research_admissions(
+                patch_id="68160", revision="d" * 40
+            )[-1]
+            self.assertEqual(admission.state, "registered")
+            self.assertEqual(admission.session_id, "session-3")
+        self.assertEqual(request.run_id, "research-1")
+        self.assertEqual(evidence["revision_sha"], "d" * 40)
+        self.assertEqual(evidence["records"][0]["payload"]["suite"], "sanity")
+        self.assertTrue(attempt_id.startswith("manual:"))
+        self.assertEqual(trigger["kind"], "manual")
+
+    def test_automatic_research_respects_global_execution_kill_switch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_automation_store(
+                Path(temp_dir) / "automation.sqlite3"
+            )
+            app.initialize_session_store(Path(temp_dir) / "sessions.sqlite3")
+            patch_record, _ = app.add_patch(
+                "https://review.whamcloud.com/c/68160"
+            )
+            patch_record.update(
+                change_number=68160,
+                project="fs/lustre-release",
+                patchset=4,
+                revision_sha="d" * 40,
+                revision_ref="refs/changes/60/68160/4",
+                lifecycle="Open",
+            )
+            app.sync_automation_patch(patch_record)
+            store.set_research_policy(
+                "68160", mode="automatic", run_budget=1, updated_by="operator"
+            )
+            store.record_observation(
+                "68160",
+                revision="d" * 40,
+                source="gerrit+maloo",
+                kind="maloo_retest_evaluation",
+                fingerprint="sha256:" + "b" * 64,
+                payload={"snapshot": {
+                    "maloo_state_complete": True,
+                    "maloo_failures": [{
+                        "session_id": "session-1",
+                        "test_group": "review-dne-part-1",
+                        "suite": "sanity",
+                        "enforced": True,
+                        "linked_bugs": [],
+                        "remote_failure_id": "suite-1",
+                    }],
+                }},
+            )
+
+            class FakeResearchController:
+                def __init__(self):
+                    self.calls = []
+
+                def stop(self):
+                    return None
+
+                def request_unknown_failure_investigation(
+                    self, evidence, *, attempt_id, trigger
+                ):
+                    created = not self.calls
+                    self.calls.append((evidence, attempt_id, trigger))
+                    return SimpleNamespace(
+                        run_id="research-1", session_id="session-1", created=created
+                    )
+
+            class FakeRetestController:
+                def tick_patch(self, patch, **options):
+                    return SimpleNamespace(patch_id="68160")
+
+            research = FakeResearchController()
+            app.RUN_CONTROLLER = research
+            app.RETEST_CONTROLLER = FakeRetestController()
+            app._observe_patch_automation(patch_record)
+            self.assertEqual(research.calls, [])
+            store.set_global_automation(
+                True, changed_by="operator", reason="test"
+            )
+            app._observe_patch_automation(patch_record)
+            self.assertEqual(len(research.calls), 1)
+            app._observe_patch_automation(patch_record)
+            self.assertEqual(len(research.calls), 2)
+            decisions = [
+                item for item in store.list_observations("68160")
+                if item.kind == "unknown_failure_research_trigger_decision"
+            ]
+            self.assertEqual(decisions[-1].payload["status"], "already_exists")
+
+    def test_approved_failure_route_plans_inertly_then_executes_one_link(self):
+        class FakeMaloo:
+            def __init__(self):
+                self.link_calls = []
+
+            def get_bug_links(self, suite_id, related=False):
+                return MalooBugLinks(suite_id, ())
+
+            def get_enforced_failures(self, change_number, patchset):
+                return (SimpleNamespace(
+                    session=SimpleNamespace(
+                        session_id="11111111-2222-3333-4444-555555555555",
+                        test_group="review-dne-part-1",
+                    ),
+                    failures=SimpleNamespace(failed_suites=(SimpleNamespace(
+                        suite_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                        suite="sanity",
+                    ),)),
+                ),)
+
+            def link_bug(self, suite_id, jira_ticket, **options):
+                self.link_calls.append((suite_id, jira_ticket, options))
+                return MalooLinkBugResult(
+                    suite_id, jira_ticket, "TestSet", "accepted", True, "OK"
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_automation_store(
+                Path(temp_dir) / "automation.sqlite3"
+            )
+            patch_record, _ = app.add_patch(
+                "https://review.whamcloud.com/c/68160"
+            )
+            patch_record.update(
+                change_number=68160,
+                project="fs/lustre-release",
+                patchset=4,
+                revision_sha="d" * 40,
+                revision_ref="refs/changes/60/68160/4",
+                lifecycle="Open",
+            )
+            app.sync_automation_patch(patch_record)
+            store.set_policy(
+                "68160", mode="approval", action_budget=2,
+                delivery_budget=0, updated_by="operator",
+            )
+            store.record_observation(
+                "68160",
+                revision="d" * 40,
+                source="gerrit+maloo",
+                kind="maloo_retest_evaluation",
+                fingerprint="sha256:" + "c" * 64,
+                payload={"snapshot": {
+                    "maloo_state_complete": True,
+                    "maloo_failures": [{
+                        "session_id": "11111111-2222-3333-4444-555555555555",
+                        "test_group": "review-dne-part-1",
+                        "suite": "sanity",
+                        "enforced": True,
+                        "linked_bugs": [],
+                        "remote_failure_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                    }],
+                }},
+            )
+            maloo = FakeMaloo()
+            fresh = FailurePatchRevision(
+                patch_id="68160",
+                gerrit_url=patch_record["url"],
+                change_number=68160,
+                patchset_number=4,
+                revision_sha="d" * 40,
+            )
+            app.FAILURE_ACTION_CONTROLLER = FailureActionController(
+                store, maloo, revalidate=lambda _url: fresh,
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            values = {
+                "csrf_token": app.CSRF_TOKEN,
+                "change_number": "68160",
+                "patchset": "4",
+                "revision_sha": "d" * 40,
+                "session_id": "11111111-2222-3333-4444-555555555555",
+                "test_group": "review-dne-part-1",
+                "suite_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "jira_ticket": "LU-19487",
+            }
+            try:
+                incomplete_values = dict(values)
+                incomplete_values["session_id"] = ""
+                incomplete = Request(
+                    base + "/failure-actions/plan",
+                    data=urlencode(incomplete_values).encode(),
+                    method="POST",
+                )
+                rejected = urlopen(incomplete).read().decode()
+                self.assertIn(
+                    "That failure is not present in the latest complete",
+                    rejected,
+                )
+                self.assertEqual(store.list_runs(), [])
+
+                tampered_values = dict(values)
+                tampered_values["suite_id"] = (
+                    "ffffffff-ffff-ffff-ffff-ffffffffffff"
+                )
+                tampered = Request(
+                    base + "/failure-actions/plan",
+                    data=urlencode(tampered_values).encode(),
+                    method="POST",
+                )
+                rejected = urlopen(tampered).read().decode()
+                self.assertIn(
+                    "That failure is not present in the latest complete",
+                    rejected,
+                )
+                self.assertEqual(store.list_runs(), [])
+                self.assertEqual(maloo.link_calls, [])
+
+                request = Request(
+                    base + "/failure-actions/plan",
+                    data=urlencode(values).encode(),
+                    method="POST",
+                )
+                confirmation = urlopen(request).read().decode()
+                self.assertIn("Confirm JIRA association", confirmation)
+                self.assertEqual(maloo.link_calls, [])
+                action = store.list_actions(store.list_runs()[0].run_id)[0]
+                confirmation_token = re.search(
+                    r"name='confirmation_token' value='([^']+)'", confirmation
+                ).group(1)
+                approve = Request(
+                    base + f"/approvals/{action.action_id}/approve",
+                    data=urlencode({
+                        "csrf_token": app.CSRF_TOKEN,
+                        "revision_sha": "d" * 40,
+                        "confirmation_token": confirmation_token,
+                    }).encode(),
+                    method="POST",
+                )
+                urlopen(approve).read()
+                self.assertEqual(maloo.link_calls, [])
+                self.assertIn("Queued for execution", app.page())
+                app._advance_failure_action_runs("68160")
+                self.assertEqual(len(maloo.link_calls), 1)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def test_failure_action_button_is_disabled_for_incomplete_observed_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_automation_store(
+                Path(temp_dir) / "automation.sqlite3"
+            )
+            patch_record, _ = app.add_patch(
+                "https://review.whamcloud.com/c/68160"
+            )
+            patch_record.update(
+                change_number=68160,
+                project="fs/lustre-release",
+                patchset=4,
+                revision_sha="d" * 40,
+                revision_ref="refs/changes/60/68160/4",
+                lifecycle="Open",
+            )
+            app.sync_automation_patch(patch_record)
+            store.set_policy(
+                "68160", mode="approval", action_budget=2,
+                delivery_budget=0, updated_by="operator",
+            )
+            store.record_observation(
+                "68160",
+                revision="d" * 40,
+                source="gerrit+maloo",
+                kind="maloo_retest_evaluation",
+                fingerprint="sha256:" + "e" * 64,
+                payload={"snapshot": {
+                    "maloo_state_complete": True,
+                    "maloo_failures": [{
+                        "session_id": "",
+                        "test_group": "review-dne-part-1",
+                        "suite": "sanity",
+                        "enforced": True,
+                        "linked_bugs": [],
+                        "remote_failure_id": (
+                            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+                        ),
+                    }],
+                }},
+            )
+            rendered = app.page()
+        self.assertIn(
+            "The exact Maloo session, test group, suite name, or suite ID is unavailable.",
+            rendered,
+        )
+        self.assertRegex(
+            rendered,
+            r"<button type='submit' disabled aria-disabled='true'>Plan association</button>",
+        )
 
     def test_refreshed_patch_offers_exact_read_only_investigation(self):
         patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")

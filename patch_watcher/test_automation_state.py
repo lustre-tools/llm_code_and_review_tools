@@ -100,6 +100,196 @@ class AutomationStateStoreTests(unittest.TestCase):
         with sqlite3.connect(self.database) as connection:
             self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "wal")
 
+    def test_research_policy_is_independent_and_defaults_disabled(self):
+        default = self.store.get_research_policy("68160")
+        self.assertEqual(default.mode, "disabled")
+        self.assertEqual(default.run_budget, 0)
+        self.policy(mode="automatic", action_budget=4)
+        changed = self.store.set_research_policy(
+            "68160",
+            mode="automatic",
+            run_budget=2,
+            updated_by="patrick",
+            at=START + timedelta(minutes=2),
+        )
+        self.assertEqual(changed.mode, "automatic")
+        self.assertEqual(changed.run_budget, 2)
+        self.assertEqual(self.store.get_policy("68160").mode, "automatic")
+        reopened = AutomationStateStore(self.database)
+        self.assertEqual(reopened.get_research_policy("68160"), changed)
+        with self.assertRaisesRegex(ValueError, "at least one run"):
+            self.store.set_research_policy(
+                "68160", mode="manual", run_budget=0, updated_by="patrick"
+            )
+
+    def test_schema_v2_migration_adds_safe_research_policy(self):
+        old_db = Path(self.temporary_directory.name) / "schema-v2.sqlite3"
+        store = AutomationStateStore(old_db)
+        store.upsert_patch(
+            "68161",
+            gerrit_url="https://review.whamcloud.com/c/68161",
+            change_number=68161,
+            revision="revision-1",
+            patchset=1,
+        )
+        with sqlite3.connect(old_db) as connection:
+            connection.execute("DROP TABLE pw_research_admission")
+            connection.execute("DROP TABLE pw_research_policy")
+            connection.execute(
+                "UPDATE pw_automation_schema SET version = 2 WHERE singleton = 1"
+            )
+        migrated = AutomationStateStore(old_db)
+        self.assertEqual(migrated.get_research_policy("68161").mode, "disabled")
+
+    def test_research_policy_compare_and_set_rejects_stale_proposal(self):
+        original = self.store.get_research_policy("68160")
+        changed = self.store.set_research_policy(
+            "68160",
+            mode="manual",
+            run_budget=1,
+            updated_by="patrick",
+            expected_version=original.version,
+            at=START + timedelta(minutes=3),
+        )
+        self.assertEqual(changed.mode, "manual")
+        with self.assertRaisesRegex(AutomationConflict, "changed after"):
+            self.store.set_research_policy(
+                "68160",
+                mode="automatic",
+                run_budget=1,
+                updated_by="stale-browser",
+                expected_version=original.version,
+                at=START + timedelta(minutes=4),
+            )
+        self.assertEqual(self.store.get_research_policy("68160"), changed)
+
+    def test_research_admission_atomically_claims_one_versioned_revision_slot(self):
+        policy = self.store.set_research_policy(
+            "68160", mode="manual", run_budget=1, updated_by="patrick",
+            at=START + timedelta(minutes=3),
+        )
+        barrier = threading.Barrier(2)
+        results = []
+
+        def claim(attempt):
+            store = AutomationStateStore(self.database)
+            barrier.wait()
+            try:
+                results.append(store.claim_research_admission(
+                    "68160",
+                    revision="revision-1",
+                    patchset=1,
+                    expected_policy_version=policy.version,
+                    mode="manual",
+                    attempt_id=attempt,
+                    evidence_fingerprint="sha256:evidence",
+                ))
+            except Exception as exc:
+                results.append(exc)
+
+        threads = [
+            threading.Thread(target=claim, args=(f"attempt-{index}",))
+            for index in range(2)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        claims = [item for item in results if isinstance(item, tuple)]
+        failures = [item for item in results if isinstance(item, Exception)]
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0][0].slot, 1)
+        self.assertTrue(claims[0][1])
+        self.assertEqual(len(failures), 1)
+        self.assertIsInstance(failures[0], BudgetExhausted)
+
+    def test_research_admission_is_idempotent_and_release_requires_new_retry_id(self):
+        policy = self.store.set_research_policy(
+            "68160", mode="manual", run_budget=1, updated_by="patrick",
+            at=START + timedelta(minutes=3),
+        )
+        options = dict(
+            revision="revision-1",
+            patchset=1,
+            expected_policy_version=policy.version,
+            mode="manual",
+            attempt_id="attempt-1",
+            evidence_fingerprint="sha256:evidence",
+        )
+        admission, created = self.store.claim_research_admission(
+            "68160", **options
+        )
+        duplicate, duplicate_created = self.store.claim_research_admission(
+            "68160", **options
+        )
+        self.assertTrue(created)
+        self.assertFalse(duplicate_created)
+        self.assertEqual(duplicate, admission)
+
+        released = self.store.release_research_admission(
+            admission.admission_id, reason="session registration failed"
+        )
+        self.assertEqual(released.state, "released")
+        repeated, repeated_created = self.store.claim_research_admission(
+            "68160", **options
+        )
+        self.assertFalse(repeated_created)
+        self.assertEqual(repeated.state, "released")
+
+        retry, retry_created = self.store.claim_research_admission(
+            "68160", **{**options, "attempt_id": "attempt-2"}
+        )
+        self.assertTrue(retry_created)
+        self.assertEqual(retry.slot, 1)
+        registered = self.store.register_research_admission(
+            retry.admission_id, "session-2"
+        )
+        self.assertEqual(registered.state, "registered")
+        self.assertEqual(registered.session_id, "session-2")
+        self.assertEqual(
+            self.store.register_research_admission(
+                retry.admission_id, "session-2"
+            ),
+            registered,
+        )
+
+    def test_research_admission_fails_closed_on_policy_revision_and_global_gate(self):
+        policy = self.store.set_research_policy(
+            "68160", mode="automatic", run_budget=2, updated_by="patrick",
+            at=START + timedelta(minutes=3),
+        )
+        options = dict(
+            revision="revision-1",
+            patchset=1,
+            expected_policy_version=policy.version,
+            mode="automatic",
+            attempt_id="attempt-1",
+            evidence_fingerprint="sha256:evidence",
+        )
+        with self.assertRaises(GlobalAutomationDisabled):
+            self.store.claim_research_admission("68160", **options)
+        self.store.set_global_automation(
+            True, changed_by="patrick", reason="test",
+            at=START + timedelta(minutes=4),
+        )
+        changed = self.store.set_research_policy(
+            "68160", mode="automatic", run_budget=2, updated_by="patrick",
+            expected_version=policy.version,
+            at=START + timedelta(minutes=5),
+        )
+        with self.assertRaisesRegex(AutomationConflict, "policy changed"):
+            self.store.claim_research_admission("68160", **options)
+        with self.assertRaisesRegex(AutomationConflict, "no longer current"):
+            self.store.claim_research_admission(
+                "68160",
+                **{
+                    **options,
+                    "expected_policy_version": changed.version,
+                    "revision": "old-revision",
+                },
+            )
+
     def test_observation_and_trigger_fingerprints_are_idempotent(self):
         first, created = self.store.record_observation(
             "68160",

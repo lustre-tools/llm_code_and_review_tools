@@ -1,8 +1,10 @@
 # Patch Watcher Action Flow
 
 This document describes the product flow toward Patch Shepherd-style patch
-handling. Phase 1's deterministic Maloo retest is implemented; later build,
-review, source-editing, and agent-driven actions remain designs or disabled
+handling. Phase 1's deterministic Maloo retest and Phase 2's read-only
+unknown-failure research are implemented. Existing-Jira association followed
+by a retest is available only as a two-step, operator-approved workflow;
+later build, review, and source-editing actions remain designs or disabled
 stubs.
 
 The implementation-grade state, persistence, native Claude runner, human
@@ -166,10 +168,22 @@ part of this phase.
 
 ### Phase 2: investigation agents
 
-An agent can investigate an unknown test failure or review feedback. It may
-read patch context, CI details, and linked issue data; it produces an evidence
-report and either a recommendation or a human escalation. It still does not
-modify source or Gerrit.
+**Implemented for unknown Maloo failures.** A separately configured policy is
+Disabled, Manual, or Automatic, with a per-revision run budget. Automatic
+research also respects the global execution kill switch. The controller gives
+Claude an immutable, exact-revision evidence bundle and pinned source checkout
+with only Read, Glob, and Grep. External evidence is untrusted input. The
+structured result must classify the failure as known failure, transient,
+patch-caused, needs human, or inconclusive and cite only captured evidence.
+It cannot modify source or contact Gerrit, Maloo, Jira, Jenkins, or LTVM.
+
+After research, an operator may enter an existing Jira key for an exact
+observed failure. Planning is inert. The association requires its own signed
+confirmation, exact-revision revalidation, and remote acceptance. Only then
+is a separate retest action planned, and that retest requires a second signed
+operator confirmation. Ambiguous writes are terminal and are never blindly
+retried. Jira creation, Gerrit comments, and automatic failure association are
+not implemented.
 
 ### Phase 3: controlled patch work
 
