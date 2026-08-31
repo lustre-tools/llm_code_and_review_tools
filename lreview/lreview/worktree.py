@@ -52,6 +52,16 @@ def commit_subject(repo: Path, sha: str) -> str:
     return result.stdout.strip()
 
 
+def recent_commits(repo: Path, count: int, start: str = "HEAD") -> list[str]:
+    """The newest `count` commit SHAs reachable from start, newest first.
+
+    Returns fewer than `count` only when the history is shorter; the
+    caller decides whether that is an error.
+    """
+    result = run_git(repo, "rev-list", "--max-count", str(count), start)
+    return result.stdout.split()
+
+
 def fetch_change(repo: Path, remote_url: str, ref: str) -> None:
     """Fetch a Gerrit change ref into the repository object store."""
     with _GIT_LOCK:

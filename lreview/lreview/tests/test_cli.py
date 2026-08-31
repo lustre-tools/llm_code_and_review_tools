@@ -186,3 +186,67 @@ class TestDefaultWorktreesDir:
         repo.mkdir()
         results = tmp_path / "results"
         assert default_worktrees_dir(repo, results) == results / "worktrees"
+
+
+class TestLastAndOutput:
+    """--last N (newest N commits of --repo) and the text dump."""
+
+    def test_parses(self):
+        args = build_parser().parse_args(
+            ["run", "--last", "3", "-o", "/tmp/dump.txt"])
+        assert args.last == 3
+        assert args.output == "/tmp/dump.txt"
+        args = build_parser().parse_args(["run", "-n", "2"])
+        assert args.last == 2
+        assert args.output is None
+
+    def test_default_none(self):
+        args = build_parser().parse_args(["run", "64086"])
+        assert args.last is None
+        assert args.output is None
+
+    def test_rejects_zero(self):
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(["run", "--last", "0"])
+
+    def test_dump_path(self, tmp_path):
+        from lreview.cli import text_dump_path
+        args = build_parser().parse_args(["run", "--last", "4"])
+        assert text_dump_path(args, tmp_path) == \
+            tmp_path / "review-last4.txt"
+        args = build_parser().parse_args(["run", "--last", "4", "-o", "x.txt"])
+        assert text_dump_path(args, tmp_path) == Path("x.txt")
+        # No --last and no --output: no dump
+        args = build_parser().parse_args(["run", "64086"])
+        assert text_dump_path(args, tmp_path) is None
+        # --output alone still writes one, Gerrit batch or not
+        args = build_parser().parse_args(["run", "64086", "-o", "x.txt"])
+        assert text_dump_path(args, tmp_path) == Path("x.txt")
+
+    def test_last_rejects_change_arguments(self, tmp_path, capsys):
+        import subprocess
+        from lreview.cli import cmd_run
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        args = build_parser().parse_args(
+            ["run", "--last", "2", "--repo", str(tmp_path), "64086"])
+        assert cmd_run(args) == 1
+        assert "takes no change arguments" in capsys.readouterr().out
+
+    def test_last_more_than_history(self, tmp_path, capsys, monkeypatch):
+        import subprocess
+        from lreview.cli import cmd_run
+        monkeypatch.setenv("GIT_AUTHOR_NAME", "t")
+        monkeypatch.setenv("GIT_AUTHOR_EMAIL", "t@e")
+        monkeypatch.setenv("GIT_COMMITTER_NAME", "t")
+        monkeypatch.setenv("GIT_COMMITTER_EMAIL", "t@e")
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        (tmp_path / "f").write_text("x")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "f"], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "one"],
+                       check=True)
+        monkeypatch.setattr("lreview.cli.ensure_prompts",
+                            lambda args: tmp_path)
+        args = build_parser().parse_args(
+            ["run", "--last", "5", "--repo", str(tmp_path)])
+        assert cmd_run(args) == 1
+        assert "has only 1 commit(s)" in capsys.readouterr().out

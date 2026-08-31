@@ -183,6 +183,8 @@ patchset instead of the current one.
 ```bash
 lreview run --repo ~/git/lustre-release                    # the checked-out
                                                            # HEAD, in place
+lreview run --repo ~/git/lustre-release --last 5           # newest 5 commits,
+                                                           # one review each
 lreview run --repo ~/git/lustre-release --local br1 br2    # branch tips, each
                                                            # in its own worktree
 ```
@@ -195,9 +197,64 @@ makes the change arguments local refs (branches, SHAs) instead of
 Gerrit changes; each gets its own worktree exactly like Gerrit
 changes do, so they run in parallel.
 
+`--last N` (`-n N`) points lreview at a directory and reviews the
+**newest N commits** of that repository — `HEAD`, `HEAD~1`, ...
+`HEAD~N-1` — each in its own worktree pinned to that commit, so every
+patch is reviewed as the top commit exactly as a Gerrit change would
+be. It takes no change arguments and reviews run `--jobs` at a time
+like any other batch:
+
+```bash
+lreview run --repo ~/git/lustre-release --last 3 --model haiku -j 3
+```
+
 Local results get the same collection, `summary.json` entries (keyed
 `<ref>_<sha7>`, marked `local`), and Markdown reports — but they are
 never posted; `post` skips them.
+
+### Text dump (`--output`)
+
+`--output FILE` (`-o`) writes the whole batch to one plain-text file:
+a header with the repo, timestamp, per-review index and token/cost
+totals, then every review in full — the overall assessment and each
+finding with its file and line. Unlike the Markdown reports it also
+covers the reviews that came back **clean, failed, or timed out**, so
+the file accounts for all N patches.
+
+`--last` writes one by default at
+`<results-dir>/review-last<N>.txt`; `--output` overrides the path and
+works for Gerrit batches too.
+
+```
+========================================================================
+lreview: last 3 commit(s) of lustre-release
+========================================================================
+generated: 2026-08-31T18:22:07+00:00
+repository: /home/user/lustre-release
+reviews: 3
+totals: 1.9M tokens, $4.02
+
+  1. HEAD  89bd1861f3ab  LU-12668 tests: add EC recovery tests -- findings (2)
+  2. HEAD~1  490380c43a11  LU-12668 llite: make AIO reads ... -- clean
+  3. HEAD~2  2dcb33d4b9c0  LU-12669 ec: recover data from parity -- findings (5)
+
+========================================================================
+[1/3] HEAD  89bd1861f3ab  LU-12668 tests: add EC recovery tests
+========================================================================
+
+status: findings (2 finding(s)), severity medium
+run:    haiku, 612k tokens, $0.91, 8m12s
+
+Overall assessment
+------------------------------------------------------------------------
+...
+
+Findings (2)
+------------------------------------------------------------------------
+
+(1) lustre/tests/sanity-ec.sh (line 214)
+    (bug) $tfile is not cleaned up when the OST fails to come back ...
+```
 
 ## Results directory
 
@@ -208,6 +265,7 @@ lreview-results/
 ├── kreview-64086_ps40.log            # full claude event log (stream-json)
 ├── markdown/
 │   └── 64086_LU-..._ps40.md          # human-readable report (see below)
+├── review-last3.txt                  # --last text dump (see above)
 └── summary.json                      # per-change manifest (see above)
 ```
 
@@ -235,6 +293,7 @@ jq -r 'select(.type=="assistant").message.content[]?
 lreview setup                    # guided first-time setup
 lreview check                    # verify agent CLI + prompts + Gerrit
 lreview run <change|url>... [options]
+lreview run --repo DIR --last N  # review the newest N commits locally
 lreview render [file.json...]    # (re)generate Markdown reports from
                                  # existing review JSONs (--results-dir)
 lreview post [<change|url>...] [options]
@@ -250,6 +309,8 @@ rejoin a positional list split around a flag).
 |---|---|---|
 | `--repo PATH` | `.` | Source git repository |
 | `--local` | off | Changes are git refs of `--repo`; no changes at all = checked-out HEAD, in place (no flag needed); not postable |
+| `--last, -n N` | — | Review the newest N commits of `--repo`, one worktree each; takes no change arguments; not postable |
+| `--output, -o FILE` | — | Plain-text dump of every review in the batch (default with `--last`: `<results-dir>/review-last<N>.txt`) |
 | `--jobs, -j N` | 5 | Parallel reviews |
 | `--timeout SECS` | 7200 | Per-review timeout |
 | `--results-dir DIR` | `./lreview-results` | Logs, JSONs, summary.json |

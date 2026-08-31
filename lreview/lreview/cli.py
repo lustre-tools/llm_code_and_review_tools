@@ -112,11 +112,35 @@ def cmd_setup(args) -> int:
     return run_setup(args.agent, args.prompts_dir)
 
 
+def text_dump_path(args, results_dir: Path):
+    """Where the plain-text dump of the batch goes, if anywhere.
+
+    --output wins; otherwise --last gets one for free in the results
+    dir, since a local batch has nowhere else to be read from.
+    """
+    if args.output:
+        return Path(args.output).expanduser()
+    if args.last:
+        return results_dir / f"review-last{args.last}.txt"
+    return None
+
+
+def text_dump_title(args, repo: Path, count: int) -> str:
+    if args.last:
+        return f"lreview: last {args.last} commit(s) of {repo.name}"
+    return f"lreview: {count} review(s)"
+
+
 def cmd_run(args) -> int:
     repo = Path(args.repo).expanduser().resolve()
     from .worktree import is_git_repo
     if not is_git_repo(repo):
         print(f"error: {repo} is not a git repository (--repo)")
+        return 1
+
+    if args.last and args.changes:
+        print("error: --last N reviews the newest N commits of --repo; "
+              "it takes no change arguments")
         return 1
 
     prompts_dir = ensure_prompts(args)
@@ -142,12 +166,28 @@ def cmd_run(args) -> int:
     in_place = False
     # No changes at all = review the checked-out HEAD of --repo, in
     # place; --local makes the positional args local refs instead of
-    # Gerrit changes (each in its own worktree).
-    if args.local or not args.changes:
+    # Gerrit changes (each in its own worktree); --last N reviews the
+    # newest N commits of --repo, each in its own worktree.
+    if args.last or args.local or not args.changes:
         from .gerrit import LocalChange
-        from .worktree import commit_subject, rev_parse
-        refs = args.changes or ["HEAD"]
-        in_place = not args.changes
+        from .worktree import commit_subject, recent_commits, rev_parse
+        if args.last:
+            try:
+                shas = recent_commits(repo, args.last)
+            except Exception as exc:
+                print(f"error: cannot list commits of {repo}: {exc}")
+                return 1
+            if len(shas) < args.last:
+                print(f"error: --last {args.last} but {repo} has only "
+                      f"{len(shas)} commit(s)")
+                return 1
+            # Name each commit by its position so the slug (and the
+            # text dump) says which patch it was.
+            refs = ["HEAD" if i == 0 else f"HEAD~{i}"
+                    for i in range(args.last)]
+        else:
+            refs = args.changes or ["HEAD"]
+        in_place = not args.changes and not args.last
         for ref in refs:
             try:
                 sha = rev_parse(repo, ref)
@@ -260,6 +300,18 @@ def cmd_run(args) -> int:
         for report in reports:
             print(f"  {report}")
 
+    output = text_dump_path(args, results_dir)
+    if output:
+        from .text import write_batch_text
+        try:
+            written = write_batch_text(
+                output, results, repo=repo,
+                title=text_dump_title(args, repo, len(results)))
+            print(f"\nFull text dump: {written}")
+        except OSError as exc:
+            print(f"\nerror: could not write {output}: {exc}")
+            failed += 1
+
     with_findings = [r for r in results if r.status == STATUS_FINDINGS]
     local_findings = [r for r in with_findings if r.change.number is None]
     with_findings = [r for r in with_findings
@@ -364,8 +416,12 @@ def build_parser() -> argparse.ArgumentParser:
             "                   (default: '[AI review - <model>]')\n"
             "  --timeout SECS   per-review limit (default: 7200)\n"
             "\n"
+            "  --last N         review the newest N commits of --repo\n"
+            "  --output FILE    plain-text dump of the whole batch\n"
+            "\n"
             "examples:\n"
             "  lreview run --repo lustre-release --post -j 8 64086 64087\n"
+            "  lreview run --repo ~/lustre-release --last 3 -o rev.txt\n"
             "  lreview post 64086 --force\n"
         ),
     )
@@ -409,7 +465,8 @@ def build_parser() -> argparse.ArgumentParser:
         "changes", nargs="*",
         help="Gerrit change numbers or URLs; with --local, git refs "
              "of --repo instead. With no changes at all, the "
-             "checked-out HEAD of --repo is reviewed in place.")
+             "checked-out HEAD of --repo is reviewed in place; see "
+             "--last N to review the newest N commits instead.")
     run_p.add_argument(
         "--repo", default=".",
         help="Path to the source git repository (default: cwd)")
@@ -418,6 +475,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Treat the change arguments as local git refs "
              "(branches/SHAs) of --repo — each reviewed in its own "
              "worktree. Local results are not postable to Gerrit.")
+    run_p.add_argument(
+        "--last", "-n", type=_positive_int, default=None, metavar="N",
+        help="Review the newest N commits of --repo (newest first), "
+             "each on its own in a worktree. Implies a local review: "
+             "results are not postable, and a plain-text dump of the "
+             "whole batch is written (see --output)")
+    run_p.add_argument(
+        "--output", "-o", default=None, metavar="FILE",
+        help="Write a plain-text dump of every review in the batch to "
+             "FILE (default with --last: "
+             "<results-dir>/review-last<N>.txt)")
     run_p.add_argument(
         "--jobs", "-j", type=_positive_int, default=5,
         help="Maximum parallel reviews (default: 5)")

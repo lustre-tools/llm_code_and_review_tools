@@ -32,7 +32,7 @@ def markdown_filename(change) -> str:
             f"_ps{change.patchset}.md")
 
 
-def _iter_findings(spec: dict):
+def iter_findings(spec: dict):
     """Yield (path, comment) in file order for both JSON shapes."""
     comments = spec.get("comments") or {}
     if isinstance(comments, dict):
@@ -66,7 +66,7 @@ def review_markdown(
     cost_usd: Optional[float] = None,
     duration: Optional[float] = None,
 ) -> str:
-    findings = list(_iter_findings(spec))
+    findings = list(iter_findings(spec))
 
     review_bits = [f"{len(findings)} finding(s)"]
     if severity:

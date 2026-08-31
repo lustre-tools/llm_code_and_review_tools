@@ -35,6 +35,8 @@ lreview setup                                    # guided first-time setup
 lreview run --repo lustre-release 64086 64087    # review (5 parallel, opus)
 lreview post                                     # post findings after inspection
 lreview run --repo lustre-release --post 64086   # or review + post in one go
+lreview run --repo lustre-release --last 3      # or review the newest 3
+                                                # local commits, no Gerrit
 ```
 
 Live colored status with per-review token counter while running;
