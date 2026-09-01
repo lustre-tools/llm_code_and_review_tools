@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lreview"
-version = "0.1.0"
-description = "Run the kreview AI patch-review skill on Gerrit changes in parallel and post the results"
+version = "0.2.0"
+description = "Run deep AI patch reviews on Gerrit changes and GitHub pull requests"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}

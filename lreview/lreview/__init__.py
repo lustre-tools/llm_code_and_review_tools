@@ -6,4 +6,4 @@ each in its own git worktree, collects the generated gerrit-review.json
 files, and posts them to Gerrit via gerrit-cli.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

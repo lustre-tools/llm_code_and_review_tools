@@ -28,6 +28,7 @@ from typing import Optional
 
 from .agents import get_agent
 from .gerrit import ResolvedChange
+from .artifacts import REVIEW_RESULT_NAME, validate_review_result
 from .manifest import SUMMARY_NAME, locked_summary  # noqa: F401 (re-export)
 from .markdown import write_review_markdown
 from .ui import console, elapsed as _elapsed, format_tokens  # noqa: F401
@@ -148,7 +149,7 @@ class BatchConfig:
             raise ValueError(f"jobs must be >= 1, got {self.jobs}")
 
 
-def review_prompt(config: BatchConfig) -> str:
+def review_prompt(config: BatchConfig, change=None) -> str:
     """The instruction that initiates a review.
 
     This is the review-prompts README quick-start form (also what its
@@ -158,11 +159,18 @@ def review_prompt(config: BatchConfig) -> str:
     prompt compliance than calling it a review. The worktree's HEAD
     is the patch, so "the top commit" needs no SHA.
     """
+    if getattr(change, "provider", None) == "github":
+        return (f"Using {config.prompts_dir}/review-core.md, run a deep dive "
+                f"regression analysis of the complete pull request range "
+                f"{change.base_sha}...{change.sha}. Read the full range, not just HEAD. "
+                f"Write {REVIEW_RESULT_NAME} version 1 with message and findings; inline "
+                "findings must name added PR lines, while commit-message and general findings "
+                "use location_kind commit_message or summary with null path and line.")
     return (f"Using the prompt {config.prompts_dir}/review-core.md "
             "run a deep dive regression analysis of the top commit")
 
 
-def build_agent_cmd(config: BatchConfig) -> list[str]:
+def build_agent_cmd(config: BatchConfig, change=None) -> list[str]:
     """Headless review command for the configured agent.
 
     All agents receive the same instruction prompt; claude runs with
@@ -172,7 +180,7 @@ def build_agent_cmd(config: BatchConfig) -> list[str]:
     """
     spec = get_agent(config.agent)
     return spec.build_cmd(config.model, config.effort, config.agent_args,
-                          review_prompt(config))
+                          review_prompt(config, change))
 
 
 def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:
@@ -187,6 +195,10 @@ def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:
         if not wt.commit_exists(config.repo, change.sha):
             raise wt.GitError(
                 f"fetched {change.ref} but {change.sha} still missing")
+    if getattr(change, "base_sha", None) and not wt.commit_exists(config.repo, change.base_sha):
+        wt.fetch_change(config.repo, change.fetch_url(), change.base_sha)
+        if not wt.commit_exists(config.repo, change.base_sha):
+            raise wt.GitError(f"fetched base {change.base_sha} but it is still missing")
     dest = config.worktrees_dir / f"kreview_{change.slug}.{os.getpid()}"
     if dest.exists():
         wt.remove_worktree(config.repo, dest)
@@ -200,6 +212,8 @@ def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:
 
 
 def count_findings(spec: dict) -> int:
+    if isinstance(spec.get("findings"), list):
+        return len(spec["findings"])
     comments = spec.get("comments") or {}
     if isinstance(comments, dict):
         return sum(len(v) for v in comments.values())
@@ -330,6 +344,12 @@ def _run_claude(cmd: list[str], cwd: Path, log_path: Path,
     Raises subprocess.TimeoutExpired after the group is killed.
     """
     with open(log_path, "w") as log_file:
+        env = os.environ.copy()
+        # The reviewer needs Claude OAuth only. GitHub credentials belong to
+        # the parent poster and must never reach an agent or its shell tools.
+        env.pop("GH_TOKEN", None); env.pop("GITHUB_TOKEN", None)
+        if os.environ.get("CI"):
+            env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
         proc = subprocess.Popen(
             cmd,
             cwd=str(cwd),
@@ -337,6 +357,7 @@ def _run_claude(cmd: list[str], cwd: Path, log_path: Path,
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=env,
         )
         try:
             return proc.wait(timeout=timeout)
@@ -386,7 +407,7 @@ def run_review(
 ) -> ReviewResult:
     """Run one headless kreview in its worktree and collect the output."""
     log_path = config.results_dir / f"kreview-{change.slug}.log"
-    cmd = build_agent_cmd(config)
+    cmd = build_agent_cmd(config, change)
     start = time.monotonic()
 
     _log(f"[{change.slug}] {console.color('cyan', 'review started')}: "
@@ -413,7 +434,7 @@ def run_review(
     tokens, cost_usd = parse_final_usage(log_path)
     if tokens is None:
         tokens = live_token_count(log_path)
-    review_json = worktree_dir / REVIEW_JSON_NAME
+    review_json = worktree_dir / (REVIEW_RESULT_NAME if getattr(change, "provider", None) == "github" else REVIEW_JSON_NAME)
     metadata_json = worktree_dir / METADATA_JSON_NAME
 
     # review-metadata.json is written for every completed analysis;
@@ -456,7 +477,7 @@ def run_review(
             tokens=tokens, cost_usd=cost_usd, duration=duration,
             log_path=log_path)
 
-    dest_json = config.results_dir / f"gerrit-review-{change.slug}.json"
+    dest_json = config.results_dir / f"{'review-result' if getattr(change, 'provider', None) == 'github' else 'gerrit-review'}-{change.slug}.json"
     spec, error = _collect_json(review_json, dest_json)
     if spec is None:
         _log(f"[{change.slug}] {console.color('red', 'INVALID JSON')} "
@@ -465,6 +486,12 @@ def run_review(
             change, STATUS_INVALID_JSON, duration=duration,
             log_path=log_path, model=model, tokens=tokens,
             cost_usd=cost_usd, error=error)
+    if getattr(change, "provider", None) == "github":
+        try:
+            validate_review_result(spec, worktree_dir, change.base_sha, change.sha)
+        except Exception as exc:
+            return ReviewResult(change, STATUS_INVALID_JSON, duration=duration, log_path=log_path,
+                model=model, tokens=tokens, cost_usd=cost_usd, error=str(exc))
 
     findings = count_findings(spec)
     markdown_path = None
@@ -521,7 +548,7 @@ def _review_and_cleanup(
 def _stash_stale_artifacts(config: BatchConfig, repo_dir: Path) -> None:
     """Move pre-existing review artifacts out of an in-place repo so a
     stale gerrit-review.json is never collected as this run's result."""
-    for name in (REVIEW_JSON_NAME, METADATA_JSON_NAME):
+    for name in (REVIEW_JSON_NAME, REVIEW_RESULT_NAME, METADATA_JSON_NAME):
         path = repo_dir / name
         if path.exists():
             dest = config.results_dir / f"stale-{os.getpid()}-{name}"
@@ -531,7 +558,7 @@ def _stash_stale_artifacts(config: BatchConfig, repo_dir: Path) -> None:
 
 
 def _remove_artifacts(repo_dir: Path) -> None:
-    for name in (REVIEW_JSON_NAME, METADATA_JSON_NAME):
+    for name in (REVIEW_JSON_NAME, REVIEW_RESULT_NAME, METADATA_JSON_NAME):
         try:
             (repo_dir / name).unlink()
         except OSError:
@@ -627,15 +654,22 @@ def update_summary(results_dir: Path, results: list[ReviewResult]) -> None:
         for result in results:
             change = result.change
             # Local reviews have no change number; key them by slug
-            key = str(change.number) if change.number else change.slug
+            key = (f"github:{change.project}#{change.number}"
+                   if getattr(change, "provider", None) == "github"
+                   else str(change.number) if change.number else change.slug)
             old = summary.get(key)
 
             entry = {
+                "provider": getattr(change, "provider", "gerrit" if change.number else "local"),
                 "number": change.number,
                 "local": change.number is None,
                 "ref_name": getattr(change, "ref_name", None),
                 "patchset": change.patchset,
                 "sha": change.sha,
+                "head_sha": change.sha,
+                "base_sha": getattr(change, "base_sha", None),
+                "repository": getattr(change, "project", None),
+                "web_url": getattr(change, "url", None),
                 "subject": change.subject,
                 "base_url": change.base_url,
                 "status": result.status,

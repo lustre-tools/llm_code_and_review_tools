@@ -23,6 +23,7 @@ class ResolvedChange:
     patchset: int
     ref: str
     base_url: str
+    provider: str = "gerrit"
 
     @property
     def slug(self) -> str:

@@ -361,3 +361,23 @@ already-posted review.
   calibrate before batching.
 - This is an operator-facing tool and prints human-readable output,
   unlike the JSON-emitting agent tools in this repository.
+# GitHub pull requests
+
+`lreview` can review the complete recorded base-to-head range of a GitHub PR:
+
+```sh
+export CLAUDE_CODE_OAUTH_TOKEN=...  # standalone Claude Code authentication
+export GH_TOKEN=...                 # or GITHUB_TOKEN; needs pull-requests:write to post
+lreview run --github https://github.com/OWNER/REPO/pull/123 --repo . --post
+```
+
+The agent receives no GitHub token; `lreview` validates its deterministic
+`review-result.json` and posts it afterwards, refusing to post if the PR head
+changed. Inline findings must anchor to added PR lines; general and commit-message
+findings become the review summary. `lreview post --dry-run` previews pending
+posts and `--force` bypasses only local idempotence, never stale-head protection.
+Use `lreview check --github` to validate `GH_TOKEN`/`GITHUB_TOKEN`.
+
+The included `.github/workflows/lreview.yml` is intentionally a concrete template:
+replace its immutable revision placeholder. It uses `pull_request`, not
+`pull_request_target`, so fork PRs cannot access the Claude secret and are skipped.

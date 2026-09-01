@@ -85,20 +85,26 @@ def ensure_prompts(args):
 def cmd_check(args) -> int:
     from .doctor import check_gerrit
     status = check_prompts(explicit=args.prompts_dir, agent=args.agent)
-    gerrit_ok, gerrit_detail = check_gerrit(live=True)
+    if args.github:
+        from .doctor import check_github
+        gerrit_ok, gerrit_detail = check_github()
+        provider_name = "GitHub"
+    else:
+        gerrit_ok, gerrit_detail = check_gerrit(live=True)
+        provider_name = "gerrit"
 
     if status.available and gerrit_ok:
         print(f"lreview is ready for {args.agent}:")
         print(f"  agent CLI: {status.agent_cli}")
         print(f"  prompts:   {status.prompts_dir}")
         print(f"  found via: {status.source}")
-        print(f"  gerrit:    {gerrit_detail}")
+        print(f"  {provider_name}:    {gerrit_detail}")
         return 0
     print(f"lreview is NOT ready for {args.agent}:")
     for problem in status.problems:
         print(f"  - {problem}")
     if not gerrit_ok:
-        print(f"  - gerrit: {gerrit_detail}")
+        print(f"  - {provider_name}: {gerrit_detail}")
     print()
     if not status.available:
         print(setup_instructions(
@@ -168,7 +174,20 @@ def cmd_run(args) -> int:
     # place; --local makes the positional args local refs instead of
     # Gerrit changes (each in its own worktree); --last N reviews the
     # newest N commits of --repo, each in its own worktree.
-    if args.last or args.local or not args.changes:
+    if args.github:
+        if args.changes or args.local or args.last:
+            print("error: --github cannot be combined with changes, --local, or --last")
+            return 1
+        from .github import resolve_pull_request
+        try:
+            change = resolve_pull_request(args.github)
+        except Exception as exc:
+            print(f"error: cannot resolve GitHub PR: {exc}")
+            return 1
+        changes.append(change)
+        seen.add(f"github:{change.project}#{change.number}")
+        print(f"  GitHub {change.project}#{change.number} {change.sha[:12]} (base {change.base_sha[:12]})")
+    elif args.last or args.local or not args.changes:
         from .gerrit import LocalChange
         from .worktree import commit_subject, recent_commits, rev_parse
         if args.last:
@@ -230,7 +249,9 @@ def cmd_run(args) -> int:
     for change in changes:
         if change.number is None:
             continue
-        old = previous.get(str(change.number))
+        key = (f"github:{change.project}#{change.number}"
+               if getattr(change, "provider", None) == "github" else str(change.number))
+        old = previous.get(key)
         if old and old.get("posted") and old.get("sha") == change.sha:
             print(f"  note: {change.number} ps{change.patchset} was already "
                   "posted; posting a fresh result needs 'post --force'")
@@ -314,18 +335,16 @@ def cmd_run(args) -> int:
 
     with_findings = [r for r in results if r.status == STATUS_FINDINGS]
     local_findings = [r for r in with_findings if r.change.number is None]
-    with_findings = [r for r in with_findings
-                     if r.change.number is not None]
+    with_findings = [r for r in with_findings if r.change.number is not None]
     if local_findings and args.post:
         print("\nnote: local reviews are not tied to a Gerrit change "
               "and are never posted; see the reports above.")
     if with_findings:
         numbers = [r.change.number for r in with_findings]
         if args.post:
-            print("\nPosting results to Gerrit...")
+            print("\nPosting results...")
             try:
-                outcomes = post_results(
-                    results_dir, changes=numbers, prefix=args.prefix)
+                outcomes = post_results(results_dir, changes=None, prefix=args.prefix)
             except Exception as exc:
                 print(f"error: posting failed: {exc}")
                 return 1
@@ -378,6 +397,12 @@ def cmd_post(args) -> int:
             changes.append(number)
 
     try:
+        if getattr(args, "dry_run", False):
+            from .manifest import read_summary
+            for key, entry in read_summary(results_dir).items():
+                if entry.get("status") == STATUS_FINDINGS and not entry.get("posted"):
+                    print(f"  {key}: would post ({entry.get('provider', 'gerrit')})")
+            return 0
         outcomes = post_results(
             results_dir, changes=changes, prefix=args.prefix,
             force=args.force)
@@ -403,8 +428,7 @@ def cmd_post(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lreview",
-        description="Run AI patch reviews (review-prompts review-core) "
-                    "on Gerrit changes in parallel and post the results.",
+        description="Run AI patch reviews (review-prompts review-core) on Gerrit changes or GitHub PRs.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "key run options (full list: lreview run -h):\n"
@@ -457,6 +481,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Agent to check (default: $LREVIEW_AGENT or claude)")
     check_p.add_argument(
         "--prompts-dir", default=default_prompts, help=prompts_help)
+    check_p.add_argument("--github", action="store_true",
+        help="check GitHub token (GH_TOKEN, falling back to GITHUB_TOKEN) instead of Gerrit")
     check_p.set_defaults(func=cmd_check)
 
     run_p = sub.add_parser(
@@ -467,6 +493,8 @@ def build_parser() -> argparse.ArgumentParser:
              "of --repo instead. With no changes at all, the "
              "checked-out HEAD of --repo is reviewed in place; see "
              "--last N to review the newest N commits instead.")
+    run_p.add_argument("--github", metavar="PR_URL",
+        help="Review a canonical GitHub pull-request URL (complete base...head range)")
     run_p.add_argument(
         "--repo", default=".",
         help="Path to the source git repository (default: cwd)")
@@ -527,7 +555,7 @@ def build_parser() -> argparse.ArgumentParser:
              "use --agent-arg=--flag for arguments starting with a dash)")
     run_p.add_argument(
         "--post", action="store_true",
-        help="Post results with findings to Gerrit when the batch finishes")
+        help="Post results with findings to their provider when the batch finishes")
     run_p.add_argument(
         "--prefix", default=default_prefix,
         help="Prefix for every posted message; a <model> placeholder is "
@@ -566,6 +594,8 @@ def build_parser() -> argparse.ArgumentParser:
     post_p.add_argument(
         "--force", action="store_true",
         help="Repost even if the manifest says already posted")
+    post_p.add_argument("--dry-run", action="store_true",
+        help="Show findings that would be posted without contacting a provider")
     post_p.set_defaults(func=cmd_post)
 
     return parser
