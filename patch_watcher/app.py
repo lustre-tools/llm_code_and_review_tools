@@ -1413,6 +1413,103 @@ def _engineering_projection(session):
         }
         for item in artifacts if item.kind == "diff"
     ]
+    validation_lookup = getattr(
+        RUN_CONTROLLER.engineering_store,
+        "get_validation_execution_by_run",
+        None,
+    )
+    execution = (
+        validation_lookup(session.run_id) if callable(validation_lookup) else None
+    )
+    if execution is not None:
+        attempts = RUN_CONTROLLER.engineering_store.list_validation_attempts(
+            execution.execution_id
+        )
+        attempt = attempts[0] if attempts else None
+        steps = (
+            RUN_CONTROLLER.engineering_store.list_validation_step_results(
+                attempt.attempt_id
+            )
+            if attempt is not None else ()
+        )
+        command_audits = []
+        results = []
+        for step in steps:
+            command = step.command.to_dict()
+            audit = {
+                **command,
+                "step_id": step.step_id,
+                "state": step.state,
+                "exit_code": step.exit_code,
+                "started_at": step.started_at.isoformat(),
+                "finished_at": step.finished_at.isoformat(),
+                "owner_id": execution.owner_id,
+                "target": "exact-owner session guest",
+            }
+            command_audits.append(audit)
+            results.append({
+                "step_id": step.step_id,
+                "label": command.get("label") or step.step_id,
+                "state": step.state,
+                "exit_code": step.exit_code,
+                "started_at": step.started_at.isoformat(),
+                "finished_at": step.finished_at.isoformat(),
+            })
+        cooldown = RUN_CONTROLLER.engineering_store.get_capacity_cooldown(
+            session.patch_id
+        )
+        resources = SESSION_STORE.list_owned_resources(
+            session_id=session.session_id
+        )
+        remaining = sum(
+            resource.resource_type in {"ltvm_vm", "ltvm_cluster"}
+            and resource.state not in {"cleaned", "destroyed"}
+            for resource in resources
+        )
+        resource_exhaustion = None
+        if attempt is not None and attempt.state == "resource_exhausted":
+            resource_exhaustion = {
+                "error_code": attempt.failure_code or "ltvm_resource_exhausted",
+                "operation": "session-owned guest validation",
+                "requested_resources": "exact-owner LTVM guest capacity",
+                "evidence": attempt.summary or "LTVM capacity was exhausted",
+            }
+        cooldown_projection = None
+        if cooldown is not None:
+            observed_at = datetime.now(timezone.utc)
+            active_cooldown = cooldown.active_at(observed_at)
+            cooldown_projection = {
+                "state": "active" if active_cooldown else "expired",
+                "retry_not_before": cooldown.not_before.isoformat(),
+                "remaining_seconds": max(
+                    0, int((cooldown.not_before - observed_at).total_seconds())
+                ),
+                "automation_suppressed": active_cooldown,
+                "exhaustion_count": cooldown.consecutive_exhaustions,
+            }
+        projection["validation"] = {
+            "execution_id": execution.execution_id,
+            "attempt_id": attempt.attempt_id if attempt else None,
+            "state": attempt.state if attempt else execution.state,
+            "approval_state": execution.admission_state,
+            "approved_by": execution.approved_by,
+            "approved_at": (
+                execution.approved_at.isoformat() if execution.approved_at else None
+            ),
+            "revision_sha": execution.revision_sha,
+            "owner_id": execution.owner_id,
+            "target": "any exact-owner session LTVM guest",
+            "manifest_id": execution.manifest_id,
+            "manifest_digest": execution.manifest_sha256,
+            "command_audits": command_audits,
+            "results": results,
+            "resource_exhaustion": resource_exhaustion,
+            "cooldown": cooldown_projection,
+            "cleanup": {
+                "state": "pending" if remaining else "clean",
+                "owned_resources_remaining": remaining,
+            },
+        }
     return projection
 
 

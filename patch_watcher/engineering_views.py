@@ -1,9 +1,10 @@
 """Side-effect-free HTML views for Phase 3 engineering runs.
 
 The views accept mappings, dataclasses, or other attribute objects and have no
-controller or persistence dependencies.  They deliberately render only a
-small manifest allowlist: shell commands, environment values, and arbitrary
-artifact URLs never cross this display boundary.
+controller or persistence dependencies.  The Phase 3A summary deliberately
+renders only a small manifest allowlist.  Phase 3B separately renders planned
+and executed argv as escaped, tokenized audit data; environment values and
+arbitrary artifact URLs never cross this display boundary.
 
 Route contract used by the renderers:
 
@@ -13,6 +14,11 @@ Route contract used by the renderers:
   and submits ``POST /engineering-runs/start`` with controller-issued tokens;
 * run detail controls link to ``.../confirm?intent=...`` display pages; and
 * only confirmation pages submit cancel, kill, or retry mutations.
+
+Phase 3B guest execution is granted by the existing engineering-run start
+confirmation.  The immutable manifest records optional intent and evidence;
+it is not a per-command allowlist.  Every actual guest command remains visible
+in the audit history.
 """
 
 import math
@@ -198,19 +204,64 @@ def _status_badge(value, *, noun="Run"):
     )
 
 
-def _capability_status(suffix="default"):
-    """Render the fixed Phase 3 capability boundary prominently."""
+def _capability_status(suffix="default", run=None):
+    """Render the Phase 3 boundary without overstating an active grant."""
     title_id = "engineering-capabilities-title-" + quote(str(suffix), safe="")
+    if run is None:
+        source_status = "declared; activated only for a confirmed, active engineering run"
+        guest_status = (
+            "declared; activated only after exact revision and owner binding are verified"
+        )
+    else:
+        run_state = _state(_get(run, "state", "status"))
+        validation = _get(
+            run, "validation", "validation_execution", "validation_status"
+        )
+        if run_state in TERMINAL_STATES:
+            source_status = "expired; the engineering run is terminal"
+            guest_status = "expired; no guest command capability is active"
+        elif validation is None:
+            source_status = (
+                "active inside the isolated checkout" if run_state == "running"
+                else "pending isolated-checkout activation"
+            )
+            guest_status = "not verified active; no validation grant is displayed"
+        else:
+            identity = _validation_identity(run, validation)
+            issues = _validation_identity_issues(run, identity)
+            approval = _state(_get(
+                validation, "approval_state", "authorization_state"
+            ))
+            validation_state = _state(_get(
+                validation, "state", "status", "outcome"
+            ))
+            active = (
+                not issues and approval == "approved"
+                and validation_state in {"claimed", "running", "active"}
+            )
+            source_status = (
+                "active inside the isolated checkout" if run_state == "running"
+                else "approved for this non-terminal engineering run"
+            )
+            guest_status = (
+                "active as one open-ended audited capability, restricted to exact-owner session LTVM guests"
+                if active else
+                "inactive; an exact approved running validation grant is not verified"
+            )
     return (
         "<section class='engineering-capabilities' "
         f"aria-labelledby='{escape(title_id, quote=True)}'>"
         f"<h3 id='{escape(title_id, quote=True)}'>Capability status</h3><ul>"
-        "<li class='capability-enabled'><strong>Source editing:</strong> permitted</li>"
-        "<li class='capability-disabled'><strong>Build execution:</strong> request only in Phase 3A; not executed yet</li>"
-        "<li class='capability-disabled'><strong>Test execution:</strong> request only in Phase 3A; session-owned LTVM execution is Phase 3B</li>"
+        "<li class='capability-enabled'><strong>Source editing:</strong> "
+        + escape(source_status) + "</li>"
+        "<li class='capability-gated'><strong>Guest build/test execution:</strong> "
+        + escape(guest_status) + "</li>"
+        "<li class='capability-disabled'><strong>Host command execution:</strong> disabled; commands are brokered only into approved session-owned guests</li>"
         "<li class='capability-disabled'><strong>Gerrit upload:</strong> disabled for this subphase</li>"
-        "</ul><p>The produced diff and captured evidence remain review artifacts; this run "
-        "cannot upload a patchset or otherwise write to Gerrit.</p></section>"
+        "</ul><p>The engineering-run approval grants an open-ended, audited guest-execution capability "
+        "inside the exact owner boundary; it is not approval of each individual "
+        "command. The run cannot execute patch code on the host, upload a patchset, "
+        "or otherwise write to Gerrit.</p></section>"
     )
 
 
@@ -518,6 +569,465 @@ def _render_operator_form(run, *, base_url, csrf_token, idempotency_token, suffi
     )
 
 
+def _validation_manifest(run, record):
+    return _get(
+        record, "manifest", "execution_manifest", "validation_manifest",
+        default=_get(run, "manifest", "execution_manifest"),
+    ) or {}
+
+
+def _validation_commands(manifest):
+    commands = _items(_get(manifest, "commands", "steps"))
+    if commands:
+        return commands
+    return (
+        _items(_get(manifest, "build_steps", "builds"))
+        + _items(_get(manifest, "test_steps", "tests"))
+    )
+
+
+def _validation_target(record, manifest):
+    projected = _project(record)
+    target = None
+    explicit = False
+    for name in (
+        "target", "guest_target", "execution_target", "target_id",
+        "target_name",
+    ):
+        if isinstance(projected, Mapping) and name in projected:
+            target = projected[name]
+            explicit = True
+            break
+        try:
+            target = getattr(projected, name)
+        except (AttributeError, TypeError):
+            continue
+        explicit = True
+        break
+    if isinstance(target, Mapping) or (
+        target is not None and not isinstance(target, (str, bytes, int, float, bool))
+    ):
+        return _plain(_get(target, "name", "target_id", "id", "label"))
+    if target is not None and target != "":
+        return _plain(target)
+    # An explicitly supplied empty target is invalid.  Only an absent proposal
+    # target may be inferred from a manifest whose steps unanimously name one.
+    if explicit:
+        return UNKNOWN
+    targets = {
+        _plain(_get(command, "execution_target", "target", "environment"), "")
+        for command in _validation_commands(manifest)
+    }
+    targets.discard("")
+    return next(iter(targets)) if len(targets) == 1 else UNKNOWN
+
+
+def _validation_identity(run, record):
+    manifest = _validation_manifest(run, record)
+    return {
+        "manifest": manifest,
+        "manifest_id": _get(
+            record, "manifest_id",
+            default=_get(manifest, "manifest_id", "id"),
+        ),
+        "manifest_digest": _get(
+            record, "manifest_digest", "digest",
+            default=_get(manifest, "digest", "manifest_digest", "hash"),
+        ),
+        "revision_sha": _get(
+            record, "revision_sha", "revision",
+            default=_get(manifest, "revision_sha", "revision", default=_revision(run)),
+        ),
+        "owner_id": _get(
+            record, "owner_id", "ltvm_owner_id", "session_owner_id",
+            default=_get(manifest, "owner_id", "ltvm_owner_id", default=_owner_id(run)),
+        ),
+        "target": _validation_target(record, manifest),
+    }
+
+
+def _validation_identity_issues(run, identity):
+    """Return reasons an identity cannot be trusted as this run's capability."""
+    issues = []
+    for label, key in (
+        ("manifest ID", "manifest_id"),
+        ("manifest digest", "manifest_digest"),
+        ("exact revision", "revision_sha"),
+        ("durable LTVM owner", "owner_id"),
+        ("guest target", "target"),
+    ):
+        value = identity[key]
+        if value is None or value == "" or value == UNKNOWN:
+            issues.append(label)
+    expected_revision = _revision(run)
+    if expected_revision is None or expected_revision == "" or expected_revision == UNKNOWN:
+        issues.append("engineering run exact revision")
+    elif (
+        identity["revision_sha"] is not None
+        and identity["revision_sha"] != ""
+        and identity["revision_sha"] != UNKNOWN
+        and str(identity["revision_sha"]).casefold()
+        != str(expected_revision).casefold()
+    ):
+        issues.append("revision matching the engineering run")
+    expected_owner = _owner_id(run)
+    if not expected_owner:
+        issues.append("engineering run durable owner")
+    elif (
+        identity["owner_id"] is not None
+        and identity["owner_id"] != ""
+        and identity["owner_id"] != UNKNOWN
+        and str(identity["owner_id"]) != expected_owner
+    ):
+        issues.append("owner matching the engineering session")
+    return issues
+
+
+def _argv_html(command):
+    argv = _get(command, "argv", "arguments")
+    text = _get(command, "text", "guest_text")
+    if argv is None and text not in (None, ""):
+        return (
+            "<span class='guest-command-kind'>guest shell text:</span> "
+            "<code class='guest-command-text'>" + escape(_plain(text)) + "</code>"
+        )
+    if isinstance(argv, (str, bytes, Mapping)):
+        return "<span class='invalid-argv'>invalid argv representation</span>"
+    try:
+        values = list(argv)
+    except TypeError:
+        return "<span class='invalid-argv'>argv unavailable</span>"
+    if not values:
+        return "<span class='invalid-argv'>argv unavailable</span>"
+    # Each argument is a separate escaped token.  This is audit data, never a
+    # shell command string and never copied into a GET action.
+    bounded = values[:128]
+    rendered = " ".join(
+        f"<code class='argv-token'>{escape(_plain(value))}</code>"
+        for value in bounded
+    )
+    if len(values) > len(bounded):
+        rendered += f" <span>{len(values) - len(bounded)} argument(s) omitted</span>"
+    return rendered
+
+
+def _render_validation_plan(identity, *, heading="Immutable validation manifest"):
+    manifest = identity["manifest"]
+    commands = _validation_commands(manifest)
+    if commands:
+        rows = []
+        for command in commands[:64]:
+            label = _get(command, "label", "name", "step_id", "id", default="Validation step")
+            rows.append(
+                "<li><strong>" + escape(_plain(label)) + "</strong><dl>"
+                + _field("Step ID", _get(command, "step_id", "id"), code=True)
+                + _field("Guest target", _get(command, "execution_target", "target", "environment"))
+                + _field("Guest working directory", _get(command, "cwd", "working_directory"), code=True)
+                + _field("Timeout", _format_duration(_get(command, "timeout_seconds")))
+                + "</dl><p><strong>Planned exec argv:</strong> "
+                + _argv_html(command) + "</p></li>"
+            )
+        omitted = len(commands) - len(rows)
+        command_html = "<ol class='validation-plan-steps'>" + "".join(rows) + "</ol>"
+        if omitted:
+            command_html += f"<p>{omitted} step(s) omitted from this bounded view.</p>"
+    else:
+        command_html = "<p class='empty'>No validation steps are recorded.</p>"
+    return (
+        f"<h4>{escape(heading)}</h4><p>The frozen manifest records the proposed "
+        "plan and later evidence. It does not constrain the approved session to "
+        "only these commands; every actual guest exec remains audited below.</p><dl>"
+        + _field("Manifest ID", identity["manifest_id"], code=True)
+        + _field("Manifest digest", identity["manifest_digest"], code=True)
+        + _field("Exact pinned revision", identity["revision_sha"], code=True)
+        + _field("Exact LTVM owner", identity["owner_id"], code=True)
+        + _field("Requested guest target", identity["target"], code=True)
+        + "</dl>" + command_html
+    )
+
+
+def _validation_missing(run, record, identity):
+    missing = _validation_identity_issues(run, identity)
+    if not _validation_commands(identity["manifest"]):
+        missing.append("at least one manifest plan step")
+    if _get(record, "validation_eligible", "eligible") is False:
+        missing.append(_plain(_get(record, "disabled_reason", "ineligible_reason"), "controller eligibility"))
+    return missing
+
+
+def _validation_route(run, base_url, suffix):
+    return _run_path(run, base_url) + "/validation/" + suffix
+
+
+def render_validation_proposal(
+    run, proposal=None, *, base_url="/engineering-runs", action=None,
+    csrf_token=None, idempotency_token=None,
+):
+    """Render the inert Phase 3B proposal and its prepare-only POST.
+
+    The prepare endpoint may freeze/sign the proposal and redirect to a GET
+    confirmation.  It must not execute guest commands.
+    """
+    proposal = proposal or {}
+    identity = _validation_identity(run, proposal)
+    missing = _validation_missing(run, proposal, identity)
+    disabled = " disabled aria-disabled='true'" if missing else ""
+    target_action = _safe_base_url(
+        action or _validation_route(run, base_url, "prepare")
+    )
+    reason_html = ""
+    title_id = "validation-proposal-title-" + quote(_run_id(run), safe="")
+    if missing:
+        reason_html = (
+            "<div class='validation-unavailable' role='status'><strong>Validation "
+            "approval unavailable:</strong><ul>"
+            + "".join(f"<li>{escape(item)}</li>" for item in missing)
+            + "</ul></div>"
+        )
+    return (
+        "<section class='validation-proposal' aria-labelledby='"
+        + escape(title_id, quote=True) + "'>"
+        + "<h3 id='" + escape(title_id, quote=True)
+        + "'>Proposed session-owned LTVM validation</h3>"
+        "<p>No build or test has started. Preparing this proposal only opens a "
+        "display-only confirmation page. Explicit operator approval is required "
+        "before the controller grants guest execution.</p>"
+        + _render_validation_plan(identity)
+        + "<p><strong>Capability boundary:</strong> approval permits open-ended, "
+        "brokered command execution only inside LTVM guests carrying the exact "
+        "owner shown above. Host execution and Gerrit upload remain disabled.</p>"
+        + f"<form method='post' action='{escape(target_action, quote=True)}'>"
+        + _hidden("run_id", _run_id(run))
+        + _hidden("manifest_id", identity["manifest_id"])
+        + _hidden("manifest_digest", identity["manifest_digest"])
+        + _hidden("revision_sha", identity["revision_sha"])
+        + _hidden("owner_id", identity["owner_id"])
+        + _hidden("target", identity["target"])
+        + _hidden("csrf_token", csrf_token)
+        + _hidden("idempotency_token", idempotency_token)
+        + f"<button type='submit'{disabled}>Review validation capability</button></form>"
+        + reason_html + "</section>"
+    )
+
+
+def render_validation_confirmation(
+    run, proposal, *, confirmation_token, intent="execute",
+    confirmation_expires_at=None, csrf_token=None, idempotency_token=None,
+    base_url="/engineering-runs", action=None,
+):
+    """Render the display-only GET confirmation whose final action is POST."""
+    normalized = _state(intent)
+    if normalized not in {"execute", "retry"}:
+        raise ValueError("validation intent must be execute or retry")
+    if not confirmation_token:
+        raise ValueError("a confirmation token is required")
+    identity = _validation_identity(run, proposal)
+    missing = _validation_missing(run, proposal, identity)
+    if missing:
+        raise ValueError("validation proposal lacks an exact immutable identity")
+    route = action or _validation_route(
+        run, base_url, "execute" if normalized == "execute" else "retry"
+    )
+    target_action = _safe_base_url(route)
+    if normalized == "retry":
+        title = "Confirm a new validation attempt"
+        button = "Approve new validation attempt"
+        warning = (
+            "This starts a new attempt against the same immutable proposal; it "
+            "does not resume or rewrite the previous attempt."
+        )
+    else:
+        title = "Confirm session-owned LTVM validation"
+        button = "Approve validation capability"
+        warning = (
+            "This grants the engineering run an open-ended, brokered guest-command "
+            "capability inside resources carrying the exact owner below."
+        )
+    return (
+        "<main class='validation-confirmation'>"
+        f"<h2>{escape(title)}</h2><p role='alert'>{escape(warning)}</p>"
+        + _render_validation_plan(identity, heading="Immutable proposal being approved")
+        + "<p><strong>Not granted:</strong> host command execution, unrelated or "
+        "unowned VM access, and Gerrit upload remain disabled.</p>"
+        + f"<form method='post' action='{escape(target_action, quote=True)}'>"
+        + _hidden("intent", normalized)
+        + _hidden("run_id", _run_id(run))
+        + _hidden("manifest_id", identity["manifest_id"])
+        + _hidden("manifest_digest", identity["manifest_digest"])
+        + _hidden("revision_sha", identity["revision_sha"])
+        + _hidden("owner_id", identity["owner_id"])
+        + _hidden("target", identity["target"])
+        + _hidden("confirmation_token", confirmation_token)
+        + _hidden("confirmation_expires_at", confirmation_expires_at)
+        + _hidden("csrf_token", csrf_token)
+        + _hidden("idempotency_token", idempotency_token)
+        + f"<button type='submit'>{escape(button)}</button> "
+        + f"<a href='{escape(_run_path(run, base_url), quote=True)}'>Do not grant validation</a>"
+        + "</form></main>"
+    )
+
+
+def _render_validation_audit(validation, *, expected_owner, identity_trusted):
+    audits = _items(
+        _get(validation, "command_audits", "audit_history", "command_history")
+    )
+    if not audits:
+        return "<p class='empty'>No guest command audit records.</p>"
+    rows = []
+    for audit in audits[:100]:
+        observed_owner = _get(audit, "owner_id", "observed_owner_id")
+        owner_matches = (
+            identity_trusted and observed_owner is not None
+            and observed_owner != "" and observed_owner != UNKNOWN
+            and str(observed_owner) == str(expected_owner)
+        )
+        audit_warning = ""
+        if not owner_matches:
+            audit_warning = (
+                "<p class='validation-audit-warning' role='alert'>This audit "
+                "record is unverified because its owner binding is missing or "
+                "does not match the engineering run.</p>"
+            )
+        rows.append(
+            "<li><header><strong>" + escape(_plain(_get(audit, "label", "step_id", "audit_id")))
+            + "</strong> · " + escape(_human(_get(audit, "state", "status", "outcome")))
+            + "</header><dl>"
+            + _field("Guest", _get(audit, "guest", "vm_name", "target"), code=True)
+            + _field("Owner observed", observed_owner, code=True)
+            + _field("Started", _get(audit, "started_at", "created_at"))
+            + _field("Finished", _get(audit, "finished_at", "completed_at"))
+            + _field("Exit status", _get(audit, "exit_status", "exit_code"))
+            + _field("Duration", _format_duration(_get(audit, "duration_seconds", "elapsed_seconds")))
+            + "</dl>" + audit_warning
+            + "<p><strong>Executed argv:</strong> " + _argv_html(audit) + "</p></li>"
+        )
+    omitted = len(audits) - len(rows)
+    note = f"<p>{omitted} older audit record(s) omitted.</p>" if omitted else ""
+    return note + "<ol class='validation-command-audit'>" + "".join(rows) + "</ol>"
+
+
+def render_validation_status(
+    run, validation, *, base_url="/engineering-runs",
+):
+    """Render immutable identity, guest command audit, results, and cleanup state."""
+    validation = validation or {}
+    identity = _validation_identity(run, validation)
+    identity_issues = _validation_identity_issues(run, identity)
+    identity_trusted = not identity_issues
+    state = _get(validation, "state", "status", "outcome")
+    results = _items(_get(validation, "results", "test_results", "step_results"))
+    artifacts = _items(_get(validation, "artifacts", "result_artifacts"))
+    result_rows = []
+    for result in results[:100]:
+        result_rows.append(
+            "<li><strong>" + escape(_plain(_get(result, "label", "name", "step_id")))
+            + "</strong> · " + escape(_human(_get(result, "state", "status", "outcome")))
+            + " · exit status " + escape(_plain(_get(result, "exit_status", "exit_code")))
+            + " · " + escape(_format_duration(_get(result, "duration_seconds", "elapsed_seconds")))
+            + _artifact_link(run, result, base_url=base_url) + "</li>"
+        )
+    result_html = (
+        "<ul>" + "".join(result_rows) + "</ul>" if result_rows
+        else "<p class='empty'>No validation results recorded.</p>"
+    )
+    artifact_html = (
+        "<ul>" + "".join(
+            _artifact_row(run, artifact, base_url=base_url, kind="Validation")
+            for artifact in artifacts[:100]
+        ) + "</ul>" if artifacts
+        else "<p class='empty'>No validation artifacts recorded.</p>"
+    )
+    cleanup = _get(validation, "cleanup", "cleanup_status", default={})
+    cleanup_state = _get(
+        cleanup, "state", "status", default=_get(validation, "cleanup_state")
+    )
+    cleanup_error = _get(
+        cleanup, "error", "failure_summary", "message",
+        default=_get(validation, "cleanup_error"),
+    )
+    normalized = _state(state)
+    run_state = _state(_get(run, "state", "status"))
+    reported_approval = _human(_get(
+        validation, "approval_state", "authorization_state"
+    ))
+    effective_active = (
+        identity_trusted and run_state in ACTIVE_STATES
+        and _state(reported_approval) == "approved"
+        and normalized in {"claimed", "running", "active"}
+    )
+    retry_html = ""
+    if normalized in {
+        "failed", "cancelled", "resource_exhausted", "cleanup_failed",
+    }:
+        retry_html = (
+            "<p>Use the engineering run controls to review and confirm a new "
+            "isolated run. This guest capability cannot silently retry itself.</p>"
+        )
+    suffix = "validation-status-" + quote(_run_id(run), safe="")
+    if effective_active:
+        identity_warning = ""
+        approval_label = "Approval state"
+        approval_value = reported_approval
+        boundary = (
+            "<p><strong>Execution boundary:</strong> one open-ended guest-command "
+            "capability is brokered and audited inside exact-owner LTVM resources. "
+            "It is not per-command approval. Host execution and Gerrit upload are "
+            "disabled.</p>"
+        )
+    elif not identity_trusted:
+        identity_warning = (
+            "<div class='validation-identity-warning' role='alert'><strong>Validation "
+            "identity not verified; capability treated as inactive.</strong><ul>"
+            + "".join(f"<li>{escape(item)}</li>" for item in identity_issues)
+            + "</ul></div>"
+        )
+        approval_label = "Reported approval state"
+        approval_value = reported_approval
+        boundary = (
+            "<p><strong>Execution boundary:</strong> this status does not establish "
+            "an active guest capability because its exact run identity is unverified. "
+            "Host execution and Gerrit upload remain disabled.</p>"
+        )
+    else:
+        identity_warning = ""
+        approval_label = "Approval state"
+        approval_value = reported_approval
+        boundary = (
+            "<p><strong>Execution boundary:</strong> the exact run identity is "
+            "verified, but no active approved guest capability is reported. Host "
+            "execution and Gerrit upload are disabled.</p>"
+        )
+    return (
+        f"<section class='validation-status' aria-labelledby='{escape(suffix, quote=True)}'>"
+        f"<h3 id='{escape(suffix, quote=True)}'>Session-owned LTVM validation</h3>"
+        + _status_badge(state, noun="Validation") + identity_warning + "<dl>"
+        + _field("Validation attempt", _get(validation, "validation_id", "attempt_id", "execution_id"), code=True)
+        + _field(approval_label, approval_value)
+        + _field("Effective guest capability", "active" if effective_active else "inactive")
+        + _field("Approved by", _get(validation, "approved_by", "authorized_by"))
+        + _field("Approved at", _get(validation, "approved_at", "authorized_at"))
+        + _field("Manifest ID", identity["manifest_id"], code=True)
+        + _field("Manifest digest", identity["manifest_digest"], code=True)
+        + _field("Exact pinned revision", identity["revision_sha"], code=True)
+        + _field("Exact LTVM owner", identity["owner_id"], code=True)
+        + _field("Guest target", identity["target"], code=True)
+        + "</dl>" + boundary + "<h4>Guest command audit</h4>"
+        + _render_validation_audit(
+            validation, expected_owner=identity["owner_id"],
+            identity_trusted=identity_trusted,
+        )
+        + "<h4>Results</h4>" + result_html
+        + "<h4>Artifacts</h4>" + artifact_html
+        + _render_resource_state(validation, suffix)
+        + "<section class='validation-cleanup'><h4>Validation cleanup</h4><dl>"
+        + _field("Cleanup state", _human(cleanup_state))
+        + _field("Cleanup error", cleanup_error)
+        + _field("Quarantine state", _human(_get(validation, "quarantine_state", default=_get(cleanup, "quarantine_state"))))
+        + _field("Owned resources remaining", _get(cleanup, "owned_resources_remaining", "remaining_count"))
+        + "</dl></section>" + retry_html + "</section>"
+    )
+
+
 def _render_control_links(run, *, base_url):
     state = _state(_get(run, "state", "status"))
     path = _run_path(run, base_url)
@@ -547,6 +1057,26 @@ def render_engineering_run(
     title_id = "engineering-run-" + quote(_run_id(run), safe="")
     suffix = quote(_run_id(run), safe="")
     messages = _get(run, "messages", default=[]) if messages is None else messages
+    validation = _get(
+        run, "validation", "validation_execution", "validation_status"
+    )
+    validation_proposal = _get(
+        run, "validation_proposal", "pending_validation", "validation_request"
+    )
+    if validation is not None:
+        validation_html = render_validation_status(
+            run, validation, base_url=base_url
+        )
+    elif validation_proposal is not None:
+        validation_html = render_validation_proposal(
+            run,
+            validation_proposal,
+            base_url=base_url,
+            csrf_token=csrf_token,
+            idempotency_token=idempotency_token,
+        )
+    else:
+        validation_html = ""
     return (
         f"<article class='engineering-run' aria-labelledby='{escape(title_id, quote=True)}'>"
         f"<header><h2 id='{escape(title_id, quote=True)}'>Engineering run "
@@ -558,8 +1088,9 @@ def render_engineering_run(
         + _field("Current step", _get(run, "current_step", "step"))
         + _field("Started", _get(run, "started_at", "created_at"))
         + "</dl><p><a href='" + escape(path, quote=True) + "'>Permalink to this run</a></p>"
-        + _capability_status(suffix) + _render_checkout(run, suffix) + _render_manifest(run, suffix)
+        + _capability_status(suffix, run) + _render_checkout(run, suffix) + _render_manifest(run, suffix)
         + _render_artifacts(run, base_url=base_url, suffix=suffix)
+        + validation_html
         + _render_vms(run, supplied_vms=vms, suffix=suffix) + _render_resource_state(run, suffix)
         + _render_lifecycle_warnings(run, supplied_vms=vms, suffix=suffix)
         + _render_messages(run, messages, suffix)
@@ -726,4 +1257,7 @@ __all__ = [
     "render_engineering_run",
     "render_engineering_start_confirmation",
     "render_engineering_start_control",
+    "render_validation_confirmation",
+    "render_validation_proposal",
+    "render_validation_status",
 ]

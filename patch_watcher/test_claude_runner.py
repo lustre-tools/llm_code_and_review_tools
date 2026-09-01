@@ -228,6 +228,49 @@ class ClaudeRunnerTests(unittest.TestCase):
         self.assertNotIn("GERRIT_PASS", environment)
         self.assertEqual(environment["PATCH_WATCHER_CAPABILITY_PROFILE"], "source_edit")
 
+    def test_ltvm_engineering_profile_exposes_only_the_owner_broker(self):
+        config = json.dumps({
+            "mcpServers": {
+                "pw_ltvm": {
+                    "command": "/usr/bin/python3",
+                    "args": ["/private/pw_ltvm_mcp.py", "--context", "/private/run.json"],
+                }
+            }
+        })
+        spec = self.spec(
+            report_kind="engineering",
+            capability_profile="source_edit_ltvm",
+            mcp_config_json=config,
+        )
+        command = build_read_only_claude_command(spec)
+        command_text = " ".join(command)
+        self.assertNotIn("Bash", command_text)
+        self.assertIn("mcp__pw_ltvm__exec", command_text)
+        self.assertIn("mcp__pw_ltvm__create", command_text)
+        self.assertEqual(command[command.index("--mcp-config") + 1], config)
+        environment = _safe_environment(
+            {"GERRIT_PASS": "secret"}, capability_profile="source_edit_ltvm"
+        )
+        self.assertNotIn("GERRIT_PASS", environment)
+
+    def test_ltvm_engineering_profile_rejects_ambient_or_relative_mcp(self):
+        for config in (
+            "{}",
+            json.dumps({"mcpServers": {
+                "pw_ltvm": {"command": "python3", "args": ["server.py"]}
+            }}),
+            json.dumps({"mcpServers": {
+                "pw_ltvm": {"command": "/usr/bin/python3", "args": ["server.py"]},
+                "other": {"command": "/bin/false", "args": ["x"]},
+            }}),
+        ):
+            with self.subTest(config=config), self.assertRaises(ValueError):
+                self.spec(
+                    report_kind="engineering",
+                    capability_profile="source_edit_ltvm",
+                    mcp_config_json=config,
+                ).validate()
+
     def test_engineering_report_validation(self):
         report = validate_engineering_report({
             "schema": "patch-watcher-engineering-report/v1",

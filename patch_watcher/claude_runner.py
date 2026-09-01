@@ -181,8 +181,10 @@ class ReadOnlyRunSpec:
     """Everything the transport needs to launch one bounded conversation.
 
     The historical class name is retained for persisted Phase 0C launch specs.
-    ``source_edit`` enables only file editing in an isolated checkout; Bash,
-    MCP, browser, and ambient service credentials remain unavailable.
+    ``source_edit`` enables only file editing in an isolated checkout.
+    ``source_edit_ltvm`` additionally exposes one controller-built local MCP
+    broker for open-ended execution inside exact-owner LTVM guests.  Bash,
+    browser, ambient MCP servers, and service credentials remain unavailable.
     """
 
     run_id: str
@@ -196,6 +198,7 @@ class ReadOnlyRunSpec:
     claude_binary: str = "claude"
     report_kind: str = "read_only"
     capability_profile: str = "read_only"
+    mcp_config_json: str = "{}"
 
     def validate(self) -> None:
         if not RUN_ID_RE.fullmatch(self.run_id):
@@ -222,12 +225,46 @@ class ReadOnlyRunSpec:
             raise ValueError("unsupported effort")
         if self.report_kind not in {"read_only", "unknown_failure_research", "engineering"}:
             raise ValueError("unsupported report kind")
-        if self.capability_profile not in {"read_only", "source_edit"}:
+        if self.capability_profile not in {
+            "read_only", "source_edit", "source_edit_ltvm"
+        }:
             raise ValueError("unsupported capability profile")
-        if self.report_kind == "engineering" and self.capability_profile != "source_edit":
-            raise ValueError("engineering reports require the source_edit capability profile")
-        if self.capability_profile == "source_edit" and self.report_kind != "engineering":
+        if self.report_kind == "engineering" and self.capability_profile not in {
+            "source_edit", "source_edit_ltvm"
+        }:
+            raise ValueError("engineering reports require a source-edit capability profile")
+        if self.capability_profile in {"source_edit", "source_edit_ltvm"} and self.report_kind != "engineering":
             raise ValueError("source_edit capability requires an engineering report")
+        try:
+            mcp_config = json.loads(self.mcp_config_json)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("mcp_config_json must be valid JSON") from exc
+        if not isinstance(mcp_config, Mapping):
+            raise ValueError("mcp_config_json must contain an object")
+        if self.capability_profile == "source_edit_ltvm":
+            servers = mcp_config.get("mcpServers")
+            if not isinstance(servers, Mapping) or set(servers) != {"pw_ltvm"}:
+                raise ValueError("source_edit_ltvm requires only the pw_ltvm MCP server")
+            server = servers["pw_ltvm"]
+            if not isinstance(server, Mapping) or set(server) != {"command", "args"}:
+                raise ValueError("pw_ltvm MCP server configuration is invalid")
+            command = server.get("command")
+            arguments = server.get("args")
+            if (
+                not isinstance(command, str)
+                or not Path(command).is_absolute()
+                or "\x00" in command
+                or not isinstance(arguments, list)
+                or not 1 <= len(arguments) <= 16
+                or any(
+                    not isinstance(item, str) or not item or "\x00" in item
+                    or len(item.encode("utf-8")) > 4096
+                    for item in arguments
+                )
+            ):
+                raise ValueError("pw_ltvm MCP command is invalid")
+        elif mcp_config != {}:
+            raise ValueError("MCP is unavailable without the LTVM capability profile")
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -416,7 +453,9 @@ def _safe_environment(
         if any(marker in upper for marker in service_markers) or upper.endswith(secret_suffixes):
             environment.pop(key, None)
     environment["CLAUDE_CODE_SAFE_MODE"] = "1"
-    if capability_profile not in {"read_only", "source_edit"}:
+    if capability_profile not in {
+        "read_only", "source_edit", "source_edit_ltvm"
+    }:
         raise ValueError("unsupported capability profile")
     environment["PATCH_WATCHER_CAPABILITY_PROFILE"] = capability_profile
     return environment
@@ -431,7 +470,19 @@ def build_read_only_claude_command(spec: ReadOnlyRunSpec) -> List[str]:
         "engineering": ENGINEERING_REPORT_SCHEMA,
         "read_only": READ_ONLY_REPORT_SCHEMA,
     }[spec.report_kind]
-    tools = "Read,Glob,Grep,Edit,Write" if spec.capability_profile == "source_edit" else "Read,Glob,Grep"
+    if spec.capability_profile == "read_only":
+        tools = "Read,Glob,Grep"
+    elif spec.capability_profile == "source_edit":
+        tools = "Read,Glob,Grep,Edit,Write"
+    else:
+        tools = (
+            "Read,Glob,Grep,Edit,Write,"
+            "mcp__pw_ltvm__list,mcp__pw_ltvm__target_list,"
+            "mcp__pw_ltvm__target_fetch,mcp__pw_ltvm__create,"
+            "mcp__pw_ltvm__cluster_create,mcp__pw_ltvm__push_source,"
+            "mcp__pw_ltvm__exec,mcp__pw_ltvm__cluster_exec,"
+            "mcp__pw_ltvm__destroy"
+        )
     command = [
         spec.claude_binary,
         "--print",
@@ -452,7 +503,7 @@ def build_read_only_claude_command(spec: ReadOnlyRunSpec) -> List[str]:
         "--tools",
         tools,
         "--mcp-config",
-        "{}",
+        spec.mcp_config_json,
         "--json-schema",
         json.dumps(report_schema, sort_keys=True, separators=(",", ":")),
     ]

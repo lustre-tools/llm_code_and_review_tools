@@ -141,7 +141,8 @@ read-only forms of:
 - Jenkins (`jenkins`);
 - Janitor (`janitor`);
 - GitHub (`gh`) when a run needs TLC repository context;
-- LTVM (`ltvm`) only for an engineering profile granted `start_ltvm`; and
+- the Patch Watcher LTVM broker only for an engineering profile granted
+  `start_ltvm` and `run_vm_tests`; and
 - optional specialist profiles such as crash analysis or AI review tooling.
 
 Tool presence is not enough. The profile pins the supported machine-readable
@@ -150,8 +151,13 @@ external write. `lreview`, crash tooling, compilers, and other large or
 specialized dependencies are optional profile features, not universal worker
 assumptions.
 
-Untrusted patch builds and tests run in owned LTVM guests or a later approved
-sandbox, never directly in an unsandboxed host worker.
+For a manually confirmed engineering run, those two grants form one
+open-ended guest capability: Claude may choose arbitrary build, test, and
+diagnostic commands inside exactly owner-matched LTVM guests. This is not an
+argv allowlist and does not require per-command approval. The broker owns host
+operations, revalidates the owner before each guest command, and records the
+command and bounded result. Untrusted patch builds and tests never run directly
+in an unsandboxed host worker.
 
 ### What does not live in the worker box
 
@@ -199,7 +205,19 @@ Before admission, Patch Watcher prepares:
 - capability-scoped broker access;
 - model transport/authentication;
 - output, scratch, and artifact directories; and
-- the session owner identifier and LTVM bridge when granted.
+- the session owner identifier and a private, exact-owner LTVM broker when
+  granted. The broker exposes VM lifecycle, source transfer, and open-ended
+  guest execution, but no general host shell or controller-owned service
+  credentials.
+
+The first LTVM SSH bridge checks exact owner inventory immediately before
+dispatch and uses only the literal inventory address with ambient SSH config,
+proxies, forwarding, and local commands disabled. Because current LTVM has no
+atomic owner-checked exec operation, the check and dispatch remain adjacent;
+the portable contract calls for an LTVM RPC that combines them. The initial
+credential/egress properties are declared provisioning facts, not yet LTVM
+attestation fields, and must become machine-verifiable before they are treated
+as a portable isolation guarantee.
 
 Worker instructions are assembled from versioned Patch Watcher policy,
 portable organization policy derived from the useful parts of the user-level

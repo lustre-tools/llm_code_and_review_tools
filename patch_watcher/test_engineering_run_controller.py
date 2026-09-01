@@ -35,9 +35,12 @@ class EngineeringRunner:
         self.events_by_session = {}
         self.terminations = []
         self.alive = True
+        self.start_error = None
 
     def start(self, spec):
         self.starts.append(spec)
+        if self.start_error is not None:
+            raise self.start_error
         handle = RunnerHandle(
             spec.run_id,
             spec.session_id,
@@ -248,8 +251,21 @@ class EngineeringRunControllerTests(unittest.TestCase):
 
         spec = self.runner.starts[0]
         self.assertEqual(Path(spec.cwd), checkout_path)
-        self.assertEqual(spec.capability_profile, "source_edit")
+        self.assertEqual(spec.capability_profile, "source_edit_ltvm")
         self.assertEqual(spec.report_kind, "engineering")
+        mcp_config = json.loads(spec.mcp_config_json)
+        self.assertEqual(set(mcp_config["mcpServers"]), {"pw_ltvm"})
+        context_path = Path(mcp_config["mcpServers"]["pw_ltvm"]["args"][-1])
+        self.assertEqual(context_path.stat().st_mode & 0o777, 0o600)
+        context = json.loads(context_path.read_text(encoding="utf-8"))
+        self.assertEqual(context["owner_id"], allocation.owner_id)
+        self.assertEqual(context["revision_sha"], DEFAULT_REVISION)
+        capability = controller.engineering_store.get_active_validation_capability(
+            session_id=session.session_id,
+            run_id=session.run_id,
+            revision_sha=session.revision,
+        )
+        self.assertIsNotNone(capability)
         resources = self.store.list_owned_resources(session_id=session.session_id)
         checkout_resource = next(
             resource for resource in resources
@@ -263,6 +279,149 @@ class EngineeringRunControllerTests(unittest.TestCase):
         self.assertEqual(envelope["checkout_mode"], "writable")
         self.assertIn("edit_source", envelope["capabilities"])
         self.assertNotIn("upload_patchset", envelope["capabilities"])
+
+    def test_runner_start_failure_closes_open_guest_capability(self):
+        controller = self.controller()
+        requested = controller.request_engineering(engineering_patch())
+        self.runner.start_error = RuntimeError("transport did not start")
+
+        controller.tick()
+
+        session = self.store.get_session(requested.session_id)
+        execution = controller.engineering_store.get_validation_execution_by_run(
+            session.run_id
+        )
+        attempts = controller.engineering_store.list_validation_attempts(
+            execution.execution_id
+        )
+        self.assertEqual(attempts[0].state, "failed")
+        self.assertEqual(attempts[0].failure_code, "runner_start_failed")
+        self.assertNotEqual(session.state, "running")
+
+    def test_unexpected_terminal_path_revokes_guest_capability_first(self):
+        controller = self.controller()
+        requested = controller.request_engineering(engineering_patch())
+        controller.tick()
+        running = self.store.get_session(requested.session_id)
+        self.assertIsNotNone(
+            controller.engineering_store.get_active_validation_capability(
+                session_id=running.session_id,
+                run_id=running.run_id,
+                revision_sha=running.revision,
+            )
+        )
+        self.runner.events_by_session[running.session_id] = [RunnerEvent(
+            1, self.now.timestamp(), "process_exit", {"returncode": 1}
+        )]
+
+        controller.tick()
+
+        terminal = self.store.get_session(running.session_id)
+        execution = controller.engineering_store.get_validation_execution_by_run(
+            running.run_id
+        )
+        attempt = controller.engineering_store.list_validation_attempts(
+            execution.execution_id
+        )[0]
+        self.assertEqual(terminal.state, "failed")
+        self.assertEqual(execution.admission_state, "disabled")
+        self.assertEqual(attempt.state, "failed")
+        self.assertIsNone(
+            controller.engineering_store.get_active_validation_capability(
+                session_id=running.session_id,
+                run_id=running.run_id,
+                revision_sha=running.revision,
+            )
+        )
+
+    def test_restart_makes_unadoptable_running_guest_attempt_ambiguous(self):
+        controller = self.controller()
+        requested = controller.request_engineering(engineering_patch())
+        controller.tick()
+        running = self.store.get_session(requested.session_id)
+        execution = controller.engineering_store.get_validation_execution_by_run(
+            running.run_id
+        )
+        self.runner.alive = False
+
+        restarted = self.controller()
+
+        attempt = restarted.engineering_store.list_validation_attempts(
+            execution.execution_id
+        )[0]
+        self.assertEqual(attempt.state, "ambiguous")
+        self.assertEqual(
+            restarted.engineering_store.get_validation_execution(
+                execution.execution_id
+            ).state,
+            "ambiguous",
+        )
+        self.assertIsNone(
+            restarted.engineering_store.get_active_validation_capability(
+                session_id=running.session_id,
+                run_id=running.run_id,
+                revision_sha=running.revision,
+            )
+        )
+        restarted.tick()
+        self.assertEqual(
+            self.store.get_session(running.session_id).state, "failed"
+        )
+        self.assertEqual(
+            restarted.engineering_store.get_validation_execution(
+                execution.execution_id
+            ).admission_state,
+            "disabled",
+        )
+
+    def test_restart_retains_only_exact_adoptable_guest_attempt(self):
+        controller = self.controller()
+        requested = controller.request_engineering(engineering_patch())
+        controller.tick()
+        running = self.store.get_session(requested.session_id)
+
+        restarted = self.controller()
+
+        execution = restarted.engineering_store.get_active_validation_capability(
+            session_id=running.session_id,
+            run_id=running.run_id,
+            revision_sha=running.revision,
+        )
+        self.assertIsNotNone(execution)
+        attempt = restarted.engineering_store.list_validation_attempts(
+            execution.execution_id
+        )[0]
+        self.assertEqual(attempt.state, "running")
+
+    def test_new_patchset_revokes_running_guest_capability_immediately(self):
+        controller = self.controller()
+        requested = controller.request_engineering(engineering_patch())
+        controller.tick()
+        running = self.store.get_session(requested.session_id)
+
+        stale = controller.reconcile_patch_revision(engineering_patch(
+            revision="e" * 40,
+            patchset=5,
+            revision_ref="refs/changes/60/68160/5",
+        ))
+
+        execution = controller.engineering_store.get_validation_execution_by_run(
+            running.run_id
+        )
+        attempt = controller.engineering_store.list_validation_attempts(
+            execution.execution_id
+        )[0]
+        self.assertEqual(stale, [running.run_id])
+        self.assertEqual(self.store.get_session(running.session_id).state, "stale")
+        self.assertEqual(execution.admission_state, "disabled")
+        self.assertEqual(attempt.state, "stale")
+        self.assertIsNone(
+            controller.engineering_store.get_active_validation_capability(
+                session_id=running.session_id,
+                run_id=running.run_id,
+                revision_sha=running.revision,
+            )
+        )
 
     def test_terminal_report_captures_actual_tracked_and_untracked_diff_and_manifest(self):
         seed, revision = self.create_seed_repository()

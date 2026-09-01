@@ -78,26 +78,301 @@ class EngineeringViewTests(unittest.TestCase):
         value.update(changes)
         return value
 
+    def validation_proposal(self, **changes):
+        value = {
+            "manifest": {
+                "schema_version": 1,
+                "manifest_id": "manifest-eng-123",
+                "digest": "f" * 64,
+                "revision_sha": "a" * 40,
+                "commands": [{
+                    "step_id": "validation-1",
+                    "label": "Build and smoke test",
+                    "argv": ["make", "check", "NAME=<unsafe>"],
+                    "cwd": ".",
+                    "timeout_seconds": 3661,
+                    "execution_target": "rocky9-x86_64",
+                    "env": {"TOKEN": "secret-must-not-render"},
+                }],
+            },
+            "owner_id": "patch-watcher:session-123",
+            "target": "rocky9-x86_64",
+            "validation_eligible": True,
+        }
+        value.update(changes)
+        return value
+
     def test_run_shows_checkout_revision_manifest_evidence_and_capability_boundary(self):
         rendered = engineering_views.render_engineering_run(self.sample_run())
         for expected in (
             "Isolated full checkout", "Exact pinned revision", "a" * 40,
             "Safe execution manifest summary", "engineering-manifest-v1",
             "Lustre build", "sanity-dom", "proposed.patch",
-            "Source editing:</strong> permitted",
-            "Build execution:</strong> request only in Phase 3A",
-            "Test execution:</strong> request only in Phase 3A",
+            "Source editing:</strong> active inside the isolated checkout",
+            "Guest build/test execution:</strong> not verified active",
+            "not approval of each individual command",
+            "Host command execution:</strong> disabled",
             "Gerrit upload:</strong> disabled for this subphase",
         ):
             self.assertIn(expected, rendered)
         self.assertNotIn("user:secret", rendered)
         self.assertNotIn("token=bad", rendered)
 
+    def test_capability_banner_distinguishes_declared_active_and_expired(self):
+        declared = engineering_views.render_engineering_dashboard([])
+        self.assertIn(
+            "declared; activated only after exact revision and owner binding are verified",
+            declared,
+        )
+        active_run = self.sample_run(validation={
+            **self.validation_proposal(),
+            "state": "running",
+            "approval_state": "approved",
+            "validation_id": "attempt-active",
+        })
+        active = engineering_views.render_engineering_run(active_run)
+        self.assertIn(
+            "active as one open-ended audited capability, restricted to exact-owner",
+            active,
+        )
+        expired = engineering_views.render_engineering_run(
+            self.sample_run(state="failed", validation=active_run["validation"])
+        )
+        self.assertIn(
+            "Guest build/test execution:</strong> expired; no guest command capability is active",
+            expired,
+        )
+        self.assertIn("Effective guest capability</dt><dd>inactive", expired)
+
     def test_manifest_is_an_allowlisted_summary_not_a_shell_or_secret_dump(self):
         rendered = engineering_views.render_engineering_run(self.sample_run())
         for secret in ("TOP_SECRET", "never render this", "--secret"):
             self.assertNotIn(secret, rendered)
         self.assertIn("Raw commands, arguments, environment values, and secrets", rendered)
+
+    def test_validation_proposal_is_exact_inert_and_not_a_per_command_allowlist(self):
+        rendered = engineering_views.render_validation_proposal(
+            self.sample_run(),
+            self.validation_proposal(),
+            base_url="/runs",
+            csrf_token="csrf<&",
+            idempotency_token="proposal-once",
+        )
+        for expected in (
+            "Proposed session-owned LTVM validation",
+            "No build or test has started",
+            "manifest-eng-123",
+            "f" * 64,
+            "a" * 40,
+            "patch-watcher:session-123",
+            "rocky9-x86_64",
+            "Build and smoke test",
+            "Planned exec argv",
+            "NAME=&lt;unsafe&gt;",
+            "not constrain the approved session to only these commands",
+            "Host execution and Gerrit upload remain disabled",
+            "method='post' action='/runs/eng-123/validation/prepare'",
+            "Review validation capability",
+        ):
+            self.assertIn(expected, rendered)
+        self.assertNotIn("secret-must-not-render", rendered)
+        self.assertNotIn("/validation/execute'", rendered)
+        self.assertNotRegex(rendered, r"(?i)method=['\"]get")
+        self.assertNotIn("csrf<&", rendered)
+
+    def test_validation_proposal_fails_closed_on_revision_owner_or_target_gap(self):
+        cases = (
+            self.validation_proposal(
+                manifest={
+                    **self.validation_proposal()["manifest"],
+                    "revision_sha": "b" * 40,
+                }
+            ),
+            self.validation_proposal(owner_id="patch-watcher:other"),
+            self.validation_proposal(target=""),
+            self.validation_proposal(validation_eligible=False, disabled_reason="policy denied"),
+        )
+        for proposal in cases:
+            with self.subTest(proposal=proposal):
+                rendered = engineering_views.render_validation_proposal(
+                    self.sample_run(), proposal
+                )
+                self.assertIn("disabled aria-disabled='true'", rendered)
+                self.assertIn("Validation approval unavailable", rendered)
+
+    def test_validation_confirmation_repeats_boundary_and_only_final_post_executes(self):
+        rendered = engineering_views.render_validation_confirmation(
+            self.sample_run(),
+            self.validation_proposal(),
+            confirmation_token="signed<&",
+            confirmation_expires_at="1788300000",
+            csrf_token="csrf",
+            idempotency_token="validation-once",
+            base_url="/runs",
+        )
+        for expected in (
+            "Confirm session-owned LTVM validation",
+            "open-ended, brokered guest-command capability",
+            "Immutable proposal being approved",
+            "manifest-eng-123",
+            "patch-watcher:session-123",
+            "rocky9-x86_64",
+            "Not granted:",
+            "Gerrit upload remain disabled",
+            "method='post' action='/runs/eng-123/validation/execute'",
+            "name='confirmation_expires_at' value='1788300000'",
+            "name='idempotency_token' value='validation-once'",
+            "Approve validation capability",
+        ):
+            self.assertIn(expected, rendered)
+        self.assertNotIn("signed<&", rendered)
+        self.assertNotRegex(rendered, r"(?i)method=['\"]get")
+
+        retry = engineering_views.render_validation_confirmation(
+            self.sample_run(), self.validation_proposal(),
+            intent="retry", confirmation_token="retry-token", base_url="/runs",
+        )
+        self.assertIn("Confirm a new validation attempt", retry)
+        self.assertIn("does not resume or rewrite", retry)
+        self.assertIn("action='/runs/eng-123/validation/retry'", retry)
+        with self.assertRaises(ValueError):
+            engineering_views.render_validation_confirmation(
+                self.sample_run(), self.validation_proposal(),
+                confirmation_token="", base_url="/runs",
+            )
+
+    def test_validation_status_shows_guest_audit_results_capacity_and_cleanup(self):
+        validation = {
+            **self.validation_proposal(),
+            "validation_id": "validation-attempt-7",
+            "state": "resource_exhausted",
+            "approval_state": "approved",
+            "approved_by": "operator<&",
+            "approved_at": "2026-09-01T15:00:00Z",
+            "command_audits": [{
+                "audit_id": "audit-1",
+                "label": "Configure",
+                "state": "succeeded",
+                "guest": "eng-123-co1-mds",
+                "owner_id": "patch-watcher:session-123",
+                "argv": ["./configure", "--with-name=<unsafe>"],
+                "started_at": "2026-09-01T15:01:00Z",
+                "finished_at": "2026-09-01T15:02:01Z",
+                "exit_code": 0,
+                "duration_seconds": 61,
+                "environment": {"SECRET": "do-not-render"},
+            }],
+            "results": [{
+                "name": "smoke", "outcome": "passed", "exit_code": 0,
+                "duration_seconds": 9, "artifact_id": "smoke-log",
+            }],
+            "artifacts": [{
+                "artifact_id": "console/log", "name": "console.log",
+                "state": "captured", "size_bytes": MIB,
+                "sha256": "c" * 64,
+                "href": "javascript:bad",
+            }],
+            "resource_exhaustion": {
+                "error_code": "ltvm_resource_exhausted",
+                "operation": "cluster create",
+                "requested_resources": "4 guests",
+                "evidence": "insufficient host memory",
+            },
+            "cooldown": {
+                "state": "active",
+                "retry_not_before": "2026-09-01T16:00:00Z",
+                "remaining_seconds": 1800,
+                "automation_suppressed": True,
+                "exhaustion_count": 3,
+            },
+            "cleanup": {
+                "state": "cleanup_failed",
+                "error": "VM <stuck>",
+                "owned_resources_remaining": 1,
+            },
+            "quarantine_state": "quarantined",
+        }
+        rendered = engineering_views.render_validation_status(
+            self.sample_run(), validation, base_url="/runs"
+        )
+        for expected in (
+            "Session-owned LTVM validation",
+            "Validation: Resource exhausted",
+            "validation-attempt-7",
+            "manifest-eng-123",
+            "patch-watcher:session-123",
+            "rocky9-x86_64",
+            "Guest command audit",
+            "eng-123-co1-mds",
+            "./configure",
+            "--with-name=&lt;unsafe&gt;",
+            "smoke",
+            "/runs/eng-123/artifacts/smoke-log",
+            "/runs/eng-123/artifacts/console%2Flog",
+            "ltvm_resource_exhausted",
+            "2026-09-01T16:00:00Z",
+            "30m 0s",
+            "Validation cleanup",
+            "Cleanup failed",
+            "VM &lt;stuck&gt;",
+            "Quarantined",
+            "Use the engineering run controls to review and confirm a new isolated run",
+            "cannot silently retry itself",
+            "Host execution and Gerrit upload are disabled",
+        ):
+            self.assertIn(expected, rendered)
+        self.assertNotIn("do-not-render", rendered)
+        self.assertNotIn("javascript:", rendered)
+        self.assertNotRegex(rendered, r"(?i)<form[^>]+method=['\"]get")
+
+    def test_validation_status_fails_closed_on_identity_or_audit_owner_mismatch(self):
+        validation = {
+            **self.validation_proposal(owner_id="patch-watcher:wrong"),
+            "revision_sha": "b" * 40,
+            "state": "running",
+            "approval_state": "approved",
+            "validation_id": "attempt-untrusted",
+            "command_audits": [{
+                "step_id": "step-1", "state": "succeeded",
+                "owner_id": "patch-watcher:wrong", "argv": ["true"],
+            }],
+        }
+        rendered = engineering_views.render_validation_status(
+            self.sample_run(), validation
+        )
+        self.assertIn(
+            "Validation identity not verified; capability treated as inactive",
+            rendered,
+        )
+        self.assertIn("revision matching the engineering run", rendered)
+        self.assertIn("owner matching the engineering session", rendered)
+        self.assertIn("Reported approval state", rendered)
+        self.assertIn("Effective guest capability</dt><dd>inactive", rendered)
+        self.assertIn("audit record is unverified", rendered)
+        self.assertNotIn("one open-ended guest-command capability is brokered", rendered)
+
+    def test_run_embeds_only_explicit_validation_proposal_or_status(self):
+        proposal_run = self.sample_run(
+            validation_proposal=self.validation_proposal()
+        )
+        proposal_html = engineering_views.render_engineering_run(
+            proposal_run, base_url="/runs", csrf_token="csrf",
+            idempotency_token="once",
+        )
+        self.assertIn("Proposed session-owned LTVM validation", proposal_html)
+        self.assertIn("/runs/eng-123/validation/prepare", proposal_html)
+
+        status_run = self.sample_run(validation_execution={
+            **self.validation_proposal(),
+            "validation_id": "attempt-1",
+            "state": "running",
+        })
+        status_html = engineering_views.render_engineering_run(
+            status_run, base_url="/runs"
+        )
+        self.assertIn("Session-owned LTVM validation", status_html)
+        self.assertIn("attempt-1", status_html)
+        self.assertNotIn("Review validation capability", status_html)
 
     def test_artifact_hrefs_are_internal_routes_derived_from_encoded_ids(self):
         rendered = engineering_views.render_engineering_run(self.sample_run())

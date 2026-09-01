@@ -1344,14 +1344,28 @@ Build:
   list/fetch/validate guidance and recorded VM environment;
 - structured LTVM resource-exhaustion reporting, email, partial-resource
   cleanup, per-patch cooldown, and operator retry controls;
-- safe command/test manifests rather than arbitrary dashboard shell text;
+- one explicitly confirmed, run-level capability for open-ended command
+  execution inside exactly owner-matched guests; commands are audited as they
+  execute and do not require per-command approval or an allowlist;
+- no arbitrary host command box: dashboard messages steer Claude, while all
+  build, test, and diagnostic shell text executes through the guest broker;
 - artifact collection, cleanup, quarantine, and orphan reconciliation;
 - rootless worker container prototype and network-profile display.
 
 The controller, not the web request and not an untrusted repository file,
-admits each manifest step. Build/test execution occurs in the selected
-session-owned guest. No Phase 3 command runs inside the Patch Watcher web
-service process.
+grants the session capability after the operator confirms the engineering run.
+The exact-owner broker then admits VM lifecycle calls and forwards open-ended
+commands only into that session's guests, rechecking ownership and recording
+each result. No Phase 3 command runs inside the Patch Watcher web service or
+the Claude host environment.
+
+Current LTVM exposes inventory ownership and SSH reachability as separate
+operations. Phase 3B therefore performs an adjacent exact-owner inventory
+check before confined literal-IP SSH. A future LTVM owner-checked exec RPC must
+make that check and dispatch atomic. Likewise, the initial guest
+credential/egress assertion is a declared provisioning contract; LTVM should
+eventually return a machine-readable attestation that the controller can
+verify before granting guest execution.
 
 #### Phase 3C: separately gated Gerrit upload
 

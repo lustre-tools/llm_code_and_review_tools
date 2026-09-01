@@ -1484,6 +1484,95 @@ class PatchWatcherTests(unittest.TestCase):
         orphan_section = rendered.split("<section class='orphan-vms'", 1)[1]
         self.assertIn("unrelated-vm", orphan_section)
 
+    def test_engineering_projection_maps_exhaustion_and_cooldown_for_views(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_session_store(Path(temp_dir) / "sessions.sqlite3")
+            store.register_pinned_session(
+                "engineering-session-capacity",
+                patch_id="68160",
+                run_id="pw-engineer-68160-ps4-capacity",
+                revision="d" * 40,
+                patchset=4,
+                profile="engineering",
+                state="resource_exhausted",
+            )
+            session = store.get_session("engineering-session-capacity")
+            future = app.datetime(2099, 1, 1, tzinfo=app.timezone.utc)
+
+            class Cooldown:
+                not_before = future
+                consecutive_exhaustions = 3
+
+                def active_at(self, observed_at):
+                    return observed_at < self.not_before
+
+            execution = SimpleNamespace(
+                execution_id="validation-execution-1",
+                state="resource_exhausted",
+                admission_state="approved",
+                approved_by="local-dashboard-user",
+                approved_at=future,
+                revision_sha="d" * 40,
+                owner_id="patch-watcher:engineering-session-capacity",
+                manifest_id="manifest-1",
+                manifest_sha256="e" * 64,
+            )
+            attempt = SimpleNamespace(
+                attempt_id="attempt-1",
+                state="resource_exhausted",
+                failure_code="ltvm_resource_exhausted",
+                summary="insufficient host memory",
+            )
+
+            class FakeEngineeringState:
+                def get_allocation_by_run(self, run_id):
+                    return None
+
+                def get_manifest(self, run_id):
+                    return None
+
+                def list_artifacts(self, run_id):
+                    return []
+
+                def get_validation_execution_by_run(self, run_id):
+                    return execution
+
+                def list_validation_attempts(self, execution_id):
+                    return (attempt,)
+
+                def list_validation_step_results(self, attempt_id):
+                    return ()
+
+                def get_capacity_cooldown(self, patch_id):
+                    return Cooldown()
+
+            class FakeEngineeringController:
+                engineering_store = FakeEngineeringState()
+                model = "test-model"
+
+                def stop(self):
+                    return None
+
+            app.RUN_CONTROLLER = FakeEngineeringController()
+            projection = app._engineering_projection(session)
+
+        validation = projection["validation"]
+        self.assertEqual(
+            validation["resource_exhaustion"],
+            {
+                "error_code": "ltvm_resource_exhausted",
+                "operation": "session-owned guest validation",
+                "requested_resources": "exact-owner LTVM guest capacity",
+                "evidence": "insufficient host memory",
+            },
+        )
+        self.assertEqual(validation["cooldown"]["state"], "active")
+        self.assertEqual(
+            validation["cooldown"]["retry_not_before"], future.isoformat()
+        )
+        self.assertTrue(validation["cooldown"]["automation_suppressed"])
+        self.assertEqual(validation["cooldown"]["exhaustion_count"], 3)
+
     def test_managed_sessions_and_recent_messages_render_from_private_store(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = app.initialize_session_store(Path(temp_dir) / "sessions.sqlite3")

@@ -197,18 +197,27 @@ simple comments, or asking Claude Code to attempt all comments. Neither option
 is selectable, invokes Claude, sends escalation email, or writes to Gerrit.
 Their proposed escalation behavior is documented in `DESIGN_ACTION_FLOW.md`.
 
-## Controlled engineering runs (Phase 3A foundation)
+## Controlled engineering runs (Phases 3A and 3B)
 
 An exact, refreshed patch revision can be prepared and then explicitly
-confirmed for a controlled engineering run. The first subphase creates a
-dedicated full clone (not a Git worktree), lets Claude edit source files with
-no shell or service credentials, and captures the actual Git diff/status plus
-inert argv-only validation requests. The dashboard shows checkout ownership,
-session messages, artifacts, and exactly owner-matched LTVM inventory.
+confirmed for a controlled engineering run. Phase 3A creates a dedicated full
+clone (not a Git worktree), lets Claude edit source files with no host shell or
+service credentials, and independently captures the actual Git diff/status.
 
-Build/test execution in session-owned LTVM guests is the next subphase.
-Gerrit upload is a later, separately approved subphase and is visibly disabled
-in the current capability display; editing a checkout never grants upload.
+Phase 3B grants that confirmed run an open-ended command capability **inside
+only its exactly owner-matched LTVM guests**. Claude may create an appropriate
+VM or cluster, copy the pinned checkout into it, and run arbitrary diagnostic,
+build, and test commands there. The broker revalidates ownership before every
+guest command, bounds execution and captured output, and writes immutable
+command/result audit records. This is one run-level capability grant, not a
+per-command approval or an argv allowlist. It does not grant a host shell,
+access to another run's VMs, or Gerrit writes.
+
+The dashboard shows checkout ownership, session messages, capability and
+attempt state, guest command results, resource exhaustion/cooldown state,
+cleanup, artifacts, and exactly owner-matched LTVM inventory. Gerrit upload is
+Phase 3C: later, separate, and visibly disabled; permission to edit or execute
+inside owned guests never implies permission to upload.
 
 ## Design documents
 
