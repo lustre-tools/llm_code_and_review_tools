@@ -21,9 +21,11 @@ from claude_runner import (
     RunnerIdentityError,
     RunnerProtocolError,
     RunnerStateError,
+    ENGINEERING_REPORT_SCHEMA,
     READ_ONLY_REPORT_SCHEMA,
     _safe_environment,
     build_read_only_claude_command,
+    validate_engineering_report,
     validate_read_only_report,
 )
 
@@ -211,6 +213,44 @@ class ClaudeRunnerTests(unittest.TestCase):
         self.assertNotIn(self.spec().prompt, command_text)
         schema_index = command.index("--json-schema") + 1
         self.assertEqual(json.loads(command[schema_index]), READ_ONLY_REPORT_SCHEMA)
+
+    def test_source_edit_command_allows_files_but_not_shell_or_services(self):
+        spec = self.spec(report_kind="engineering", capability_profile="source_edit")
+        command = build_read_only_claude_command(spec)
+        self.assertIn("Read,Glob,Grep,Edit,Write", command)
+        self.assertNotIn("Bash", " ".join(command))
+        schema_index = command.index("--json-schema") + 1
+        self.assertEqual(json.loads(command[schema_index]), ENGINEERING_REPORT_SCHEMA)
+        environment = _safe_environment(
+            {"GERRIT_PASS": "secret", "ANTHROPIC_API_KEY": "model-secret"},
+            capability_profile="source_edit",
+        )
+        self.assertNotIn("GERRIT_PASS", environment)
+        self.assertEqual(environment["PATCH_WATCHER_CAPABILITY_PROFILE"], "source_edit")
+
+    def test_engineering_report_validation(self):
+        report = validate_engineering_report({
+            "schema": "patch-watcher-engineering-report/v1",
+            "state": "complete",
+            "summary": "  Implemented the bounded change. ",
+            "changed_files": ["src/file.c"],
+            "validation_requests": [{
+                "name": "unit tests", "target": "rocky9-arm64",
+                "argv": ["make", "test"],
+            }],
+        })
+        self.assertEqual(report["summary"], "Implemented the bounded change.")
+        self.assertEqual(report["validation_requests"][0]["argv"], ["make", "test"])
+        with self.assertRaisesRegex(RunnerProtocolError, "checkout-relative"):
+            validate_engineering_report({
+                **report, "changed_files": ["../outside"],
+            })
+
+    def test_source_edit_and_report_kind_must_match(self):
+        with self.assertRaisesRegex(ValueError, "source_edit"):
+            self.spec(capability_profile="source_edit").validate()
+        with self.assertRaisesRegex(ValueError, "engineering reports"):
+            self.spec(report_kind="engineering").validate()
 
     def test_read_only_report_validation(self):
         report = validate_read_only_report({

@@ -28,6 +28,7 @@ _HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _REVISION_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
 _CAPABILITY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_OWNER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 _SENSITIVE_KEY_RE = re.compile(
     r"(?:password|passwd|token|secret|credential|authorization|cookie|private[_-]?key)",
     re.IGNORECASE,
@@ -415,7 +416,13 @@ class RunEnvelope:
                 raise ContractError("invalid_schema", "must be a sha256: digest", f"$.{hash_name}")
         owner = data["ltvm_owner_id"]
         if owner is not None:
-            owner = validate_run_id(owner, path="$.ltvm_owner_id")
+            owner = _require_string(owner, "$.ltvm_owner_id")
+            if not _OWNER_ID_RE.fullmatch(owner):
+                raise ContractError(
+                    "invalid_schema",
+                    "must be a durable filesystem-safe LTVM owner identifier",
+                    "$.ltvm_owner_id",
+                )
         instance = cls(
             schema_version=SCHEMA_VERSION,
             run_id=run_id,

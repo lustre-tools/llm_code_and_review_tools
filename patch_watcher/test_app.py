@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from http.server import ThreadingHTTPServer
 
 import app
@@ -21,6 +21,7 @@ from maloo_adapter import (
 class PatchWatcherTests(unittest.TestCase):
     def setUp(self):
         app.PATCHES.clear()
+        app._ENGINEERING_USED_CONFIRMATIONS.clear()
 
     def tearDown(self):
         if app.AUTOMATION_OBSERVER is not None:
@@ -34,6 +35,8 @@ class PatchWatcherTests(unittest.TestCase):
         app.AUTOMATION_STORE = None
         app.SESSION_STORE = None
         app.WORKER_PROFILE = None
+        app.ENGINEERING_WORKER_PROFILE = None
+        app._ENGINEERING_USED_CONFIRMATIONS.clear()
         app.RESOURCE_COLLECTION_ENABLED = False
         app._RESOURCE_SNAPSHOT = None
         app._RESOURCE_SNAPSHOT_MONOTONIC = 0.0
@@ -828,6 +831,476 @@ class PatchWatcherTests(unittest.TestCase):
         self.assertIn("Read-only:", rendered)
         self.assertNotIn("name='revision_sha' value=''", rendered)
 
+    def test_engineering_start_http_flow_is_inert_until_one_exact_final_post(self):
+        patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+        patch_record.update(
+            change_number=68160,
+            project="fs/lustre-release",
+            patchset=4,
+            revision_sha="d" * 40,
+            revision_ref="refs/changes/60/68160/4",
+            lifecycle="Open",
+            title="LU-12345 controlled repair",
+        )
+
+        class FakeEngineeringController:
+            def __init__(self):
+                self.calls = []
+
+            def stop(self):
+                return None
+
+            def request_engineering(self, patch_value, *, request_id=None):
+                self.calls.append((dict(patch_value), request_id))
+                return SimpleNamespace(run_id="pw-engineer-68160-ps4-test")
+
+        class NoRedirect(HTTPRedirectHandler):
+            def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+                return None
+
+        controller = FakeEngineeringController()
+        app.RUN_CONTROLLER = controller
+        server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        no_redirect = build_opener(NoRedirect)
+        values = {
+            "csrf_token": app.CSRF_TOKEN,
+            "change_number": "68160",
+            "patchset": "4",
+            "revision_sha": "d" * 40,
+            "idempotency_token": "engineering-start-once",
+        }
+        try:
+            prepare = Request(
+                base + "/engineering-runs/prepare",
+                data=urlencode(values).encode(),
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as prepared:
+                no_redirect.open(prepare)
+            self.assertEqual(prepared.exception.code, 303)
+            confirmation_location = prepared.exception.headers["Location"]
+            self.assertEqual(controller.calls, [])
+            self.assertEqual(app._ENGINEERING_USED_CONFIRMATIONS, {})
+
+            confirmation = urlopen(base + confirmation_location).read().decode()
+            self.assertEqual(controller.calls, [])
+            self.assertEqual(app._ENGINEERING_USED_CONFIRMATIONS, {})
+            self.assertIn("Confirm controlled engineering run", confirmation)
+            self.assertIn("d" * 40, confirmation)
+            self.assertIn(
+                "Gerrit upload:</strong> disabled for this subphase",
+                confirmation,
+            )
+            confirmation_token = re.search(
+                r"name='confirmation_token' value='([^']+)'", confirmation
+            ).group(1)
+            confirmation_expires_at = re.search(
+                r"name='confirmation_expires_at' value='([^']+)'", confirmation
+            ).group(1)
+
+            final_values = {
+                **values,
+                "confirmation_token": confirmation_token,
+                "confirmation_expires_at": confirmation_expires_at,
+            }
+            final = Request(
+                base + "/engineering-runs/start",
+                data=urlencode(final_values).encode(),
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as started:
+                no_redirect.open(final)
+            self.assertEqual(started.exception.code, 303)
+            self.assertEqual(
+                started.exception.headers["Location"],
+                "/runs/pw-engineer-68160-ps4-test",
+            )
+            self.assertEqual(len(controller.calls), 1)
+            self.assertEqual(controller.calls[0][0]["revision_sha"], "d" * 40)
+            self.assertEqual(controller.calls[0][0]["patchset"], 4)
+            self.assertEqual(controller.calls[0][1], "engineering-start-once")
+
+            replay = Request(
+                base + "/engineering-runs/start",
+                data=urlencode(final_values).encode(),
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as replayed:
+                urlopen(replay)
+            self.assertEqual(replayed.exception.code, 409)
+            self.assertEqual(len(controller.calls), 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_engineering_confirmation_rejects_tampering_and_revision_staleness(self):
+        patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+        patch_record.update(
+            change_number=68160,
+            project="fs/lustre-release",
+            patchset=4,
+            revision_sha="d" * 40,
+            revision_ref="refs/changes/60/68160/4",
+            lifecycle="Open",
+        )
+
+        class FakeEngineeringController:
+            def __init__(self):
+                self.calls = []
+
+            def stop(self):
+                return None
+
+            def request_engineering(self, patch_value, *, request_id=None):
+                self.calls.append((dict(patch_value), request_id))
+                return SimpleNamespace(run_id="unexpected")
+
+        class NoRedirect(HTTPRedirectHandler):
+            def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+                return None
+
+        controller = FakeEngineeringController()
+        app.RUN_CONTROLLER = controller
+        server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        no_redirect = build_opener(NoRedirect)
+        values = {
+            "csrf_token": app.CSRF_TOKEN,
+            "change_number": "68160",
+            "patchset": "4",
+            "revision_sha": "d" * 40,
+            "idempotency_token": "tamper-test",
+        }
+        try:
+            request = Request(
+                base + "/engineering-runs/prepare",
+                data=urlencode(values).encode(),
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as prepared:
+                no_redirect.open(request)
+            location = prepared.exception.headers["Location"]
+            query = parse_qs(urlparse(location).query)
+            signed = query["confirmation_token"][0]
+            confirmation_expires_at = query["confirmation_expires_at"][0]
+
+            tampered_query = {
+                key: item[0] for key, item in query.items()
+            }
+            tampered_query["confirmation_token"] = "0" * len(signed)
+            with self.assertRaises(HTTPError) as bad_get:
+                urlopen(
+                    base + "/engineering-runs/confirm-start?"
+                    + urlencode(tampered_query)
+                )
+            self.assertEqual(bad_get.exception.code, 403)
+
+            tampered_final = Request(
+                base + "/engineering-runs/start",
+                data=urlencode({
+                    **values,
+                    "idempotency_token": "different-nonce",
+                    "confirmation_token": signed,
+                    "confirmation_expires_at": confirmation_expires_at,
+                }).encode(),
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as bad_post:
+                urlopen(tampered_final)
+            self.assertEqual(bad_post.exception.code, 403)
+
+            expired_at = str(int(app.time.time()) - 1)
+            expired_token = app._signed_confirmation(
+                "engineering-start", 68160, 4, "d" * 40,
+                "expired-nonce", expired_at,
+            )
+            expired_final = Request(
+                base + "/engineering-runs/start",
+                data=urlencode({
+                    **values,
+                    "idempotency_token": "expired-nonce",
+                    "confirmation_token": expired_token,
+                    "confirmation_expires_at": expired_at,
+                }).encode(),
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as expired_post:
+                urlopen(expired_final)
+            self.assertEqual(expired_post.exception.code, 403)
+
+            # The same signed identity becomes stale as soon as the watched
+            # patch advances, on both the confirmation GET and final POST.
+            patch_record.update(
+                patchset=5,
+                revision_sha="e" * 40,
+                revision_ref="refs/changes/60/68160/5",
+            )
+            with self.assertRaises(HTTPError) as stale_get:
+                urlopen(base + location)
+            self.assertEqual(stale_get.exception.code, 403)
+            stale_final = Request(
+                base + "/engineering-runs/start",
+                data=urlencode({
+                    **values,
+                    "confirmation_token": signed,
+                    "confirmation_expires_at": confirmation_expires_at,
+                }).encode(),
+                method="POST",
+            )
+            with self.assertRaises(HTTPError) as stale_post:
+                urlopen(stale_final)
+            self.assertEqual(stale_post.exception.code, 409)
+            self.assertEqual(controller.calls, [])
+            self.assertEqual(app._ENGINEERING_USED_CONFIRMATIONS, {})
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_engineering_dashboard_uses_live_run_routes_and_disables_upload(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_session_store(
+                Path(temp_dir) / "sessions.sqlite3"
+            )
+            store.register_pinned_session(
+                "engineering-session-1",
+                patch_id="68160",
+                run_id="pw-engineer-68160-ps4-view",
+                revision="f" * 40,
+                patchset=4,
+                profile="engineering",
+                state="running",
+            )
+
+            class FakeEngineeringState:
+                def get_allocation_by_run(self, run_id):
+                    return None
+
+                def get_manifest(self, run_id):
+                    return None
+
+                def list_artifacts(self, run_id):
+                    return []
+
+            class FakeEngineeringController:
+                engineering_store = FakeEngineeringState()
+                model = "test-model"
+
+                def stop(self):
+                    return None
+
+            app.RUN_CONTROLLER = FakeEngineeringController()
+            with patch(
+                "app.refresh_resource_status",
+                return_value={"ltvm": {"vms": []}},
+            ):
+                rendered = app.engineering_runs_html()
+
+        self.assertIn("Controlled engineering runs", rendered)
+        self.assertIn("f" * 40, rendered)
+        self.assertIn(
+            "Gerrit upload:</strong> disabled for this subphase", rendered
+        )
+        self.assertIn(
+            "method='post' action='/runs/pw-engineer-68160-ps4-view/guidance'",
+            rendered,
+        )
+        self.assertIn(
+            "/runs/pw-engineer-68160-ps4-view/confirm?intent=cancel",
+            rendered,
+        )
+        self.assertIn(
+            "/runs/pw-engineer-68160-ps4-view/confirm?intent=kill",
+            rendered,
+        )
+        self.assertNotIn(
+            "action='/runs/pw-engineer-68160-ps4-view/cancel'", rendered
+        )
+        self.assertNotIn("Upload patch", rendered)
+
+    def test_engineering_retry_get_is_inert_and_final_post_starts_one_new_run(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_session_store(
+                Path(temp_dir) / "sessions.sqlite3"
+            )
+            store.register_pinned_session(
+                "engineering-session-retry",
+                patch_id="68160",
+                run_id="pw-engineer-68160-ps4-old",
+                revision="f" * 40,
+                patchset=4,
+                profile="engineering",
+                state="failed",
+            )
+            patch_record, _ = app.add_patch(
+                "https://review.whamcloud.com/c/68160"
+            )
+            patch_record.update(
+                change_number=68160,
+                project="fs/lustre-release",
+                patchset=4,
+                revision_sha="f" * 40,
+                revision_ref="refs/changes/60/68160/4",
+                lifecycle="Open",
+            )
+
+            class FakeEngineeringState:
+                def get_allocation_by_run(self, run_id):
+                    return None
+
+                def get_manifest(self, run_id):
+                    return None
+
+                def list_artifacts(self, run_id):
+                    return []
+
+            class FakeEngineeringController:
+                engineering_store = FakeEngineeringState()
+                model = "test-model"
+
+                def __init__(self):
+                    self.calls = []
+
+                def stop(self):
+                    return None
+
+                def request_engineering(self, patch_value, *, request_id=None):
+                    self.calls.append((dict(patch_value), request_id))
+                    return SimpleNamespace(
+                        run_id="pw-engineer-68160-ps4-new"
+                    )
+
+            class NoRedirect(HTTPRedirectHandler):
+                def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+                    return None
+
+            controller = FakeEngineeringController()
+            app.RUN_CONTROLLER = controller
+            server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            no_redirect = build_opener(NoRedirect)
+            try:
+                review = urlopen(
+                    base
+                    + "/runs/pw-engineer-68160-ps4-old/confirm?intent=retry"
+                ).read().decode()
+                self.assertIn("No action has been taken", review)
+                self.assertIn("name='intent' value='retry'", review)
+                self.assertEqual(controller.calls, [])
+                self.assertEqual(
+                    store.get_session("engineering-session-retry").state,
+                    "failed",
+                )
+
+                prepare_final = Request(
+                    base + "/runs/pw-engineer-68160-ps4-old/confirm",
+                    data=urlencode({
+                        "csrf_token": app.CSRF_TOKEN,
+                        "intent": "retry",
+                    }).encode(),
+                    method="POST",
+                )
+                final_confirmation = urlopen(prepare_final).read().decode()
+                self.assertIn("Confirm retry as a new run", final_confirmation)
+                self.assertIn("does not revive this checkout", final_confirmation)
+                self.assertIn("f" * 40, final_confirmation)
+                self.assertIn(
+                    "Gerrit upload:</strong> disabled for this subphase",
+                    final_confirmation,
+                )
+                self.assertEqual(controller.calls, [])
+                fields = {
+                    name: value for name, value in re.findall(
+                        r"name='([^']+)' value='([^']*)'", final_confirmation
+                    )
+                }
+
+                # Advancing the watched patch makes this exact retry proposal
+                # stale before the final mutation boundary.
+                patch_record.update(
+                    patchset=5,
+                    revision_sha="a" * 40,
+                    revision_ref="refs/changes/60/68160/5",
+                )
+                stale = Request(
+                    base + "/runs/pw-engineer-68160-ps4-old/retry",
+                    data=urlencode({
+                        "csrf_token": app.CSRF_TOKEN,
+                        **fields,
+                    }).encode(),
+                    method="POST",
+                )
+                with self.assertRaises(HTTPError) as rejected:
+                    urlopen(stale)
+                self.assertEqual(rejected.exception.code, 409)
+                self.assertEqual(controller.calls, [])
+
+                # A fresh confirmation after the exact revision is current
+                # receives a new stable request identity for the new run.
+                patch_record.update(
+                    patchset=4,
+                    revision_sha="f" * 40,
+                    revision_ref="refs/changes/60/68160/4",
+                )
+                final_confirmation = urlopen(prepare_final).read().decode()
+                fields = {
+                    name: value for name, value in re.findall(
+                        r"name='([^']+)' value='([^']*)'", final_confirmation
+                    )
+                }
+                final = Request(
+                    base + "/runs/pw-engineer-68160-ps4-old/retry",
+                    data=urlencode({
+                        "csrf_token": app.CSRF_TOKEN,
+                        **fields,
+                    }).encode(),
+                    method="POST",
+                )
+                with self.assertRaises(HTTPError) as started:
+                    no_redirect.open(final)
+                self.assertEqual(started.exception.code, 303)
+                self.assertEqual(
+                    started.exception.headers["Location"],
+                    "/runs/pw-engineer-68160-ps4-new",
+                )
+                self.assertEqual(len(controller.calls), 1)
+                self.assertEqual(
+                    controller.calls[0][0]["revision_sha"], "f" * 40
+                )
+                self.assertEqual(
+                    controller.calls[0][1], fields["idempotency_token"]
+                )
+                self.assertTrue(controller.calls[0][1])
+                self.assertEqual(
+                    store.get_session("engineering-session-retry").state,
+                    "failed",
+                )
+
+                replay = Request(
+                    base + "/runs/pw-engineer-68160-ps4-old/retry",
+                    data=urlencode({
+                        "csrf_token": app.CSRF_TOKEN,
+                        **fields,
+                    }).encode(),
+                    method="POST",
+                )
+                with self.assertRaises(HTTPError) as replayed:
+                    urlopen(replay)
+                self.assertEqual(replayed.exception.code, 409)
+                self.assertEqual(len(controller.calls), 1)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
     def test_kill_confirmation_get_is_display_only_and_final_post_uses_one_time_token(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = app.initialize_session_store(Path(temp_dir) / "sessions.sqlite3")
@@ -962,6 +1435,54 @@ class PatchWatcherTests(unittest.TestCase):
             self.assertIs(app.refresh_resource_status(), snapshot)
             self.assertIs(app.refresh_resource_status(force=True), snapshot)
         self.assertEqual(collect.call_count, 2)
+
+    def test_engineering_dashboard_uses_cached_vm_rss_and_exact_owner(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_session_store(Path(temp_dir) / "sessions.sqlite3")
+            store.register_pinned_session(
+                "engineering-session-1",
+                patch_id="68160",
+                run_id="pw-engineer-68160-ps4-test",
+                revision="d" * 40,
+                patchset=4,
+                profile="engineering",
+                state="running",
+            )
+            app._RESOURCE_SNAPSHOT = {
+                "host_memory": {},
+                "ltvm": {
+                    "vms": [
+                        {
+                            "name": "owned-vm",
+                            "owner_id": "patch-watcher:engineering-session-1",
+                            "state": "running",
+                            "configured_guest_memory_bytes": 2 * 1024 ** 3,
+                            "host_rss_bytes": 640 * 1024 ** 2,
+                        },
+                        {
+                            "name": "unrelated-vm",
+                            "owner_id": "patch-watcher:somebody-else",
+                            "state": "running",
+                            "configured_guest_memory_bytes": 4 * 1024 ** 3,
+                            "host_rss_bytes": 900 * 1024 ** 2,
+                        },
+                    ]
+                },
+            }
+            app._RESOURCE_SNAPSHOT_MONOTONIC = app.time.monotonic()
+            with patch(
+                "app.collect_resource_snapshot",
+                side_effect=AssertionError("cached projection must not repoll LTVM"),
+            ):
+                rendered = app.engineering_runs_html()
+
+        run_card = rendered.split("<article class='engineering-run'", 1)[1]
+        self.assertIn("owned-vm", run_card)
+        self.assertIn("2 GiB", run_card)
+        self.assertIn("640 MiB", run_card)
+        self.assertNotIn(">unrelated-vm<", run_card)
+        orphan_section = rendered.split("<section class='orphan-vms'", 1)[1]
+        self.assertIn("unrelated-vm", orphan_section)
 
     def test_managed_sessions_and_recent_messages_render_from_private_store(self):
         with tempfile.TemporaryDirectory() as temp_dir:

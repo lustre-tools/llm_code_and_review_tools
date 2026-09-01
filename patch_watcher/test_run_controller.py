@@ -11,6 +11,7 @@ from claude_runner import (
     RunnerHandle,
     RunnerSnapshot,
 )
+from ltvm_resources import LTVMInventory
 from run_controller import RunController, RunControllerError
 from session_state import SessionAlreadyExists, SessionStateStore
 from worker_contract import load_profile
@@ -91,6 +92,25 @@ class FakeRunner:
 
     def kill(self, handle):
         self.kills.append(handle.session_id)
+
+
+class FakeLTVMAdapter:
+    def __init__(self, payload):
+        self.payload = payload
+        self.cleanup_actions = []
+        self.inventory_calls = 0
+
+    def inventory(self):
+        self.inventory_calls += 1
+        if isinstance(self.payload, BaseException):
+            raise self.payload
+        return LTVMInventory.from_json(self.payload)
+
+    def cleanup(self, action):
+        self.cleanup_actions.append(action)
+        self.payload["vms"] = [
+            vm for vm in self.payload["vms"] if vm.get("name") != action.name
+        ]
 
 
 def ready_doctor(profile, envelope, **_kwargs):
@@ -250,6 +270,142 @@ class RunControllerTests(unittest.TestCase):
         self.assertEqual(self.runner.terminations.count(session.session_id), 1)
         self.assertEqual(len(self.alerts), 1)
         self.assertIn("/confirm?intent=kill", self.alerts[0][3])
+
+    def test_ltvm_reconciliation_registers_and_cleans_only_exact_owner(self):
+        session = self.controller.request_engineering(patch_record())
+        self.store.set_state(session.session_id, "running", changed_at=self.now)
+        owner = "patch-watcher:" + session.session_id
+        adapter = FakeLTVMAdapter({
+            "vms": [
+                {"name": "owned-vm", "owner_id": owner, "status": "running", "mem": 2048},
+                {
+                    "name": "other-vm",
+                    "owner_id": "patch-watcher:another-session",
+                    "status": "running",
+                    "mem": 4096,
+                },
+                {"name": "legacy-vm", "owner_id": None, "status": "stopped", "mem": 1024},
+            ]
+        })
+        self.controller.ltvm_adapter = adapter
+
+        self.controller._reconcile_ltvm_resources()
+        resources = self.store.list_owned_resources(session_id=session.session_id)
+        self.assertEqual(
+            [(item.resource_type, item.external_id, item.owner_id) for item in resources],
+            [("ltvm_vm", "owned-vm", owner)],
+        )
+
+        self.store.finish_session(
+            session.session_id,
+            "failed",
+            failure_code="test_failure",
+            failure_summary="test",
+            finished_at=self.now,
+        )
+        self.controller._reconcile_ltvm_resources()
+        self.assertEqual(
+            [(item.resource_type, item.name, item.owner_id) for item in adapter.cleanup_actions],
+            [("vm", "owned-vm", owner)],
+        )
+        cleaned = self.store.list_owned_resources(session_id=session.session_id)[0]
+        self.assertEqual(cleaned.state, "cleaned")
+        self.assertEqual(
+            {vm["name"] for vm in adapter.payload["vms"]},
+            {"other-vm", "legacy-vm"},
+        )
+
+    def test_ltvm_cleanup_refuses_record_when_inventory_owner_becomes_ambiguous(self):
+        session = self.controller.request_engineering(patch_record())
+        self.store.set_state(session.session_id, "running", changed_at=self.now)
+        owner = "patch-watcher:" + session.session_id
+        adapter = FakeLTVMAdapter({
+            "vms": [
+                {"name": "owned-vm", "owner_id": owner, "status": "running", "mem": 2048}
+            ]
+        })
+        self.controller.ltvm_adapter = adapter
+        self.controller._reconcile_ltvm_resources()
+        self.store.finish_session(
+            session.session_id,
+            "failed",
+            failure_code="test_failure",
+            failure_summary="test",
+            finished_at=self.now,
+        )
+        adapter.payload = {
+            "vms": [
+                {"name": "owned-vm", "owner_id": None, "status": "running", "mem": 2048}
+            ]
+        }
+
+        self.controller._reconcile_ltvm_resources()
+
+        self.assertEqual(adapter.cleanup_actions, [])
+        resource = self.store.list_owned_resources(session_id=session.session_id)[0]
+        self.assertEqual(resource.state, "cleanup_failed")
+        self.assertIn("ownership", resource.cleanup_failure)
+
+    def test_ltvm_inventory_failure_retains_cleanup_pending(self):
+        session = self.controller.request_engineering(patch_record())
+        self.store.set_state(session.session_id, "running", changed_at=self.now)
+        owner = "patch-watcher:" + session.session_id
+        adapter = FakeLTVMAdapter({
+            "vms": [
+                {"name": "owned-vm", "owner_id": owner, "status": "running", "mem": 2048}
+            ]
+        })
+        self.controller.ltvm_adapter = adapter
+        self.controller._reconcile_ltvm_resources()
+        self.store.finish_session(
+            session.session_id,
+            "failed",
+            failure_code="test_failure",
+            failure_summary="test",
+            finished_at=self.now,
+        )
+        adapter.payload = RuntimeError("ltvm unavailable")
+
+        self.controller._reconcile_ltvm_resources()
+        self.controller._cleanup_session(
+            self.store.get_session(session.session_id)
+        )
+
+        resource = self.store.list_owned_resources(session_id=session.session_id)[0]
+        self.assertEqual(resource.state, "cleanup_pending")
+        self.assertEqual(adapter.cleanup_actions, [])
+
+    def test_ltvm_cleanup_waits_until_terminal_worker_is_confirmed_dead(self):
+        session = self.controller.request_engineering(patch_record())
+        self.store.set_state(session.session_id, "running", changed_at=self.now)
+        snapshot = self.runner.start(SimpleNamespace(
+            run_id=session.run_id,
+            session_id=session.session_id,
+            runtime_dir=str(self.root / "fake-runtime"),
+        ))
+        self.controller._persist_handle(session, snapshot)
+        owner = "patch-watcher:" + session.session_id
+        adapter = FakeLTVMAdapter({
+            "vms": [
+                {"name": "owned-vm", "owner_id": owner, "status": "running", "mem": 2048}
+            ]
+        })
+        self.controller.ltvm_adapter = adapter
+        self.controller._reconcile_ltvm_resources()
+        self.store.finish_session(
+            session.session_id,
+            "failed",
+            failure_code="test_failure",
+            failure_summary="test",
+            finished_at=self.now,
+        )
+
+        self.controller._reconcile_ltvm_resources()
+        self.assertEqual(adapter.cleanup_actions, [])
+
+        self.runner.alive = False
+        self.controller._reconcile_ltvm_resources()
+        self.assertEqual([action.name for action in adapter.cleanup_actions], ["owned-vm"])
 
 
 if __name__ == "__main__":

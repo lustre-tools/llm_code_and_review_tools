@@ -197,6 +197,19 @@ simple comments, or asking Claude Code to attempt all comments. Neither option
 is selectable, invokes Claude, sends escalation email, or writes to Gerrit.
 Their proposed escalation behavior is documented in `DESIGN_ACTION_FLOW.md`.
 
+## Controlled engineering runs (Phase 3A foundation)
+
+An exact, refreshed patch revision can be prepared and then explicitly
+confirmed for a controlled engineering run. The first subphase creates a
+dedicated full clone (not a Git worktree), lets Claude edit source files with
+no shell or service credentials, and captures the actual Git diff/status plus
+inert argv-only validation requests. The dashboard shows checkout ownership,
+session messages, artifacts, and exactly owner-matched LTVM inventory.
+
+Build/test execution in session-owned LTVM guests is the next subphase.
+Gerrit upload is a later, separately approved subphase and is visibly disabled
+in the current capability display; editing a checkout never grants upload.
+
 ## Design documents
 
 - `DESIGN_ACTION_FLOW.md` defines the product-policy flow for test failures,

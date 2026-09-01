@@ -182,6 +182,26 @@ class RunEnvelopeTests(unittest.TestCase):
         envelope = make_envelope()
         self.assertEqual(RunEnvelope.from_dict(envelope.to_dict()).to_dict(), envelope.to_dict())
 
+    def test_ltvm_owner_accepts_durable_session_namespace(self):
+        profile = make_profile()
+        envelope = build_run_envelope(
+            run_id="run-123", change_id="68160", patchset=4,
+            revision_sha=REVISION, profile=profile,
+            task="Inspect the pinned patch.",
+            capabilities=["read_source", "report_status"],
+            instructions_hash=hash_text("instructions"), created_at=NOW,
+            ltvm_owner_id="patch-watcher:123e4567-e89b-12d3-a456-426614174000",
+        )
+        self.assertEqual(
+            RunEnvelope.from_dict(envelope.to_dict()).ltvm_owner_id,
+            "patch-watcher:123e4567-e89b-12d3-a456-426614174000",
+        )
+        payload = envelope.to_dict()
+        payload["ltvm_owner_id"] = "bad owner"
+        payload["content_hash"] = content_hash(payload)
+        with self.assertRaisesRegex(ContractError, "owner identifier"):
+            RunEnvelope.from_dict(payload)
+
     def test_envelope_hash_mismatch_is_rejected(self):
         payload = make_envelope().to_dict()
         payload["patchset"] += 1

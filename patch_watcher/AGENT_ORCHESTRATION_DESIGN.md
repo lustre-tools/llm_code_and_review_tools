@@ -1311,9 +1311,30 @@ Exit criteria:
 
 ### Phase 3: isolated execution foundation
 
+Phase 3 is deliberately split so source editing, execution, and publication do
+not arrive as one oversized capability grant.
+
+#### Phase 3A: private source-edit runs
+
 Build:
 
 - full independent checkout lifecycle;
+- exact-revision, two-step operator confirmation before a source-edit worker
+  starts;
+- a source-edit Claude profile limited to `Read`, `Glob`, `Grep`, `Edit`, and
+  `Write` inside the dedicated checkout, with no Bash, MCP, browser, service
+  credentials, or Gerrit write capability;
+- capture the actual Git diff/status independently of the agent and retain
+  them as immutable, digest-addressed evidence;
+- accept desired validation only as a bounded argv manifest. The request is
+  inert until a later controller stage admits and executes it;
+- dashboard progress, messages, exact revision, checkout ownership, evidence,
+  and explicit **Gerrit upload disabled** status.
+
+#### Phase 3B: session-owned LTVM validation
+
+Build:
+
 - consume LTVM's existing session-scoped `owner_id` inventory and implement
   reconciliation;
 - inventory all current LTVM VMs, associate matching owner IDs beneath their
@@ -1327,6 +1348,21 @@ Build:
 - artifact collection, cleanup, quarantine, and orphan reconciliation;
 - rootless worker container prototype and network-profile display.
 
+The controller, not the web request and not an untrusted repository file,
+admits each manifest step. Build/test execution occurs in the selected
+session-owned guest. No Phase 3 command runs inside the Patch Watcher web
+service process.
+
+#### Phase 3C: separately gated Gerrit upload
+
+After 3A and 3B are proven, add a distinct upload capability. It remains
+disabled by default and is never implied by permission to edit, build, or
+test. Upload requires an exact-current-patchset recheck, a reviewable diff and
+test evidence, a controller-generated upload plan, and explicit operator
+approval. Ambiguous upload outcomes reconcile with Gerrit before any retry.
+The uploaded patchset becomes a new observed revision and cannot silently
+reuse the old run's authority.
+
 Exit criteria:
 
 - untrusted build/test code does not execute in the web service or host worker
@@ -1338,6 +1374,8 @@ Exit criteria:
   owner-matched partial resources, emails once, and suppresses that patch until
   cooldown or confirmed manual retry;
 - restricted-egress behavior is tested and honestly represented.
+- Phase 3A/3B completion does not enable upload; 3C has its own capability,
+  confirmation, audit, and kill switch.
 
 ### Phase 4: review handling and proposed edits
 
@@ -1358,13 +1396,14 @@ Exit criteria:
 - all edits map to a specific comment and pinned revision;
 - containerization/isolation gate is met before executing patch code.
 
-### Phase 5: Jenkins build handling and controlled Gerrit writes
+### Phase 5: Jenkins build handling and broader controlled Gerrit writes
 
 Build:
 
 - design and implement Jenkins failure classification separately from Maloo
   retesting;
-- narrowly granted Gerrit replies/messages and patchset upload;
+- narrowly granted Gerrit replies/messages and reuse of the separately proven
+  Phase 3C patchset-upload controller;
 - pre-write revision revalidation, approval, idempotency, and audit;
 - post-upload observation of the new patchset as a new revision/run boundary.
 

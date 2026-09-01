@@ -62,6 +62,41 @@ READ_ONLY_REPORT_SCHEMA: Mapping[str, Any] = {
         }
     ],
 }
+ENGINEERING_REPORT_SCHEMA: Mapping[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "schema": {"const": "patch-watcher-engineering-report/v1"},
+        "state": {"enum": ["complete", "needs_input", "failed", "resource_exhausted"]},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "changed_files": {
+            "type": "array", "maxItems": 200,
+            "items": {"type": "string", "minLength": 1, "maxLength": 1000},
+        },
+        "validation_requests": {
+            "type": "array", "maxItems": 50,
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "name": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "target": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "argv": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 4000},
+                    },
+                },
+                "required": ["name", "target", "argv"],
+            },
+        },
+        "question": {"type": "string", "minLength": 1, "maxLength": 2000},
+    },
+    "required": ["schema", "state", "summary", "changed_files", "validation_requests"],
+    "allOf": [{
+        "if": {"properties": {"state": {"const": "needs_input"}}, "required": ["state"]},
+        "then": {"required": ["question"]},
+    }],
+}
 UNKNOWN_FAILURE_RECOMMENDATIONS = frozenset(
     {"known_failure", "transient", "patch_caused", "needs_human", "inconclusive"}
 )
@@ -143,7 +178,12 @@ class ProcessIdentity:
 
 @dataclasses.dataclass(frozen=True)
 class ReadOnlyRunSpec:
-    """Everything the transport needs to launch one read-only conversation."""
+    """Everything the transport needs to launch one bounded conversation.
+
+    The historical class name is retained for persisted Phase 0C launch specs.
+    ``source_edit`` enables only file editing in an isolated checkout; Bash,
+    MCP, browser, and ambient service credentials remain unavailable.
+    """
 
     run_id: str
     session_id: str
@@ -155,6 +195,7 @@ class ReadOnlyRunSpec:
     effort: str = ""
     claude_binary: str = "claude"
     report_kind: str = "read_only"
+    capability_profile: str = "read_only"
 
     def validate(self) -> None:
         if not RUN_ID_RE.fullmatch(self.run_id):
@@ -179,8 +220,14 @@ class ReadOnlyRunSpec:
             raise ValueError("claude_binary must identify the Claude Code executable")
         if self.effort and self.effort not in {"low", "medium", "high", "xhigh", "max"}:
             raise ValueError("unsupported effort")
-        if self.report_kind not in {"read_only", "unknown_failure_research"}:
+        if self.report_kind not in {"read_only", "unknown_failure_research", "engineering"}:
             raise ValueError("unsupported report kind")
+        if self.capability_profile not in {"read_only", "source_edit"}:
+            raise ValueError("unsupported capability profile")
+        if self.report_kind == "engineering" and self.capability_profile != "source_edit":
+            raise ValueError("engineering reports require the source_edit capability profile")
+        if self.capability_profile == "source_edit" and self.report_kind != "engineering":
+            raise ValueError("source_edit capability requires an engineering report")
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -345,7 +392,11 @@ def _same_identity(expected: ProcessIdentity, actual: ProcessIdentity) -> bool:
     return expected.pid == actual.pid and expected.start_token == actual.start_token
 
 
-def _safe_environment(source: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+def _safe_environment(
+    source: Optional[Mapping[str, str]] = None,
+    *,
+    capability_profile: str = "read_only",
+) -> Dict[str, str]:
     """Remove ambient service-write credentials while preserving model auth."""
 
     environment = dict(source if source is not None else os.environ)
@@ -365,19 +416,22 @@ def _safe_environment(source: Optional[Mapping[str, str]] = None) -> Dict[str, s
         if any(marker in upper for marker in service_markers) or upper.endswith(secret_suffixes):
             environment.pop(key, None)
     environment["CLAUDE_CODE_SAFE_MODE"] = "1"
-    environment["PATCH_WATCHER_CAPABILITY_PROFILE"] = "read_only"
+    if capability_profile not in {"read_only", "source_edit"}:
+        raise ValueError("unsupported capability profile")
+    environment["PATCH_WATCHER_CAPABILITY_PROFILE"] = capability_profile
     return environment
 
 
 def build_read_only_claude_command(spec: ReadOnlyRunSpec) -> List[str]:
-    """Return a shell-free command with no external-write-capable tools."""
+    """Return a shell-free command with the profile's exact bounded tools."""
 
     spec.validate()
-    report_schema = (
-        UNKNOWN_FAILURE_REPORT_SCHEMA
-        if spec.report_kind == "unknown_failure_research"
-        else READ_ONLY_REPORT_SCHEMA
-    )
+    report_schema = {
+        "unknown_failure_research": UNKNOWN_FAILURE_REPORT_SCHEMA,
+        "engineering": ENGINEERING_REPORT_SCHEMA,
+        "read_only": READ_ONLY_REPORT_SCHEMA,
+    }[spec.report_kind]
+    tools = "Read,Glob,Grep,Edit,Write" if spec.capability_profile == "source_edit" else "Read,Glob,Grep"
     command = [
         spec.claude_binary,
         "--print",
@@ -396,7 +450,7 @@ def build_read_only_claude_command(spec: ReadOnlyRunSpec) -> List[str]:
         "--permission-mode",
         "dontAsk",
         "--tools",
-        "Read,Glob,Grep",
+        tools,
         "--mcp-config",
         "{}",
         "--json-schema",
@@ -409,6 +463,76 @@ def build_read_only_claude_command(spec: ReadOnlyRunSpec) -> List[str]:
     if spec.effort:
         command.extend(["--effort", spec.effort])
     return command
+
+
+def validate_engineering_report(value: Any) -> Mapping[str, Any]:
+    """Validate the source-edit worker's bounded, non-authoritative report."""
+
+    if not isinstance(value, Mapping):
+        raise RunnerProtocolError("engineering report must be an object")
+    allowed = {
+        "schema", "state", "summary", "changed_files", "validation_requests", "question",
+    }
+    unknown = set(value) - allowed
+    if unknown:
+        raise RunnerProtocolError(
+            "engineering report has unknown fields: " + ", ".join(sorted(unknown))
+        )
+    if value.get("schema") != "patch-watcher-engineering-report/v1":
+        raise RunnerProtocolError("engineering report has unsupported schema")
+    state = value.get("state")
+    if state not in {"complete", "needs_input", "failed", "resource_exhausted"}:
+        raise RunnerProtocolError("engineering report has invalid state")
+    summary = value.get("summary")
+    if not isinstance(summary, str) or not summary.strip() or len(summary) > 2000:
+        raise RunnerProtocolError("engineering report summary is invalid")
+    changed_files = value.get("changed_files")
+    if not isinstance(changed_files, list) or len(changed_files) > 200:
+        raise RunnerProtocolError("engineering report changed_files is invalid")
+    normalized_files = []
+    for item in changed_files:
+        if not isinstance(item, str) or not item.strip() or len(item) > 1000 or "\x00" in item:
+            raise RunnerProtocolError("engineering report contains an invalid changed file")
+        path = item.strip()
+        if Path(path).is_absolute() or ".." in Path(path).parts:
+            raise RunnerProtocolError("engineering report changed files must be checkout-relative")
+        normalized_files.append(path)
+    requests = value.get("validation_requests")
+    if not isinstance(requests, list) or len(requests) > 50:
+        raise RunnerProtocolError("engineering report validation_requests is invalid")
+    normalized_requests = []
+    for request in requests:
+        if not isinstance(request, Mapping) or set(request) != {"name", "target", "argv"}:
+            raise RunnerProtocolError("engineering validation request fields are invalid")
+        name, target, argv = request.get("name"), request.get("target"), request.get("argv")
+        if not isinstance(name, str) or not name.strip() or len(name) > 200:
+            raise RunnerProtocolError("engineering validation request name is invalid")
+        if not isinstance(target, str) or not target.strip() or len(target) > 200:
+            raise RunnerProtocolError("engineering validation request target is invalid")
+        if not isinstance(argv, list) or not 1 <= len(argv) <= 100:
+            raise RunnerProtocolError("engineering validation request argv is invalid")
+        normalized_argv = []
+        for argument in argv:
+            if not isinstance(argument, str) or not argument or len(argument) > 4000 or "\x00" in argument:
+                raise RunnerProtocolError("engineering validation request argument is invalid")
+            normalized_argv.append(argument)
+        normalized_requests.append(
+            {"name": name.strip(), "target": target.strip(), "argv": normalized_argv}
+        )
+    question = value.get("question")
+    if question is not None and (
+        not isinstance(question, str) or not question.strip() or len(question) > 2000
+    ):
+        raise RunnerProtocolError("engineering report question is invalid")
+    if state == "needs_input" and question is None:
+        raise RunnerProtocolError("needs_input engineering report requires question")
+    normalized: Dict[str, Any] = {
+        "schema": value["schema"], "state": state, "summary": summary.strip(),
+        "changed_files": normalized_files, "validation_requests": normalized_requests,
+    }
+    if question is not None:
+        normalized["question"] = question.strip()
+    return normalized
 
 
 def validate_read_only_report(value: Any) -> Mapping[str, Any]:
@@ -699,7 +823,7 @@ class ClaudeHost:
         self.process = self.process_factory(
             command,
             cwd=str(Path(self.spec.cwd).expanduser().resolve()),
-            env=_safe_environment(),
+            env=_safe_environment(capability_profile=self.spec.capability_profile),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -731,7 +855,7 @@ class ClaudeHost:
                 "run_id": self.spec.run_id,
                 "session_id": self.spec.session_id,
                 "claude_pid": claude_identity.pid,
-                "capability_profile": "read_only",
+                "capability_profile": self.spec.capability_profile,
                 "command": [*command, "<streamed-prompt>"],
             },
         )
@@ -835,11 +959,11 @@ class ClaudeHost:
                     )
                 else:
                     try:
-                        validator = (
-                            validate_unknown_failure_report
-                            if self.spec.report_kind == "unknown_failure_research"
-                            else validate_read_only_report
-                        )
+                        validator = {
+                            "unknown_failure_research": validate_unknown_failure_report,
+                            "engineering": validate_engineering_report,
+                            "read_only": validate_read_only_report,
+                        }[self.spec.report_kind]
                         report = validator(raw.get("structured_output"))
                     except RunnerProtocolError as exc:
                         self._append_event(
