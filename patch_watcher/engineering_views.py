@@ -209,7 +209,7 @@ def _capability_status(suffix="default"):
         "<li class='capability-disabled'><strong>Build execution:</strong> request only in Phase 3A; not executed yet</li>"
         "<li class='capability-disabled'><strong>Test execution:</strong> request only in Phase 3A; session-owned LTVM execution is Phase 3B</li>"
         "<li class='capability-disabled'><strong>Gerrit upload:</strong> disabled for this subphase</li>"
-        "</ul><p>The produced diff and commit remain review artifacts; this run "
+        "</ul><p>The produced diff and captured evidence remain review artifacts; this run "
         "cannot upload a patchset or otherwise write to Gerrit.</p></section>"
     )
 
