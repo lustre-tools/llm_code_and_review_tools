@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0",
+  "profile_id": "host-unsandboxed-mac-v1",
+  "profile_version": 1,
+  "content_hash": "sha256:a3df641a92577728093001992e52b7f1d4677cbe245c9546ace8f35b973d3087",
+  "description": "Current single-host macOS worker. Trusted and unsandboxed; manual read-only investigation only.",
+  "supported_hosts": {
+    "operating_systems": ["Darwin"],
+    "architectures": ["arm64"]
+  },
+  "runtimes": {
+    "claude_code": "==2.1.251",
+    "node": ">=25.6,<26",
+    "python": ">=3.9,<3.13",
+    "git": ">=2.39",
+    "worker_protocol": "==1.0"
+  },
+  "tools": [
+    {"name": "claude_code", "command": "claude", "required": true, "version_constraint": "==2.1.251", "expected_path": "/opt/homebrew/bin/claude"},
+    {"name": "node", "command": "node", "required": true, "version_constraint": ">=25.6,<26", "expected_path": "/opt/homebrew/bin/node"},
+    {"name": "python", "command": "python3", "required": true, "version_constraint": ">=3.9,<3.13", "expected_path": "/usr/bin/python3"},
+    {"name": "git", "command": "git", "required": true, "version_constraint": ">=2.39", "expected_path": "/usr/bin/git"},
+    {"name": "rg", "command": "rg", "required": true, "expected_path": "/Applications/ChatGPT.app/Contents/Resources/rg"},
+    {"name": "jq", "command": "jq", "required": true, "expected_path": "/usr/bin/jq"},
+    {"name": "pw_worker", "command": "pw-worker", "required": true, "api_version": "1.0"},
+    {"name": "gerrit", "command": "gerrit", "required": false, "api_version": "0.2", "expected_path": "~/.pyenv/shims/gerrit"},
+    {"name": "jira", "command": "jira", "required": false, "api_version": "0.5", "expected_path": "~/.pyenv/shims/jira"},
+    {"name": "maloo", "command": "maloo", "required": false, "api_version": "1", "expected_path": "~/.pyenv/shims/maloo"},
+    {"name": "jenkins", "command": "jenkins", "required": false, "api_version": "1", "expected_path": "~/.pyenv/shims/jenkins"},
+    {"name": "janitor", "command": "janitor", "required": false, "api_version": "1", "expected_path": "~/.pyenv/shims/janitor"},
+    {"name": "github", "command": "gh", "required": false, "expected_path": "/opt/homebrew/bin/gh"},
+    {"name": "ltvm", "command": "ltvm", "required": false, "version_constraint": "==0.20.01146e5", "api_version": "0.20", "expected_path": "/usr/local/bin/ltvm"},
+    {"name": "lreview", "command": "lreview", "required": false, "api_version": "0.1"}
+  ],
+  "capabilities": [
+    "query_ci",
+    "query_gerrit",
+    "query_jira",
+    "read_evidence",
+    "read_source",
+    "register_artifact",
+    "report_status"
+  ],
+  "isolation_profiles": ["host_unsandboxed"],
+  "network_profiles": ["host_ambient"],
+  "logical_paths": {
+    "/home/worker": "private_read_write",
+    "/run/patch-watcher": "private_read_write",
+    "/work/input": "private_read_only",
+    "/work/output": "private_read_write",
+    "/work/scratch": "private_read_write",
+    "/work/source": "read_only"
+  },
+  "host_services": [
+    "artifact_collector",
+    "claude_runner",
+    "resource_sampler",
+    "worker_report_channel"
+  ],
+  "default_limits": {
+    "action_count": 50,
+    "cpu_count": 4,
+    "disk_bytes": 21474836480,
+    "inactivity_seconds": 1800,
+    "memory_bytes": 8589934592,
+    "output_bytes": 1073741824,
+    "process_count": 256,
+    "runtime_seconds": 7200
+  },
+  "ambient_home_allowed": true,
+  "security_label": "trusted_unsandboxed"
+}

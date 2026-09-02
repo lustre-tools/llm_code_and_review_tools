@@ -144,11 +144,21 @@ lreview run 64086 64087 --repo lustre-release   # Review (no post)
 lreview post                         # Post collected findings
 lreview run 64086 --post             # Review + post in one go
 lreview run --mode light 64086 --repo lustre-release  # cheap single-pass
+lreview run --repo ~/tree --last 3   # Review the newest 3 local commits
 ```
 
 `--mode light` runs the bundled single-pass light review instead of
 the review-core deep dive (much cheaper; artifacts `-light`-suffixed
 so the modes never overwrite each other).
+
+`--last N` (`-n`) points lreview at a directory instead of Gerrit and
+reviews the newest N commits of that repo, each in its own worktree
+pinned to that commit. Local results are never posted; `--output`
+(`-o`, default `<results-dir>/review-last<N>.txt` with `--last`)
+writes the whole batch as one plain-text dump -- assessment and
+findings per commit, including the clean and failed ones.
+
+
 Defaults: opus model (`--model` / `$LREVIEW_MODEL` for sonnet/fable),
 5 parallel reviews (`--jobs`), 2h per-review timeout, results in
 `./lreview-results/` (per-change JSON + log + summary.json), a live

@@ -24,6 +24,7 @@ class ResolvedChange:
     ref: str
     base_url: str
     change_id: Optional[str] = None
+    provider: str = "gerrit"
 
     @property
     def slug(self) -> str:

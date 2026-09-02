@@ -745,3 +745,35 @@ class TestUpdateSummary:
         backups = list(tmp_path.glob("summary.json.corrupt-*"))
         assert len(backups) == 1
         assert backups[0].read_text() == "{truncated"
+
+
+class TestRecentCommits:
+    """worktree.recent_commits backs 'lreview run --last N'."""
+
+    def _repo(self, tmp_path, count):
+        import subprocess
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e",
+               "PATH": os.environ["PATH"], "HOME": str(tmp_path)}
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True,
+                       env=env)
+        for i in range(count):
+            (tmp_path / "f").write_text(str(i))
+            subprocess.run(["git", "-C", str(tmp_path), "add", "f"],
+                           check=True, env=env)
+            subprocess.run(
+                ["git", "-C", str(tmp_path), "commit", "-qm", f"c{i}"],
+                check=True, env=env)
+        return tmp_path
+
+    def test_newest_first(self, tmp_path):
+        from lreview.worktree import commit_subject, recent_commits
+        repo = self._repo(tmp_path, 4)
+        shas = recent_commits(repo, 3)
+        assert len(shas) == 3
+        assert [commit_subject(repo, s) for s in shas] == ["c3", "c2", "c1"]
+
+    def test_short_history_returns_what_there_is(self, tmp_path):
+        from lreview.worktree import recent_commits
+        repo = self._repo(tmp_path, 2)
+        assert len(recent_commits(repo, 10)) == 2

@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://patch-watcher.local/schemas/environment-attestation-v1.schema.json",
+  "title": "Patch Watcher EnvironmentAttestation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "content_hash", "created_at", "admitted", "status",
+    "worker_host", "worker_profile_id", "worker_profile_hash", "run_envelope_hash",
+    "isolation_mode", "network_mode", "executables", "services", "checkout",
+    "resource_limits", "free_resources", "config_schemas", "warnings", "deviations",
+    "unavailable_optional_capabilities", "failure_codes"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "content_hash": {"$ref": "#/$defs/hash"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "admitted": {"type": "boolean"},
+    "status": {"enum": ["ready", "degraded", "blocked"]},
+    "worker_host": {
+      "type": "object", "additionalProperties": false,
+      "required": ["host_id", "operating_system", "architecture", "os_version", "host_build_id", "image_digest"],
+      "properties": {
+        "host_id": {"type": "string", "minLength": 1},
+        "operating_system": {"type": "string", "minLength": 1},
+        "architecture": {"type": "string", "minLength": 1},
+        "os_version": {"type": "string", "minLength": 1},
+        "host_build_id": {"type": "string", "minLength": 1},
+        "image_digest": {"type": "string"}
+      }
+    },
+    "worker_profile_id": {"type": "string", "minLength": 1},
+    "worker_profile_hash": {"$ref": "#/$defs/hash"},
+    "run_envelope_hash": {"$ref": "#/$defs/hash"},
+    "isolation_mode": {"type": "string", "minLength": 1},
+    "network_mode": {"type": "string", "minLength": 1},
+    "executables": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "path", "version", "required", "available", "api_version"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "path": {"type": "string"},
+          "version": {"type": "string"},
+          "required": {"type": "boolean"},
+          "available": {"type": "boolean"},
+          "api_version": {"type": "string"}
+        }
+      }
+    },
+    "services": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object", "additionalProperties": false,
+        "required": ["healthy", "version", "detail"],
+        "properties": {
+          "healthy": {"type": "boolean"},
+          "version": {"type": "string"},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+    "checkout": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "revision_sha", "clean", "mount_mode", "initial_state_hash", "free_bytes"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "revision_sha": {"type": "string", "pattern": "^[0-9a-fA-F]{40,64}$"},
+        "clean": {"type": "boolean"},
+        "mount_mode": {"type": "string", "minLength": 1},
+        "initial_state_hash": {"$ref": "#/$defs/hash"},
+        "free_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "resource_limits": {"$ref": "#/$defs/limits"},
+    "free_resources": {"$ref": "#/$defs/freeLimits"},
+    "config_schemas": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}},
+    "warnings": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "deviations": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "unavailable_optional_capabilities": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "failure_codes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "cpu_count": {"type": "integer", "minimum": 1},
+        "memory_bytes": {"type": "integer", "minimum": 1},
+        "disk_bytes": {"type": "integer", "minimum": 1},
+        "process_count": {"type": "integer", "minimum": 1},
+        "runtime_seconds": {"type": "integer", "minimum": 1},
+        "inactivity_seconds": {"type": "integer", "minimum": 1},
+        "output_bytes": {"type": "integer", "minimum": 1},
+        "action_count": {"type": "integer", "minimum": 1}
+      }
+    },
+    "freeLimits": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "cpu_count": {"type": "integer", "minimum": 0},
+        "memory_bytes": {"type": "integer", "minimum": 0},
+        "disk_bytes": {"type": "integer", "minimum": 0},
+        "process_count": {"type": "integer", "minimum": 0},
+        "runtime_seconds": {"type": "integer", "minimum": 0},
+        "inactivity_seconds": {"type": "integer", "minimum": 0},
+        "output_bytes": {"type": "integer", "minimum": 0},
+        "action_count": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

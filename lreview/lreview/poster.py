@@ -91,6 +91,34 @@ def _post_one(results_dir: Path, entry: dict, prefix: Optional[str]):
     return False, result.error or "unknown error", prefix
 
 
+def _post_github(results_dir: Path, entry: dict, prefix: Optional[str]):
+    """Post one neutral artifact, refusing a PR whose head moved."""
+    from .github import github_request
+    prefix = resolve_prefix(prefix, entry)
+    owner_repo = entry["repository"]
+    number = entry["number"]
+    current = github_request(f"/repos/{owner_repo}/pulls/{number}")
+    if current["head"]["sha"] != entry["head_sha"]:
+        return False, "PR head changed since review; refusing stale post", prefix
+    spec = json.loads((results_dir / entry["json"]).read_text())
+    body = (prefix + "\n\n" if prefix else "") + spec.get("message", "")
+    summary = []
+    comments = []
+    for finding in spec.get("findings", []):
+        text = finding["message"]
+        if finding.get("location_kind", "inline") == "inline":
+            comments.append({"path": finding["path"], "line": finding["line"],
+                             "side": finding.get("side", "RIGHT").upper(), "body": text})
+        else:
+            summary.append("- " + text)
+    if summary:
+        body += "\n\nAdditional findings:\n" + "\n".join(summary)
+    payload = {"body": body, "commit_id": entry["head_sha"], "event": "COMMENT"}
+    if comments: payload["comments"] = comments
+    github_request(f"/repos/{owner_repo}/pulls/{number}/reviews", "POST", payload)
+    return True, f"posted {len(comments)} inline comment(s) pinned to {entry['head_sha'][:12]}", prefix
+
+
 def post_results(
     results_dir: Path,
     changes: Optional[list[int]] = None,
@@ -160,8 +188,10 @@ def post_results(
                 continue
 
             try:
-                success, detail, used_prefix = _post_one(
-                    results_dir, entry, prefix)
+                if entry.get("provider") == "github":
+                    success, detail, used_prefix = _post_github(results_dir, entry, prefix)
+                else:
+                    success, detail, used_prefix = _post_one(results_dir, entry, prefix)
             except Exception as exc:  # noqa: BLE001 - one bad entry
                 # (missing file, config error) must not kill the rest
                 outcomes.append(PostOutcome(number, "error", str(exc)))

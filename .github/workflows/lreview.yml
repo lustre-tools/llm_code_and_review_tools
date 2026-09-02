@@ -1,0 +1,31 @@
+name: lreview
+on:
+  pull_request:
+jobs:
+  review:
+    # Fork PRs do not receive repository secrets with pull_request.
+    if: github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: Install lreview at a pinned revision
+        run: |
+          git clone https://github.com/lustre-tools/llm_code_and_review_tools.git tools
+          git -C tools checkout REPLACE_WITH_IMMUTABLE_COMMIT
+          git -C tools submodule update --init review-prompts
+          pip install ./tools/gerrit_cli ./tools/lreview
+      - run: lreview run --github "$PR_URL" --repo "$GITHUB_WORKSPACE" --post
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: lreview-results, path: lreview-results}

@@ -7,6 +7,7 @@ instructions for the rest.
 """
 
 import shutil
+import os
 import sys
 from typing import Optional, Tuple
 
@@ -58,6 +59,18 @@ def check_gerrit(live: bool = True) -> Tuple[bool, str]:
         # reported the same way to the user
         return False, (f"credentials set for {client.url} but "
                        f"verification failed: {exc}")
+
+
+def check_github() -> Tuple[bool, str]:
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not token:
+        return False, "set GH_TOKEN or GITHUB_TOKEN"
+    try:
+        from .github import github_request
+        identity = github_request("/user")
+        return True, f"authenticated as {identity.get('login', 'unknown')}"
+    except Exception as exc:
+        return False, str(exc)
 
 
 def _step(ok: bool, label: str, detail: str) -> None:
