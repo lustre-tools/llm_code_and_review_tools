@@ -232,6 +232,7 @@ class EngineeringStateTests(unittest.TestCase):
             lambda: SafeCommand("x", ["pytest"], cwd="../other"),
             lambda: SafeCommand("x", ["pytest"], env={"PATH": "/tmp/bin"}),
             lambda: SafeCommand("x", ["pytest"], execution_target="guest\nother"),
+            lambda: SafeCommand("x", ["pytest"], evidence_role="probably-test"),
         )
         for factory in invalid:
             with self.subTest(factory=factory), self.assertRaises(ValueError):
@@ -401,6 +402,21 @@ class EngineeringStateTests(unittest.TestCase):
                 expected_revision=disabled_allocation.revision_sha,
                 expected_owner_id=disabled_allocation.owner_id,
             )
+
+    def test_validation_command_audit_persists_explicit_evidence_role(self):
+        command = ValidationCommandAudit(
+            "guest-test", argv=("make", "test"), evidence_role="test"
+        )
+        restored = ValidationCommandAudit.from_command(command.to_dict())
+        self.assertEqual(restored.evidence_role, "test")
+        self.assertEqual(restored.digest, command.digest)
+
+        historical = ValidationCommandAudit("historical", argv=("true",))
+        self.assertNotIn("evidence_role", historical.to_dict())
+        self.assertEqual(
+            ValidationCommandAudit.from_command(historical.to_dict()).evidence_role,
+            "other",
+        )
 
     def test_guest_command_audit_is_open_ended_immutable_and_artifact_bound(self):
         allocation, manifest, execution, attempt = self.approve_and_claim()

@@ -16,6 +16,7 @@ from maloo_adapter import (
     MalooBugLinks,
     MalooLinkBugResult,
 )
+from gerrit_upload import UploadStateStore
 
 
 class PatchWatcherTests(unittest.TestCase):
@@ -36,6 +37,7 @@ class PatchWatcherTests(unittest.TestCase):
         app.SESSION_STORE = None
         app.WORKER_PROFILE = None
         app.ENGINEERING_WORKER_PROFILE = None
+        app.GERRIT_UPLOAD_CONTROLLER = None
         app._ENGINEERING_USED_CONFIRMATIONS.clear()
         app.RESOURCE_COLLECTION_ENABLED = False
         app._RESOURCE_SNAPSHOT = None
@@ -113,6 +115,44 @@ class PatchWatcherTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_upload_confirmation_get_is_display_only_and_token_bound(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            diff = root / "proposed.patch"
+            diff.write_text("diff --git a/a b/a\n", encoding="utf-8")
+            import hashlib
+            store = UploadStateStore(root / "uploads.sqlite3")
+            plan = store.prepare(
+                idempotency_key="plan-once", run_id="run-1", session_id="session-1",
+                change_number=68541, project="fs/lustre-release", branch="master",
+                change_id="I" + "1" * 40,
+                patchset=3, revision_sha="a" * 40,
+                revision_ref="refs/changes/41/68541/3", diff_path=str(diff),
+                diff_artifact_id="diff-1",
+                diff_sha256=hashlib.sha256(diff.read_bytes()).hexdigest(),
+                evidence_sha256="c" * 64, requested_by="operator",
+            )
+            plan = store.transition(
+                plan.upload_id, expected={"prepared"}, state="commit_ready",
+                local_commit_sha="b" * 40,
+            )
+            app.GERRIT_UPLOAD_CONTROLLER = SimpleNamespace(store=store)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                body = urlopen(
+                    f"http://127.0.0.1:{server.server_address[1]}"
+                    f"/uploads/{plan.upload_id}/confirm"
+                ).read().decode()
+            finally:
+                server.shutdown(); server.server_close(); thread.join(timeout=2)
+            final_state = store.get(plan.upload_id).state
+        self.assertIn("Confirm new Gerrit patchset", body)
+        self.assertIn("method='post' action='/uploads/", body)
+        self.assertIn(plan.binding_digest, body)
+        self.assertEqual(final_state, "commit_ready")
 
     def test_page_displays_review_and_ci_criteria_as_links(self):
         patch_record, _ = app.add_patch(
@@ -217,14 +257,32 @@ class PatchWatcherTests(unittest.TestCase):
         self.assertIn("name='url'", rendered)
         self.assertNotIn("name='title'", rendered)
 
-    def test_page_includes_disabled_review_handling_stubs(self):
+    def test_patch_actions_are_compact_ordered_and_truthful(self):
+        first, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+        first.update(
+            change_number=68160, patchset=4, revision_sha="d" * 40,
+            revision_ref="refs/changes/60/68160/4",
+            project="fs/lustre-release", lifecycle="Open",
+        )
+        second, _ = app.add_patch("https://review.whamcloud.com/c/68161")
+        second.update(change_number=68161, patchset=2)
+
         rendered = app.page()
-        self.assertIn("Handle reviews", rendered)
-        self.assertIn("Handle simple comments", rendered)
-        self.assertIn("Handle all comments", rendered)
-        self.assertIn("Stub · disabled", rendered)
-        self.assertEqual(rendered.count("aria-disabled='true'"), 2)
+
+        self.assertIn("id='patch-actions-68160-4'", rendered)
+        self.assertIn("id='patch-actions-68161-2'", rendered)
+        self.assertEqual(rendered.count("<summary>Actions</summary>"), 2)
+        self.assertLess(rendered.index("Build failures"), rendered.index("Test failures"))
+        self.assertLess(rendered.index("Test failures"), rendered.index("Review comments"))
+        self.assertIn("Handle simple comments; bail to human", rendered)
+        self.assertIn("Handle all comments; bail to human when needed", rendered)
+        self.assertIn("Jenkins failures are currently observed only", rendered)
+        self.assertNotIn("aria-labelledby='handle-reviews-title'", rendered)
         self.assertNotIn("action='/handle-review", rendered)
+        self.assertIn("method='post' action='/automation/policy'", rendered)
+        self.assertIn("method='post' action='/automation/dry-run'", rendered)
+        self.assertIn("method='post' action='/runs/investigate'", rendered)
+        self.assertIn("method='post' action='/engineering-runs/prepare'", rendered)
 
     def test_retest_automation_defaults_globally_and_per_patch_disabled(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -244,6 +302,8 @@ class PatchWatcherTests(unittest.TestCase):
         self.assertEqual(policy_mode, "disabled")
         self.assertIn("Global execution: Disabled", rendered)
         self.assertIn("Test failure handling: <strong>Disabled", rendered)
+        self.assertIn("<strong>Build failures</strong>", rendered)
+        self.assertIn("<strong>Review comments</strong>", rendered)
 
     def test_global_automation_enable_get_is_display_only_then_post_mutates(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -825,10 +885,10 @@ class PatchWatcherTests(unittest.TestCase):
             revision_ref="refs/changes/60/68160/4",
         )
         rendered = app.page()
-        self.assertIn("Manual read-only investigation", rendered)
+        self.assertIn("Start a read-only investigation pinned to this exact revision", rendered)
         self.assertIn("action='/runs/investigate'", rendered)
         self.assertIn("name='revision_sha'", rendered)
-        self.assertIn("Read-only:", rendered)
+        self.assertIn(">Investigate</button>", rendered)
         self.assertNotIn("name='revision_sha' value=''", rendered)
 
     def test_engineering_start_http_flow_is_inert_until_one_exact_final_post(self):

@@ -36,6 +36,17 @@ class RunViewTests(unittest.TestCase):
         self.assertIn("a" * 40, html)
         self.assertNotIn("method='get'", html.casefold())
 
+    def test_compact_investigate_preserves_exact_post_without_long_copy(self):
+        html = run_views.render_investigate_control(
+            self.patch(), csrf_token="csrf", idempotency_token="once",
+            compact=True,
+        )
+        self.assertIn("class='quick-action'", html)
+        self.assertIn("action='/runs/investigate'", html)
+        self.assertIn("name='revision_sha'", html)
+        self.assertIn("Investigate", html)
+        self.assertNotIn("Starts one manually requested", html)
+
     def test_investigate_disabled_when_terminal_active_unpinned_or_ineligible(self):
         for patch in (self.patch(status="merged"), self.patch(active_run_id="x"),
                       self.patch(revision_sha=None), self.patch(eligible=False)):

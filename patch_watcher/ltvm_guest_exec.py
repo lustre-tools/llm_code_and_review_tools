@@ -205,6 +205,7 @@ class GuestCommand:
     timeout_seconds: int = 3_600
     expected_exit_codes: tuple[int, ...] = (0,)
     label: str = ""
+    evidence_role: str = "other"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "command_id", _identifier("command_id", self.command_id))
@@ -271,6 +272,10 @@ class GuestCommand:
         object.__setattr__(self, "expected_exit_codes", tuple(sorted(set(codes))))
         if "\x00" in self.label or len(self.label.encode("utf-8")) > 500:
             raise ValueError("label is invalid or oversized")
+        role = str(self.evidence_role).strip().lower()
+        if role not in {"test", "build", "diagnostic", "other"}:
+            raise ValueError("evidence_role must be test, build, diagnostic, or other")
+        object.__setattr__(self, "evidence_role", role)
 
     @property
     def mode(self) -> str:
@@ -290,6 +295,9 @@ class GuestCommand:
             value["argv" if self.argv is not None else "text"] = (
                 list(self.argv) if self.argv is not None else self.text
             )
+        # Keep existing command identities stable when no explicit role exists.
+        if self.evidence_role != "other":
+            value["evidence_role"] = self.evidence_role
         return value
 
     @property
@@ -358,6 +366,7 @@ class GuestExecutionRequest:
                     timeout_seconds=command.timeout_seconds,
                     expected_exit_codes=command.expected_exit_codes,
                     label=command.label,
+                    evidence_role=command.evidence_role,
                 )
                 for command in manifest.commands
             ),

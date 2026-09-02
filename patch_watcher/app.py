@@ -40,6 +40,12 @@ from engineering_views import (
     render_engineering_dashboard,
     render_engineering_start_confirmation,
     render_engineering_start_control,
+    render_gerrit_upload_confirmation,
+)
+from gerrit_upload import (
+    GerritUploadConflict,
+    GerritUploadError,
+    configured_upload_controller,
 )
 from ltvm_resources import LTVMAdapter, owner_id_for_session
 from session_state import (
@@ -99,6 +105,9 @@ DEFAULT_SESSION_DATABASE = (
 DEFAULT_AUTOMATION_DATABASE = (
     Path.home() / ".local" / "state" / "patch-watcher" / "automation.sqlite3"
 )
+DEFAULT_GERRIT_UPLOAD_DATABASE = (
+    Path.home() / ".local" / "state" / "patch-watcher" / "gerrit-uploads.sqlite3"
+)
 DEFAULT_WORKER_PROFILE_ID = "host-unsandboxed-mac-v1"
 DEFAULT_ENGINEERING_WORKER_PROFILE_ID = "host-unsandboxed-mac-engineering-v1"
 ACTIVE_WATCH_FILE = DEFAULT_SEED_FILE
@@ -112,6 +121,7 @@ RUN_CONTROLLER = None
 AUTOMATION_STORE = None
 RETEST_CONTROLLER = None
 FAILURE_ACTION_CONTROLLER = None
+GERRIT_UPLOAD_CONTROLLER = None
 AUTOMATION_OBSERVER = None
 PATCHES_LOCK = threading.RLock()
 CSRF_TOKEN = secrets.token_urlsafe(32)
@@ -464,6 +474,16 @@ def initialize_run_controller(*, runs_directory=None, start=True):
     if start:
         RUN_CONTROLLER.start()
     return RUN_CONTROLLER
+
+
+def initialize_gerrit_upload_controller(database=DEFAULT_GERRIT_UPLOAD_DATABASE):
+    """Create the separately gated controller-owned Gerrit writer."""
+    global GERRIT_UPLOAD_CONTROLLER
+    if RUN_CONTROLLER is None:
+        raise RuntimeError("initialize the run controller before Gerrit upload")
+    root = RUN_CONTROLLER.runs_directory / "gerrit-upload-workspaces"
+    GERRIT_UPLOAD_CONTROLLER = configured_upload_controller(database, root)
+    return GERRIT_UPLOAD_CONTROLLER
 
 
 def worker_admission_html():
@@ -1364,6 +1384,14 @@ def _engineering_projection(session):
     """Join session, checkout, manifest, and captured evidence for Phase 3 views."""
     projection = _run_projection(session)
     projection["owner_id"] = owner_id_for_session(session.session_id)
+    projection["gerrit_upload_enabled"] = bool(
+        GERRIT_UPLOAD_CONTROLLER is not None
+        and GERRIT_UPLOAD_CONTROLLER.enabled
+    )
+    if GERRIT_UPLOAD_CONTROLLER is not None:
+        projection["gerrit_upload"] = (
+            GERRIT_UPLOAD_CONTROLLER.store.get_by_run(session.run_id)
+        )
     if RUN_CONTROLLER is None:
         return projection
     allocation = RUN_CONTROLLER.engineering_store.get_allocation_by_run(session.run_id)
@@ -1634,6 +1662,7 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         investigation_patch,
         csrf_token=CSRF_TOKEN,
         idempotency_token=secrets.token_urlsafe(18),
+        compact=True,
     )
     engineering_patch = dict(investigation_patch)
     engineering_patch["engineering_eligible"] = bool(
@@ -1652,6 +1681,7 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         engineering_patch,
         csrf_token=CSRF_TOKEN,
         idempotency_token=secrets.token_urlsafe(18),
+        compact=True,
     )
     (
         retest_policy,
@@ -1668,6 +1698,38 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         csrf_token=CSRF_TOKEN,
     )
     research_html = _research_and_failure_html(patch)
+    identity = "patch-actions-" + escape(
+        f"{patch.get('change_number', 'unknown')}-{patch.get('patchset', 'unknown')}",
+        quote=True,
+    )
+    action_policy_html = (
+        f"<details class='patch-actions' id='{identity}'>"
+        "<summary>Actions</summary>"
+        "<div class='quick-actions'>"
+        f"{investigate_html}{engineering_html}"
+        f"<form class='quick-action' method='post' action='/remove'>"
+        f"<input type='hidden' name='url' value='{escape(patch['url'], quote=True)}'>"
+        "<button class='danger' type='submit'>Remove</button></form></div>"
+        "<div class='action-policy-grid'>"
+        "<section class='action-policy-item unavailable' aria-label='Build failure handling'>"
+        "<div class='policy-heading'><strong>Build failures</strong>"
+        "<span class='availability'>Planned</span></div>"
+        "<ul class='future-options'><li>Notify human</li>"
+        "<li>Diagnose and prepare a fix</li>"
+        "<li>Create a new patchset</li></ul>"
+        "<p class='detail'>Jenkins failures are currently observed only.</p></section>"
+        "<section class='action-policy-item available' aria-label='Test failure handling'>"
+        "<div class='policy-heading'><strong>Test failures</strong>"
+        "<span class='availability'>Available</span></div>"
+        f"{retest_html}{research_html}</section>"
+        "<section class='action-policy-item unavailable' aria-label='Review comment handling'>"
+        "<div class='policy-heading'><strong>Review comments</strong>"
+        "<span class='availability'>Planned</span></div>"
+        "<ul class='future-options'><li>Handle simple comments; bail to human</li>"
+        "<li>Handle all comments; bail to human when needed</li>"
+        "<li>Create a new patchset</li></ul></section>"
+        "</div></details>"
+    )
     return (
         "<tr><td>"
         f"<a href='{escape(patch['url'], quote=True)}' target='_blank' rel='noreferrer'>"
@@ -1684,14 +1746,7 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         f"<td>{escape(patch.get('change_summary', '—') or '—')}"
         f"<div class='detail'>Changed: {escape(patch.get('last_changed', '—') or '—')}</div>"
         f"{_history_html(patch)}</td>"
-        "<td><div class='actions'>"
-        f"<form method='post' action='/remove'><input type='hidden' name='url' "
-        f"value='{escape(patch['url'], quote=True)}'><button class='danger'>Remove</button></form>"
-        f"{investigate_html}"
-        f"{engineering_html}"
-        f"{retest_html}"
-        f"{research_html}"
-        "</div></td></tr>"
+        f"<td>{action_policy_html}</td></tr>"
     )
 
 
@@ -1706,12 +1761,12 @@ def page(message="", jira_base=JIRA_BASE_URL):
     ) or "<tr><td colspan='5' class='empty'>No patches yet. Add a Gerrit change to start watching.</td></tr>"
     return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>Patch Watcher</title><style>
-body{{margin:0;background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1450px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card,.resource-card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a;overflow-x:auto}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input,textarea,select{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px}}input,textarea{{flex:1;min-width:240px}}textarea{{display:block;width:min(620px,95%);min-height:70px;margin:7px 0 10px}}button,.button-link{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}.button-link{{display:inline-block;text-decoration:none}}button:disabled{{cursor:not-allowed;opacity:.68}}button.danger,button.secondary,.button-link.danger-link{{background:#fff;padding:7px 11px}}button.danger,.button-link.danger-link{{color:#b42318;border:1px solid #fecdca}}button.secondary{{color:#344054;border:1px solid #d0d5dd}}table{{width:100%;border-collapse:collapse;margin-top:18px;min-width:1050px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url,.detail{{color:#667085;font-size:12px;margin-top:4px;word-break:break-word}}.patch-meta{{display:flex;align-items:center;gap:6px;color:#667085;font-size:12px;margin-top:7px}}.ticket{{display:inline-block;margin-left:8px;font-size:12px}}.actions{{display:flex;gap:6px;flex-wrap:wrap}}.actions form{{margin:0}}.error{{color:#b42318;font-size:12px;margin-top:5px;max-width:340px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}.section-title{{display:flex;justify-content:space-between;align-items:center;gap:16px}}small{{display:block;color:#667085;margin-top:4px}}details{{margin-top:7px;font-size:12px;color:#475467}}details ol{{padding-left:18px;max-height:140px;overflow:auto}}details li{{margin:5px 0}}details time{{font-variant-numeric:tabular-nums}}.history-state{{color:#667085}}.status-chip,.resource-status,.admission-status,.worker-boundary{{display:inline-block;border:1px solid transparent;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;line-height:1.35;white-space:nowrap}}.tone-good{{background:#dcfce7;border-color:#86efac;color:#166534}}.tone-bad{{background:#fee2e2;border-color:#fca5a5;color:#991b1b}}.tone-warn{{background:#fef3c7;border-color:#fcd34d;color:#78350f}}.tone-info{{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}}.tone-neutral{{background:#f2f4f7;border-color:#d0d5dd;color:#344054}}.status-link{{text-decoration:none}}.status-link:focus-visible .status-chip{{outline:3px solid #315efb;outline-offset:2px}}.ci-stack{{display:flex;align-items:flex-start;gap:5px;flex-wrap:wrap;margin-top:8px}}.retest-control{{width:min(390px,85vw);padding:6px 8px;border:1px solid #d0d5dd;border-radius:8px}}.retest-control form{{display:grid;gap:7px;margin-top:9px}}.retest-control label{{display:grid;gap:4px}}.retest-control input,.retest-control select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.retest-decision,.retest-approval{{display:grid;gap:6px;margin-top:9px;padding:8px;background:#f8fafc;border-radius:7px}}.retest-approval{{background:#fffaeb}}.retest-timeline{{padding-left:18px}}.retest-global form{{margin-top:12px}}.stub-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}}.stub-option{{display:flex;align-items:flex-start;gap:10px;text-align:left;background:#f8fafc;color:#344054;border:1px solid #d0d5dd;padding:14px}}.stub-label{{display:block;color:#667085;font-size:12px;font-weight:500;margin-top:4px}}.stub-tag{{display:inline-block;margin-left:6px;border:1px solid #d0d5dd;border-radius:999px;padding:1px 6px;font-size:10px;text-transform:uppercase}}.resource-toolbar{{display:flex;justify-content:flex-end;margin-top:20px}}.resource-dashboard{{display:grid;gap:18px}}.resource-card{{margin-top:0}}.resource-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}}.resource-metric{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:12px}}.resource-metric dt{{font-size:12px;color:#667085}}.resource-metric dd{{margin:5px 0 0;font-size:18px;font-weight:700}}.resource-errors{{color:#b42318}}.resource-ok{{color:#027a48}}.session-controls{{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-top:16px}}fieldset{{border:1px solid #fecdca;border-radius:8px}}.message-content{{white-space:pre-wrap;margin-top:3px}}.worker-admission{{margin-top:18px}}.worker-admission-heading{{display:flex;justify-content:space-between;gap:12px;align-items:center}}.worker-boundaries{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}.worker-provenance{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}}.worker-provenance div{{background:#f8fafc;border:1px solid #eaecf0;border-radius:8px;padding:10px}}.worker-provenance dt{{font-size:12px;color:#667085}}.worker-provenance dd{{margin:4px 0 0;word-break:break-word}}.admission-failures{{color:#b42318}}@media(max-width:760px){{.session-controls{{grid-template-columns:1fr}}}}</style></head>
+body{{margin:0;background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1450px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card,.resource-card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a;overflow-x:auto}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input,textarea,select{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px}}input,textarea{{flex:1;min-width:240px}}textarea{{display:block;width:min(620px,95%);min-height:70px;margin:7px 0 10px}}button,.button-link{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}.button-link{{display:inline-block;text-decoration:none}}button:disabled{{cursor:not-allowed;opacity:.68}}button.danger,button.secondary,.button-link.danger-link{{background:#fff;padding:7px 11px}}button.danger,.button-link.danger-link{{color:#b42318;border:1px solid #fecdca}}button.secondary{{color:#344054;border:1px solid #d0d5dd}}table{{width:100%;border-collapse:collapse;margin-top:18px;min-width:1050px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url,.detail{{color:#667085;font-size:12px;margin-top:4px;word-break:break-word}}.patch-meta{{display:flex;align-items:center;gap:6px;color:#667085;font-size:12px;margin-top:7px}}.ticket{{display:inline-block;margin-left:8px;font-size:12px}}.error{{color:#b42318;font-size:12px;margin-top:5px;max-width:340px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}.section-title{{display:flex;justify-content:space-between;align-items:center;gap:16px}}small{{display:block;color:#667085;margin-top:4px}}details{{margin-top:7px;font-size:12px;color:#475467}}details ol{{padding-left:18px;max-height:140px;overflow:auto}}details li{{margin:5px 0}}details time{{font-variant-numeric:tabular-nums}}.history-state{{color:#667085}}.status-chip,.resource-status,.admission-status,.worker-boundary{{display:inline-block;border:1px solid transparent;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;line-height:1.35;white-space:nowrap}}.tone-good{{background:#dcfce7;border-color:#86efac;color:#166534}}.tone-bad{{background:#fee2e2;border-color:#fca5a5;color:#991b1b}}.tone-warn{{background:#fef3c7;border-color:#fcd34d;color:#78350f}}.tone-info{{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}}.tone-neutral{{background:#f2f4f7;border-color:#d0d5dd;color:#344054}}.status-link{{text-decoration:none}}.status-link:focus-visible .status-chip{{outline:3px solid #315efb;outline-offset:2px}}.ci-stack{{display:flex;align-items:flex-start;gap:5px;flex-wrap:wrap;margin-top:8px}}.patch-actions{{width:min(720px,80vw)}}.patch-actions>summary{{cursor:pointer;display:inline-flex;align-items:center;border:1px solid #d0d5dd;border-radius:8px;padding:7px 11px;background:white;color:#344054;font-weight:700}}.quick-actions{{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}}.quick-action{{margin:0}}.action-policy-grid{{display:grid;grid-template-columns:repeat(3,minmax(190px,1fr));gap:10px}}.action-policy-item{{border:1px solid #d0d5dd;border-radius:10px;padding:10px;background:#fff}}.action-policy-item.unavailable{{background:#f8fafc;color:#667085}}.policy-heading{{display:flex;justify-content:space-between;gap:8px;align-items:center}}.availability{{border:1px solid #d0d5dd;border-radius:999px;padding:2px 6px;font-size:10px;text-transform:uppercase;font-weight:700}}.available .availability{{background:#dcfce7;border-color:#86efac;color:#166534}}.future-options{{padding-left:18px;margin:8px 0}}.retest-control,.research-controls{{width:auto;padding:6px 8px;border:1px solid #d0d5dd;border-radius:8px}}.retest-control form{{display:grid;gap:7px;margin-top:9px}}.retest-control label{{display:grid;gap:4px}}.retest-control input,.retest-control select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.retest-decision,.retest-approval{{display:grid;gap:6px;margin-top:9px;padding:8px;background:#f8fafc;border-radius:7px}}.retest-approval{{background:#fffaeb}}.retest-timeline{{padding-left:18px}}.retest-global form{{margin-top:12px}}.resource-toolbar{{display:flex;justify-content:flex-end;margin-top:20px}}.resource-dashboard{{display:grid;gap:18px}}.resource-card{{margin-top:0}}.resource-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}}.resource-metric{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:12px}}.resource-metric dt{{font-size:12px;color:#667085}}.resource-metric dd{{margin:5px 0 0;font-size:18px;font-weight:700}}.resource-errors{{color:#b42318}}.resource-ok{{color:#027a48}}.session-controls{{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-top:16px}}fieldset{{border:1px solid #fecdca;border-radius:8px}}.message-content{{white-space:pre-wrap;margin-top:3px}}.worker-admission{{margin-top:18px}}.worker-admission-heading{{display:flex;justify-content:space-between;gap:12px;align-items:center}}.worker-boundaries{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}.worker-provenance{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}}.worker-provenance div{{background:#f8fafc;border:1px solid #eaecf0;border-radius:8px;padding:10px}}.worker-provenance dt{{font-size:12px;color:#667085}}.worker-provenance dd{{margin:4px 0 0;word-break:break-word}}.admission-failures{{color:#b42318}}@media(max-width:980px){{.action-policy-grid{{grid-template-columns:1fr}}}}@media(max-width:760px){{.session-controls{{grid-template-columns:1fr}}}}</style></head>
 <body><style>.research-controls{{width:min(430px,88vw);border:1px solid #d0d5dd;border-radius:8px;padding:8px}}.research-controls>summary{{cursor:pointer;font-weight:700}}.research-controls section{{border-top:1px solid #eaecf0;margin-top:10px;padding-top:10px}}.research-controls form{{display:grid;gap:7px;margin-top:8px}}.research-controls input,.research-controls select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.research-controls dl{{display:grid;gap:6px}}.research-controls dd{{margin:2px 0 6px;word-break:break-word}}.action-approval-card{{background:#fffaeb;border:1px solid #fedf89;border-radius:8px;padding:10px}}</style><main><h1>Patch Watcher</h1><p class='sub'>Track Gerrit patches, managed sessions, and worker resources.</p>
 <div class='resource-toolbar'><form method='post' action='/resources/refresh'><button class='secondary'>Refresh resource status</button></form></div>{resources}{worker_admission}{global_retest_html()}
 {active_runs_html()}{engineering_runs_html()}<section class='card'><h2>Add a patch</h2><form class='add' method='post' action='/add'><input name='url' required placeholder='https://review.whamcloud.com/c/...'><button>Add patch</button></form>{f"<div class='notice'>{escape(message)}</div>" if message else ''}</section>
 <section class='card'><div class='section-title'><div><h2>Watched patches <small>({len(patches)} · checks every {refresh_interval}s)</small></h2><div class='detail'>Overall last checked: {escape(overall_last_checked())}</div></div><div class='actions'><form method='post' action='/refresh-all'><button class='secondary'>Refresh all</button></form><form method='post' action='/email'><button class='secondary'>Send status email</button></form></div></div><table><thead><tr><th>Patch</th><th>Watch state / CI</th><th>Review</th><th>Latest change</th><th></th></tr></thead><tbody>{rows}</tbody></table></section>
-<section class='card' aria-labelledby='handle-reviews-title'><h2 id='handle-reviews-title'>Handle reviews <span class='stub-tag'>Stub · disabled</span></h2><p class='sub'>Planned Claude Code workflows are visible for design review only. They cannot be selected and perform no Gerrit writes or Claude invocation.</p><div class='stub-grid'><button class='stub-option' type='button' disabled aria-disabled='true'><span>Handle simple comments<span class='stub-label'>Future: ask Claude to fix only clearly trivial comments; report and email-escalate everything complex or ambiguous.</span></span></button><button class='stub-option' type='button' disabled aria-disabled='true'><span>Handle all comments<span class='stub-label'>Future: ask Claude to attempt every comment; escalate whenever it cannot resolve one safely or requests human judgment.</span></span></button></div></section></main></body></html>"""
+</main></body></html>"""
 
 
 def load_seed_file(path=DEFAULT_SEED_FILE):
@@ -1751,6 +1806,31 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         parts = [item for item in path.split("/") if item]
+        if len(parts) == 3 and parts[0] == "uploads" and parts[2] == "confirm":
+            if GERRIT_UPLOAD_CONTROLLER is None:
+                self.send_error(503, "Gerrit upload controller is not initialized")
+                return
+            try:
+                upload = GERRIT_UPLOAD_CONTROLLER.store.get(parts[1])
+            except GerritUploadError:
+                self.send_error(404)
+                return
+            if upload.state != "commit_ready":
+                self.send_error(409, "Upload is not awaiting confirmation")
+                return
+            idempotency_token = secrets.token_urlsafe(18)
+            expires_at = str(int(time.time()) + ENGINEERING_CONFIRMATION_TTL_SECONDS)
+            token = _signed_confirmation(
+                "gerrit-upload", upload.upload_id, upload.binding_digest,
+                idempotency_token, expires_at,
+            )
+            body = render_gerrit_upload_confirmation(
+                upload, confirmation_token=token,
+                confirmation_expires_at=expires_at, csrf_token=CSRF_TOKEN,
+                idempotency_token=idempotency_token,
+            )
+            self.respond(_standalone_document("Confirm Gerrit upload", body))
+            return
         if path == "/engineering-runs/confirm-start":
             query = parse_qs(parsed.query)
             try:
@@ -2054,6 +2134,75 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         parts = [item for item in path.split("/") if item]
+        if parts and parts[0] == "uploads":
+            token = data.get("csrf_token", [""])[0]
+            if not hmac.compare_digest(token, CSRF_TOKEN):
+                self.send_error(403, "Invalid request token")
+                return
+            if len(parts) != 3 or parts[2] not in {"execute", "reconcile"}:
+                self.send_error(404)
+                return
+            if GERRIT_UPLOAD_CONTROLLER is None:
+                self.send_error(503, "Gerrit upload controller is not initialized")
+                return
+            try:
+                upload = GERRIT_UPLOAD_CONTROLLER.store.get(parts[1])
+                if parts[2] == "execute":
+                    confirmation = data.get("confirmation_token", [""])[0]
+                    idempotency_token = data.get("idempotency_token", [""])[0]
+                    expires_at = data.get("confirmation_expires_at", [""])[0]
+                    binding_digest = data.get("binding_digest", [""])[0]
+                    if (
+                        not _engineering_confirmation_unexpired(expires_at)
+                        or binding_digest != upload.binding_digest
+                        or not _verify_confirmation(
+                            confirmation, "gerrit-upload", upload.upload_id,
+                            upload.binding_digest, idempotency_token, expires_at,
+                        )
+                    ):
+                        self.send_error(403, "Invalid or stale upload confirmation")
+                        return
+                    if not _claim_engineering_confirmation(
+                        confirmation, idempotency_token
+                    ):
+                        self.send_error(409, "Upload confirmation was already used")
+                        return
+                    upload = GERRIT_UPLOAD_CONTROLLER.execute(
+                        upload.upload_id,
+                        expected_binding_digest=binding_digest,
+                    )
+                else:
+                    upload = GERRIT_UPLOAD_CONTROLLER.reconcile(upload.upload_id)
+            except (GerritUploadError, GerritUploadConflict, OSError) as exc:
+                self.respond(_standalone_document(
+                    "Gerrit upload error",
+                    "<main><h2>Gerrit upload did not proceed</h2><p class='notice'>"
+                    + escape(str(exc)) + "</p></main>",
+                ))
+                return
+            if upload.state == "succeeded":
+                with PATCHES_LOCK:
+                    watched = next((
+                        item for item in PATCHES
+                        if int(item.get("change_number") or 0) == upload.change_number
+                    ), None)
+                if watched is not None:
+                    refresh_watched_patch(watched)
+                if SESSION_STORE is not None:
+                    SESSION_STORE.append_event(
+                        upload.session_id, "gerrit_patchset_uploaded",
+                        {
+                            "upload_id": upload.upload_id,
+                            "old_patchset": upload.patchset,
+                            "new_patchset": upload.new_patchset,
+                            "new_revision_sha": upload.new_revision_sha,
+                        },
+                        idempotency_key="gerrit-upload-succeeded:" + upload.upload_id,
+                    )
+            self.send_response(303)
+            self.send_header("Location", f"/runs/{upload.run_id}")
+            self.end_headers()
+            return
         if parts and parts[0] == "engineering-runs":
             token = data.get("csrf_token", [""])[0]
             if not hmac.compare_digest(token, CSRF_TOKEN):
@@ -2503,6 +2652,47 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Location", f"/runs/{session.run_id}")
                 self.end_headers()
                 return
+            if len(parts) == 4 and parts[2:] == ["upload", "prepare"]:
+                if RUN_CONTROLLER is None or GERRIT_UPLOAD_CONTROLLER is None:
+                    self.send_error(503, "Gerrit upload controller is not initialized")
+                    return
+                try:
+                    session = _find_session_by_run_id(parts[1])
+                    patch = _find_exact_patch(
+                        int(session.patch_id), int(session.patchset or 0),
+                        str(session.revision or ""),
+                    )
+                    if patch is None:
+                        raise RunControllerError(
+                            "engineering run is not the exact current patchset"
+                        )
+                    idempotency_token = data.get(
+                        "idempotency_token", [""]
+                    )[0] or secrets.token_urlsafe(18)
+                    values = RUN_CONTROLLER.engineering_upload_inputs(
+                        session.run_id, patch, requested_by="operator",
+                        idempotency_key=idempotency_token,
+                    )
+                    upload = GERRIT_UPLOAD_CONTROLLER.prepare(**values)
+                except (
+                    GerritUploadError, RunControllerError, SessionNotFound,
+                    OSError, ValueError,
+                ) as exc:
+                    self.respond(_standalone_document(
+                        "Gerrit upload unavailable",
+                        "<main><h2>Cannot prepare a Gerrit upload</h2>"
+                        f"<p class='notice'>{escape(str(exc))}</p></main>",
+                    ))
+                    return
+                self.send_response(303)
+                destination = (
+                    f"/uploads/{upload.upload_id}/confirm"
+                    if upload.state == "commit_ready"
+                    else f"/runs/{upload.run_id}"
+                )
+                self.send_header("Location", destination)
+                self.end_headers()
+                return
             if len(parts) != 3:
                 self.send_error(404)
                 return
@@ -2750,6 +2940,12 @@ if __name__ == "__main__":
         help="private SQLite database for deterministic retest state",
     )
     parser.add_argument(
+        "--gerrit-upload-database",
+        type=Path,
+        default=DEFAULT_GERRIT_UPLOAD_DATABASE,
+        help="private SQLite database for Phase 3C upload plans",
+    )
+    parser.add_argument(
         "--worker-profile",
         default=DEFAULT_WORKER_PROFILE_ID,
         help="checked-in worker profile ID for newly admitted runs",
@@ -2777,6 +2973,7 @@ if __name__ == "__main__":
         print(result.message)
         raise SystemExit(0 if result.sent or not config.email_enabled else 1)
     initialize_run_controller()
+    initialize_gerrit_upload_controller(args.gerrit_upload_database)
     initialize_retest_controller()
     print(f"Patch Watcher listening on http://127.0.0.1:{args.port}")
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()

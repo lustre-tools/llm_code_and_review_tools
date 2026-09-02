@@ -1369,13 +1369,22 @@ verify before granting guest execution.
 
 #### Phase 3C: separately gated Gerrit upload
 
-After 3A and 3B are proven, add a distinct upload capability. It remains
+Implemented as a distinct upload capability. It remains
 disabled by default and is never implied by permission to edit, build, or
 test. Upload requires an exact-current-patchset recheck, a reviewable diff and
 test evidence, a controller-generated upload plan, and explicit operator
 approval. Ambiguous upload outcomes reconcile with Gerrit before any retry.
 The uploaded patchset becomes a new observed revision and cannot silently
 reuse the old run's authority.
+
+The implementation uses a private durable upload ledger and a fresh
+controller-only staging checkout reconstructed from the immutable diff artifact
+after the worker checkout has been deleted. Validation requests carry an
+explicit `evidence_role`; upload requires at least one successful `test` role
+and never infers a test from a command label. Preparation verifies the old
+Gerrit Change-Id and records the amended commit SHA before the confirmation
+page is rendered. The final one-use token binds the complete plan digest,
+including the old revision, diff, test evidence, and proposed commit.
 
 Exit criteria:
 

@@ -797,6 +797,113 @@ class RunController:
                 result.append(session)
         return result
 
+    def engineering_upload_inputs(
+        self, run_id: str, patch: Mapping[str, Any], *, requested_by: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Return a fully revalidated Phase 3C upload binding.
+
+        This is intentionally strict.  A successful engineering report is not
+        test evidence: at least one explicitly test-role guest validation step
+        must have succeeded and every recorded step must have succeeded.
+        """
+
+        session = next((
+            item for item in self._engineering_sessions() if item.run_id == run_id
+        ), None)
+        if session is None or session.profile != "engineering":
+            raise RunControllerError("only a controlled engineering run can upload")
+        terminal = self.store.get_terminal_result(session.session_id)
+        if (
+            session.state != "succeeded" or terminal is None
+            or terminal.state != "succeeded"
+            or terminal.result.get("state") != "complete"
+        ):
+            raise RunControllerError("engineering run is not successfully complete")
+        try:
+            change_number = int(patch.get("change_number") or 0)
+            patchset = int(patch.get("patchset") or 0)
+        except (TypeError, ValueError) as exc:
+            raise RunControllerError("current Gerrit identity is invalid") from exc
+        revision = str(patch.get("revision_sha") or "").lower()
+        if (
+            change_number != int(session.patch_id)
+            or patchset != int(session.patchset or 0)
+            or revision != str(session.revision or "").lower()
+            or str(patch.get("lifecycle") or "").lower() != "open"
+        ):
+            raise RunControllerError("engineering run is not the exact current open patchset")
+        allocation = self.engineering_store.get_allocation_by_run(run_id)
+        if allocation is None:
+            raise RunControllerError("engineering allocation is missing")
+        diffs = [
+            item for item in self.engineering_store.list_artifacts(run_id)
+            if item.kind == "diff"
+        ]
+        if len(diffs) != 1 or diffs[0].size_bytes <= 0:
+            raise RunControllerError("exactly one nonempty captured diff is required")
+        diff = diffs[0]
+        artifact_root = (self.runs_directory / "engineering-artifacts" / run_id).resolve()
+        diff_path = (artifact_root / diff.relative_path).resolve()
+        try:
+            diff_path.relative_to(artifact_root)
+        except ValueError as exc:
+            raise RunControllerError("captured diff path escapes its artifact root") from exc
+        if (
+            not diff_path.is_file() or diff_path.is_symlink()
+            or diff_path.stat().st_size != diff.size_bytes
+            or hashlib.sha256(diff_path.read_bytes()).hexdigest() != diff.sha256
+        ):
+            raise RunControllerError("captured diff bytes do not match immutable evidence")
+        execution = self.engineering_store.get_validation_execution_by_run(run_id)
+        if execution is None or execution.state != "succeeded":
+            raise RunControllerError("successful guest validation is required")
+        attempts = self.engineering_store.list_validation_attempts(execution.execution_id)
+        attempt = attempts[0] if attempts else None
+        if attempt is None or attempt.state != "succeeded":
+            raise RunControllerError("successful guest validation attempt is required")
+        steps = self.engineering_store.list_validation_step_results(attempt.attempt_id)
+        if not steps or any(item.state != "succeeded" for item in steps):
+            raise RunControllerError("all recorded guest validation steps must succeed")
+        if not any(item.command.evidence_role == "test" for item in steps):
+            raise RunControllerError("an explicitly test-role validation step is required")
+        request = self._request_payload(session)
+        project = str(request.get("project") or patch.get("project") or "")
+        branch = str(patch.get("branch") or request.get("branch") or "master")
+        change_id = str(patch.get("change_id") or "")
+        revision_ref = str(request.get("revision_ref") or patch.get("revision_ref") or "")
+        if not project or not revision_ref or not re.fullmatch(r"I[0-9A-Fa-f]{40}", change_id):
+            raise RunControllerError(
+                "Gerrit project, Change-Id, and exact revision ref are required"
+            )
+        evidence = [{
+            "step_id": item.step_id,
+            "state": item.state,
+            "exit_code": item.exit_code,
+            "command_sha256": item.command_sha256,
+            "evidence_role": item.command.evidence_role,
+        } for item in steps]
+        evidence_sha256 = hashlib.sha256(json.dumps(
+            evidence, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        return {
+            "idempotency_key": idempotency_key,
+            "run_id": run_id,
+            "session_id": session.session_id,
+            "change_number": change_number,
+            "project": project,
+            "branch": branch,
+            "change_id": change_id,
+            "patchset": patchset,
+            "revision_sha": revision,
+            "revision_ref": revision_ref,
+            "diff_path": str(diff_path),
+            "diff_artifact_id": diff.artifact_id,
+            "diff_sha256": diff.sha256,
+            "evidence_sha256": evidence_sha256,
+            "requested_by": requested_by,
+        }
+
     @staticmethod
     def _ltvm_record(resource: Any) -> SessionResourceRecord:
         kind = "cluster" if resource.resource_type == "ltvm_cluster" else "vm"
@@ -1189,7 +1296,9 @@ class RunController:
                 "open-ended guest capability, not a command allowlist. You have no host shell, "
                 "service credentials, or Gerrit write capability. Record useful build/test "
                 "results in your report; validation_requests are optional planning evidence, "
-                "not authorization. The current subphase produces a diff and evidence for "
+                "not authorization. Tag every validation request with evidence_role: test, "
+                "build, diagnostic, or other; only a successful explicit test can qualify "
+                "a later human-approved Gerrit upload. The current subphase produces a diff and evidence for "
                 "human review, never a Gerrit upload. Patch subject: "
                 + str(payload.get("subject") or "(unavailable)")
             )
@@ -1203,7 +1312,8 @@ class RunController:
             reporting_instructions = (
                 "Return the controller-required engineering report. List checkout-relative "
                 "changed files, summarize actual guest validation, and optionally list desired "
-                "follow-up validation as argv arrays. Never claim an upload occurred."
+                "follow-up validation as argv arrays with an explicit evidence_role. Never "
+                "claim an upload occurred."
             )
         else:
             task = (
@@ -1796,6 +1906,7 @@ class RunController:
                     timeout_seconds=3600,
                     label=request["name"],
                     execution_target=request["target"],
+                    evidence_role=request.get("evidence_role", "other"),
                 )
                 for index, request in enumerate(requests)
             )

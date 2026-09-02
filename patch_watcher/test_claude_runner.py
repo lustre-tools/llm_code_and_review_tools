@@ -280,10 +280,12 @@ class ClaudeRunnerTests(unittest.TestCase):
             "validation_requests": [{
                 "name": "unit tests", "target": "rocky9-arm64",
                 "argv": ["make", "test"],
+                "evidence_role": "test",
             }],
         })
         self.assertEqual(report["summary"], "Implemented the bounded change.")
         self.assertEqual(report["validation_requests"][0]["argv"], ["make", "test"])
+        self.assertEqual(report["validation_requests"][0]["evidence_role"], "test")
         with self.assertRaisesRegex(RunnerProtocolError, "checkout-relative"):
             validate_engineering_report({
                 **report, "changed_files": ["../outside"],

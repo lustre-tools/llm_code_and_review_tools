@@ -233,6 +233,7 @@ class ValidationCommandAudit:
     timeout_seconds: int = 3_600
     expected_exit_codes: tuple[int, ...] = (0,)
     label: str = ""
+    evidence_role: str = "other"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "command_id", _identifier("command_id", self.command_id))
@@ -314,6 +315,10 @@ class ValidationCommandAudit:
             or len(self.label.encode("utf-8")) > 500
         ):
             raise ValueError("label is invalid or oversized")
+        role = str(self.evidence_role).strip().lower()
+        if role not in {"test", "build", "diagnostic", "other"}:
+            raise ValueError("evidence_role must be test, build, diagnostic, or other")
+        object.__setattr__(self, "evidence_role", role)
 
     @property
     def mode(self) -> str:
@@ -332,6 +337,9 @@ class ValidationCommandAudit:
         value["argv" if self.argv is not None else "text"] = (
             list(self.argv) if self.argv is not None else self.text
         )
+        # Preserve hashes for historical audit records, which predate roles.
+        if self.evidence_role != "other":
+            value["evidence_role"] = self.evidence_role
         return value
 
     @property
@@ -362,6 +370,7 @@ class ValidationCommandAudit:
             timeout_seconds=payload.get("timeout_seconds", 3_600),
             expected_exit_codes=payload.get("expected_exit_codes", (0,)),
             label=payload.get("label", ""),
+            evidence_role=payload.get("evidence_role", "other"),
         )
 
 
@@ -474,6 +483,7 @@ class SafeCommand:
     expected_exit_codes: tuple[int, ...] = (0,)
     label: str = ""
     execution_target: str = "checkout"
+    evidence_role: str = "other"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "step_id", _identifier("step_id", self.step_id))
@@ -554,12 +564,16 @@ class SafeCommand:
             "execution_target",
             execution_target,
         )
+        role = str(self.evidence_role).strip().lower()
+        if role not in {"test", "build", "diagnostic", "other"}:
+            raise ValueError("evidence_role must be test, build, diagnostic, or other")
+        object.__setattr__(self, "evidence_role", role)
 
     def resolve_cwd(self, checkout_path: str | Path, *, must_exist: bool = False) -> Path:
         return resolve_confined_path(checkout_path, self.cwd, must_exist=must_exist)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "step_id": self.step_id,
             "argv": list(self.argv),
             "cwd": self.cwd,
@@ -569,6 +583,10 @@ class SafeCommand:
             "label": self.label,
             "execution_target": self.execution_target,
         }
+        # Preserve the digest of historical v1 manifests, which predate roles.
+        if self.evidence_role != "other":
+            value["evidence_role"] = self.evidence_role
+        return value
 
 
 @dataclass(frozen=True)
@@ -1499,6 +1517,7 @@ class EngineeringStateStore:
                     expected_exit_codes=command["expected_exit_codes"],
                     label=command.get("label", ""),
                     execution_target=command.get("execution_target", "checkout"),
+                    evidence_role=command.get("evidence_role", "other"),
                 )
                 for command in payload["commands"]
             )

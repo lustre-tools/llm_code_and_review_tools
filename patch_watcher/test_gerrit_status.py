@@ -116,6 +116,29 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(status.GerritConfigError, "GERRIT_USER"):
                 status.GerritConfig.load(path)
 
+    def test_upload_kill_switch_defaults_off_and_requires_git_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config"
+            base = (
+                "GERRIT_URL=https://review.whamcloud.com\n"
+                "GERRIT_USER=test-user\nGERRIT_PASS=secret\n"
+            )
+            path.write_text(base, encoding="utf-8")
+            path.chmod(0o600)
+            self.assertFalse(status.GerritConfig.load(path).upload_enabled)
+            path.write_text(base + "GERRIT_UPLOAD_ENABLED=true\n", encoding="utf-8")
+            with self.assertRaisesRegex(status.GerritConfigError, "GERRIT_GIT_NAME"):
+                status.GerritConfig.load(path)
+            path.write_text(
+                base + "GERRIT_UPLOAD_ENABLED=true\n"
+                "GERRIT_GIT_NAME=Patch Watcher\n"
+                "GERRIT_GIT_EMAIL=patch-watcher@example.test\n",
+                encoding="utf-8",
+            )
+            config = status.GerritConfig.load(path)
+            self.assertTrue(config.upload_enabled)
+            self.assertEqual(config.git_name, "Patch Watcher")
+
 
 class StatusTests(unittest.TestCase):
     def test_parses_supported_change_urls(self):
@@ -235,6 +258,28 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(captured["request"].method, "GET")
         self.assertEqual(captured["timeout"], 3)
         self.assertEqual(result["title"], change["subject"])
+
+    def test_identity_fetch_includes_all_revision_numbers_for_reconciliation(self):
+        change = sample_change()
+        change["status"] = "NEW"
+        change["branch"] = "master"
+        change["change_id"] = "I" + "1" * 40
+        change["revisions"]["older"] = {"_number": 3}
+
+        def transport(_request, _timeout):
+            return (")]}'\n" + json.dumps(change)).encode("utf-8")
+
+        client = status.GerritStatusClient(
+            status.GerritConfig(
+                "https://review.whamcloud.com", "reader", "private-password"
+            ),
+            transport=transport,
+        )
+        identity = client.fetch_identity("https://review.whamcloud.com/c/61965")
+        self.assertEqual(identity["patchset"], 4)
+        self.assertEqual(identity["revision_sha"], "d" * 40)
+        self.assertEqual(identity["revision_numbers"]["older"], 3)
+        self.assertIn("d" * 40, identity["revision_shas"])
 
     def test_refresh_preserves_last_known_status_on_error(self):
         patch_record = {

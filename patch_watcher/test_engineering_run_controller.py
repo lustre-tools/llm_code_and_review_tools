@@ -455,7 +455,10 @@ class EngineeringRunControllerTests(unittest.TestCase):
                 "summary": "Prepared a small fix for review.",
                 "changed_files": ["tracked.txt", "new.txt"],
                 "validation_requests": [
-                    {"name": "unit", "target": "ltvm", "argv": ["make", "test"]}
+                    {
+                        "name": "unit", "target": "ltvm", "argv": ["make", "test"],
+                        "evidence_role": "test",
+                    }
                 ],
             },
         )]
@@ -475,6 +478,7 @@ class EngineeringRunControllerTests(unittest.TestCase):
         self.assertEqual(manifest.commands[0].cwd, ".")
         self.assertEqual(manifest.commands[0].label, "unit")
         self.assertEqual(manifest.commands[0].execution_target, "ltvm")
+        self.assertEqual(manifest.commands[0].evidence_role, "test")
         events = self.store.list_events(session.session_id)
         captured_event = next(
             event for event in events if event.event_type == "engineering_evidence_captured"

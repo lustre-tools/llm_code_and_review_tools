@@ -59,6 +59,9 @@ class GerritConfig:
     email_enabled: bool = False
     email_to: str = "paf@mulberrytree.us"
     sendmail_path: str = "/usr/sbin/sendmail"
+    upload_enabled: bool = False
+    git_name: str = ""
+    git_email: str = ""
 
     @classmethod
     def load(cls, path: Path | None = None) -> "GerritConfig":
@@ -104,6 +107,7 @@ class GerritConfig:
                 "GERRIT_URL", "GERRIT_USER", "GERRIT_PASS",
                 "REFRESH_INTERVAL_SECONDS", "EMAIL_ENABLED", "EMAIL_TO",
                 "SENDMAIL_PATH",
+                "GERRIT_UPLOAD_ENABLED", "GERRIT_GIT_NAME", "GERRIT_GIT_EMAIL",
             }:
                 values[key] = value
 
@@ -145,6 +149,22 @@ class GerritConfig:
         if not Path(sendmail_path).is_absolute():
             raise GerritConfigError("SENDMAIL_PATH must be an absolute path.")
 
+        upload_enabled_text = values.get("GERRIT_UPLOAD_ENABLED", "false").casefold()
+        if upload_enabled_text not in {"true", "false", "yes", "no", "1", "0"}:
+            raise GerritConfigError(
+                "GERRIT_UPLOAD_ENABLED must be true/false, yes/no, or 1/0."
+            )
+        upload_enabled = upload_enabled_text in {"true", "yes", "1"}
+        git_name = values.get("GERRIT_GIT_NAME", "").strip()
+        git_email = values.get("GERRIT_GIT_EMAIL", "").strip()
+        if upload_enabled and (not git_name or not re.fullmatch(
+            r"[^@\s]+@[^@\s]+\.[^@\s]+", git_email
+        )):
+            raise GerritConfigError(
+                "GERRIT_GIT_NAME and a valid GERRIT_GIT_EMAIL are required when "
+                "Gerrit upload is enabled."
+            )
+
         return cls(
             values["GERRIT_URL"].rstrip("/"),
             values["GERRIT_USER"],
@@ -153,6 +173,9 @@ class GerritConfig:
             email_enabled in {"true", "yes", "1"},
             email_to,
             sendmail_path,
+            upload_enabled,
+            git_name,
+            git_email,
         )
 
 
@@ -188,6 +211,35 @@ class GerritStatusClient:
             "o=CURRENT_REVISION&o=CURRENT_COMMIT&o=DETAILED_LABELS"
             "&o=DETAILED_ACCOUNTS&o=MESSAGES"
         )
+        change = self._fetch_detail(change_number, options)
+        return summarize_change(change)
+
+    def fetch_identity(self, change_url: str) -> dict[str, Any]:
+        """Return exact write-precondition identity including every revision SHA."""
+        change_number = parse_change_number(change_url)
+        change = self._fetch_detail(
+            change_number,
+            "o=ALL_REVISIONS&o=CURRENT_REVISION&o=CURRENT_COMMIT",
+        )
+        current = str(change.get("current_revision") or "").lower()
+        revisions = change.get("revisions") or {}
+        current_record = revisions.get(current) or {}
+        return {
+            "change_number": int(change.get("_number") or change_number),
+            "project": str(change.get("project") or ""),
+            "branch": str(change.get("branch") or ""),
+            "change_id": str(change.get("change_id") or ""),
+            "status": str(change.get("status") or "").upper(),
+            "revision_sha": current,
+            "patchset": int(current_record.get("_number") or 0),
+            "revision_shas": tuple(sorted(str(item).lower() for item in revisions)),
+            "revision_numbers": {
+                str(item).lower(): int((record or {}).get("_number") or 0)
+                for item, record in revisions.items()
+            },
+        }
+
+    def _fetch_detail(self, change_number: int, options: str) -> dict[str, Any]:
         endpoint = f"/a/changes/{quote(str(change_number), safe='')}/detail?{options}"
         token = base64.b64encode(
             f"{self._config.username}:{self._config.password}".encode("utf-8")
@@ -221,7 +273,7 @@ class GerritStatusClient:
             raise GerritRequestError("Gerrit returned an invalid JSON response.") from exc
         if not isinstance(change, dict):
             raise GerritRequestError("Gerrit returned an unexpected response.")
-        return summarize_change(change)
+        return change
 
 
 def parse_change_number(value: str) -> int:
@@ -555,6 +607,8 @@ def summarize_change(change: dict[str, Any]) -> dict[str, Any]:
     return {
         "change_number": int(change.get("_number", 0) or 0),
         "project": str(change.get("project", "") or ""),
+        "branch": str(change.get("branch", "") or ""),
+        "change_id": str(change.get("change_id", "") or ""),
         "revision_sha": str(current_revision or ""),
         "revision_ref": str(current.get("ref", "") or ""),
         "title": change.get("subject", ""),

@@ -157,7 +157,7 @@ def _status_badge(state):
 
 def render_investigate_control(
     patch, *, action="/runs/investigate", csrf_token=None,
-    idempotency_token=None,
+    idempotency_token=None, compact=False,
 ):
     """Render the per-patch manual read-only Investigate control."""
     status = _state(_get(patch, "lifecycle", "status", "gerrit_status"))
@@ -186,6 +186,17 @@ def render_investigate_control(
         f"<p class='control-reason' role='status'>{escape(_plain(reason))}</p>"
         if not eligible else ""
     )
+    if compact:
+        title = reason or (
+            "Start a read-only investigation pinned to this exact revision"
+        )
+        return (
+            "<form class='quick-action' method='post' "
+            f"action='{escape(action, quote=True)}'>"
+            f"{fields}<button class='secondary' type='submit' title='"
+            f"{escape(_plain(title), quote=True)}'{disabled}>Investigate</button>"
+            "</form>"
+        )
     return (
         "<section class='investigate-control' aria-label='Manual read-only investigation'>"
         "<h3>Manual investigation</h3>"

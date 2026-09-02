@@ -81,6 +81,9 @@ ENGINEERING_REPORT_SCHEMA: Mapping[str, Any] = {
                 "properties": {
                     "name": {"type": "string", "minLength": 1, "maxLength": 200},
                     "target": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "evidence_role": {
+                        "enum": ["test", "build", "diagnostic", "other"]
+                    },
                     "argv": {
                         "type": "array", "minItems": 1, "maxItems": 100,
                         "items": {"type": "string", "minLength": 1, "maxLength": 4000},
@@ -553,22 +556,32 @@ def validate_engineering_report(value: Any) -> Mapping[str, Any]:
         raise RunnerProtocolError("engineering report validation_requests is invalid")
     normalized_requests = []
     for request in requests:
-        if not isinstance(request, Mapping) or set(request) != {"name", "target", "argv"}:
+        if (
+            not isinstance(request, Mapping)
+            or not {"name", "target", "argv"}.issubset(request)
+            or set(request) - {"name", "target", "argv", "evidence_role"}
+        ):
             raise RunnerProtocolError("engineering validation request fields are invalid")
         name, target, argv = request.get("name"), request.get("target"), request.get("argv")
+        evidence_role = request.get("evidence_role", "other")
         if not isinstance(name, str) or not name.strip() or len(name) > 200:
             raise RunnerProtocolError("engineering validation request name is invalid")
         if not isinstance(target, str) or not target.strip() or len(target) > 200:
             raise RunnerProtocolError("engineering validation request target is invalid")
         if not isinstance(argv, list) or not 1 <= len(argv) <= 100:
             raise RunnerProtocolError("engineering validation request argv is invalid")
+        if evidence_role not in {"test", "build", "diagnostic", "other"}:
+            raise RunnerProtocolError("engineering validation evidence role is invalid")
         normalized_argv = []
         for argument in argv:
             if not isinstance(argument, str) or not argument or len(argument) > 4000 or "\x00" in argument:
                 raise RunnerProtocolError("engineering validation request argument is invalid")
             normalized_argv.append(argument)
         normalized_requests.append(
-            {"name": name.strip(), "target": target.strip(), "argv": normalized_argv}
+            {
+                "name": name.strip(), "target": target.strip(),
+                "argv": normalized_argv, "evidence_role": evidence_role,
+            }
         )
     question = value.get("question")
     if question is not None and (

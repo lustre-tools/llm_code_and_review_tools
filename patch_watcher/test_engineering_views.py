@@ -536,6 +536,53 @@ class EngineeringViewTests(unittest.TestCase):
             engineering_views.render_engineering_start_confirmation(
                 {"change_number": 1}, confirmation_token="signed")
 
+    def test_compact_start_preserves_prepare_post_without_capability_essay(self):
+        patch = {
+            "change_number": 68160,
+            "patchset": 13,
+            "revision_sha": "b" * 40,
+            "engineering_eligible": True,
+        }
+        rendered = engineering_views.render_engineering_start_control(
+            patch, csrf_token="csrf", idempotency_token="once", compact=True,
+        )
+        self.assertIn("class='quick-action'", rendered)
+        self.assertIn("action='/engineering-runs/prepare'", rendered)
+        self.assertIn("name='revision_sha'", rendered)
+        self.assertIn("Engineering run", rendered)
+        self.assertNotIn("Capability status", rendered)
+
+    def test_upload_capability_is_separate_disabled_and_post_only(self):
+        run = self.sample_run(state="succeeded", gerrit_upload_enabled=False)
+        rendered = engineering_views.render_engineering_run(run, csrf_token="csrf")
+        self.assertIn("New Gerrit patchset", rendered)
+        self.assertIn("Disabled", rendered)
+        self.assertNotIn("/upload/prepare", rendered)
+
+        run["gerrit_upload_enabled"] = True
+        rendered = engineering_views.render_engineering_run(
+            run, csrf_token="csrf", idempotency_token="prepare-once",
+        )
+        self.assertIn("method='post' action='/runs/eng-123/upload/prepare'", rendered)
+        self.assertIn("Prepare new patchset", rendered)
+
+    def test_upload_confirmation_binds_diff_test_and_revision(self):
+        upload = {
+            "upload_id": "upload-1", "change_number": 68541, "patchset": 3,
+            "revision_sha": "a" * 40, "diff_sha256": "b" * 64,
+            "evidence_sha256": "c" * 64, "binding_digest": "d" * 64,
+            "local_commit_sha": "e" * 40,
+        }
+        rendered = engineering_views.render_gerrit_upload_confirmation(
+            upload, confirmation_token="signed", confirmation_expires_at="123",
+            csrf_token="csrf", idempotency_token="once",
+        )
+        self.assertIn("method='post' action='/uploads/upload-1/execute'", rendered)
+        for value in ("a" * 40, "b" * 64, "c" * 64, "d" * 64, "e" * 40):
+            self.assertIn(value, rendered)
+        self.assertIn("Claude does not receive credentials", rendered)
+        self.assertNotIn("method='get'", rendered.casefold())
+
     def test_dataclass_input_dynamic_text_and_route_segments_are_safe(self):
         @dataclass
         class Checkout:

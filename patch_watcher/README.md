@@ -47,6 +47,10 @@ REFRESH_INTERVAL_SECONDS=300
 EMAIL_ENABLED=false
 EMAIL_TO=paf@mulberrytree.us
 SENDMAIL_PATH=/usr/sbin/sendmail
+GERRIT_UPLOAD_ENABLED=false
+# Required only when the separate upload kill switch is enabled:
+GERRIT_GIT_NAME=Your Name
+GERRIT_GIT_EMAIL=you@example.com
 ```
 
 Generate the HTTP password in Gerrit under **Settings → HTTP Credentials**.
@@ -192,12 +196,12 @@ and Maloo chips appear inside **Watch state / CI**. Patchset appears as compact
 `PS N` metadata under the patch title; only actual work-in-progress changes
 show a WIP badge, so there is no ambiguous “Active” label.
 
-The **Handle reviews** section shows two disabled design stubs: handling only
-simple comments, or asking Claude Code to attempt all comments. Neither option
-is selectable, invokes Claude, sends escalation email, or writes to Gerrit.
-Their proposed escalation behavior is documented in `DESIGN_ACTION_FLOW.md`.
+Each patch has one compact **Actions** disclosure. It groups build failures,
+test failures, and review comments; only implemented controls are interactive.
+Build/review actions remain clearly marked as planned, while the current
+test-failure policies retain their working controls.
 
-## Controlled engineering runs (Phases 3A and 3B)
+## Controlled engineering runs (Phases 3A–3C)
 
 An exact, refreshed patch revision can be prepared and then explicitly
 confirmed for a controlled engineering run. Phase 3A creates a dedicated full
@@ -215,9 +219,19 @@ access to another run's VMs, or Gerrit writes.
 
 The dashboard shows checkout ownership, session messages, capability and
 attempt state, guest command results, resource exhaustion/cooldown state,
-cleanup, artifacts, and exactly owner-matched LTVM inventory. Gerrit upload is
-Phase 3C: later, separate, and visibly disabled; permission to edit or execute
-inside owned guests never implies permission to upload.
+cleanup, artifacts, and exactly owner-matched LTVM inventory.
+
+Phase 3C is a separate controller-owned Gerrit upload path. It is disabled by
+default. A successful engineering run becomes eligible only when it has one
+nonempty immutable diff and successful guest validation explicitly tagged as
+test evidence. Preparing an upload rebuilds the exact pinned revision in a
+fresh private staging checkout, verifies the diff, preserves the Gerrit
+Change-Id, and records the proposed commit SHA. A second page shows the exact
+old patchset/revision, diff digest, test-evidence digest, and proposed commit;
+only its one-use POST can push. The controller rechecks Gerrit immediately
+before dispatch and reconciles the proposed commit against all Gerrit
+revisions after either success or an uncertain result. It never blindly
+retries an ambiguous push. Claude never receives Gerrit credentials.
 
 ## Design documents
 

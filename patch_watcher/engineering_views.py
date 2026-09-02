@@ -1048,6 +1048,91 @@ def _render_control_links(run, *, base_url):
     )
 
 
+def render_gerrit_upload_control(
+    run, upload=None, *, enabled=False, csrf_token=None, idempotency_token=None,
+):
+    """Render the separate Phase 3C capability without implying worker access."""
+    run_id = _run_id(run)
+    state = _plain(_get(run, "state", "status"), "unknown").lower()
+    if upload is not None:
+        upload_id = _plain(_get(upload, "upload_id", "id"))
+        upload_state = _plain(_get(upload, "state", "status"), "unknown")
+        detail = escape(_plain(_get(upload, "summary"), "Awaiting operator action."))
+        observed = ""
+        if _get(upload, "new_patchset"):
+            observed = (
+                "<p>Uploaded patchset <strong>PS "
+                + escape(_plain(_get(upload, "new_patchset")))
+                + "</strong> · <code>"
+                + escape(_plain(_get(upload, "new_revision_sha")))
+                + "</code></p>"
+            )
+        if upload_state == "commit_ready":
+            action = (
+                "<a class='button-link' href='/uploads/"
+                + quote(upload_id, safe="") + "/confirm'>Review and confirm upload</a>"
+            )
+        elif upload_state in {"push_claimed", "ambiguous"}:
+            action = (
+                "<form method='post' action='/uploads/" + quote(upload_id, safe="")
+                + "/reconcile'>" + _hidden("csrf_token", csrf_token)
+                + "<button class='secondary' type='submit'>Reconcile with Gerrit</button></form>"
+            )
+        else:
+            action = ""
+        return (
+            "<section class='gerrit-upload'><h3>New Gerrit patchset</h3>"
+            f"<p><strong>{escape(upload_state.replace('_', ' ').title())}</strong> — {detail}</p>"
+            + observed + action + "</section>"
+        )
+    if state != "succeeded":
+        return ""
+    if not enabled:
+        return (
+            "<section class='gerrit-upload'><h3>New Gerrit patchset</h3>"
+            "<p><strong>Disabled.</strong> Source editing and guest execution do not grant "
+            "Gerrit write access. Enable the separate controller kill switch to use 3C.</p></section>"
+        )
+    return (
+        "<section class='gerrit-upload'><h3>New Gerrit patchset</h3>"
+        "<p>The controller will require an exact-current revision, an immutable diff, "
+        "and successful explicit test evidence before showing a final confirmation.</p>"
+        f"<form method='post' action='/runs/{quote(run_id, safe='')}/upload/prepare'>"
+        + _hidden("csrf_token", csrf_token)
+        + _hidden("idempotency_token", idempotency_token)
+        + "<button type='submit'>Prepare new patchset</button></form></section>"
+    )
+
+
+def render_gerrit_upload_confirmation(
+    upload, *, confirmation_token, confirmation_expires_at, csrf_token=None,
+    idempotency_token=None,
+):
+    """Display one immutable plan; only the final POST can dispatch a push."""
+    upload_id = _plain(_get(upload, "upload_id", "id"))
+    return (
+        "<main class='gerrit-upload-confirmation'><h2>Confirm new Gerrit patchset</h2>"
+        "<p>This is a controller-owned Gerrit write. Claude does not receive credentials.</p>"
+        "<dl>"
+        + _field("Change", _get(upload, "change_number"))
+        + _field("Current patchset", _get(upload, "patchset"))
+        + _field("Exact current revision", _get(upload, "revision_sha"), code=True)
+        + _field("Diff SHA-256", _get(upload, "diff_sha256"), code=True)
+        + _field("Test evidence SHA-256", _get(upload, "evidence_sha256"), code=True)
+        + _field("Proposed commit", _get(upload, "local_commit_sha"), code=True)
+        + _field("Prepared plan digest", _get(upload, "binding_digest"), code=True)
+        + "</dl><p>Immediately before push, the controller will recheck Gerrit. An uncertain "
+        "outcome is reconciled and is never blindly retried.</p>"
+        f"<form method='post' action='/uploads/{quote(upload_id, safe='')}/execute'>"
+        + _hidden("csrf_token", csrf_token)
+        + _hidden("confirmation_token", confirmation_token)
+        + _hidden("confirmation_expires_at", confirmation_expires_at)
+        + _hidden("idempotency_token", idempotency_token)
+        + _hidden("binding_digest", _get(upload, "binding_digest"))
+        + "<button type='submit'>Upload new patchset</button></form></main>"
+    )
+
+
 def render_engineering_run(
     run, *, vms=(), messages=None, base_url="/engineering-runs",
     csrf_token=None, idempotency_token=None,
@@ -1095,6 +1180,11 @@ def render_engineering_run(
         + _render_lifecycle_warnings(run, supplied_vms=vms, suffix=suffix)
         + _render_messages(run, messages, suffix)
         + _render_operator_form(run, base_url=base_url, csrf_token=csrf_token, idempotency_token=idempotency_token, suffix=suffix)
+        + render_gerrit_upload_control(
+            run, _get(run, "gerrit_upload", "upload"),
+            enabled=bool(_get(run, "gerrit_upload_enabled", default=False)),
+            csrf_token=csrf_token, idempotency_token=idempotency_token,
+        )
         + _render_control_links(run, base_url=base_url) + "</article>"
     )
 
@@ -1147,7 +1237,7 @@ def render_engineering_dashboard(
 
 def render_engineering_start_control(
     patch, *, action="/engineering-runs/prepare", csrf_token=None,
-    idempotency_token=None,
+    idempotency_token=None, compact=False,
 ):
     """Render the first POST in the controller-owned start confirmation flow."""
     revision = _revision(patch)
@@ -1157,6 +1247,25 @@ def render_engineering_start_control(
         eligible = False
         reason = reason or "The exact revision is unavailable."
     disabled = "" if eligible else " disabled aria-disabled='true'"
+    fields = (
+        _hidden("change_number", _get(patch, "change_number", "change", "id"))
+        + _hidden("patchset", _get(patch, "patchset", "patch_set", "patchset_number"))
+        + _hidden("revision_sha", revision)
+        + _hidden("csrf_token", csrf_token)
+        + _hidden("idempotency_token", idempotency_token)
+    )
+    if compact:
+        title = reason or (
+            "Prepare a confirmed source-editing run with owned LTVM validation"
+        )
+        return (
+            "<form class='quick-action' method='post' "
+            f"action='{escape(_safe_base_url(action), quote=True)}'>"
+            + fields
+            + f"<button class='secondary' type='submit' title='"
+            + f"{escape(_plain(title), quote=True)}'{disabled}>Engineering run</button>"
+            + "</form>"
+        )
     return (
         "<section class='engineering-start' aria-labelledby='engineering-start-title'>"
         "<h3 id='engineering-start-title'>Start controlled engineering run</h3>"
@@ -1165,10 +1274,7 @@ def render_engineering_start_control(
         + _capability_status("start")
         + f"<p><strong>Exact pinned revision:</strong> <code>{escape(_plain(revision))}</code></p>"
         + f"<form method='post' action='{escape(_safe_base_url(action), quote=True)}'>"
-        + _hidden("change_number", _get(patch, "change_number", "change", "id"))
-        + _hidden("patchset", _get(patch, "patchset", "patch_set", "patchset_number"))
-        + _hidden("revision_sha", revision) + _hidden("csrf_token", csrf_token)
-        + _hidden("idempotency_token", idempotency_token)
+        + fields
         + f"<button type='submit'{disabled}>Prepare engineering run</button></form>"
         + (f"<p role='status'>{escape(_plain(reason))}</p>" if not eligible else "")
         + "</section>"
@@ -1257,6 +1363,8 @@ __all__ = [
     "render_engineering_run",
     "render_engineering_start_confirmation",
     "render_engineering_start_control",
+    "render_gerrit_upload_confirmation",
+    "render_gerrit_upload_control",
     "render_validation_confirmation",
     "render_validation_proposal",
     "render_validation_status",

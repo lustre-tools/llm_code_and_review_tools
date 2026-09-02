@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from engineering_state import ExecutionManifest, SafeCommand
+from engineering_state import ExecutionManifest, SafeCommand, ValidationCommandAudit
 from ltvm_guest_exec import (
     EngineeringExecutionAuthorization,
     GuestCapacityExhausted,
@@ -158,7 +158,10 @@ class OpenEndedGuestExecutionTests(unittest.TestCase):
             "manifest-1",
             RUN,
             REVISION,
-            (SafeCommand("planned", ("make", "check"), label="planned validation"),),
+            (SafeCommand(
+                "planned", ("make", "check"), label="planned validation",
+                evidence_role="test",
+            ),),
         )
         planned = GuestExecutionRequest.from_manifest(
             request_id="request-manifest",
@@ -170,6 +173,11 @@ class OpenEndedGuestExecutionTests(unittest.TestCase):
 
         self.assertEqual(planned.source_manifest_digest, manifest.digest)
         self.assertEqual(planned.commands[0].argv, ("make", "check"))
+        self.assertEqual(planned.commands[0].evidence_role, "test")
+        self.assertEqual(
+            ValidationCommandAudit.from_command(planned.commands[0]).evidence_role,
+            "test",
+        )
         self.assertIsNone(ad_hoc.source_manifest_id)
         self.assertNotEqual(planned.digest, ad_hoc.digest)
 
