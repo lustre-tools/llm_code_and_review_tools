@@ -1,0 +1,68 @@
+<script>
+  // Theme must be applied before the stylesheet paints (no dark flash).
+  // Viewer preference, not per-user: plain cookie + localStorage mirror
+  // (cookies don't persist on file:// static exports).
+  (function () {
+    let t = null;
+    try {
+      t = (document.cookie.match(/(?:^|;\s*)gd-theme=([a-z-]+)/) || [])[1]
+          || localStorage.getItem('gd-theme');
+    } catch (e) {}
+    // No saved preference -> the deployment's configured default (dark
+    // unless GD_DEFAULT_THEME is set). The picker still overrides per viewer.
+    if (!t) t = "{{ default_theme | default('dark') }}";
+    if (t === 'light' || t === 'gruvbox-light') document.documentElement.dataset.theme = t;
+  })();
+</script>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #21262d; --border: #30363d;
+    --ink: #e6edf3; --muted: #8b949e; --link: #58a6ff;
+    --ok: #3fb950; --bad: #f85149; --warn: #d29922; --run: #58a6ff; --tag: #bc8cff;
+    --ok-rgb: 63,185,80; --bad-rgb: 248,81,73; --warn-rgb: 210,153,34;
+    --run-rgb: 88,166,255; --tag-rgb: 188,140,255;
+    --shadow: rgba(0,0,0,.5);
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  html[data-theme="light"] {
+    --bg: #ffffff; --panel: #f6f8fa; --panel2: #eaeef2; --border: #d0d7de;
+    --ink: #1f2328; --muted: #59636e; --link: #0969da;
+    --ok: #1a7f37; --bad: #d1242f; --warn: #9a6700; --run: #0969da; --tag: #8250df;
+    --ok-rgb: 26,127,55; --bad-rgb: 209,36,47; --warn-rgb: 154,103,0;
+    --run-rgb: 9,105,218; --tag-rgb: 130,80,223;
+    --shadow: rgba(140,149,159,.35);
+    color-scheme: light;
+  }
+  /* gruvbox light (morhetz/gruvbox): bg0/bg0_s/bg1/bg2, fg1/fg4, and the
+     "faded" accent variants, which are the foreground colors on light bg. */
+  html[data-theme="gruvbox-light"] {
+    --bg: #fbf1c7; --panel: #f2e5bc; --panel2: #ebdbb2; --border: #d5c4a1;
+    --ink: #3c3836; --muted: #7c6f64; --link: #076678;
+    /* ok = faded aqua, not faded green: gruvbox's green is olive and
+       unreadable as a "good" signal on the light background. */
+    --ok: #427b58; --bad: #9d0006; --warn: #b57614; --run: #076678; --tag: #8f3f71;
+    --ok-rgb: 66,123,88; --bad-rgb: 157,0,6; --warn-rgb: 181,118,20;
+    --run-rgb: 7,102,120; --tag-rgb: 143,63,113;
+    --shadow: rgba(124,111,100,.35);
+    color-scheme: light;
+  }
+
+  /* base elements shared by every page */
+  * { box-sizing: border-box; }
+  html { scrollbar-color: var(--panel2) var(--bg); }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 13px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button, select {
+    background: var(--panel2); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  button:hover, select:hover { border-color: var(--muted); }
+  button:disabled { opacity: .5; cursor: default; }
+  label.ctl { color: var(--muted); font-size: 12px; }
+  /* optional "back to the parent site" crumb in the header */
+  a.site-home { font-weight: 600; color: var(--ink); }
+  a.site-home:hover { color: var(--link); text-decoration: none; }
+  .crumb-sep { color: var(--muted); }
+</style>

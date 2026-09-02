@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gerrit Dashboards</title>
+{% include "_theme.html" %}
+<style>
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 0 24px 64px; }
+  .topbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+            padding: 10px 0; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+  .topbar h1 { font-size: 15px; font-weight: 600; margin: 0; }
+  .topbar .ident { color: var(--muted); font-size: 12px; }
+  .topbar .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+  .lead { color: var(--muted); margin: 0 0 20px; max-width: 70ch; }
+  .lead strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  .banner { border-radius: 4px; padding: 6px 10px; margin: 0 0 16px; font-size: 12px; }
+  .banner.bad { background: rgba(var(--bad-rgb),.1); border: 1px solid rgba(var(--bad-rgb),.4);
+                color: var(--bad); }
+  .banner.ok { background: rgba(var(--ok-rgb),.1); border: 1px solid rgba(var(--ok-rgb),.4);
+               color: var(--ok); }
+
+  /* add-a-board */
+  form.add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+             background: var(--panel); border: 1px solid var(--border);
+             border-radius: 6px; padding: 12px 14px; margin: 0 0 24px; }
+  form.add label { font-size: 14px; }
+  form.add input {
+    background: var(--bg); border: 1px solid var(--border); color: var(--ink);
+    border-radius: 4px; padding: 5px 10px; font: inherit; font-size: 14px;
+    font-family: var(--mono); width: 240px; }
+  form.add input:focus { border-color: var(--link); outline: none; }
+  form.add button { font-size: 14px; padding: 5px 14px; }
+  form.add .hint { color: var(--muted); font-size: 12px; }
+
+  h2 { font-size: 13px; font-weight: 600; text-transform: uppercase;
+       letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; }
+
+  .boards { display: grid; gap: 10px; }
+  .board { display: grid; grid-template-columns: minmax(180px, 1fr) auto;
+           gap: 6px 16px; align-items: center;
+           background: var(--panel); border: 1px solid var(--border);
+           border-radius: 6px; padding: 12px 16px; }
+  .board:hover { border-color: var(--link); }
+  .who { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .who .name { font-size: 15px; font-weight: 600; }
+  .who .user { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .tags { display: flex; gap: 6px; }
+  .tag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+         border-radius: 2em; padding: 1px 8px; }
+  .tag.you { color: var(--bg); background: var(--link); }
+  .tag.live { color: var(--ok); background: rgba(var(--ok-rgb),.12); }
+  .tag.pending { color: var(--warn); background: rgba(var(--warn-rgb),.12); }
+
+  .age { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
+         text-align: right; white-space: nowrap; }
+  .age.stale { color: var(--warn); }
+  .age .abs { display: block; font-size: 11px; opacity: .75; }
+
+  .stats { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 14px;
+           border-top: 1px solid var(--border); padding-top: 10px; margin-top: 2px; }
+  .stat { display: flex; align-items: baseline; gap: 5px; font-size: 12px;
+          color: var(--muted); }
+  .stat b { font-size: 14px; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .stat.alert b { color: var(--bad); }
+  .stat.calm b { color: var(--ok); }
+  .empty { color: var(--muted); background: var(--panel);
+           border: 1px dashed var(--border); border-radius: 6px; padding: 20px; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 28px;
+           border-top: 1px solid var(--border); padding-top: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="topbar">
+  {% if site_name %}<a class="site-home" href="{{ site_home or '/' }}" title="Back to {{ site_name }}">{{ site_name }}</a><span class="crumb-sep">/</span>{% endif %}
+  <h1>Gerrit Dashboards</h1>
+  <span class="ident">{{ gerrit_url | replace('https://', '') | replace('http://', '') }}</span>
+  <div class="right">
+    {% include "_theme_picker.html" %}
+  </div>
+</div>
+
+{% if error %}<div class="banner bad">{{ error }}</div>{% endif %}
+
+<p class="lead">
+  {% if boards %}
+    <strong>{{ boards|length }}</strong> board{{ 's' if boards|length != 1 }} on this instance.
+    Each one answers "what needs my attention?" for one Gerrit user, and is
+    refreshed on demand — the age below is how stale it currently is.
+  {% else %}
+    No boards yet. Add a Gerrit username below to build the first one.
+  {% endif %}
+</p>
+
+<form class="add" method="get" action="{{ url_for('open_board') }}">
+  <label for="gd-add">Open a board</label>
+  <input id="gd-add" type="text" name="user" placeholder="gerrit username or account id"
+         autocomplete="off" autofocus required>
+  <button type="submit">Open</button>
+  <span class="hint">a board that does not exist yet is created and refreshed on first visit</span>
+</form>
+
+<h2>Boards</h2>
+{% if boards %}
+  <div class="boards">
+    {% for b in boards %}
+      {% set bsum = b.summary %}
+      {% set s = bsum if bsum and bsum.state == 'ok' else none %}
+      {% set k = (s.kpis if s else {}) or {} %}
+      <a class="board" href="{{ url_for('index', user=b.username) }}">
+        <div class="who">
+          <span class="name">{{ (bsum.self.name if bsum and bsum.self else '') or b.username }}</span>
+          <span class="user">{{ b.username }}</span>
+          <span class="tags">
+            {%- if b.username == default_user %}<span class="tag you">default</span>{% endif %}
+            {%- if b.live %}<span class="tag live">loaded</span>{% endif %}
+            {%- if not s %}<span class="tag pending">{{ 'needs refresh' if bsum else 'no data yet' }}</span>{% endif %}
+          </span>
+        </div>
+        <div class="age{{ ' stale' if s and s.fetched_at and 'd ago' in b.age }}">
+          {%- if s %}{{ b.age }}<span class="abs">{{ s.generated_at }}</span>
+          {%- elif bsum %}data from an older version
+          {%- else %}never refreshed{% endif %}
+        </div>
+        {% if s %}
+          <div class="stats">
+            <span class="stat {{ 'alert' if k.action else 'calm' }}"><b>{{ k.action or 0 }}</b> needs action</span>
+            {% if k.pings %}<span class="stat alert"><b>{{ k.pings }}</b> pings</span>{% endif %}
+            {% if k.action_old %}<span class="stat"><b>{{ k.action_old }}</b> longstanding</span>{% endif %}
+            <span class="stat"><b>{{ k.mine_open or 0 }}</b> own patches</span>
+            <span class="stat"><b>{{ k.carry_open or 0 }}</b> carrying</span>
+            <span class="stat"><b>{{ k.reviews or 0 }}</b> to review</span>
+            <span class="stat"><b>{{ k.in_ci or 0 }}</b> in CI</span>
+            <span class="stat calm"><b>{{ k.landing or 0 }}</b> landing</span>
+            {% if k.watch %}<span class="stat"><b>{{ k.watch }}</b> watched</span>{% endif %}
+            {% if k.merged %}<span class="stat"><b>{{ k.merged }}</b> merged (30d)</span>{% endif %}
+          </div>
+        {% endif %}
+      </a>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty">Nothing indexed yet.</div>
+{% endif %}
+
+<footer>
+  Read-only against Gerrit: this tool never votes, comments or stars.
+  Boards are built from the credentials configured on the server, so any
+  user's board can be viewed here.
+</footer>
+
+</div>
+</body>
+</html>

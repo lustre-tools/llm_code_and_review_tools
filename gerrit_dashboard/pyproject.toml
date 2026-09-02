@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gerrit-dashboard"
+version = "0.1.0"
+description = "Gerrit attention dashboard for the Lustre CI"
+license = {text = "BSD-2-Clause"}
+requires-python = ">=3.10"
+# Also requires the `gerrit_cli` Gerrit REST client from
+# github.com/lustre-tools/llm_code_and_review_tools, installed from a
+# checkout.  It is deliberately NOT listed as a dependency: an unrelated
+# project already owns the name "gerrit-cli" on PyPI, so resolving it by
+# name would install the wrong package.
+dependencies = [
+    "flask>=3.0",
+    "requests>=2.28",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0.0"]
+
+[project.scripts]
+gerrit-dashboard = "gerrit_dashboard.cli:main"
+gdash = "gerrit_dashboard.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["gerrit_dashboard*"]
+
+[tool.setuptools.package-data]
+gerrit_dashboard = ["templates/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = [
+    "unit: offline unit tests",
+    "integration: tests requiring network",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+ignore = ["E501"]

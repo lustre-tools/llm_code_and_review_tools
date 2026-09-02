@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Unified installer for LLM Code and Review Tools
-# Installs: jira, gerrit-cli, maloo, jenkins, lustre-crash, janitor, lreview, and beads (bd)
+# Installs: jira, gerrit-cli, maloo, jenkins, lustre-crash, janitor, lreview, gerrit-dashboard, and beads (bd)
 #
 # Run it either way:
 #   ./install.sh [OPTIONS]          # normal run
@@ -235,6 +235,12 @@ install_tools() {
     $PYTHON -m pip install -q -e "$SCRIPT_DIR/gerrit_cli"
     echo -e "${GREEN}✓${NC} gerrit-cli installed"
 
+    # Install gerrit_dashboard (needs gerrit_cli, installed just above)
+    echo ""
+    echo "Installing gerrit-dashboard..."
+    $PYTHON -m pip install -q -e "$SCRIPT_DIR/gerrit_dashboard"
+    echo -e "${GREEN}✓${NC} gerrit-dashboard installed"
+
     # Install maloo_tool
     echo ""
     echo "Installing maloo..."
@@ -409,6 +415,9 @@ uninstall_tools() {
 
     echo "Uninstalling lreview..."
     $PYTHON -m pip uninstall -y lreview 2>/dev/null || true
+
+    echo "Uninstalling gerrit-dashboard..."
+    $PYTHON -m pip uninstall -y gerrit-dashboard 2>/dev/null || true
 
     echo "Uninstalling lustre-crash..."
     $PYTHON -m pip uninstall -y lustre-crash 2>/dev/null || true

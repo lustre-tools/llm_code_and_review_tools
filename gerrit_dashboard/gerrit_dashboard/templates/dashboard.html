@@ -1,0 +1,1061 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gerrit — {{ snapshot.self.username if snapshot else 'loading' }}</title>
+{% include "_theme.html" %}
+<style>
+  .wrap { max-width: 1560px; margin: 0 auto; padding: 0 24px 48px; }
+
+  /* top bar */
+  .topbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 0;
+            border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+  .topbar h1 { font-size: 15px; font-weight: 600; margin: 0; }
+  .topbar h1 a.home { color: inherit; }
+  .topbar h1 a.home:hover { color: var(--link); text-decoration: none; }
+  .topbar .ident { color: var(--muted); font-size: 12px; }
+  .topbar .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .status { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .prog { display: flex; align-items: center; gap: 8px; }
+  .prog-label { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums;
+                white-space: nowrap; }
+  .prog-bar { width: 150px; height: 6px; border-radius: 3px; background: var(--panel2);
+              overflow: hidden; }
+  .prog-fill { display: block; height: 100%; width: 0; border-radius: 3px;
+               background: var(--link); transition: width .4s ease; }
+  .prog-fill.indet { width: 30%; animation: gd-indet 1.2s ease-in-out infinite; }
+  @keyframes gd-indet { 0% { margin-left: 0; } 50% { margin-left: 70%; } 100% { margin-left: 0; } }
+
+  .banner { background: rgba(var(--bad-rgb),.1); border: 1px solid rgba(var(--bad-rgb),.4);
+            color: var(--bad); border-radius: 4px; padding: 6px 10px; margin: 0 0 12px; font-size: 12px; }
+
+  /* kpis — status numbers not duplicated on tab pills */
+  .kpis { display: flex; gap: 10px; margin: 0 0 16px; flex-wrap: wrap; }
+  .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 4px;
+         padding: 8px 16px; min-width: 118px; }
+  .kpi .n { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .kpi .l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .kpi.alert .n { color: var(--bad); }
+  .kpi.calm .n { color: var(--ok); }
+  .kpi[data-tab] { cursor: pointer; }
+  .kpi[data-tab]:hover { border-color: var(--link); background: var(--panel2); }
+  .kpi[data-tab]:hover .l { color: var(--link); }
+
+  /* tabs — primary navigation, sticky. Button height 38px + 1px bar border:
+     the 39px offset below and .grp scroll-margin depend on it. */
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 0;
+          position: sticky; top: 0; z-index: 30; background: var(--bg); }
+  .tabs button { background: none; border: none; border-bottom: 2px solid transparent;
+                 border-radius: 0; padding: 8px 16px; color: var(--muted);
+                 font-size: 14px; font-weight: 500; line-height: 20px; }
+  .tabs button:hover { color: var(--ink); border-bottom-color: var(--border); }
+  .tabs button.active { color: var(--ink); border-bottom-color: var(--link); }
+  .tabs .tcount { display: inline-block; margin-left: 7px; padding: 1px 7px;
+                  font-size: 11px; line-height: 15px; border-radius: 2em;
+                  background: var(--panel2); color: var(--muted);
+                  font-variant-numeric: tabular-nums; vertical-align: 1px; }
+  .tabs button.active .tcount { color: var(--ink); }
+  .tabs button.attn .tcount { color: var(--bad); background: rgba(var(--bad-rgb),.15); }
+  .tabs .search { margin-left: auto; display: flex; align-items: center; }
+  .tabs .search input { background: var(--panel); border: 1px solid var(--border);
+      color: var(--ink); border-radius: 4px; padding: 3px 9px; font: inherit; font-size: 12px;
+      width: 190px; }
+  .tabs .search input:focus { border-color: var(--link); outline: none; width: 260px; }
+  .tabs .bfilter { position: relative; display: flex; align-items: center; margin-left: 12px; }
+  .tabs #gd-bmenu-btn { font-size: 14px; line-height: 20px; padding: 5px 14px; color: var(--ink); }
+  #gd-bmenu-btn #gd-bsummary { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .bmenu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 50;
+           background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+           box-shadow: 0 8px 24px var(--shadow); padding: 10px 12px; min-width: 260px; }
+  .bmenu-actions { display: flex; gap: 16px; padding: 0 2px 10px;
+                   border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+  .bmenu-actions a { font-size: 14px; color: var(--link); }
+  .bopt { display: flex; align-items: center; gap: 10px; padding: 5px 4px;
+          font-size: 14px; cursor: pointer; border-radius: 4px; }
+  .bopt:hover { background: var(--panel2); }
+  .bopt input { accent-color: var(--link); margin: 0; width: 15px; height: 15px; }
+  .bopt .bname { font-family: var(--mono); color: var(--ink); }
+  /* optional per-branch tinting, configured via GD_BRANCH_COLORS */
+  .bname.bc-tag,   .branch.bc-tag   { color: var(--tag); }
+  .bname.bc-run,   .branch.bc-run   { color: var(--run); }
+  .bname.bc-ok,    .branch.bc-ok    { color: var(--ok); }
+  .bname.bc-bad,   .branch.bc-bad   { color: var(--bad); }
+  .bname.bc-warn,  .branch.bc-warn  { color: var(--warn); }
+  .bname.bc-muted, .branch.bc-muted { color: var(--muted); }
+  .bopt .bcount { margin-left: auto; color: var(--muted); font-size: 12px;
+                  font-variant-numeric: tabular-nums; }
+  .tabpane { display: none; }
+  .tabpane.active { display: block; padding-top: 14px; }
+
+  /* sections */
+  section { margin-bottom: 28px; }
+  .sechead { display: flex; align-items: baseline; gap: 10px;
+             border-bottom: 1px solid var(--border); padding-bottom: 4px; margin-bottom: 8px; }
+  .sechead h2 { font-size: 13px; font-weight: 600; text-transform: uppercase;
+                letter-spacing: .06em; color: var(--ink); margin: 0; }
+  .sechead .count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .sechead .viewtoggle { margin-left: auto; display: flex; gap: 2px; }
+  .viewtoggle button { padding: 2px 8px; font-size: 12px; border-radius: 3px; color: var(--muted); }
+  .viewtoggle button.active { color: var(--ink); background: var(--border); }
+  .empty { color: var(--muted); font-size: 12px; padding: 4px 2px; }
+
+  /* in-pane jump navigation, sticky under the tab bar */
+  .grpnav { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px;
+            position: sticky; top: 39px; z-index: 20; background: var(--bg);
+            padding: 6px 0 8px; margin: 0 0 6px; }
+  .grpnav a { font-size: 12px; color: var(--muted); background: var(--panel);
+              border: 1px solid var(--border); border-radius: 2em; padding: 2px 10px; }
+  .grpnav a:hover { color: var(--ink); border-color: var(--muted); text-decoration: none; }
+  .grpnav a .n { color: var(--ink); font-variant-numeric: tabular-nums; margin-left: 5px; }
+  .grpnav .gn-x { margin-left: auto; display: flex; gap: 10px; }
+  .grpnav .gn-x a { border: none; background: none; padding: 2px 0; }
+
+  /* group headers — real section bars */
+  .grp { margin: 0 0 14px; scroll-margin-top: 88px; }
+  .grp > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline;
+                   gap: 6px; padding: 6px 8px; background: var(--panel2);
+                   border: 1px solid var(--border); border-radius: 4px; margin: 0 0 6px; }
+  .grp > summary:hover { border-color: var(--muted); }
+  .grp > summary::-webkit-details-marker { display: none; }
+  .grp h3 { font-size: 13px; font-weight: 600; color: var(--ink); margin: 0; }
+  .grp .count { color: var(--muted); font-weight: 400; font-size: 12px;
+                font-variant-numeric: tabular-nums; }
+  .grp > summary.tp0 { border-left: 3px solid var(--bad); }
+  .grp > summary.tp1 { border-left: 3px solid var(--warn); }
+  .grp > summary.tok { border-left: 3px solid var(--ok); }
+  .grp > summary.tok h3 { color: var(--ok); }
+  .grp > summary.trun { border-left: 3px solid var(--run); }
+  .grp.is-empty > summary { opacity: .45; }
+  .grp.is-filtered-empty > summary { opacity: .45; }
+  .row.bhidden, .row.shidden, .row.hhidden { display: none; }
+  .row.is-hidden { opacity: .55; }
+  .grp .empty { padding: 2px 0 4px 20px; }
+  .caret { display: inline-block; transition: transform .08s; color: var(--muted);
+           font-size: 10px; width: 14px; }
+  .grp[open] > summary .caret { transform: rotate(90deg); }
+
+  /* rows */
+  .row { background: var(--panel); border: 1px solid var(--border);
+         border-left-width: 3px; border-radius: 4px; margin: 4px 0; }
+  .row.p0 { border-left-color: var(--bad); }
+  .row.p1 { border-left-color: var(--warn); }
+  .row.ok { border-left-color: var(--ok); }
+  .row.run { border-left-color: var(--run); }
+  .row[open] { border-color: var(--muted); border-left-width: 3px; }
+  .row.p0[open] { border-left-color: var(--bad); }
+  .row.p1[open] { border-left-color: var(--warn); }
+  .row.ok[open] { border-left-color: var(--ok); }
+  .row.run[open] { border-left-color: var(--run); }
+  .row > summary { list-style: none; cursor: pointer; padding: 5px 10px; }
+  .row > summary::-webkit-details-marker { display: none; }
+  .rgrid { display: grid; grid-template-columns: 62px 64px minmax(158px, auto) minmax(260px, 1fr) auto 40px 16px;
+           gap: 0 10px; align-items: start; }
+  .rhide { visibility: hidden; background: none; border: none; cursor: pointer;
+           color: var(--muted); font-size: 19px; line-height: 1; padding: 0;
+           align-self: center; }
+  .row > summary:hover .rhide { visibility: visible; }
+  .rhide:hover { color: var(--bad); }
+  .rhide.runhide:hover { color: var(--ok); }
+  .branch { font-family: var(--mono); font-size: 11px; color: var(--muted);
+            padding-top: 3px; white-space: nowrap; }
+  /* fixed status slots: B(uild) J(anitor) T(ests) R(eviews) — aligned column */
+  .stats { display: flex; gap: 3px; padding-top: 1px; }
+  .st { font-family: var(--mono); font-size: 11px; line-height: 17px; border-radius: 3px;
+        padding: 0 4px; background: var(--panel2); color: var(--muted);
+        min-width: 34px; text-align: center; white-space: nowrap; }
+  .st.ok   { color: var(--ok);   background: rgba(var(--ok-rgb),.12); }
+  .st.bad  { color: var(--bad);  background: rgba(var(--bad-rgb),.12); }
+  .st.warn { color: var(--warn); background: rgba(var(--warn-rgb),.12); }
+  .st.run  { color: var(--run);  background: rgba(var(--run-rgb),.1); }
+  .st.none { opacity: .4; }
+  .st.ghost { visibility: hidden; }  /* keeps B/T/R columns aligned */
+  .num { font-family: var(--mono); font-size: 12px; align-self: stretch;
+         display: flex; align-items: center; justify-content: center;
+         border: 1px solid var(--border); border-radius: 4px; background: var(--panel2);
+         padding: 0 7px; }
+  .num:hover { border-color: var(--link); text-decoration: none; background: var(--border); }
+  .subj { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .why { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .why.p0 { color: var(--bad); }
+  .why.p1 { color: var(--warn); }
+  .secnote { color: var(--muted); font-size: 12px; margin: 0 0 12px; max-width: 78ch; }
+  .why.ok { color: var(--ok); }
+  .why .owner { color: var(--ink); font-weight: 500; }
+  .role { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+          border-radius: 3px; padding: 0 5px; line-height: 15px; display: inline-block;
+          vertical-align: 1px; margin-right: 3px; }
+  .role.rmine  { color: var(--bg); background: var(--link); }
+  .role.rcarry { color: var(--tag); background: rgba(var(--tag-rgb),.12);
+                 border: 1px solid rgba(var(--tag-rgb),.35); }
+  .role.rrev   { color: var(--muted); background: var(--panel2); border: 1px solid var(--border); }
+  .chips { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; padding-top: 1px; }
+  .age { color: var(--muted); font-size: 11px; text-align: right; font-family: var(--mono); padding-top: 2px; }
+
+  .chip { font-size: 11px; border-radius: 3px; padding: 0 6px; line-height: 17px;
+          background: var(--panel2); color: var(--muted); white-space: nowrap; }
+  .chip.ok   { color: var(--ok);   background: rgba(var(--ok-rgb),.12); }
+  .chip.bad  { color: var(--bad);  background: rgba(var(--bad-rgb),.12); }
+  .chip.warn { color: var(--warn); background: rgba(var(--warn-rgb),.12); }
+  .chip.run  { color: var(--run);  background: rgba(var(--run-rgb),.1); }
+  .chip.tag  { color: var(--tag);  background: rgba(var(--tag-rgb),.1); }
+  .chip.mono { font-family: var(--mono); }
+  .chip .ins { color: var(--ok); }
+  .chip .del { color: var(--bad); }
+  .pshist .pse { display: inline-block; margin: 0 8px 2px 0;
+                 font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+  .pshist .pse .up { color: var(--ink); font-family: inherit; }
+  .psmore { display: inline; }
+  .psmore > summary { display: inline-block; list-style: none; cursor: pointer;
+                      color: var(--link); font-family: var(--mono); font-size: 11px;
+                      margin-right: 8px; }
+  .psmore > summary::-webkit-details-marker { display: none; }
+  .psmore > summary:hover { text-decoration: underline; }
+
+  /* detail */
+  .detail { border-top: 1px solid var(--border); padding: 8px 12px 10px; font-size: 12px; }
+  .detail .line { color: var(--muted); margin: 2px 0; }
+  .detail .line strong { color: var(--ink); font-weight: 600; }
+  .detail table { border-collapse: collapse; width: 100%; margin: 6px 0; }
+  .detail th { text-align: left; color: var(--muted); font-size: 11px; text-transform: uppercase;
+               letter-spacing: .04em; padding: 3px 10px 3px 0; border-bottom: 1px solid var(--border); }
+  .detail td { padding: 3px 10px 3px 0; border-bottom: 1px solid var(--panel2); vertical-align: top; }
+  .detail td, .thread { overflow-wrap: anywhere; }
+  .thread { margin: 3px 0; color: var(--muted); }
+  .thread > summary { cursor: pointer; list-style: none; }
+  .thread > summary::-webkit-details-marker { display: none; }
+  .thread > summary:hover { color: var(--ink); }
+  .thread .meta { font-family: var(--mono); font-size: 11px; }
+  .thread .who { color: var(--ink); }
+  .thread .tc { margin: 6px 0 8px 24px; }
+  .thread .tchead { margin-bottom: 2px; }
+  .thread .tc pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+                    padding: 6px 10px; margin: 0; font: 12px/1.5 var(--mono);
+                    white-space: pre-wrap; overflow-wrap: anywhere; max-width: 920px; }
+  .kindtag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+             border-radius: 3px; padding: 0 4px; background: var(--panel2); }
+  .kindtag.reply { color: var(--warn); }
+  .kindtag.ping { color: var(--bad); background: rgba(var(--bad-rgb),.12); }
+  .kindtag.pingdone { color: var(--muted); background: var(--panel2); }
+
+  form.watchadd { display: flex; gap: 8px; margin: 4px 0 10px; flex-wrap: wrap; }
+  form.watchadd input[type=text] { background: var(--panel); border: 1px solid var(--border);
+      color: var(--ink); border-radius: 4px; padding: 4px 8px; font: inherit; font-size: 12px; }
+  form.watchadd input[type=text]:focus { border-color: var(--link); outline: none; }
+  form.watchadd input[name=change] { width: 190px; font-family: var(--mono); }
+  form.watchadd input[name=note] { flex: 1; min-width: 220px; }
+  .rm { background: none; border: none; color: var(--bad); cursor: pointer; font-size: 12px; padding: 0; }
+  .wadd { background: none; border: none; color: var(--link); cursor: pointer; font-size: 12px; padding: 0; }
+  .wadd:disabled { color: var(--muted); }
+  .cmsg { margin-top: 8px; }
+  .cmsg summary { display: inline-block; cursor: pointer; list-style: none;
+                  font-size: 13px; color: var(--ink); background: var(--panel2);
+                  border: 1px solid var(--border); border-radius: 4px; padding: 4px 12px; }
+  .cmsg summary::-webkit-details-marker { display: none; }
+  .cmsg summary::before { content: "▸ "; font-size: 10px; color: var(--muted); }
+  .cmsg[open] summary::before { content: "▾ "; }
+  .cmsg summary:hover { border-color: var(--muted); }
+  .cmsg pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+              padding: 8px 12px; margin: 4px 0 0; font: 11px/1.5 var(--mono);
+              white-space: pre-wrap; overflow-wrap: anywhere; max-width: 920px; }
+
+  footer { color: var(--muted); font-size: 11px; margin-top: 28px; border-top: 1px solid var(--border);
+           padding-top: 8px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+{# writable: the live app (a static export has no endpoints to call). #}
+{% set writable = not static_mode %}
+{# optional branch -> colour-token map from GD_BRANCH_COLORS #}
+{% set bcolors = (snapshot.branch_colors if snapshot else {}) or {} %}
+<div class="wrap">
+
+<div class="topbar">
+  {% if site_name %}<a class="site-home" href="{{ site_home or '/' }}" title="Back to {{ site_name }}">{{ site_name }}</a><span class="crumb-sep">/</span>{% endif %}
+  <h1>{% if not static_mode %}<a class="home" href="{{ url_for('root') }}" title="all boards">Gerrit Review Dashboard</a>{% else %}Gerrit Review Dashboard{% endif %}</h1>
+  <span class="ident">{{ snapshot.self.name if snapshot else '…' }} · {{ gerrit_url | replace('https://', '') | replace('http://', '') }}</span>
+  <div class="right">
+    {% if static_mode %}
+      <span class="status">static export {{ snapshot.generated_at if snapshot }} — refresh/watchlist controls are on the live app (gerrit-dashboard serve)</span>
+    {% else %}
+      <span class="status" id="gd-status">
+        {% if snapshot %}updated {{ snapshot.generated_at }}{% else %}no data yet — first refresh running{% endif %}
+      </span>
+      <span class="prog hidden" id="gd-prog">
+        <span class="prog-label" id="gd-prog-label">refreshing…</span>
+        <span class="prog-bar"><span class="prog-fill" id="gd-prog-fill"></span></span>
+      </span>
+      <label class="ctl"><input type="checkbox" id="gd-show-hidden"> show hidden{% if snapshot and snapshot.kpis.hidden %} ({{ snapshot.kpis.hidden }}){% endif %}</label>
+      {# auto-refresh control hidden: manual refresh only.  The element
+         stays in the DOM so the status-poll JS keeps working. #}
+      <label class="ctl hidden">auto-refresh
+        <select id="gd-interval">
+          <option value="0">off</option>
+          <option value="300">5 min</option>
+          <option value="600">10 min</option>
+          <option value="900">15 min</option>
+          <option value="1800">30 min</option>
+          <option value="3600">60 min</option>
+        </select>
+      </label>
+      {% if writable %}<button id="gd-refresh" type="button">Refresh</button>{% endif %}
+    {% endif %}
+    {% include "_theme_picker.html" %}
+  </div>
+</div>
+
+{% if error %}<div class="banner">Last refresh problem: {{ error }}</div>{% endif %}
+{% if form_error %}<div class="banner">Watchlist: {{ form_error }}</div>{% endif %}
+
+{% if not snapshot %}
+  <p class="empty">Fetching data from Gerrit for the first time — this page reloads automatically (takes ~1 min).</p>
+{% else %}
+
+{% set k = snapshot.kpis %}
+<div class="kpis">
+  <div class="kpi {{ 'alert' if k.action else 'calm' }}" data-tab="action" title="open tab"><div class="n">{{ k.action }}</div><div class="l">needs action</div></div>
+  <div class="kpi {{ 'alert' if k.pings else 'calm' }}" data-tab="pings" title="open tab"><div class="n">{{ k.pings_open }}</div><div class="l">open pings</div></div>
+  <div class="kpi" data-tab="action" title="open tab"><div class="n">{{ k.action_old }}</div><div class="l">longstanding</div></div>
+  <div class="kpi" data-tab="mine" title="open tab"><div class="n">{{ k.in_ci }}</div><div class="l">in CI</div></div>
+  <div class="kpi calm" data-tab="mine" title="open tab"><div class="n">{{ k.landing }}</div><div class="l">ready to land</div></div>
+</div>
+
+<nav class="tabs" id="gd-tabs">
+  <button data-tab="action" class="{{ 'attn' if k.action }}">Action<span class="tcount">{{ k.action }}</span></button>
+  <button data-tab="pings" class="{{ 'attn' if k.pings }}">Mentions<span class="tcount">{{ k.pings_open }}</span></button>
+  <button data-tab="watchlist">Watchlist<span class="tcount">{{ k.watch }}</span></button>
+  <button data-tab="mine">My patches<span class="tcount">{{ k.mine_open }}</span></button>
+  <button data-tab="carry">Carrying<span class="tcount">{{ k.carry_open }}</span></button>
+  <button data-tab="reviews">Reviews<span class="tcount">{{ k.reviews }}</span></button>
+  <button data-tab="cc">CC<span class="tcount">{{ snapshot.cc|length }}</span></button>
+  <button data-tab="merged" id="gd-tab-merged">Merged<span class="tcount">{{ k.merged }}</span></button>
+  <span class="search"><input type="search" id="gd-search" placeholder="filter — press /" spellcheck="false"></span>
+  {% if snapshot.branches|length > 1 %}
+  <span class="bfilter" id="gd-bfilter">
+    <button type="button" id="gd-bmenu-btn">branch: <span id="gd-bsummary">all</span> ▾</button>
+    <div class="bmenu hidden" id="gd-bmenu">
+      <div class="bmenu-actions">
+        <a href="#" data-ball="1">select all</a>
+        <a href="#" data-ball="0">select none</a>
+      </div>
+      {% for b in snapshot.branches %}
+      <label class="bopt">
+        <input type="checkbox" data-branch="{{ b.name }}" checked>
+        <span class="bname{{ ' bc-' + bcolors[b.name] if b.name in bcolors }}">{{ b.name }}</span>
+        <span class="bcount">{{ b.count }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </span>
+  {% endif %}
+</nav>
+
+{% macro status_chips(r) -%}
+  <span class="stats">
+    {%- if r.signals.janitor == 'OK' %}<span class="st ok" title="initial testing (janitor): succeeded">J ✓</span>
+    {%- elif r.signals.janitor == 'FAIL' %}<span class="st bad" title="initial testing (janitor): failures unique to this patch{% if r.signals.unique_tests %}: {% for u in r.signals.unique_tests %}{{ u.test }}{{ ', ' if not loop.last }}{% endfor %}{% endif %}">J ✗{{ r.signals.unique_tests|length if r.signals.unique_tests }}</span>
+    {%- elif r.signals.janitor == 'ERRORS' %}<span class="st warn" title="initial testing (janitor): {% if r.signals.janitor_compile_fail %}build failed — no tests ran{% else %}run had failures, none unique to this patch{% endif %}">J !</span>
+    {%- elif r.branch != 'master' %}<span class="st ghost"></span>
+    {%- else %}<span class="st none" title="initial testing (janitor): no verdict yet">J –</span>{% endif %}
+    {%- if r.build.state == 'SUCCESS' %}<span class="st ok" title="build (jenkins): success">B ✓</span>
+    {%- elif r.build.state in ('FAILURE', 'ABORTED') %}<span class="st bad" title="build (jenkins): {{ r.build.state|lower }}">B ✗</span>
+    {%- elif r.build.state == 'BUILDING' %}<span class="st run" title="build (jenkins): running">B …</span>
+    {%- else %}<span class="st none" title="build (jenkins): no result">B –</span>{% endif %}
+    {%- if r.test.state == 'PASS' %}<span class="st ok" title="tests (Maloo): all enforced passed">T ✓</span>
+    {%- elif r.test.state == 'FAIL' and r.test.all_failures_retesting %}<span class="st warn" title="tests (Maloo): failed, auto-retest in flight">T ↻</span>
+    {%- elif r.test.state == 'FAIL' %}<span class="st bad" title="tests (Maloo): {{ r.test.enforced_fail }} enforced failing">T ✗{{ r.test.enforced_fail }}</span>
+    {%- elif r.test.state == 'RUNNING' %}<span class="st run" title="tests (Maloo): running">T …</span>
+    {%- else %}<span class="st none" title="tests (Maloo): no results">T –</span>{% endif %}
+    {%- set n = r.review.plus1 + r.review.plus2 %}
+    {%- if r.review.neg %}<span class="st bad" title="reviews: negative vote standing">R {{ n }}/{{ r.review.threshold }}−</span>
+    {%- elif r.review.pass %}<span class="st ok" title="reviews: threshold met{{ ', has +2' if r.review.plus2 }}">R {{ n }}/{{ r.review.threshold }}{{ '+2' if r.review.plus2 }}</span>
+    {%- elif n %}<span class="st" title="reviews: below threshold">R {{ n }}/{{ r.review.threshold }}</span>
+    {%- else %}<span class="st none" title="reviews: none yet">R 0/{{ r.review.threshold }}</span>{% endif %}
+  </span>
+{%- endmacro %}
+
+{% macro badges(r) -%}
+  {% if r.janitor_alert %}<span class="chip bad" title="janitor: test failures unique to this patch — expand for details">{% if r.signals.unique_tests %}{{ r.signals.unique_tests|length }} {% endif %}unique failure{{ 's' if r.signals.unique_tests|length != 1 }}</span>{% endif %}
+  {% if r.topic %}<span class="chip run" title="topic: {{ r.topic }}">{{ r.topic }}</span>{% endif %}
+  {% for h in r.hashtags %}<span class="chip tag" title="hashtag">{{ h }}</span>{% endfor %}
+  {% if r.ci_ps and r.ci_ps != r.ps %}<span class="chip mono" title="Later patchset(s) changed only the commit message; CI did not re-run">CI@PS{{ r.ci_ps }}</span>{% endif %}
+  {% if r.wip %}<span class="chip warn">WIP</span>{% endif %}
+  {% if r.queued %}<span class="chip tag">{{ r.queued_tag }}</span>{% endif %}
+  {% if r.starred %}<span class="chip warn">★</span>{% endif %}
+  {% if r.hidden %}<span class="chip">hidden</span>{% endif %}
+  {% if r.stalled %}<span class="chip warn">stalled {{ r.updated_age }}</span>{% endif %}
+  {% if r.unresolved %}<span class="chip warn">{{ r.unresolved }} unresolved</span>{% endif %}
+  <span class="chip mono" title="{{ r.insertions + r.deletions }} lines changed">{{ r.size_bucket }} <span class="ins">+{{ r.insertions }}</span> <span class="del">−{{ r.deletions }}</span></span>
+{%- endmacro %}
+
+{% macro rolechip(r) -%}
+  {%- if r.role == 'mine' %}<span class="role rmine" title="you own this patch">mine</span>
+  {%- elif r.role == 'carrying' %}<span class="role rcarry" title="you uploaded the current patchset — you watch its CI">carrying</span> <span class="owner">{{ r.owner }}</span> ·
+  {%- elif r.role == 'reviewing' %}<span class="role rrev" title="you are a reviewer">reviewing</span> <span class="owner">{{ r.owner }}</span> ·
+  {%- elif r.role %}<span class="role rrev">{{ r.role }}</span> <span class="owner">{{ r.owner }}</span> ·
+  {%- endif %}
+{%- endmacro %}
+
+{% macro row(r, show_owner=False, watch=False, open_detail=False, merged=False, pings_only=False) %}
+<details class="row {{ r.tone }}{{ ' is-hidden' if r.hidden }}" data-branch="{{ r.branch }}" {% if r.hidden %}data-hidden="1"{% endif %} {{ 'open' if open_detail }}>
+  <summary>
+    <div class="rgrid">
+      <a class="num" href="{{ r.url }}" target="_blank" rel="noopener" title="open in Gerrit">{{ r.number }}</a>
+      <span class="branch{{ ' bc-' + bcolors[r.branch] if r.branch in bcolors }}" title="{{ r.project }} · {{ r.branch }}">{{ r.branch }}</span>
+      {{ status_chips(r) }}
+      <div>
+        <div class="subj" title="{{ r.subject }}">{{ r.subject }}</div>
+        {% if r.top_reason %}
+          <div class="why {{ r.tone }}">{% if show_owner %}{{ rolechip(r) }} {% endif %}{{ r.top_reason }}{% if watch and r.watch_note %} — {{ r.watch_note }}{% endif %}</div>
+        {% elif show_owner and r.role %}
+          <div class="why">{{ rolechip(r) }}{% if watch and r.watch_note %} {{ r.watch_note }}{% endif %}</div>
+        {% elif watch and r.watch_note %}
+          <div class="why">{{ r.watch_note }}</div>
+        {% endif %}
+      </div>
+      <div class="chips">
+        {{ badges(r) }}
+      </div>
+      <div class="age">{{ r.updated_age }}</div>
+      {% if writable and r.status == 'NEW' %}
+        {% if r.hidden %}
+          <button class="rhide runhide" data-unhide="{{ r.number }}" title="unhide patch">+</button>
+        {% else %}
+          <button class="rhide" data-hide="{{ r.number }}" title="hide patch">×</button>
+        {% endif %}
+      {% else %}<span></span>{% endif %}
+    </div>
+  </summary>
+  <div class="detail">
+    {% if not pings_only %}
+    {% if r['items']|length > 1 %}
+      {% for it in r['items'] %}<div class="line {{ 'why p0' if it.prio == 0 else ('why p1' if it.prio == 1) }}">{{ it.reason }}</div>{% endfor %}
+    {% endif %}
+    {% if r.signals.unique_failure %}
+      <div class="line{{ ' why p0' if r.janitor_alert }}">janitor flagged test failures unique to this patch
+        {%- if not r.janitor_alert %} — superseded ({{ 'retest in flight' if r.test.all_failures_retesting else 'tests have since passed' }}){% endif %}
+        {%- if r.signals.janitor_url %} — <a href="{{ r.signals.janitor_url }}" target="_blank" rel="noopener">full janitor results</a>{% endif %}</div>
+      {% if r.signals.unique_tests %}
+        <table>
+          <tr><th>unique failing test</th><th>history</th></tr>
+          {% for u in r.signals.unique_tests %}
+            <tr><td>{{ u.test }}</td><td>{{ u.note }}</td></tr>
+          {% endfor %}
+        </table>
+      {% endif %}
+    {% elif r.signals.janitor == 'ERRORS' and r.signals.janitor_url %}
+      <div class="line">janitor run: {% if r.signals.janitor_compile_fail %}build failed — no tests ran{% else %}{{ r.signals.janitor_fails }} failing config(s), none unique to this patch{% endif %} — <a href="{{ r.signals.janitor_url }}" target="_blank" rel="noopener">janitor results</a></div>
+    {% endif %}
+    {% if r.test.failed_tests %}
+      <table>
+        <tr><th>failed enforced test</th><th>platform</th><th>detail</th><th></th></tr>
+        {% for t in r.test.failed_tests %}{% for f in t.failures %}
+          <tr>
+            <td>{{ t.name }}{% if t.retest_pending %} <span class="chip warn">retesting</span>{% endif %}
+                {% if f.attempts and f.attempts > 1 %} <span class="chip bad">failed {{ f.attempts }}×</span>{% endif %}
+                {% if f.crashed %} <span class="chip bad">crashed</span>{% endif %}</td>
+            <td>{{ f.platform }}</td>
+            <td>{{ f.detail[:110] }}</td>
+            <td>{% if f.url %}<a href="{{ f.url }}" target="_blank" rel="noopener">session</a>{% endif %}</td>
+          </tr>
+        {% endfor %}{% endfor %}
+      </table>
+    {% endif %}
+    {% if r.test.optional_fail %}<div class="line">{{ r.test.optional_fail }} optional test failure(s) — informational</div>{% endif %}
+    {% if r.build.url or r.test.results_url %}
+      <div class="line">
+        {%- if r.build.url %}build <a href="{{ r.build.url }}" target="_blank" rel="noopener">#{{ r.build.number }}</a> {{ r.build.state }}{% endif %}
+        {%- if r.test.results_url %}{{ ' · ' if r.build.url }}tests <a href="{{ r.test.results_url }}" target="_blank" rel="noopener">all Maloo sessions</a>
+          {%- if r.test.state == 'RUNNING' and r.test.queue_url %} · <a href="{{ r.test.queue_url }}" target="_blank" rel="noopener">test queue</a>{% endif %}
+        {%- endif %}
+      </div>
+    {% endif %}
+    {% if r.review.humans %}
+      <div class="line">reviews:
+        {% for v in r.review.humans %}<strong>{{ v.name }} {{ '%+d'|format(v.value) }}</strong> <span class="thread meta">{{ v.date[:16] }}</span>{{ ' · ' if not loop.last }}{% endfor %}
+      </div>
+    {% endif %}
+    {% if r.pending_reviewers and r.status == 'NEW' %}
+      <div class="line">no vote yet: {% for n in r.pending_reviewers %}<strong>{{ n }}</strong>{{ ', ' if not loop.last }}{% endfor %}</div>
+    {% endif %}
+    {% if r.ps_history|length > 1 %}
+      {% set pshead = r.ps_history[:-5] %}
+      <div class="line pshist">patchsets:
+        {% if pshead %}
+        <details class="psmore"><summary>+{{ pshead|length }} earlier</summary>
+          {%- for p in pshead %}
+          <span class="pse" title="PS{{ p.ps }} uploaded {{ p.date[:16] }} by {{ p.uploader }}">PS{{ p.ps }} {{ p.date[5:10] }}{% if p.uploader and p.uploader != r.owner %} <span class="up">{{ p.uploader }}</span>{% endif %}</span>
+          {%- endfor %}
+        </details>
+        {% endif %}
+        {% for p in r.ps_history[-5:] %}
+          <span class="pse" title="PS{{ p.ps }} uploaded {{ p.date[:16] }} by {{ p.uploader }}">PS{{ p.ps }} {{ p.date[5:10] }}{% if p.uploader and p.uploader != r.owner %} <span class="up">{{ p.uploader }}</span>{% endif %}</span>
+        {% endfor %}
+      </div>
+    {% endif %}
+    {% if r.review.prior_vote %}
+      <div class="line">your previous vote: <strong>{{ '%+d'|format(r.review.prior_vote.value) }}</strong> on PS{{ r.review.prior_vote.ps }} ({{ r.review.prior_vote.date[:16] }}) — now at PS{{ r.ps }}</div>
+    {% endif %}
+    {% endif %}{# /not pings_only #}
+    {% if r.pings %}
+      {% if r.ping_count %}
+        <div class="line why p1">{{ r.ping_count }} ping{{ 's' if r.ping_count != 1 }} waiting on you:</div>
+      {% else %}
+        <div class="line">open ping — you replied, the thread is not resolved yet:</div>
+      {% endif %}
+      {% for t in r.pings %}
+        <details class="thread">
+          <summary>
+            {% if t.answered %}<span class="kindtag pingdone">@you · replied</span>
+            {% else %}<span class="kindtag ping">@you</span>{% endif %}
+            <span class="meta">PS{{ t.ps if t.ps else '?' }} {{ t.updated[:16] }}</span>
+            <span class="who">{{ t.author }}</span>
+            {% if t.file and t.file != '/PATCHSET_LEVEL' %}
+              <a class="meta" target="_blank" rel="noopener" title="{{ t.file }}"
+                 href="{{ r.url }}/{{ t.ps if t.ps else r.ps }}/{{ t.file }}{% if t.line %}#{{ t.line }}{% endif %}"
+                >{{ t.file.split('/')[-1] }}{% if t.line %}:{{ t.line }}{% endif %}</a>
+            {% else %}
+              <a class="meta" target="_blank" rel="noopener" href="{{ r.url }}">patchset comment</a>
+            {% endif %}
+            — {{ t.snippet }}
+          </summary>
+          {% for c in t.conv %}
+            <div class="tc">
+              <div class="tchead"><span class="who">{{ c.author }}</span> <span class="meta">PS{{ c.ps }} · {{ c.updated[:16] }}</span></div>
+              <pre>{{ c.message }}</pre>
+            </div>
+          {% endfor %}
+        </details>
+      {% endfor %}
+    {% endif %}
+    {% if not pings_only %}
+    {% if r.threads %}
+      <div class="line">threads: {{ r.threads.my_turn }} need your reply · {{ r.threads.their_turn }} waiting on others · {{ r.threads.sticky }} own notes · {{ r.threads.bot }} bot</div>
+      {% for t in r.threads['items'] %}
+        <details class="thread">
+          <summary>
+            <span class="kindtag {{ 'reply' if t.kind == 'my_turn' }}">{{ 'reply' if t.kind == 'my_turn' else 'note' }}</span>
+            <span class="meta">PS{{ t.ps if t.ps else '?' }} {{ t.updated[:16] }}</span>
+            <span class="who">{{ t.author }}</span>
+            {% if t.file and t.file != '/PATCHSET_LEVEL' %}
+              <a class="meta" target="_blank" rel="noopener" title="{{ t.file }}"
+                 href="{{ r.url }}/{{ t.ps if t.ps else r.ps }}/{{ t.file }}{% if t.line %}#{{ t.line }}{% endif %}"
+                >{{ t.file.split('/')[-1] }}{% if t.line %}:{{ t.line }}{% endif %}</a>
+            {% else %}
+              <a class="meta" target="_blank" rel="noopener" href="{{ r.url }}">patchset comment</a>
+            {% endif %}
+            — {{ t.snippet }}
+          </summary>
+          {% for c in t.conv %}
+            <div class="tc">
+              <div class="tchead"><span class="who">{{ c.author }}</span> <span class="meta">PS{{ c.ps }} · {{ c.updated[:16] }}</span></div>
+              <pre>{{ c.message }}</pre>
+            </div>
+          {% endfor %}
+        </details>
+      {% endfor %}
+    {% endif %}
+    {% if r.hashtags %}<div class="line">tags: {% for h in r.hashtags %}<span class="chip tag">{{ h }}</span> {% endfor %}</div>{% endif %}
+    {% if r.ci_ps and r.ci_ps != r.ps %}
+      <div class="line">build/test results are from <strong>PS{{ r.ci_ps }}</strong> — PS{{ r.ci_ps + 1 }}…PS{{ r.ps }} changed only the commit message (votes copied, CI not re-run)</div>
+    {% endif %}
+    {% endif %}{# /not pings_only #}
+    <div class="line">owner <strong>{{ r.owner }}</strong> · uploader <strong>{{ r.uploader }}</strong> · PS{{ r.ps }} uploaded {{ r.ps_age }} ago · {{ r.status }}{% if r.backport %} · backport{% endif %} · <a href="{{ r.url }}" target="_blank" rel="noopener">open in Gerrit ↗</a></div>
+    {% if writable %}
+      <div style="margin-top:6px" class="rowactions">
+        {% if watch %}
+          <button class="rm" data-rm="{{ r.number }}">remove from watchlist</button>
+        {% elif r.status == 'NEW' %}
+          <button class="wadd" data-watch="{{ r.number }}">+ add to watchlist</button>
+        {% endif %}
+        {% if r.hidden %}
+          <button class="wadd" data-unhide="{{ r.number }}">unhide patch</button>
+        {% elif r.status == 'NEW' %}
+          <button class="rm" data-hide="{{ r.number }}">hide patch</button>
+        {% endif %}
+      </div>
+    {% endif %}
+    {% if r.commit_msg and not pings_only %}
+      <details class="cmsg"><summary>commit message</summary><pre>{{ r.commit_msg }}</pre></details>
+    {% endif %}
+  </div>
+</details>
+{% endmacro %}
+
+{% macro group(title, rows, show_owner=False, gid=None, tone='') %}
+  <details class="grp{{ ' is-empty' if not rows }}"{% if gid %} id="grp-{{ gid }}"{% endif %} {{ 'open' if rows }}>
+    <summary class="{{ 't' ~ tone if tone }}"><span class="caret">▶</span><h3>{{ title }}</h3> <span class="count">({{ rows|length }})</span></summary>
+    {% for r in rows %}{{ row(r, show_owner=show_owner) }}{% else %}<div class="empty">nothing here right now</div>{% endfor %}
+  </details>
+{% endmacro %}
+
+{% macro state_groups(m, sec, show_owner=False) %}
+  {% set gl = [('failed', 'Failed / broken', 'Failed', m.failed, 'p0'),
+               ('feedback', 'Review feedback — your turn', 'Feedback', m.feedback, 'p1'),
+               ('ci', 'In CI', 'In CI', m.in_ci, 'run'),
+               ('needsrev', 'Needs reviewers', 'Needs reviewers', m.needs_reviewers, ''),
+               ('waiting', 'Waiting on reviewers', 'Waiting', m.waiting, ''),
+               ('landing', 'Ready to land', 'Ready to land', m.landing, 'ok'),
+               ('parked', 'Parked (WIP / self-blocked)', 'Parked', m.parked, '')] %}
+  <nav class="grpnav">
+    {% for key, title, short, rows, tone in gl if rows %}
+      <a href="#grp-{{ sec }}-{{ key }}">{{ short }}<span class="n">{{ rows|length }}</span></a>
+    {% endfor %}
+    <span class="gn-x"><a href="#" data-gx="1">expand all</a><a href="#" data-gx="0">collapse all</a></span>
+  </nav>
+  {% for key, title, short, rows, tone in gl %}
+    {{ group(title, rows, show_owner=show_owner, gid=sec ~ '-' ~ key, tone=tone) }}
+  {% endfor %}
+{% endmacro %}
+
+{% macro tag_groups(bytag, sec, show_owner=False) %}
+  {% if bytag %}
+  <nav class="grpnav">
+    {% for tag, rows in bytag.items() if rows %}
+      <a href="#grp-{{ sec }}-tag-{{ tag|lower|replace(' ', '-')|replace('(', '')|replace(')', '')|replace('/', '-') }}">{{ tag }}<span class="n">{{ rows|length }}</span></a>
+    {% endfor %}
+    <span class="gn-x"><a href="#" data-gx="1">expand all</a><a href="#" data-gx="0">collapse all</a></span>
+  </nav>
+  {% endif %}
+  {% for tag, rows in bytag.items() %}
+    {{ group(tag, rows, show_owner=show_owner, gid=sec ~ '-tag-' ~ tag|lower|replace(' ', '-')|replace('(', '')|replace(')', '')|replace('/', '-')) }}
+  {% else %}
+    <div class="empty">no open changes</div>
+  {% endfor %}
+{% endmacro %}
+
+<section id="tab-action" class="tabpane">
+  <div class="sechead"><h2>Needs your action</h2>
+    <span class="count">{{ snapshot.action|length }} new{% if snapshot.action_old %} · {{ snapshot.action_old|length }} longstanding{% endif %}</span></div>
+  {% for r in snapshot.action %}
+    {{ row(r, show_owner=True) }}
+  {% else %}
+    <div class="empty">No new signals — nothing fresh needs your attention.</div>
+  {% endfor %}
+  {% if snapshot.action_old %}
+  <details class="grp" id="grp-action-old" open>
+    <summary><span class="caret">▶</span><h3>Longstanding (signal older than a week)</h3> <span class="count">({{ snapshot.action_old|length }})</span></summary>
+    {% for r in snapshot.action_old %}
+      {{ row(r, show_owner=True) }}
+    {% endfor %}
+  </details>
+  {% endif %}
+</section>
+
+<section id="tab-pings" class="tabpane">
+  <div class="sechead"><h2>Mentions</h2>
+    <span class="count">{{ snapshot.kpis.pings }} waiting on you · {{ snapshot.kpis.pings_open }} open</span></div>
+  <p class="secnote">Unresolved threads where someone @-mentioned you (username, email or
+  full name) — the pings that drown in Gerrit's email. Red: you have not replied since
+  the ping. Muted: you replied, but the thread is still open, so it stays on the list
+  until someone resolves it. Both clear on the refresh after the thread is resolved.</p>
+  {% for r in snapshot.pinged %}
+    {{ row(r, show_owner=True, open_detail=True, pings_only=True) }}
+  {% else %}
+    <div class="empty">No unanswered pings — nobody is waiting on a mention.</div>
+  {% endfor %}
+</section>
+
+<section id="tab-watchlist" class="tabpane">
+  <div class="sechead"><span class="count">{{ snapshot.watch|length }} watched</span></div>
+  {% if writable %}
+  <form class="watchadd" method="post" action="{{ url_for('watchlist_add_form', user=user) }}">
+    <input type="text" name="change" placeholder="change # or Gerrit URL" required>
+    <input type="text" name="note" placeholder="note (optional)">
+    <button type="submit">Watch</button>
+  </form>
+  {% endif %}
+  {% for r in snapshot.watch %}
+    {{ row(r, show_owner=True, watch=True, open_detail=(r.test.state == 'FAIL')) }}
+  {% else %}
+    <div class="empty">Nothing watched.{% if writable %} Add a change above — e.g. after rebasing someone's patch — and its build/test state shows up here.{% else %} The watchlist is managed on the live app.{% endif %}</div>
+  {% endfor %}
+</section>
+
+<section id="tab-mine" class="tabpane">
+  {% set m = snapshot.mine %}
+  <div class="sechead">
+    <span class="count">{{ m.failed|length + m.feedback|length + m.in_ci|length + m.needs_reviewers|length + m.waiting|length + m.landing|length + m.parked|length }} open</span>
+    <div class="viewtoggle" data-section="mine">
+      <button type="button" data-view="state" class="active">by state</button>
+      <button type="button" data-view="tag">by tag</button>
+    </div>
+  </div>
+  <div class="view-state" id="mine-state">{{ state_groups(m, 'mine') }}</div>
+  <div class="view-tag hidden" id="mine-tag">{{ tag_groups(snapshot.mine_by_tag, 'mine') }}</div>
+</section>
+
+<section id="tab-carry" class="tabpane">
+  {% set c = snapshot.carry %}
+  <div class="sechead"><h2>Carrying — uploaded by me, owned by others</h2>
+    <span class="count">{{ c.failed|length + c.feedback|length + c.in_ci|length + c.needs_reviewers|length + c.waiting|length + c.landing|length + c.parked|length }} open</span>
+    <div class="viewtoggle" data-section="carry">
+      <button type="button" data-view="state" class="active">by state</button>
+      <button type="button" data-view="tag">by tag</button>
+    </div>
+  </div>
+  <div class="view-state" id="carry-state">{{ state_groups(c, 'carry', show_owner=True) }}</div>
+  <div class="view-tag hidden" id="carry-tag">{{ tag_groups(snapshot.carry_by_tag, 'carry', show_owner=True) }}</div>
+</section>
+
+<section id="tab-reviews" class="tabpane">
+  {% set v = snapshot.reviews %}
+  <div class="sechead">
+    <span class="count">{{ v.re_review|length + v.requested|length + v.later|length + v.done|length }} open</span></div>
+  <nav class="grpnav">
+    {% if v.re_review %}<a href="#grp-reviews-rereview">Re-review<span class="n">{{ v.re_review|length }}</span></a>{% endif %}
+    {% if v.requested %}<a href="#grp-reviews-requested">CI green<span class="n">{{ v.requested|length }}</span></a>{% endif %}
+    {% if v.later %}<a href="#grp-reviews-later">CI pending<span class="n">{{ v.later|length }}</span></a>{% endif %}
+    {% if v.done %}<a href="#grp-reviews-done">Voted<span class="n">{{ v.done|length }}</span></a>{% endif %}
+    <span class="gn-x"><a href="#" data-gx="1">expand all</a><a href="#" data-gx="0">collapse all</a></span>
+  </nav>
+  {{ group('Re-review needed — new patchset since your vote', v.re_review, show_owner=True, gid='reviews-rereview', tone='p1') }}
+  {{ group('Awaiting your review — CI green', v.requested, show_owner=True, gid='reviews-requested') }}
+  {{ group('Awaiting review — CI not green yet', v.later, show_owner=True, gid='reviews-later') }}
+  {{ group('Voted on current patchset', v.done, show_owner=True, gid='reviews-done') }}
+</section>
+
+<section id="tab-cc" class="tabpane">
+  <div class="sechead"><h2>CC'd — on your radar, review not requested</h2>
+    <span class="count">({{ snapshot.cc|length }})</span></div>
+  {% for r in snapshot.cc %}
+    {{ row(r, show_owner=True) }}
+  {% else %}
+    <div class="empty">You are not CC'd on any open changes.</div>
+  {% endfor %}
+</section>
+
+<section id="tab-merged" class="tabpane">
+  <div class="sechead"><h2>Merged — last 30 days</h2><span class="count">({{ snapshot.merged|length }})</span></div>
+  {% for r in snapshot.merged %}
+    {{ row(r, show_owner=True, merged=True) }}
+  {% else %}
+    <div class="empty">Nothing merged in the last 30 days.</div>
+  {% endfor %}
+</section>
+
+<footer>
+  snapshot {{ snapshot.snapshot_id }} · generated {{ snapshot.generated_at }} · read-only against Gerrit
+</footer>
+{% endif %}
+
+</div>
+<script>
+  const STATIC_MODE = {{ 'true' if static_mode else 'false' }};
+
+  const SNAP_ID = {{ (snapshot.snapshot_id if snapshot else '')|tojson }};
+  const BASE = {{ url_for('index', user=user)|tojson }};  // e.g. "/gerrit/<user>/"
+  const LSKEY = 'gd-' + {{ user|tojson }};  // per-user browser prefs
+
+  // tab navigation, persisted; scroll to top so the pane starts at its head
+  const tabbar = document.getElementById('gd-tabs');
+  function setTab(name) {
+    if (!document.getElementById('tab-' + name)) name = 'action';
+    document.querySelectorAll('.tabpane').forEach(p =>
+      p.classList.toggle('active', p.id === 'tab-' + name));
+    if (tabbar) tabbar.querySelectorAll('button').forEach(b =>
+      b.classList.toggle('active', b.getAttribute('data-tab') === name));
+    try { localStorage.setItem(LSKEY + '-tab', name); } catch (e) {}
+  }
+  if (tabbar) {
+    tabbar.querySelectorAll('button').forEach(b =>
+      b.addEventListener('click', () => { setTab(b.getAttribute('data-tab')); window.scrollTo(0, 0); }));
+    document.querySelectorAll('.kpi[data-tab]').forEach(k =>
+      k.addEventListener('click', () => setTab(k.getAttribute('data-tab'))));
+    let saved = 'action';
+    try { saved = localStorage.getItem(LSKEY + '-tab') || 'action'; } catch (e) {}
+    setTab(saved);
+  }
+
+  // ---- row visibility: additive branch filter + fuzzy search, combined ----
+  const bfilter = document.getElementById('gd-bfilter');
+  const searchEl = document.getElementById('gd-search');
+  const bboxes = bfilter ? [...bfilter.querySelectorAll('input[data-branch]')] : [];
+  const allBranches = bboxes.map(b => b.getAttribute('data-branch'));
+  let enabled = new Set(allBranches);
+  try {
+    const s = JSON.parse(localStorage.getItem(LSKEY + '-branches') || 'null');
+    // An empty selection is never a useful board: it happens when the
+    // first, snapshot-less page load persisted [] (new user), or when
+    // every stored branch vanished from the board — fall back to all.
+    if (Array.isArray(s) && s.length) {
+      enabled = new Set(s.filter(x => allBranches.includes(x)));
+      if (!enabled.size) enabled = new Set(allBranches);
+    }
+  } catch (e) {}
+  let suppressPersist = false;
+  const autoOpened = new Set();
+
+  // fuzzy: every whitespace-separated token must match as a substring of
+  // the row, or as a subsequence WITHIN a single word ("negtiation" finds
+  // "negotiation") — never collected across word boundaries, which would
+  // make any short token match any long row.
+  function subseqInWord(word, tok) {
+    let pos = 0;
+    for (const ch of tok) {
+      pos = word.indexOf(ch, pos);
+      if (pos < 0) return false;
+      pos++;
+    }
+    return true;
+  }
+  function fuzzyMatch(hay, words, query) {
+    for (const tok of query.split(/\s+/).filter(Boolean)) {
+      if (hay.includes(tok)) continue;
+      if (!words.some(w => subseqInWord(w, tok))) return false;
+    }
+    return true;
+  }
+  function haystack(row) {
+    if (!row.dataset.hay) {
+      const s = row.querySelector('summary');
+      row.dataset.hay = ((s ? s.textContent : '') + ' ' +
+        (row.getAttribute('data-branch') || '')).toLowerCase().replace(/\s+/g, ' ');
+    }
+    return row.dataset.hay;
+  }
+  const wordsCache = new WeakMap();
+  function haywords(row) {
+    let w = wordsCache.get(row);
+    if (!w) { w = haystack(row).split(' '); wordsCache.set(row, w); }
+    return w;
+  }
+
+  const showHiddenEl = document.getElementById('gd-show-hidden');
+  function applyVisibility() {
+    const q = searchEl ? searchEl.value.trim().toLowerCase() : '';
+    const showHidden = showHiddenEl ? showHiddenEl.checked : false;
+    document.querySelectorAll('details.row[data-hidden]').forEach(r =>
+      r.classList.toggle('hhidden', !showHidden));
+    bboxes.forEach(b => { b.checked = enabled.has(b.getAttribute('data-branch')); });
+    const summary = document.getElementById('gd-bsummary');
+    if (summary) {
+      summary.textContent = enabled.size === allBranches.length ? 'all'
+        : (enabled.size === 0 ? 'none' : enabled.size + '/' + allBranches.length);
+    }
+    document.querySelectorAll('details.row[data-branch]').forEach(r => {
+      r.classList.toggle('bhidden', bboxes.length > 0 && !enabled.has(r.getAttribute('data-branch')));
+      r.classList.toggle('shidden', q !== '' && !fuzzyMatch(haystack(r), haywords(r), q));
+    });
+    const visCount = {};
+    suppressPersist = true;
+    document.querySelectorAll('details.grp').forEach(g => {
+      const total = g.querySelectorAll('details.row').length;
+      const vis = g.querySelectorAll('details.row:not(.bhidden):not(.shidden):not(.hhidden)').length;
+      const c = g.querySelector('summary .count');
+      if (c && total) c.textContent = vis === total ? '(' + total + ')' : '(' + vis + '/' + total + ')';
+      g.classList.toggle('is-filtered-empty', total > 0 && vis === 0);
+      if (g.id) visCount[g.id] = vis;
+      // searching peeks into collapsed groups with matches; restore after
+      if (q !== '' && vis > 0 && !g.open) { g.open = true; autoOpened.add(g); }
+      else if (q === '' && autoOpened.has(g)) { g.open = false; autoOpened.delete(g); }
+    });
+    suppressPersist = false;
+    document.querySelectorAll('.grpnav a[href^="#grp-"]').forEach(a => {
+      const n = a.querySelector('.n');
+      const id = a.getAttribute('href').slice(1);
+      if (n && id in visCount) n.textContent = visCount[id];
+    });
+    // Never persist from a page without branch data (first load of a
+    // fresh board) — it would poison the filter with an empty selection.
+    if (bboxes.length) {
+      try { localStorage.setItem(LSKEY + '-branches', JSON.stringify([...enabled])); } catch (e) {}
+    }
+  }
+  bboxes.forEach(b => b.addEventListener('change', () => {
+    const br = b.getAttribute('data-branch');
+    if (b.checked) enabled.add(br); else enabled.delete(br);
+    applyVisibility();
+  }));
+  if (bfilter) {
+    bfilter.querySelectorAll('[data-ball]').forEach(b =>
+      b.addEventListener('click', ev => {
+        ev.preventDefault();
+        enabled = b.getAttribute('data-ball') === '1' ? new Set(allBranches) : new Set();
+        applyVisibility();
+      }));
+    const menu = document.getElementById('gd-bmenu');
+    const btn = document.getElementById('gd-bmenu-btn');
+    btn.addEventListener('click', () => menu.classList.toggle('hidden'));
+    document.addEventListener('click', ev => {
+      if (!bfilter.contains(ev.target)) menu.classList.add('hidden');
+    });
+    document.addEventListener('keydown', ev => {
+      if (ev.key === 'Escape') menu.classList.add('hidden');
+    });
+  }
+  if (searchEl) {
+    let t = null;
+    searchEl.addEventListener('input', () => { clearTimeout(t); t = setTimeout(applyVisibility, 120); });
+    searchEl.addEventListener('keydown', ev => {
+      if (ev.key === 'Escape') { searchEl.value = ''; applyVisibility(); searchEl.blur(); }
+    });
+    document.addEventListener('keydown', ev => {
+      if (ev.key === '/' && document.activeElement !== searchEl
+          && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) {
+        ev.preventDefault(); searchEl.focus();
+      }
+    });
+  }
+  if (showHiddenEl) {
+    try { showHiddenEl.checked = localStorage.getItem(LSKEY + '-showhidden') === '1'; } catch (e) {}
+    showHiddenEl.addEventListener('change', () => {
+      try { localStorage.setItem(LSKEY + '-showhidden', showHiddenEl.checked ? '1' : '0'); } catch (e) {}
+      applyVisibility();
+    });
+  }
+  applyVisibility();
+
+  // per-group collapse persisted (groups render open server-side);
+  // search-driven auto-opens are not persisted
+  document.querySelectorAll('details.grp[id]').forEach(g => {
+    const key = LSKEY + '-' + g.id;
+    try { if (localStorage.getItem(key) === '0') g.open = false; } catch (e) {}
+    g.addEventListener('toggle', () => {
+      if (suppressPersist) return;
+      autoOpened.delete(g);  // a manual toggle takes ownership
+      try { localStorage.setItem(key, g.open ? '1' : '0'); } catch (e) {}
+    });
+  });
+
+  // jump nav: open a collapsed target before scrolling; expand/collapse all
+  document.querySelectorAll('.grpnav a[href^="#grp-"]').forEach(a => {
+    a.addEventListener('click', () => {
+      const t = document.getElementById(a.getAttribute('href').slice(1));
+      if (t && !t.open) t.open = true;
+    });
+  });
+  document.querySelectorAll('[data-gx]').forEach(b => {
+    b.addEventListener('click', ev => {
+      ev.preventDefault();
+      const scope = b.closest('.view-state, .view-tag, .tabpane');
+      const want = b.getAttribute('data-gx') === '1';
+      scope.querySelectorAll('details.grp').forEach(g => {
+        if (!g.classList.contains('is-empty') || !want) g.open = want;
+      });
+    });
+  });
+
+  // view toggles (state | tag), persisted per section
+  document.querySelectorAll('.viewtoggle').forEach(tg => {
+    const section = tg.getAttribute('data-section');
+    const apply = (view) => {
+      document.getElementById(section + '-state').classList.toggle('hidden', view !== 'state');
+      document.getElementById(section + '-tag').classList.toggle('hidden', view !== 'tag');
+      tg.querySelectorAll('button').forEach(b =>
+        b.classList.toggle('active', b.getAttribute('data-view') === view));
+      try { localStorage.setItem(LSKEY + '-view-' + section, view); } catch (e) {}
+    };
+    tg.querySelectorAll('button').forEach(b =>
+      b.addEventListener('click', () => apply(b.getAttribute('data-view'))));
+    let saved = null;
+    try { saved = localStorage.getItem(LSKEY + '-view-' + section); } catch (e) {}
+    if (saved === 'tag') apply('tag');
+  });
+
+  if (!STATIC_MODE) {
+    const statusEl = document.getElementById('gd-status');
+    const intervalEl = document.getElementById('gd-interval');
+    const progEl = document.getElementById('gd-prog');
+    const progFill = document.getElementById('gd-prog-fill');
+    const progLabel = document.getElementById('gd-prog-label');
+    let busy = false;
+    async function poll() {
+      try {
+        const r = await fetch(BASE + 'api/status');
+        const s = await r.json();
+        // "queued" = requested but held back by the refresh rate cap;
+        // show it like a refresh in flight so the button never looks dead.
+        busy = !!s.refreshing || !!s.pending;
+        statusEl.classList.toggle('hidden', busy);
+        progEl.classList.toggle('hidden', !busy);
+        if (busy) {
+          const p = s.refreshing ? s.progress : null;
+          if (p && p.total) {
+            progFill.classList.remove('indet');
+            progFill.style.width = Math.min(100, Math.round(100 * p.done / p.total)) + '%';
+            progLabel.textContent = p.phase + ' ' + p.done + '/' + p.total;
+          } else {
+            progFill.classList.add('indet');
+            progLabel.textContent = s.refreshing ? 'starting…'
+              : (s.queued_for > 1 ? 'queued ' + Math.ceil(s.queued_for) + 's' : 'queued…');
+          }
+        } else if (s.generated_at) {
+          progFill.style.width = '0';
+          statusEl.textContent = 'updated ' + s.generated_at;
+        }
+        if (document.activeElement !== intervalEl) intervalEl.value = String(s.interval);
+        if (s.snapshot_id && s.snapshot_id !== SNAP_ID && !s.refreshing) location.reload();
+      } catch (e) { /* server briefly away; retry next tick */ }
+      // fast ticks while a refresh runs so the bar actually moves
+      schedulePoll(busy ? 900 : 15000);
+    }
+    let pollTimer = null;
+    function schedulePoll(ms) { clearTimeout(pollTimer); pollTimer = setTimeout(poll, ms); }
+    poll();
+
+    intervalEl.addEventListener('change', async () => {
+      await fetch(BASE + 'api/interval', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({seconds: parseInt(intervalEl.value, 10)})});
+    });
+
+    const btn = document.getElementById('gd-refresh');
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      await fetch(BASE + 'api/refresh', {method: 'POST'});
+      setTimeout(() => { btn.disabled = false; }, 3000);
+      schedulePoll(400);  // pick up the progress bar quickly
+    });
+
+    document.querySelectorAll('[data-rm]').forEach(el => {
+      el.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        await fetch(BASE + 'api/watchlist/' + el.getAttribute('data-rm'), {method: 'DELETE'});
+        el.closest('details.row').style.display = 'none';
+      });
+    });
+
+    document.querySelectorAll('[data-hide]').forEach(el => {
+      el.addEventListener('click', async (ev) => {
+        ev.preventDefault(); ev.stopPropagation();  // don't toggle the row
+        const n = el.getAttribute('data-hide');
+        const row = el.closest('details.row');
+        row.setAttribute('data-hidden', '1');
+        row.classList.add('is-hidden');
+        applyVisibility();
+        await fetch(BASE + 'api/hidden', {method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({change: n})});
+      });
+    });
+    document.querySelectorAll('[data-unhide]').forEach(el => {
+      el.addEventListener('click', async (ev) => {
+        ev.preventDefault(); ev.stopPropagation();
+        const n = el.getAttribute('data-unhide');
+        const row = el.closest('details.row');
+        row.removeAttribute('data-hidden');
+        row.classList.remove('is-hidden', 'hhidden');
+        if (el.classList.contains('wadd')) {
+          el.textContent = 'unhidden — appears after refresh';
+          el.disabled = true;
+        }
+        await fetch(BASE + 'api/hidden/' + n, {method: 'DELETE'});
+      });
+    });
+
+    document.querySelectorAll('[data-watch]').forEach(el => {
+      el.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        el.disabled = true; el.textContent = 'adding…';
+        const r = await fetch(BASE + 'api/watchlist', {method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({change: el.getAttribute('data-watch')})});
+        el.textContent = r.ok ? 'watching — appears after refresh' : 'failed (already watched?)';
+      });
+    });
+  }
+</script>
+</body>
+</html>

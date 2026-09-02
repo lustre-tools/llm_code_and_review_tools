@@ -14,6 +14,7 @@ CI, issue tracking, and crash analysis systems.
 | **Jenkins** | `jenkins` | Jenkins build server -- build status, console logs, retriggers |
 | **Janitor** | `janitor` | Gerrit Janitor test results (separate from Maloo/enforced CI) |
 | **Lustre Crash** | `lustre-crash` | Crash dump analysis using drgn, with structured JSON output |
+| **Gerrit Dashboard** | `gerrit-dashboard` | Per-user "what needs my attention?" web dashboard -- ranked triage, @-mention tracking, watchlist with CI state ([details](gerrit_dashboard/README.md)) |
 
 Shared utilities live in `llm_tool_common/`.
 

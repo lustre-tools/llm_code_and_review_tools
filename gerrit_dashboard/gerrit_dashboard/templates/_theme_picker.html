@@ -1,0 +1,25 @@
+<label class="ctl">theme
+  <select id="gd-theme-sel">
+    <option value="dark">dark</option>
+    <option value="light">light</option>
+    <option value="gruvbox-light">gruvbox light</option>
+  </select>
+</label>
+<script>
+  (function () {
+    const sel = document.getElementById('gd-theme-sel');
+    const THEMES = ['dark', 'light', 'gruvbox-light'];
+    function applyTheme(t) {
+      if (!THEMES.includes(t)) t = 'dark';
+      if (t === 'dark') delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = t;
+      sel.value = t;
+      try {
+        document.cookie = 'gd-theme=' + t + '; path=/; max-age=31536000; SameSite=Lax';
+        localStorage.setItem('gd-theme', t);
+      } catch (e) {}
+    }
+    sel.value = document.documentElement.dataset.theme || 'dark';
+    sel.addEventListener('change', () => applyTheme(sel.value));
+  })();
+</script>
