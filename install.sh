@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Unified installer for LLM Code and Review Tools
-# Installs: jira, gerrit-cli, maloo, jenkins, lustre-crash, janitor, lreview, gerrit-dashboard, and beads (bd)
+# Installs: jira, gerrit-cli, maloo, jenkins, lustre-crash, janitor, lreview, and gerrit-dashboard
 #
 # Run it either way:
 #   ./install.sh [OPTIONS]          # normal run
@@ -59,7 +59,7 @@ usage() {
     echo "Usage: $0 [OPTIONS]"
     echo "       source $0 [OPTIONS]   (activates the venv in your shell)"
     echo ""
-    echo "Install LLM code and review tools (jira, gerrit-cli, maloo, jenkins, lustre-crash, janitor, lreview, beads)"
+    echo "Install LLM code and review tools (jira, gerrit-cli, maloo, jenkins, lustre-crash, janitor, lreview, gerrit-dashboard)"
     echo ""
     echo "Options:"
     echo "  --help, -h     Show this help message"
@@ -307,21 +307,6 @@ install_tools() {
         echo -e "${GREEN}✓${NC} lustre-drgn-tools ready"
     fi
 
-    # Install beads (bd)
-    echo ""
-    echo "Installing beads (bd)..."
-    if command -v bd &> /dev/null; then
-        echo -e "${GREEN}✓${NC} beads already installed: $(bd version 2>/dev/null | head -1)"
-    else
-        if command -v go &> /dev/null; then
-            go install github.com/steveyegge/beads/cmd/bd@latest
-            echo -e "${GREEN}✓${NC} beads installed via go"
-        else
-            curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
-            echo -e "${GREEN}✓${NC} beads installed via script"
-        fi
-    fi
-
     echo ""
     echo "========================================"
     echo -e "${GREEN}Installation Complete!${NC}"
@@ -354,7 +339,6 @@ install_tools() {
     echo "  lustre-crash    - Non-interactive crash dump analysis"
     echo "  janitor         - Gerrit Janitor test results"
     echo "  lreview         - Parallel AI patch reviews (kreview)"
-    echo "  bd              - Beads task tracking"
     echo ""
     echo "Verify installation:"
     echo "  jira --help"
@@ -364,14 +348,12 @@ install_tools() {
     echo "  lustre-crash --help"
     echo "  janitor --help"
     echo "  lreview check"
-    echo "  bd --help"
     echo ""
     echo "Configuration:"
     echo "  JIRA:    Set JIRA_SERVER and JIRA_TOKEN env vars"
     echo "  Gerrit:  Set GERRIT_URL, GERRIT_USER, GERRIT_PASS env vars (config dir: ~/.config/gerrit-cli)"
     echo "  Maloo:   Set MALOO_USER and MALOO_PASS env vars"
     echo "  Jenkins: Set JENKINS_URL, JENKINS_USER, JENKINS_TOKEN env vars"
-    echo "  Beads:   Run 'bd init --stealth' in your project"
     echo "  lreview: Run 'lreview setup' for guided AI-review setup"
     echo ""
     echo "See AGENTS.md for usage documentation."
@@ -428,9 +410,6 @@ uninstall_tools() {
 
     echo ""
     echo -e "${GREEN}✓${NC} Python tools uninstalled"
-    echo ""
-    echo -e "${YELLOW}Note:${NC} beads (bd) not uninstalled - remove manually if needed:"
-    echo "  rm ~/.local/bin/bd"
     echo ""
 }
 

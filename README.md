@@ -73,10 +73,7 @@ Details: [lreview/README.md](lreview/README.md).
 Besides the Python tools, `./install.sh` also initializes git
 submodules and installs drgn if missing (via
 `lustre-drgn-tools/install-drgn.sh`, falling back to
-`pip install drgn`), and installs the external beads (`bd`) task
-tracker from the network (`go install
-github.com/steveyegge/beads/cmd/bd@latest`, or the upstream
-install script if Go is absent).
+`pip install drgn`).
 
 On macOS the drgn/lustre-drgn-tools step is skipped: drgn ships no
 macOS wheels, its source build uses Linux-only APIs, and the
