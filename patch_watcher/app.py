@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from gerrit_status import (
     GerritConfig,
     GerritConfigError,
+    GerritRequestError,
     GerritStatusClient,
     parse_change_number,
     refresh_patch,
@@ -95,6 +96,11 @@ from research_views import (
     render_research_policy_form,
     render_research_session,
     render_unknown_failure_control,
+)
+from review_views import (
+    render_review_result,
+    render_review_start_confirmation,
+    render_review_start_control,
 )
 
 PATCHES = []
@@ -483,7 +489,112 @@ def initialize_gerrit_upload_controller(database=DEFAULT_GERRIT_UPLOAD_DATABASE)
         raise RuntimeError("initialize the run controller before Gerrit upload")
     root = RUN_CONTROLLER.runs_directory / "gerrit-upload-workspaces"
     GERRIT_UPLOAD_CONTROLLER = configured_upload_controller(database, root)
+    RUN_CONTROLLER.completion_callback = _process_review_completion
+    # A host failure can occur after the immutable worker result is committed
+    # but before publication dispatch. Reconcile every successful review run;
+    # the upload ledger and result events make this idempotent.
+    for session in SESSION_STORE.list_sessions(include_terminal=True):
+        if session.state == "succeeded" and session.run_id.startswith("pw-review-"):
+            _process_review_completion(session)
     return GERRIT_UPLOAD_CONTROLLER
+
+
+def _process_review_completion(session):
+    """Automatically publish one qualifying, manually started review run."""
+
+    if RUN_CONTROLLER is None or GERRIT_UPLOAD_CONTROLLER is None:
+        return
+    try:
+        request = RUN_CONTROLLER._request_payload(session)
+    except RunControllerError:
+        return
+    if request.get("request_kind") != "review_comments":
+        return
+
+    def alert_human(reason):
+        sender = getattr(RUN_CONTROLLER, "_send_alert_once", None)
+        if sender is not None:
+            sender(
+                session,
+                reason,
+                key="review-auto-upload-alert:" + session.run_id + ":" + reason,
+            )
+
+    upload_store = getattr(GERRIT_UPLOAD_CONTROLLER, "store", None)
+    existing_upload = (
+        upload_store.get_by_run(session.run_id) if upload_store is not None else None
+    )
+    if existing_upload is not None and existing_upload.state == "succeeded":
+        return
+    with PATCHES_LOCK:
+        patch = next((
+            dict(item) for item in PATCHES
+            if int(item.get("change_number") or 0) == int(session.patch_id)
+            and int(item.get("patchset") or 0) == int(session.patchset or 0)
+            and str(item.get("revision_sha") or "").lower()
+                == str(session.revision or "").lower()
+        ), None)
+    if patch is None:
+        SESSION_STORE.append_event(
+            session.session_id, "review_auto_upload_blocked",
+            {"reason": "watched patch is no longer the exact run revision"},
+            idempotency_key="review-auto-upload-blocked:" + session.run_id,
+        )
+        alert_human("review_auto_upload_stale_revision")
+        return
+    diffs = [
+        item for item in RUN_CONTROLLER.engineering_store.list_artifacts(
+            session.run_id
+        ) if item.kind == "diff"
+    ]
+    if len(diffs) == 1 and diffs[0].size_bytes == 0:
+        SESSION_STORE.append_event(
+            session.session_id, "review_auto_upload_not_needed",
+            {"reason": "review handling produced no source diff"},
+            idempotency_key="review-auto-upload-not-needed:" + session.run_id,
+        )
+        return
+    try:
+        snapshot = GerritStatusClient.configured().fetch_review_snapshot(
+            patch["url"], expected_revision=str(session.revision)
+        )
+        values = RUN_CONTROLLER.review_upload_inputs(
+            session.run_id, patch, snapshot
+        )
+        upload = GERRIT_UPLOAD_CONTROLLER.prepare(**values)
+        if upload.state == "commit_ready":
+            upload = GERRIT_UPLOAD_CONTROLLER.execute(
+                upload.upload_id, expected_binding_digest=upload.binding_digest
+            )
+        elif upload.state in {"push_claimed", "ambiguous"}:
+            upload = GERRIT_UPLOAD_CONTROLLER.reconcile(upload.upload_id)
+    except (GerritConfigError, GerritUploadError, RunControllerError, OSError) as exc:
+        SESSION_STORE.append_event(
+            session.session_id, "review_auto_upload_blocked",
+            {"reason": str(exc)[:500]},
+            idempotency_key="review-auto-upload-blocked:" + session.run_id,
+        )
+        alert_human("review_auto_upload_blocked")
+        return
+    SESSION_STORE.append_event(
+        session.session_id, "review_auto_upload_" + upload.state,
+        {
+            "upload_id": upload.upload_id, "state": upload.state,
+            "new_patchset": upload.new_patchset,
+            "new_revision_sha": upload.new_revision_sha,
+        },
+        idempotency_key="review-auto-upload-result:" + upload.upload_id + ":" + upload.state,
+    )
+    if upload.state == "succeeded":
+        with PATCHES_LOCK:
+            watched = next((
+                item for item in PATCHES
+                if int(item.get("change_number") or 0) == upload.change_number
+            ), None)
+        if watched is not None:
+            refresh_watched_patch(watched)
+    elif upload.state in {"ambiguous", "failed", "stale"}:
+        alert_human("review_auto_upload_" + upload.state)
 
 
 def worker_admission_html():
@@ -1616,6 +1727,20 @@ def run_detail_html(session):
     questions = SESSION_STORE.list_human_questions(session.session_id)
     question = next((item for item in reversed(questions) if item.status == "open"), None)
     admission = SESSION_STORE.get_worker_admission(session.session_id)
+    review_html = ""
+    if RUN_CONTROLLER is not None:
+        try:
+            request = RUN_CONTROLLER._request_payload(session)
+        except RunControllerError:
+            request = {}
+        if request.get("request_kind") == "review_comments":
+            terminal = SESSION_STORE.get_terminal_result(session.session_id)
+            report = terminal.result if terminal is not None else {}
+            upload = (
+                GERRIT_UPLOAD_CONTROLLER.store.get_by_run(session.run_id)
+                if GERRIT_UPLOAD_CONTROLLER is not None else None
+            )
+            review_html = render_review_result(request, report, upload)
     return render_run_detail(
         _run_projection(session),
         messages=_run_messages(session),
@@ -1624,7 +1749,7 @@ def run_detail_html(session):
         question=question,
         csrf_token=CSRF_TOKEN,
         idempotency_token=secrets.token_urlsafe(18),
-    )
+    ) + review_html
 
 
 def _standalone_document(title, body):
@@ -1683,6 +1808,15 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         idempotency_token=secrets.token_urlsafe(18),
         compact=True,
     )
+    review_html = render_review_start_control(
+        investigation_patch,
+        csrf_token=CSRF_TOKEN,
+        idempotency_token=secrets.token_urlsafe(18),
+        upload_enabled=bool(
+            GERRIT_UPLOAD_CONTROLLER is not None
+            and GERRIT_UPLOAD_CONTROLLER.enabled
+        ),
+    )
     (
         retest_policy,
         retest_evaluation,
@@ -1722,12 +1856,10 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         "<div class='policy-heading'><strong>Test failures</strong>"
         "<span class='availability'>Available</span></div>"
         f"{retest_html}{research_html}</section>"
-        "<section class='action-policy-item unavailable' aria-label='Review comment handling'>"
+        "<section class='action-policy-item available' aria-label='Review comment handling'>"
         "<div class='policy-heading'><strong>Review comments</strong>"
-        "<span class='availability'>Planned</span></div>"
-        "<ul class='future-options'><li>Handle simple comments; bail to human</li>"
-        "<li>Handle all comments; bail to human when needed</li>"
-        "<li>Create a new patchset</li></ul></section>"
+        "<span class='availability'>Available</span></div>"
+        f"{review_html}</section>"
         "</div></details>"
     )
     return (
@@ -1806,6 +1938,49 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         parts = [item for item in path.split("/") if item]
+        if path == "/review-runs/confirm-start":
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            try:
+                change = int(query.get("change_number", ["0"])[0])
+                patchset = int(query.get("patchset", ["0"])[0])
+            except ValueError:
+                self.send_error(400, "Invalid review revision identity")
+                return
+            revision = query.get("revision_sha", [""])[0].lower()
+            mode = query.get("review_mode", [""])[0]
+            digest = query.get("snapshot_sha256", [""])[0]
+            confirmation = query.get("confirmation_token", [""])[0]
+            request_id = query.get("idempotency_token", [""])[0]
+            expires_at = query.get("confirmation_expires_at", [""])[0]
+            patch = _find_exact_patch(change, patchset, revision)
+            if patch is None or mode not in {"simple", "all"}:
+                self.send_error(409, "The patch changed; prepare review handling again")
+                return
+            try:
+                snapshot = GerritStatusClient.configured().fetch_review_snapshot(
+                    patch["url"], expected_revision=revision
+                )
+            except (GerritConfigError, GerritRequestError, ValueError) as exc:
+                self.respond(page("Could not capture exact review comments: " + str(exc)))
+                return
+            if (
+                not snapshot.get("complete")
+                or snapshot.get("snapshot_sha256") != digest
+                or not _engineering_confirmation_unexpired(expires_at)
+                or not _verify_confirmation(
+                    confirmation, "review-start", change, patchset, revision,
+                    mode, digest, True, request_id, expires_at,
+                )
+            ):
+                self.send_error(403, "Invalid or stale review confirmation")
+                return
+            body = render_review_start_confirmation(
+                patch, snapshot, mode=mode, confirmation_token=confirmation,
+                idempotency_token=request_id,
+                confirmation_expires_at=expires_at, csrf_token=CSRF_TOKEN,
+            )
+            self.respond(_standalone_document("Confirm review handling", body))
+            return
         if len(parts) == 3 and parts[0] == "uploads" and parts[2] == "confirm":
             if GERRIT_UPLOAD_CONTROLLER is None:
                 self.send_error(503, "Gerrit upload controller is not initialized")
@@ -2036,7 +2211,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(404)
                 return
             if len(parts) == 4 and parts[2] == "artifacts":
-                if RUN_CONTROLLER is None or not session.run_id.startswith("pw-engineer-"):
+                if RUN_CONTROLLER is None or not session.run_id.startswith(
+                    ("pw-engineer-", "pw-review-")
+                ):
                     self.send_error(404)
                     return
                 artifact = next((
@@ -2134,6 +2311,99 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         parts = [item for item in path.split("/") if item]
+        if parts and parts[0] == "review-runs":
+            token = data.get("csrf_token", [""])[0]
+            if not hmac.compare_digest(token, CSRF_TOKEN):
+                self.send_error(403, "Invalid request token")
+                return
+            if path not in {"/review-runs/prepare", "/review-runs/start"}:
+                self.send_error(404)
+                return
+            if (
+                RUN_CONTROLLER is None or GERRIT_UPLOAD_CONTROLLER is None
+                or not GERRIT_UPLOAD_CONTROLLER.enabled
+            ):
+                self.send_error(503, "Review handling or automatic patchset upload is disabled")
+                return
+            try:
+                change = int(data.get("change_number", ["0"])[0])
+                patchset = int(data.get("patchset", ["0"])[0])
+            except ValueError:
+                self.send_error(400, "Invalid review revision identity")
+                return
+            revision = data.get("revision_sha", [""])[0].lower()
+            mode = data.get("review_mode", [""])[0]
+            if mode not in {"simple", "all"}:
+                self.send_error(400, "Invalid review mode")
+                return
+            patch = _find_exact_patch(change, patchset, revision)
+            if patch is None or _active_session_for_patch(change) is not None:
+                self.send_error(409, "The patch changed or already has an active run")
+                return
+            try:
+                snapshot = GerritStatusClient.configured().fetch_review_snapshot(
+                    patch["url"], expected_revision=revision
+                )
+            except (GerritConfigError, GerritRequestError, ValueError) as exc:
+                self.respond(page("Could not capture exact review comments: " + str(exc)))
+                return
+            if not snapshot.get("complete") or not snapshot.get("threads"):
+                self.respond(page(
+                    "Review comments are incomplete or no unresolved comments remain."
+                ))
+                return
+            digest = str(snapshot["snapshot_sha256"])
+            request_id = data.get("idempotency_token", [""])[0].strip()
+            if not request_id:
+                request_id = secrets.token_urlsafe(18)
+            if path == "/review-runs/prepare":
+                expires_at = str(int(time.time()) + ENGINEERING_CONFIRMATION_TTL_SECONDS)
+                confirmation = _signed_confirmation(
+                    "review-start", change, patchset, revision, mode, digest,
+                    True, request_id, expires_at,
+                )
+                query = urlencode({
+                    "change_number": change, "patchset": patchset,
+                    "revision_sha": revision, "review_mode": mode,
+                    "snapshot_sha256": digest,
+                    "confirmation_token": confirmation,
+                    "idempotency_token": request_id,
+                    "confirmation_expires_at": expires_at,
+                })
+                self.send_response(303)
+                self.send_header("Location", "/review-runs/confirm-start?" + query)
+                self.end_headers()
+                return
+            confirmation = data.get("confirmation_token", [""])[0]
+            expires_at = data.get("confirmation_expires_at", [""])[0]
+            submitted_digest = data.get("snapshot_sha256", [""])[0]
+            if (
+                submitted_digest != digest
+                or not _engineering_confirmation_unexpired(expires_at)
+                or not _verify_confirmation(
+                    confirmation, "review-start", change, patchset, revision,
+                    mode, digest, True, request_id, expires_at,
+                )
+            ):
+                self.send_error(403, "Invalid or stale review confirmation")
+                return
+            if not _claim_engineering_confirmation(confirmation, request_id):
+                self.send_error(409, "Review confirmation was already used")
+                return
+            try:
+                session = RUN_CONTROLLER.request_review_comments(
+                    patch, snapshot, mode=mode, request_id=request_id
+                )
+            except (
+                RunControllerError, InvalidSessionOperation,
+                SessionAlreadyExists, ValueError,
+            ) as exc:
+                self.respond(page(str(exc)))
+                return
+            self.send_response(303)
+            self.send_header("Location", f"/runs/{session.run_id}")
+            self.end_headers()
+            return
         if parts and parts[0] == "uploads":
             token = data.get("csrf_token", [""])[0]
             if not hmac.compare_digest(token, CSRF_TOKEN):

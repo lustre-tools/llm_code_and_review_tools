@@ -291,6 +291,28 @@ class ClaudeRunnerTests(unittest.TestCase):
                 **report, "changed_files": ["../outside"],
             })
 
+    def test_review_engineering_report_binds_comment_results(self):
+        report = validate_engineering_report({
+            "schema": "patch-watcher-engineering-report/v1",
+            "state": "complete", "summary": "Handled one comment",
+            "changed_files": ["src/file.c"], "validation_requests": [],
+            "review_mode": "simple",
+            "review_snapshot_sha256": "a" * 64,
+            "comment_results": [{
+                "comment_id": "comment-1", "assessment": "simple",
+                "disposition": "addressed",
+                "summary": "Renamed the local variable",
+                "reply_draft": "Done in the next patchset.",
+                "changed_files": ["src/file.c"],
+            }],
+        })
+        self.assertEqual(report["review_mode"], "simple")
+        self.assertEqual(report["comment_results"][0]["comment_id"], "comment-1")
+        with self.assertRaisesRegex(RunnerProtocolError, "review snapshot"):
+            validate_engineering_report({
+                **report, "review_snapshot_sha256": "bad",
+            })
+
     def test_source_edit_and_report_kind_must_match(self):
         with self.assertRaisesRegex(ValueError, "source_edit"):
             self.spec(capability_profile="source_edit").validate()

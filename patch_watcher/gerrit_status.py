@@ -11,13 +11,14 @@ web application does not inherit gerrit-cli's runtime dependencies.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
@@ -237,10 +238,55 @@ class GerritStatusClient:
                 str(item).lower(): int((record or {}).get("_number") or 0)
                 for item, record in revisions.items()
             },
+            "updated": str(change.get("updated") or ""),
+            "unresolved_comment_count": int(
+                change.get("unresolved_comment_count") or 0
+            ),
         }
+
+    def fetch_review_snapshot(
+        self, change_url: str, *, expected_revision: str | None = None
+    ) -> dict[str, Any]:
+        """Capture one fail-closed unresolved-comment snapshot.
+
+        Both comment calls name the immutable revision SHA rather than the
+        moving ``current`` alias.  Identity calls bracket the capture so a
+        patchset advance cannot silently mix two Gerrit states.
+        """
+
+        change_number = parse_change_number(change_url)
+        before = self.fetch_identity(change_url)
+        revision = str(before.get("revision_sha") or "").lower()
+        if expected_revision and revision != str(expected_revision).lower():
+            raise GerritRequestError("Gerrit revision changed before comment capture.")
+        if not re.fullmatch(r"[0-9a-f]{40}", revision):
+            raise GerritRequestError("Gerrit returned an invalid current revision.")
+        encoded_change = quote(str(change_number), safe="")
+        encoded_revision = quote(revision, safe="")
+        direct = self._fetch_json(
+            f"/a/changes/{encoded_change}/revisions/{encoded_revision}/comments"
+        )
+        ported = self._fetch_json(
+            f"/a/changes/{encoded_change}/revisions/{encoded_revision}/ported_comments"
+        )
+        after = self.fetch_identity(change_url)
+        identity_keys = (
+            "change_number", "project", "branch", "change_id", "status",
+            "revision_sha", "patchset", "revision_shas", "revision_numbers",
+            "updated", "unresolved_comment_count",
+        )
+        if any(before.get(key) != after.get(key) for key in identity_keys):
+            raise GerritRequestError("Gerrit changed during comment capture.")
+        return normalize_review_snapshot(before, direct, ported)
 
     def _fetch_detail(self, change_number: int, options: str) -> dict[str, Any]:
         endpoint = f"/a/changes/{quote(str(change_number), safe='')}/detail?{options}"
+        change = self._fetch_json(endpoint)
+        if not isinstance(change, dict):
+            raise GerritRequestError("Gerrit returned an unexpected response.")
+        return change
+
+    def _fetch_json(self, endpoint: str) -> Any:
         token = base64.b64encode(
             f"{self._config.username}:{self._config.password}".encode("utf-8")
         ).decode("ascii")
@@ -268,12 +314,162 @@ class GerritStatusClient:
             text = payload.decode("utf-8")
             if text.startswith(")]}'"):
                 text = text.split("\n", 1)[1] if "\n" in text else ""
-            change = json.loads(text)
+            value = json.loads(text)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise GerritRequestError("Gerrit returned an invalid JSON response.") from exc
-        if not isinstance(change, dict):
-            raise GerritRequestError("Gerrit returned an unexpected response.")
-        return change
+        return value
+
+
+def _bounded_comment_text(value: Any, *, limit: int) -> str:
+    text = str(value or "").replace("\x00", "\ufffd")
+    encoded = text.encode("utf-8")
+    if len(encoded) <= limit:
+        return text
+    return encoded[:limit].decode("utf-8", errors="ignore") + "\u2026"
+
+
+def _flatten_comments(value: Any) -> list[tuple[str, Mapping[str, Any]]]:
+    if not isinstance(value, Mapping):
+        raise GerritRequestError("Gerrit returned invalid review comments.")
+    result: list[tuple[str, Mapping[str, Any]]] = []
+    for path, comments in value.items():
+        if not isinstance(path, str) or not isinstance(comments, list):
+            raise GerritRequestError("Gerrit returned invalid review comments.")
+        for comment in comments:
+            if not isinstance(comment, Mapping):
+                raise GerritRequestError("Gerrit returned invalid review comments.")
+            result.append((path, comment))
+    return result
+
+
+def normalize_review_snapshot(
+    identity: Mapping[str, Any], direct: Any, ported: Any,
+) -> dict[str, Any]:
+    """Normalize exact-revision Gerrit comments into an immutable contract."""
+
+    revision = str(identity.get("revision_sha") or "").lower()
+    patchset = int(identity.get("patchset") or 0)
+    revision_numbers = {
+        str(key).lower(): int(value)
+        for key, value in (identity.get("revision_numbers") or {}).items()
+    }
+    by_patchset = {number: sha for sha, number in revision_numbers.items()}
+    reasons: list[str] = []
+    records: dict[str, dict[str, Any]] = {}
+
+    def add(path: str, raw: Mapping[str, Any], binding: str) -> None:
+        comment_id = str(raw.get("id") or "").strip()
+        if not comment_id or len(comment_id) > 256:
+            reasons.append("comment missing stable id")
+            return
+        if comment_id in records and binding == "ported":
+            return
+        origin_patchset = int(raw.get("patch_set") or patchset)
+        origin_revision = str(raw.get("commit_id") or by_patchset.get(origin_patchset) or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{40}", origin_revision):
+            reasons.append(f"comment {comment_id} has unknown origin revision")
+        author = raw.get("author") or {}
+        if not isinstance(author, Mapping):
+            author = {}
+        account = author.get("_account_id")
+        author_key = (
+            f"account:{int(account)}" if isinstance(account, int)
+            else "username:" + _bounded_comment_text(author.get("username"), limit=256)
+        )
+        if author_key == "username:":
+            author_key = "unknown"
+        range_value = raw.get("range")
+        normalized_range = None
+        if isinstance(range_value, Mapping):
+            keys = ("start_line", "start_character", "end_line", "end_character")
+            if all(isinstance(range_value.get(key), int) for key in keys):
+                normalized_range = {key: int(range_value[key]) for key in keys}
+            else:
+                reasons.append(f"comment {comment_id} has invalid range")
+        location = {
+            "path": _bounded_comment_text(path, limit=1000),
+            "side": str(raw.get("side") or "REVISION"),
+            "line": int(raw["line"]) if isinstance(raw.get("line"), int) else None,
+            "range": normalized_range,
+        }
+        record = {
+            "comment_id": comment_id,
+            "thread_id": comment_id,
+            "in_reply_to": str(raw.get("in_reply_to") or ""),
+            "binding": binding,
+            "origin_patchset": origin_patchset,
+            "origin_revision_sha": origin_revision,
+            "location": location,
+            "current_location": location if binding == "ported" else None,
+            "author_key": author_key,
+            "author_name": _bounded_comment_text(author.get("name"), limit=500),
+            "message": _bounded_comment_text(raw.get("message"), limit=16 * 1024),
+            "updated": str(raw.get("updated") or ""),
+            "unresolved": bool(raw.get("unresolved", False)),
+            "tag": _bounded_comment_text(raw.get("tag"), limit=500),
+            "change_message_id": str(raw.get("change_message_id") or ""),
+        }
+        records[comment_id] = record
+
+    for path, raw in _flatten_comments(ported):
+        add(path, raw, "ported")
+    for path, raw in _flatten_comments(direct):
+        add(path, raw, "direct")
+
+    for record in records.values():
+        parent = record["in_reply_to"]
+        seen = {record["comment_id"]}
+        root = record["comment_id"]
+        while parent:
+            if parent in seen:
+                reasons.append(f"comment {record['comment_id']} has a reply cycle")
+                break
+            seen.add(parent)
+            parent_record = records.get(parent)
+            if parent_record is None:
+                reasons.append(f"comment {record['comment_id']} has a missing parent")
+                break
+            root = parent
+            parent = parent_record["in_reply_to"]
+        record["thread_id"] = root
+
+    threads: dict[str, list[dict[str, Any]]] = {}
+    for record in records.values():
+        threads.setdefault(record["thread_id"], []).append(record)
+    unresolved_threads = []
+    for thread_id, comments in threads.items():
+        ordered = sorted(comments, key=lambda item: (item["updated"], item["comment_id"]))
+        latest = ordered[-1]
+        if latest["unresolved"]:
+            unresolved_threads.append({"thread_id": thread_id, "comments": ordered})
+    unresolved_threads.sort(key=lambda item: item["thread_id"])
+    reported = int(identity.get("unresolved_comment_count") or 0)
+    if len(unresolved_threads) != reported:
+        reasons.append(
+            f"unresolved thread count {len(unresolved_threads)} does not match Gerrit {reported}"
+        )
+    base = {
+        "schema": "patch-watcher-review-snapshot/v1",
+        "change": {
+            "server": "https://review.whamcloud.com",
+            "change_number": int(identity.get("change_number") or 0),
+            "project": str(identity.get("project") or ""),
+            "branch": str(identity.get("branch") or ""),
+            "change_id": str(identity.get("change_id") or ""),
+            "status": str(identity.get("status") or ""),
+            "patchset": patchset,
+            "revision_sha": revision,
+            "gerrit_updated_at": str(identity.get("updated") or ""),
+        },
+        "reported_unresolved_count": reported,
+        "complete": not reasons,
+        "incompleteness_reasons": sorted(set(reasons)),
+        "threads": unresolved_threads,
+    }
+    canonical = json.dumps(base, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    base["snapshot_sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    base["captured_at"] = datetime.now(timezone.utc).isoformat()
+    return base
 
 
 def parse_change_number(value: str) -> int:

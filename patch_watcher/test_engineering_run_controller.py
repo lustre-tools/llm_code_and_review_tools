@@ -29,6 +29,25 @@ def engineering_patch(revision=DEFAULT_REVISION, **updates):
     return value
 
 
+def review_snapshot(revision=DEFAULT_REVISION):
+    return {
+        "schema": "patch-watcher-review-snapshot/v1",
+        "change": {
+            "change_number": 68160, "project": "fs/lustre-release",
+            "branch": "master", "change_id": "I" + "a" * 40,
+            "status": "NEW", "patchset": 4, "revision_sha": revision,
+            "gerrit_updated_at": "now", "server": "https://review.whamcloud.com",
+        },
+        "reported_unresolved_count": 1, "complete": True,
+        "incompleteness_reasons": [], "snapshot_sha256": "a" * 64,
+        "captured_at": "2026-09-01T14:00:00+00:00",
+        "threads": [{"thread_id": "thread-1", "comments": [{
+            "comment_id": "comment-1", "thread_id": "thread-1",
+            "message": "Rename this", "unresolved": True,
+        }]}],
+    }
+
+
 class EngineeringRunner:
     def __init__(self):
         self.starts = []
@@ -193,6 +212,31 @@ class EngineeringRunControllerTests(unittest.TestCase):
         controller.tick()
         self.assertEqual(self.runner.starts, [])
         self.assertIsNone(controller.engineering_store.get_allocation_by_run(session.run_id))
+
+    def test_review_request_binds_mode_snapshot_and_auto_upload_policy(self):
+        controller = self.controller()
+        session = controller.request_review_comments(
+            engineering_patch(), review_snapshot(), mode="simple",
+            request_id="review-request-1",
+        )
+        replay = controller.request_review_comments(
+            engineering_patch(), review_snapshot(), mode="simple",
+            request_id="review-request-1",
+        )
+        self.assertEqual(replay.session_id, session.session_id)
+        request = controller._request_payload(session)
+        self.assertEqual(request["request_kind"], "review_comments")
+        self.assertEqual(request["review_mode"], "simple")
+        self.assertEqual(request["target_comment_ids"], ["comment-1"])
+        self.assertTrue(request["auto_upload_patchset"])
+
+        controller.tick()
+        spec = self.runner.starts[0]
+        self.assertIn("review-comments.json", spec.prompt)
+        self.assertIn("reply", spec.prompt.lower())
+        snapshot_path = self.root / "runs" / session.run_id / "work" / "input" / "review-comments.json"
+        self.assertTrue(snapshot_path.is_file())
+        self.assertEqual(snapshot_path.stat().st_mode & 0o777, 0o400)
 
     def test_restart_reconnects_checkout_planned_before_resource_registration(self):
         controller = self.controller()
@@ -485,6 +529,100 @@ class EngineeringRunControllerTests(unittest.TestCase):
         )
         self.assertEqual(captured_event.payload["validation_request_count"], 1)
         self.assertEqual(captured_event.payload["diff_bytes"], len(captured))
+
+    def test_review_terminal_report_maps_exact_comment_and_resolution_artifact(self):
+        seed, revision = self.create_seed_repository()
+
+        def checkout(destination, requested):
+            subprocess.run(
+                ["git", "clone", "--quiet", "--no-local", str(seed), str(destination)],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(destination), "checkout", "--quiet", "--detach", revision],
+                check=True,
+            )
+            return Path(destination)
+
+        controller = self.controller(checkout)
+        patch = engineering_patch(revision=revision)
+        snapshot = review_snapshot(revision)
+        snapshot["change"]["revision_sha"] = revision
+        session = controller.request_review_comments(
+            patch, snapshot, mode="all", request_id="review-terminal",
+        )
+        controller.tick()
+        allocation = controller.engineering_store.get_allocation_by_run(session.run_id)
+        (allocation.checkout_path / "tracked.txt").write_text("after\n", encoding="utf-8")
+        self.runner.events_by_session[session.session_id] = [RunnerEvent(
+            1, self.now.timestamp(), "worker_report", {
+                "schema": "patch-watcher-engineering-report/v1",
+                "state": "complete", "summary": "Addressed the review comment.",
+                "changed_files": ["tracked.txt"], "validation_requests": [],
+                "review_mode": "all", "review_snapshot_sha256": "a" * 64,
+                "comment_results": [{
+                    "comment_id": "comment-1", "assessment": "simple",
+                    "disposition": "addressed",
+                    "summary": "Updated the requested text.",
+                    "reply_draft": "Addressed in the next patchset.",
+                    "changed_files": ["tracked.txt"],
+                }],
+            },
+        )]
+        controller.tick()
+
+        self.assertEqual(self.store.get_session(session.session_id).state, "succeeded")
+        artifacts = controller.engineering_store.list_artifacts(session.run_id)
+        self.assertEqual(
+            {artifact.kind for artifact in artifacts},
+            {"diff", "status", "review_resolution"},
+        )
+        plan = self.root / "runs" / "engineering-artifacts" / session.run_id / "review-resolution-plan.json"
+        value = json.loads(plan.read_text(encoding="utf-8"))
+        self.assertEqual(value["comment_results"][0]["comment_id"], "comment-1")
+        self.assertEqual(value["review_mode"], "all")
+
+    def test_simple_review_rejects_nontrivial_comment_assessment(self):
+        seed, revision = self.create_seed_repository()
+
+        def checkout(destination, requested):
+            subprocess.run(
+                ["git", "clone", "--quiet", "--no-local", str(seed), str(destination)],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(destination), "checkout", "--quiet", "--detach", revision],
+                check=True,
+            )
+            return Path(destination)
+
+        controller = self.controller(checkout)
+        patch = engineering_patch(revision=revision)
+        snapshot = review_snapshot(revision)
+        snapshot["change"]["revision_sha"] = revision
+        session = controller.request_review_comments(
+            patch, snapshot, mode="simple", request_id="review-nontrivial",
+        )
+        controller.tick()
+        self.runner.events_by_session[session.session_id] = [RunnerEvent(
+            1, self.now.timestamp(), "worker_report", {
+                "schema": "patch-watcher-engineering-report/v1",
+                "state": "complete", "summary": "Attempted a larger change.",
+                "changed_files": [], "validation_requests": [],
+                "review_mode": "simple", "review_snapshot_sha256": "a" * 64,
+                "comment_results": [{
+                    "comment_id": "comment-1", "assessment": "nontrivial",
+                    "disposition": "addressed", "summary": "Too broad for simple mode.",
+                    "reply_draft": "", "changed_files": [],
+                }],
+            },
+        )]
+        controller.tick()
+
+        failed = self.store.get_session(session.session_id)
+        self.assertEqual(failed.state, "failed")
+        terminal = self.store.get_terminal_result(session.session_id)
+        self.assertIn("simple mode", terminal.failure_summary)
 
     def test_cleanup_refuses_cross_run_path_and_releases_only_owned_checkout(self):
         controller = self.controller()

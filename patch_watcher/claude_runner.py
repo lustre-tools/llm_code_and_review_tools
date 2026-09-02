@@ -92,6 +92,30 @@ ENGINEERING_REPORT_SCHEMA: Mapping[str, Any] = {
                 "required": ["name", "target", "argv"],
             },
         },
+        "review_mode": {"enum": ["simple", "all"]},
+        "review_snapshot_sha256": {
+            "type": "string", "pattern": "^[0-9a-f]{64}$"
+        },
+        "comment_results": {
+            "type": "array", "maxItems": 200,
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "comment_id": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "assessment": {"enum": ["simple", "nontrivial", "ambiguous"]},
+                    "disposition": {
+                        "enum": ["addressed", "reply_draft", "needs_human", "not_attempted"]
+                    },
+                    "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "reply_draft": {"type": "string", "maxLength": 4000},
+                    "changed_files": {
+                        "type": "array", "maxItems": 50,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    },
+                },
+                "required": ["comment_id", "assessment", "disposition", "summary", "changed_files"],
+            },
+        },
         "question": {"type": "string", "minLength": 1, "maxLength": 2000},
     },
     "required": ["schema", "state", "summary", "changed_files", "validation_requests"],
@@ -526,6 +550,7 @@ def validate_engineering_report(value: Any) -> Mapping[str, Any]:
         raise RunnerProtocolError("engineering report must be an object")
     allowed = {
         "schema", "state", "summary", "changed_files", "validation_requests", "question",
+        "review_mode", "review_snapshot_sha256", "comment_results",
     }
     unknown = set(value) - allowed
     if unknown:
@@ -590,12 +615,81 @@ def validate_engineering_report(value: Any) -> Mapping[str, Any]:
         raise RunnerProtocolError("engineering report question is invalid")
     if state == "needs_input" and question is None:
         raise RunnerProtocolError("needs_input engineering report requires question")
+    review_mode = value.get("review_mode")
+    snapshot_digest = value.get("review_snapshot_sha256")
+    comment_results = value.get("comment_results")
+    review_fields = (review_mode, snapshot_digest, comment_results)
+    if any(item is not None for item in review_fields):
+        if review_mode not in {"simple", "all"}:
+            raise RunnerProtocolError("engineering report review_mode is invalid")
+        if not isinstance(snapshot_digest, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", snapshot_digest
+        ):
+            raise RunnerProtocolError("engineering report review snapshot is invalid")
+        if not isinstance(comment_results, list) or len(comment_results) > 200:
+            raise RunnerProtocolError("engineering report comment_results is invalid")
+        normalized_comments = []
+        seen_comment_ids = set()
+        for item in comment_results:
+            if not isinstance(item, Mapping) or set(item) - {
+                "comment_id", "assessment", "disposition", "summary", "reply_draft", "changed_files",
+            } or not {"comment_id", "assessment", "disposition", "summary", "changed_files"}.issubset(item):
+                raise RunnerProtocolError("engineering comment result fields are invalid")
+            comment_id = item.get("comment_id")
+            assessment = item.get("assessment")
+            disposition = item.get("disposition")
+            item_summary = item.get("summary")
+            reply_draft = item.get("reply_draft")
+            item_files = item.get("changed_files")
+            if (
+                not isinstance(comment_id, str) or not comment_id.strip()
+                or len(comment_id) > 256 or comment_id in seen_comment_ids
+            ):
+                raise RunnerProtocolError("engineering comment id is invalid")
+            if disposition not in {
+                "addressed", "reply_draft", "needs_human", "not_attempted",
+            }:
+                raise RunnerProtocolError("engineering comment disposition is invalid")
+            if assessment not in {"simple", "nontrivial", "ambiguous"}:
+                raise RunnerProtocolError("engineering comment assessment is invalid")
+            if not isinstance(item_summary, str) or not item_summary.strip() or len(item_summary) > 2000:
+                raise RunnerProtocolError("engineering comment summary is invalid")
+            if reply_draft is not None and (
+                not isinstance(reply_draft, str) or len(reply_draft) > 4000 or "\x00" in reply_draft
+            ):
+                raise RunnerProtocolError("engineering reply draft is invalid")
+            if not isinstance(item_files, list) or len(item_files) > 50:
+                raise RunnerProtocolError("engineering comment changed_files is invalid")
+            normalized_item_files = []
+            for item_file in item_files:
+                if (
+                    not isinstance(item_file, str) or not item_file.strip()
+                    or len(item_file) > 1000 or "\x00" in item_file
+                    or Path(item_file).is_absolute() or ".." in Path(item_file).parts
+                ):
+                    raise RunnerProtocolError("engineering comment changed file is invalid")
+                normalized_item_files.append(item_file.strip())
+            seen_comment_ids.add(comment_id)
+            normalized_item = {
+                "comment_id": comment_id,
+                "assessment": assessment,
+                "disposition": disposition,
+                "summary": item_summary.strip(),
+                "changed_files": normalized_item_files,
+            }
+            if reply_draft is not None:
+                normalized_item["reply_draft"] = reply_draft
+            normalized_comments.append(normalized_item)
     normalized: Dict[str, Any] = {
         "schema": value["schema"], "state": state, "summary": summary.strip(),
         "changed_files": normalized_files, "validation_requests": normalized_requests,
     }
     if question is not None:
         normalized["question"] = question.strip()
+    if any(item is not None for item in review_fields):
+        normalized["review_mode"] = review_mode
+        normalized["review_snapshot_sha256"] = snapshot_digest
+        normalized["comment_results"] = normalized_comments
     return normalized
 
 

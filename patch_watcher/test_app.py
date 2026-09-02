@@ -274,11 +274,14 @@ class PatchWatcherTests(unittest.TestCase):
         self.assertEqual(rendered.count("<summary>Actions</summary>"), 2)
         self.assertLess(rendered.index("Build failures"), rendered.index("Test failures"))
         self.assertLess(rendered.index("Test failures"), rendered.index("Review comments"))
-        self.assertIn("Handle simple comments; bail to human", rendered)
-        self.assertIn("Handle all comments; bail to human when needed", rendered)
+        self.assertIn("Handle simple comments", rendered)
+        self.assertIn("Handle all comments", rendered)
+        self.assertIn("Both bail to human when judgment is required", rendered)
+        self.assertIn("action='/review-runs/prepare'", rendered)
+        self.assertIn("upload one new patchset automatically", rendered)
+        self.assertIn("never posted", rendered)
         self.assertIn("Jenkins failures are currently observed only", rendered)
         self.assertNotIn("aria-labelledby='handle-reviews-title'", rendered)
-        self.assertNotIn("action='/handle-review", rendered)
         self.assertIn("method='post' action='/automation/policy'", rendered)
         self.assertIn("method='post' action='/automation/dry-run'", rendered)
         self.assertIn("method='post' action='/runs/investigate'", rendered)
@@ -996,6 +999,168 @@ class PatchWatcherTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_review_start_approval_preauthorizes_auto_upload_without_second_confirmation(self):
+        patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+        patch_record.update(
+            change_number=68160, project="fs/lustre-release", patchset=4,
+            revision_sha="d" * 40,
+            revision_ref="refs/changes/60/68160/4", lifecycle="Open",
+            unresolved=1,
+        )
+        snapshot = {
+            "schema": "patch-watcher-review-snapshot/v1",
+            "change": {"change_number": 68160, "patchset": 4,
+                       "revision_sha": "d" * 40},
+            "complete": True, "snapshot_sha256": "a" * 64,
+            "threads": [{"thread_id": "t1", "comments": [
+                {"comment_id": "c1"}
+            ]}],
+        }
+
+        class FakeReviewController:
+            def __init__(self):
+                self.calls = []
+
+            def stop(self):
+                return None
+
+            def request_review_comments(self, patch_value, snapshot_value, *, mode, request_id):
+                self.calls.append((dict(patch_value), snapshot_value, mode, request_id))
+                return SimpleNamespace(run_id="pw-review-68160-ps4-test")
+
+        class FakeStatusClient:
+            def fetch_review_snapshot(self, _url, *, expected_revision=None):
+                self.expected_revision = expected_revision
+                return snapshot
+
+        class NoRedirect(HTTPRedirectHandler):
+            def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+                return None
+
+        controller = FakeReviewController()
+        app.RUN_CONTROLLER = controller
+        app.GERRIT_UPLOAD_CONTROLLER = SimpleNamespace(enabled=True)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        no_redirect = build_opener(NoRedirect)
+        values = {
+            "csrf_token": app.CSRF_TOKEN, "change_number": "68160",
+            "patchset": "4", "revision_sha": "d" * 40,
+            "review_mode": "simple", "idempotency_token": "review-start-once",
+        }
+        try:
+            with patch.object(
+                app.GerritStatusClient, "configured", return_value=FakeStatusClient()
+            ):
+                prepare = Request(
+                    base + "/review-runs/prepare",
+                    data=urlencode(values).encode(), method="POST",
+                )
+                with self.assertRaises(HTTPError) as prepared:
+                    no_redirect.open(prepare)
+                self.assertEqual(prepared.exception.code, 303)
+                confirmation = urlopen(
+                    base + prepared.exception.headers["Location"]
+                ).read().decode()
+                self.assertIn("no later upload confirmation", confirmation)
+                self.assertIn("never posted", confirmation)
+                token = re.search(
+                    r"name='confirmation_token' value='([^']+)'", confirmation
+                ).group(1)
+                expires = re.search(
+                    r"name='confirmation_expires_at' value='([^']+)'", confirmation
+                ).group(1)
+                final_values = {
+                    **values, "snapshot_sha256": "a" * 64,
+                    "confirmation_token": token,
+                    "confirmation_expires_at": expires,
+                }
+                final = Request(
+                    base + "/review-runs/start",
+                    data=urlencode(final_values).encode(), method="POST",
+                )
+                with self.assertRaises(HTTPError) as started:
+                    no_redirect.open(final)
+                self.assertEqual(started.exception.code, 303)
+                self.assertEqual(len(controller.calls), 1)
+                self.assertEqual(controller.calls[0][2:], ("simple", "review-start-once"))
+                with self.assertRaises(HTTPError) as replayed:
+                    no_redirect.open(final)
+                self.assertEqual(replayed.exception.code, 409)
+                self.assertEqual(len(controller.calls), 1)
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    def test_review_completion_dispatches_prepared_upload_without_confirmation(self):
+        patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+        patch_record.update(
+            change_number=68160, patchset=4, revision_sha="d" * 40,
+            lifecycle="Open",
+        )
+        events = []
+
+        class FakeRunController:
+            engineering_store = SimpleNamespace(
+                list_artifacts=lambda _run_id: [SimpleNamespace(kind="diff", size_bytes=12)]
+            )
+
+            def stop(self):
+                return None
+
+            def _request_payload(self, _session):
+                return {"request_kind": "review_comments"}
+
+            def review_upload_inputs(self, run_id, patch_value, snapshot_value):
+                self.inputs = (run_id, patch_value, snapshot_value)
+                return {"run_id": run_id, "diff_path": "/tmp/proposed.patch"}
+
+        class FakeUploadController:
+            def __init__(self):
+                self.executions = []
+
+            def prepare(self, **_values):
+                return SimpleNamespace(
+                    upload_id="upload-1", state="commit_ready",
+                    binding_digest="binding", new_patchset=None,
+                    new_revision_sha=None,
+                )
+
+            def execute(self, upload_id, *, expected_binding_digest):
+                self.executions.append((upload_id, expected_binding_digest))
+                return SimpleNamespace(
+                    upload_id=upload_id, state="succeeded", change_number=68160,
+                    patchset=4, new_patchset=5, new_revision_sha="e" * 40,
+                )
+
+        class FakeStore:
+            def append_event(self, session_id, event_type, payload, **_kwargs):
+                events.append((session_id, event_type, payload))
+
+        run_controller = FakeRunController()
+        upload_controller = FakeUploadController()
+        app.RUN_CONTROLLER = run_controller
+        app.GERRIT_UPLOAD_CONTROLLER = upload_controller
+        app.SESSION_STORE = FakeStore()
+        session = SimpleNamespace(
+            session_id="session-1", run_id="pw-review-68160-ps4-test",
+            patch_id="68160", patchset=4, revision="d" * 40,
+        )
+        snapshot = {"complete": True, "snapshot_sha256": "a" * 64}
+        with patch.object(
+            app.GerritStatusClient, "configured",
+            return_value=SimpleNamespace(
+                fetch_review_snapshot=lambda *_args, **_kwargs: snapshot
+            ),
+        ), patch.object(app, "refresh_watched_patch") as refresh:
+            app._process_review_completion(session)
+
+        self.assertEqual(upload_controller.executions, [("upload-1", "binding")])
+        self.assertEqual(run_controller.inputs[0], session.run_id)
+        self.assertTrue(any(item[1] == "review_auto_upload_succeeded" for item in events))
+        refresh.assert_called_once_with(patch_record)
 
     def test_engineering_confirmation_rejects_tampering_and_revision_staleness(self):
         patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")

@@ -93,11 +93,11 @@ Retesting belongs to the test-error branch, not this build-failure stub. The
 build branch is therefore a deliberate dead end until its criteria and
 actions are designed separately.
 
-## Handle reviews (future stubs)
+## Handle reviews (Phase 4A)
 
-The page will eventually offer two review-handling choices. Both are stubs in
-the first implementation and are disabled: they do not invoke Claude Code or
-modify Gerrit.
+The page offers two manually started, exact-revision review-handling choices.
+Starting either mode confirms the immutable unresolved-comment snapshot and
+authorizes an isolated Claude Code run. The worker has no Gerrit credentials.
 
 - **Handle simple comments:** shell out to Claude Code with a narrowly scoped
   prompt. It may fix clearly trivial review comments, but must leave harder or
@@ -108,9 +108,15 @@ modify Gerrit.
   that human judgment is needed, it leaves the comment unresolved and
   escalates to a human.
 
-In both modes, the eventual integration must preserve the full review context,
-log Claude's result, and require explicit policy/configuration before any
-write action is enabled.
+In both modes the controller preserves the full exact-revision review
+snapshot, records one disposition per target comment, captures the proposed
+diff and reply drafts, and requires successful LTVM test evidence. A qualifying
+run uploads one new patchset automatically under the run-start authorization;
+there is no second upload confirmation. The controller rechecks both the
+revision and comment-snapshot digest immediately before upload and reconciles
+an ambiguous push without blindly retrying. Review replies remain drafts and
+are never posted by this flow. Any ambiguity or incomplete result fails to the
+human instead of widening authority.
 
 ## Agent orchestration roadmap
 

@@ -152,6 +152,54 @@ class StatusTests(unittest.TestCase):
             "https://review.whamcloud.com/61965"
         ), 61965)
 
+    def test_review_snapshot_is_revision_pinned_and_deterministic(self):
+        revision = "d" * 40
+        identity = {
+            "change_number": 61965, "project": "fs/lustre-release",
+            "branch": "master", "change_id": "I" + "a" * 40,
+            "status": "NEW", "revision_sha": revision, "patchset": 4,
+            "revision_numbers": {revision: 4}, "updated": "now",
+            "unresolved_comment_count": 1,
+        }
+        comment = {
+            "id": "abc", "patch_set": 4, "commit_id": revision,
+            "author": {"_account_id": 7, "name": "Reviewer"},
+            "message": "Please rename this", "updated": "2026-01-01",
+            "unresolved": True, "line": 12,
+            "range": {"start_line": 12, "start_character": 1,
+                      "end_line": 12, "end_character": 8},
+        }
+        first = status.normalize_review_snapshot(
+            identity, {"file.c": [comment]}, {}
+        )
+        second = status.normalize_review_snapshot(
+            identity, {"file.c": [comment]}, {}
+        )
+        self.assertTrue(first["complete"])
+        self.assertEqual(first["snapshot_sha256"], second["snapshot_sha256"])
+        normalized = first["threads"][0]["comments"][0]
+        self.assertEqual(normalized["comment_id"], "abc")
+        self.assertEqual(normalized["location"]["range"]["end_character"], 8)
+        self.assertEqual(normalized["author_key"], "account:7")
+
+    def test_review_snapshot_fails_closed_on_orphan_or_count_mismatch(self):
+        revision = "d" * 40
+        identity = {
+            "change_number": 61965, "project": "fs/lustre-release",
+            "branch": "master", "change_id": "I" + "a" * 40,
+            "status": "NEW", "revision_sha": revision, "patchset": 4,
+            "revision_numbers": {revision: 4}, "updated": "now",
+            "unresolved_comment_count": 2,
+        }
+        result = status.normalize_review_snapshot(identity, {"file.c": [{
+            "id": "reply", "in_reply_to": "missing", "patch_set": 4,
+            "commit_id": revision, "message": "orphan", "updated": "now",
+            "unresolved": True,
+        }]}, {})
+        self.assertFalse(result["complete"])
+        self.assertTrue(any("missing parent" in item for item in result["incompleteness_reasons"]))
+        self.assertTrue(any("does not match" in item for item in result["incompleteness_reasons"]))
+
     def test_ready_requires_both_ci_and_two_non_owner_reviews(self):
         result = status.summarize_change(sample_change())
         self.assertEqual(result["review"], "Ready")
@@ -280,6 +328,44 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(identity["revision_sha"], "d" * 40)
         self.assertEqual(identity["revision_numbers"]["older"], 3)
         self.assertIn("d" * 40, identity["revision_shas"])
+
+    def test_review_capture_brackets_exact_sha_endpoints_with_identity(self):
+        change = sample_change()
+        change.update(
+            status="NEW", branch="master", change_id="I" + "1" * 40,
+            unresolved_comment_count=1,
+        )
+        revision = change["current_revision"]
+        calls = []
+        comment = {
+            "id": "c1", "patch_set": 4, "commit_id": revision,
+            "message": "Rename it", "updated": "now", "unresolved": True,
+        }
+
+        def transport(request, _timeout):
+            calls.append(request.full_url)
+            if request.full_url.endswith("/comments"):
+                value = {"file.c": [comment]}
+            elif request.full_url.endswith("/ported_comments"):
+                value = {}
+            else:
+                value = change
+            return (")]}'\n" + json.dumps(value)).encode("utf-8")
+
+        client = status.GerritStatusClient(
+            status.GerritConfig(
+                "https://review.whamcloud.com", "reader", "private-password"
+            ), transport=transport,
+        )
+        snapshot = client.fetch_review_snapshot(
+            "https://review.whamcloud.com/c/61965", expected_revision=revision
+        )
+        self.assertTrue(snapshot["complete"])
+        self.assertEqual(len(calls), 4)
+        self.assertIn(f"/revisions/{revision}/comments", calls[1])
+        self.assertIn(f"/revisions/{revision}/ported_comments", calls[2])
+        self.assertIn("ALL_REVISIONS", calls[0])
+        self.assertIn("ALL_REVISIONS", calls[3])
 
     def test_refresh_preserves_last_known_status_on_error(self):
         patch_record = {

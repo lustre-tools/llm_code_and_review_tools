@@ -1407,15 +1407,22 @@ Build:
 - implement **Handle simple comments** and **Handle all comments** policies;
 - exact current-patchset review-comment snapshot;
 - isolated edit/build/test run;
-- proposed diff/commit and reply draft as artifacts only;
-- explicit human approval and fail-to-human behavior.
+- proposed diff/commit, per-comment disposition, and reply draft as immutable
+  artifacts;
+- one explicit run-start approval that preauthorizes controller-owned patchset
+  upload after exact-snapshot revalidation and successful guest test evidence;
+- fail-to-human behavior for ambiguity, nontrivial work in simple mode, stale
+  comments/revisions, failed validation, or uncertain publication.
 
 Exit criteria:
 
 - “simple” mode escalates any ambiguous/nontrivial comment without attempting
   it;
 - “all” mode attempts broadly but still escalates uncertainty;
-- neither mode posts or uploads automatically;
+- neither mode posts review replies automatically; replies remain drafts;
+- a qualifying manually started run uploads one new patchset without a second
+  approval step, using the Phase 3C writer's kill switch, idempotency ledger,
+  exact-revision checks, and reconciliation-only handling of ambiguity;
 - all edits map to a specific comment and pinned revision;
 - containerization/isolation gate is met before executing patch code.
 
