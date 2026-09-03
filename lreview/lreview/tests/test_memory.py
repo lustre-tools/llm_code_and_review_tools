@@ -39,6 +39,7 @@ class TestDbDir:
 
     def test_repo_default(self, monkeypatch, tmp_path):
         monkeypatch.delenv("LREVIEW_DB", raising=False)
+        (tmp_path / "repo" / ".git").mkdir(parents=True)
         assert default_db_dir(tmp_path / "repo") == (
             tmp_path / "repo" / "lreview-db")
 

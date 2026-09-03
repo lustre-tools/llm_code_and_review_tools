@@ -95,7 +95,8 @@ cd /path/to/lustre-release          # or pass --repo
 # Review three changes, 5 in parallel (default), don't post yet
 lreview run 64086 64087 64090
 
-# Inspect lreview-results/gerrit-review-*.json, then post
+# Inspect the review JSONs (in lreview-results/ inside the llm
+# tools checkout by default), then post
 lreview post
 
 # Or review and post in one go
@@ -389,7 +390,7 @@ rejoin a positional list split around a flag).
 | `--output, -o FILE` | — | Plain-text dump of every review in the batch (default with `--last`: `<results-dir>/review-last<N>.txt`) |
 | `--jobs, -j N` | 5 | Parallel reviews |
 | `--timeout SECS` | 7200 | Per-review timeout |
-| `--results-dir DIR` | `./lreview-results` | Logs, JSONs, summary.json |
+| `--results-dir DIR` | `$LREVIEW_RESULTS_DIR`, else `lreview-results/` in the llm tools checkout (cwd-relative without a checkout) | Logs, JSONs, summary.json |
 | `--worktrees-dir DIR` | auto | Where worktrees are created |
 | `--keep-worktrees` | off | Keep worktrees after review |
 | `--agent NAME` | `claude` (or `$LREVIEW_AGENT`) | Agent backend: claude, codex, gemini, opencode |
@@ -424,6 +425,7 @@ already-posted review.
 | `LREVIEW_AGENT` | Default for `--agent` (else `claude`) |
 | `LREVIEW_MODEL` | Default for `--model` (else `opus` for claude) |
 | `LREVIEW_DB` | Default for `--db` (memory database directory) |
+| `LREVIEW_RESULTS_DIR` | Default for `--results-dir` |
 | `LREVIEW_PREFIX` | Default for `--prefix`; `<model>` substituted |
 | `REVIEW_PROMPTS_DIR` | Path to the review-prompts clone |
 | `NO_COLOR` | Disable colored output |

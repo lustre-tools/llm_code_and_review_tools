@@ -34,6 +34,24 @@ def _positive_int(value: str) -> int:
     return number
 
 
+def default_results_dir() -> str:
+    """Where results go when --results-dir is not given.
+
+    $LREVIEW_RESULTS_DIR wins; otherwise lreview-results/ in the
+    llm tools checkout (gitignored), so results land in one known
+    place no matter where lreview is invoked from. Installs without
+    a checkout (e.g. CI's plain pip install) fall back to the old
+    cwd-relative ./lreview-results.
+    """
+    env = os.environ.get("LREVIEW_RESULTS_DIR")
+    if env:
+        return env
+    from .prompts import _REPO_ROOT
+    if (_REPO_ROOT / ".git").exists():
+        return str(_REPO_ROOT / "lreview-results")
+    return "./lreview-results"
+
+
 def default_worktrees_dir(repo: Path, results_dir: Path) -> Path:
     """Prefer the workspace ai_worktrees/ convention when present."""
     ai_worktrees = repo.resolve().parent / "ai_worktrees"
@@ -589,9 +607,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--timeout", type=int, default=7200,
         help="Per-review timeout in seconds (default: 7200)")
     run_p.add_argument(
-        "--results-dir", default="./lreview-results",
+        "--results-dir", default=default_results_dir(),
         help="Where logs, review JSONs, and summary.json go "
-             "(default: ./lreview-results)")
+             "(default: $LREVIEW_RESULTS_DIR, else lreview-results/ "
+             "in the llm tools checkout; ./lreview-results when "
+             "installed without a checkout)")
     run_p.add_argument(
         "--worktrees-dir", default=None,
         help="Where review worktrees are created (default: "
@@ -655,8 +675,8 @@ def build_parser() -> argparse.ArgumentParser:
         "files", nargs="*",
         help="gerrit-review-*.json files (default: all in --results-dir)")
     render_p.add_argument(
-        "--results-dir", default="./lreview-results",
-        help="Results directory to render (default: ./lreview-results)")
+        "--results-dir", default=default_results_dir(),
+        help="Results directory to render (default: as for run)")
     render_p.set_defaults(func=cmd_render)
 
     post_p = sub.add_parser(
@@ -665,9 +685,9 @@ def build_parser() -> argparse.ArgumentParser:
         "changes", nargs="*",
         help="Change numbers to post (default: all unposted with findings)")
     post_p.add_argument(
-        "--results-dir", default="./lreview-results",
+        "--results-dir", default=default_results_dir(),
         help="Results directory from a previous run "
-             "(default: ./lreview-results)")
+             "(default: as for run)")
     post_p.add_argument(
         "--prefix", default=default_prefix,
         help="Prefix for every posted message; a <model> placeholder is "

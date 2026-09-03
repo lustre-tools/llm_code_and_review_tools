@@ -161,7 +161,8 @@ findings per commit, including the clean and failed ones.
 
 Defaults: opus model (`--model` / `$LREVIEW_MODEL` for sonnet/fable),
 5 parallel reviews (`--jobs`), 2h per-review timeout, results in
-`./lreview-results/` (per-change JSON + log + summary.json), a live
+`lreview-results/` in this checkout (per-change JSON + log +
+summary.json; `--results-dir` / `$LREVIEW_RESULTS_DIR` override), a live
 status line with token counter while reviews run, and posted messages
 prefixed `[AI review - <model>]` on a bold own line (`--prefix` /
 `$LREVIEW_PREFIX` override; a `<model>` placeholder in a custom prefix

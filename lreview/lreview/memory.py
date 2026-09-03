@@ -28,11 +28,15 @@ _CHANGE_ID_LINE_RE = re.compile(
 
 
 def default_db_dir(repo_root: Path) -> Path:
-    """$LREVIEW_DB, else <llm repo>/lreview-db (gitignored)."""
+    """$LREVIEW_DB, else lreview-db/ in the llm tools checkout
+    (gitignored); a cwd-relative lreview-db for installs without a
+    checkout (e.g. CI's plain pip install)."""
     env = os.environ.get("LREVIEW_DB")
     if env:
         return Path(env).expanduser()
-    return repo_root / DB_DIRNAME
+    if (repo_root / ".git").exists():
+        return repo_root / DB_DIRNAME
+    return Path(DB_DIRNAME)
 
 
 def _slug(text: str, max_len: int = 60) -> str:

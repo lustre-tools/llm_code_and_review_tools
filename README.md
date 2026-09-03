@@ -28,7 +28,8 @@ the others are best-effort) — running the
 [review-prompts](https://github.com/verygreen/review-prompts/)
 `review-core.md` deep-dive regression analysis in its own git
 worktree, pinned to the change's current patchset; results (`gerrit-review-*.json`, logs, `summary.json`) land
-in `./lreview-results/`, and posting goes through gerrit-cli with an
+in `lreview-results/` inside this checkout (`--results-dir` /
+`$LREVIEW_RESULTS_DIR` to change), and posting goes through gerrit-cli with an
 `[AI review - <model>]` prefix, guarded against double-posting.
 
 ```bash

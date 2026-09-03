@@ -13,19 +13,41 @@ class TestParser:
         monkeypatch.delenv("LREVIEW_PREFIX", raising=False)
         monkeypatch.delenv("LREVIEW_AGENT", raising=False)
         monkeypatch.delenv("LREVIEW_EFFORT", raising=False)
+        monkeypatch.delenv("LREVIEW_RESULTS_DIR", raising=False)
         args = build_parser().parse_args(["run", "64086"])
         assert args.effort is None
         assert args.changes == ["64086"]
         assert args.jobs == 5
         assert args.timeout == 7200
         assert args.repo == "."
-        assert args.results_dir == "./lreview-results"
+        # editable checkout: results default into the llm tools repo,
+        # not the cwd
+        from lreview.prompts import _REPO_ROOT
+        assert args.results_dir == str(_REPO_ROOT / "lreview-results")
         assert args.worktrees_dir is None
         assert args.keep_worktrees is False
         assert args.post is False
         assert args.prefix is None
         assert args.model is None
         assert args.agent == "claude"
+
+    def test_default_results_dir(self, monkeypatch):
+        from lreview.cli import default_results_dir
+        from lreview.prompts import _REPO_ROOT
+        monkeypatch.delenv("LREVIEW_RESULTS_DIR", raising=False)
+        # this test runs from an editable checkout, so the repo wins
+        assert default_results_dir() == str(_REPO_ROOT / "lreview-results")
+        monkeypatch.setenv("LREVIEW_RESULTS_DIR", "/tmp/x")
+        assert default_results_dir() == "/tmp/x"
+
+    def test_default_db_dir_without_checkout(self, tmp_path, monkeypatch):
+        from lreview.memory import default_db_dir
+        monkeypatch.delenv("LREVIEW_DB", raising=False)
+        # a repo_root that is not a git checkout (pip install in CI)
+        # falls back to the cwd-relative directory
+        assert default_db_dir(tmp_path) == Path("lreview-db")
+        (tmp_path / ".git").mkdir()
+        assert default_db_dir(tmp_path) == tmp_path / "lreview-db"
 
     def test_agent_selection(self, monkeypatch):
         monkeypatch.setenv("LREVIEW_AGENT", "codex")
@@ -75,10 +97,12 @@ class TestParser:
 
     def test_post_defaults(self, monkeypatch):
         monkeypatch.delenv("LREVIEW_PREFIX", raising=False)
+        monkeypatch.delenv("LREVIEW_RESULTS_DIR", raising=False)
         args = build_parser().parse_args(["post"])
         assert args.changes == []
         assert args.force is False
-        assert args.results_dir == "./lreview-results"
+        from lreview.cli import default_results_dir
+        assert args.results_dir == default_results_dir()
 
     def test_check_parses(self):
         args = build_parser().parse_args(["check"])
