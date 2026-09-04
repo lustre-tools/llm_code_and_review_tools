@@ -33,10 +33,21 @@ def cmd_review(args):
             context_lines=context_lines,
         )
 
-        # If posting comments from file
-        if args.post_comments:
-            with open(args.post_comments) as f:
-                review_spec = json_module.load(f)
+        # Posting mode.  Any of --post-comments/--vote/--message means
+        # the caller wants to POST a review, not fetch the diff.  Gating
+        # this on --post-comments alone silently turned a message-only
+        # or vote-only review into a (potentially multi-MB) diff dump
+        # with the review quietly discarded.
+        posting = (
+            bool(args.post_comments)
+            or getattr(args, 'vote', None) is not None
+            or bool(getattr(args, 'message', None))
+        )
+        if posting:
+            review_spec = {}
+            if args.post_comments:
+                with open(args.post_comments) as f:
+                    review_spec = json_module.load(f)
 
             # Accepts both the flat comment list and the Gerrit REST
             # path -> comments dict; an explicitly given CLI flag

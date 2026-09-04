@@ -1459,6 +1459,96 @@ class TestCmdReviewPostComments:
 
             MockReviewer.return_value.post_review.assert_called_once()
 
+    def test_review_message_only_posts(self):
+        """--message with no --post-comments must POST, not fetch a diff."""
+        from gerrit_cli.cli import cmd_review
+
+        args = argparse.Namespace(
+            url="https://example.com/12345",
+            full_content=False,
+            post_comments=None,
+            message="follow-up note",
+            vote=None,
+            pretty=False,
+            changes_only=False,
+        )
+
+        with patch('gerrit_cli.cli.CodeReviewer') as MockReviewer:
+            mock_data = MagicMock()
+            mock_data.change_info.change_number = 12345
+            MockReviewer.return_value.get_review_data.return_value = mock_data
+
+            mock_post_result = MagicMock()
+            mock_post_result.success = True
+            mock_post_result.comments_posted = 0
+            mock_post_result.vote = None
+            MockReviewer.return_value.post_review.return_value = mock_post_result
+
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_review(args)
+            assert exc_info.value.code == 0
+
+            MockReviewer.return_value.post_review.assert_called_once()
+            kwargs = MockReviewer.return_value.post_review.call_args.kwargs
+            assert kwargs["message"] == "follow-up note"
+            assert kwargs["comments"] == []
+
+    def test_review_vote_only_posts(self):
+        """--vote with no --post-comments must POST, not fetch a diff."""
+        from gerrit_cli.cli import cmd_review
+
+        args = argparse.Namespace(
+            url="https://example.com/12345",
+            full_content=False,
+            post_comments=None,
+            message=None,
+            vote=-1,
+            pretty=False,
+            changes_only=False,
+        )
+
+        with patch('gerrit_cli.cli.CodeReviewer') as MockReviewer:
+            mock_data = MagicMock()
+            mock_data.change_info.change_number = 12345
+            MockReviewer.return_value.get_review_data.return_value = mock_data
+
+            mock_post_result = MagicMock()
+            mock_post_result.success = True
+            mock_post_result.comments_posted = 0
+            mock_post_result.vote = -1
+            MockReviewer.return_value.post_review.return_value = mock_post_result
+
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_review(args)
+            assert exc_info.value.code == 0
+
+            MockReviewer.return_value.post_review.assert_called_once()
+            assert MockReviewer.return_value.post_review.call_args.kwargs["vote"] == -1
+
+    def test_review_no_post_flags_fetches_diff(self):
+        """With none of the posting flags, review still fetches."""
+        from gerrit_cli.cli import cmd_review
+
+        args = argparse.Namespace(
+            url="https://example.com/12345",
+            full_content=False,
+            post_comments=None,
+            message=None,
+            vote=None,
+            pretty=False,
+            changes_only=False,
+        )
+
+        with patch('gerrit_cli.cli.CodeReviewer') as MockReviewer:
+            mock_data = MagicMock()
+            mock_data.change_info.change_number = 12345
+            mock_data.to_dict.return_value = {"change_info": {}}
+            MockReviewer.return_value.get_review_data.return_value = mock_data
+
+            with pytest.raises(SystemExit):
+                cmd_review(args)
+            MockReviewer.return_value.post_review.assert_not_called()
+
     def test_review_post_comments_nested_format_with_prefix(self, tmp_path):
         """Test --post-comments with Gerrit REST format, prefix and tag."""
         import json
