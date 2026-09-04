@@ -91,6 +91,7 @@ class PatchRevision:
     is_current: bool = True
     revision_state_complete: bool = True
     review_votes: Tuple[ReviewVote, ...] = ()
+    project: str = ""
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,7 @@ class TickResult:
     evaluation: RetestEvaluation
     observation_created: bool
     run_ids: Tuple[str, ...]
+    lane_decision: Any = None
 
 
 Revalidate = Callable[[str], Union[PatchRevision, Mapping[str, Any]]]
@@ -150,12 +152,14 @@ class RetestController:
         revalidate: Revalidate,
         notify: Optional[Notify] = None,
         worker_id: str | None = None,
+        lane_runtime: Any = None,
     ) -> None:
         self.store = store
         self.maloo = maloo
         self.revalidate = revalidate
         self.notify = notify or (lambda _event: None)
         self.worker_id = worker_id or "retest-controller-" + str(uuid.uuid4())
+        self.lane_runtime = lane_runtime
         # Protect one process from re-entering the same controller.  Different
         # processes remain serialized by SQLite claims and have distinct IDs.
         self._tick_lock = threading.Lock()
@@ -258,6 +262,7 @@ class RetestController:
             is_current=bool(value.get("is_current", True)),
             revision_state_complete=bool(value.get("revision_state_complete", True)),
             review_votes=tuple(votes),
+            project=str(value.get("project") or ""),
         )
 
     def _tick_patch_locked(
@@ -302,7 +307,9 @@ class RetestController:
                 patch.review_votes,
             )
             session_submissions = {}
-        existing_keys = frozenset(self._existing_action_keys(patch.patch_id))
+        existing_keys = frozenset(
+            self._existing_action_keys(patch.patch_id, patch.revision_sha.lower())
+        )
         evaluation = evaluate_retests(
             snapshot,
             RetestPolicy(
@@ -337,16 +344,44 @@ class RetestController:
         if created and observation_notice is not None:
             self._notify(observation_notice)
 
+        lane_admission = None
+        if self.lane_runtime is not None:
+            lane_admission = self.lane_runtime.evaluate_retest(
+                patch,
+                snapshot,
+                evaluation,
+                primary_global_enabled=global_setting.enabled,
+                actions_used=len(existing_keys),
+                record=not dry_run,
+            )
+
         run_ids = ()
-        if not dry_run:
+        lane_permits = bool(
+            lane_admission is None
+            or not lane_admission.enrolled
+            or (
+                lane_admission.decision is not None
+                and lane_admission.decision.eligible
+            )
+        )
+        if not dry_run and lane_permits:
             run_ids = self._persist_evaluation(
                 patch,
                 evaluation,
                 fingerprint,
                 session_submissions,
+                lane_decision=(
+                    None if lane_admission is None else lane_admission.decision
+                ),
             )
             self._advance_active_runs(patch.patch_id)
-        return TickResult(patch.patch_id, evaluation, created, tuple(run_ids))
+        return TickResult(
+            patch.patch_id,
+            evaluation,
+            created,
+            tuple(run_ids),
+            None if lane_admission is None else lane_admission.decision,
+        )
 
     @staticmethod
     def _should_read_maloo(
@@ -468,9 +503,11 @@ class RetestController:
                 )
             )
 
-    def _existing_action_keys(self, patch_id: str) -> Sequence[str]:
+    def _existing_action_keys(self, patch_id: str, revision: str) -> Sequence[str]:
         keys = []
         for run in self.store.list_runs(patch_id=patch_id):
+            if str(run.revision).lower() != str(revision).lower():
+                continue
             keys.extend(action.idempotency_key for action in self.store.list_actions(run.run_id))
         return keys
 
@@ -480,6 +517,7 @@ class RetestController:
         evaluation: RetestEvaluation,
         observation_fingerprint: str,
         session_submissions: Mapping[str, str],
+        lane_decision: Any = None,
     ) -> Sequence[str]:
         actionable = tuple(
             decision
@@ -535,6 +573,17 @@ class RetestController:
                 "original_submission": session_submissions.get(action.session_id, ""),
                 "action_fingerprint": action.action_fingerprint,
             }
+            if lane_decision is not None:
+                request["autonomous_lane"] = {
+                    "name": lane_decision.lane.name,
+                    "version": lane_decision.lane.version,
+                    "definition_digest": lane_decision.definition_digest,
+                    "definition_decision_key": lane_decision.decision_key,
+                    "control_generation": lane_decision.control_generation,
+                    "capability": "request_retest",
+                    "project": lane_decision.identity.project,
+                    "patch_id": lane_decision.identity.patch_id,
+                }
             try:
                 attempt = self.store.plan_action(
                     run.run_id,
@@ -554,6 +603,7 @@ class RetestController:
                     "session_id": action.session_id,
                     "test_group": request["test_group"],
                     "jira_ticket": action.jira_justification,
+                    "autonomous_lane": request.get("autonomous_lane"),
                 },
                 idempotency_key="action-planned:" + attempt.action_id,
             )
@@ -678,6 +728,34 @@ class RetestController:
                     "retest_suppressed_authority_changed",
                     {"action_id": action.action_id},
                     idempotency_key="authority-changed:" + action.action_id,
+                )
+                return
+            if (
+                self.lane_runtime is not None
+                and not self.lane_runtime.authorize_request(
+                    request,
+                    fresh,
+                    primary_global_enabled=self.store.get_global_automation().enabled,
+                    policy_mode=str(run.policy_snapshot.get("mode") or ""),
+                )
+            ):
+                self.store.finish_action(
+                    action.action_id,
+                    "cancelled",
+                    failure_code="lane_authority_changed",
+                    failure_summary="Autonomous lane authority changed before the Maloo write",
+                )
+                self.store.finish_run(
+                    run.run_id,
+                    "cancelled",
+                    failure_code="lane_authority_changed",
+                    failure_summary="Autonomous lane authority changed before the Maloo write",
+                )
+                self.store.append_timeline(
+                    run.run_id,
+                    "retest_suppressed_lane_authority_changed",
+                    {"action_id": action.action_id},
+                    idempotency_key="lane-authority-changed:" + action.action_id,
                 )
                 return
 

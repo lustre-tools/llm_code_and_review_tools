@@ -1536,13 +1536,24 @@ reconciliation behavior, budget, audit trail, and escalation path.
 
 ### Phase 6: autonomous lanes
 
-Build:
+Phase 6A and the first narrow Phase 6B lane are implemented:
 
-- named lane definitions for proven-safe patch classes;
-- eligibility checks, limited capabilities, budgets, test requirements, and
-  automatic stop conditions;
-- global/per-project/per-patch kill switches;
-- outcome metrics and periodic policy review.
+- code-owned, immutable named/versioned definitions and pure evaluators;
+- CAS-protected global/per-project/per-patch controls, all disabled by default;
+- signed one-use confirmation for enabling and immediate kill-switch disable;
+- exact-revision decision records, bounded recent outcomes, and side-effect-free
+  historical replay;
+- a first `deterministic-test-retest` version 1 lane which wraps the existing
+  Maloo retest outbox and allows one remote write per exact revision; and
+- final switch, definition, standing-policy, primary-gate, project, patch, and
+  revision revalidation before the existing Maloo writer is called.
+
+Lane enrollment is an additional restriction, never an authority grant. The
+first lane requires the already-confirmed automatic/deterministic standing
+policy and primary global automation gate. It has zero agent-run budget and no
+Gerrit, Jenkins, Jira, patch-upload, checkout, or LTVM capability. Unenrolled
+patches retain their existing behavior, so adopting the framework cannot
+silently change established workflows.
 
 Exit criteria:
 

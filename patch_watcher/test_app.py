@@ -23,6 +23,9 @@ class PatchWatcherTests(unittest.TestCase):
     def setUp(self):
         app.PATCHES.clear()
         app._ENGINEERING_USED_CONFIRMATIONS.clear()
+        app.AUTONOMOUS_LANE_STORE = None
+        app.AUTONOMOUS_LANE_HISTORY = None
+        app.AUTONOMOUS_LANE_RUNTIME = None
 
     def tearDown(self):
         if app.AUTOMATION_OBSERVER is not None:
@@ -41,6 +44,9 @@ class PatchWatcherTests(unittest.TestCase):
         app.GERRIT_REPLY_CONTROLLER = None
         app.JENKINS_RETRIGGER_CONTROLLER = None
         app.STANDING_POLICY_STORE = None
+        app.AUTONOMOUS_LANE_STORE = None
+        app.AUTONOMOUS_LANE_HISTORY = None
+        app.AUTONOMOUS_LANE_RUNTIME = None
         app._ENGINEERING_USED_CONFIRMATIONS.clear()
         app.RESOURCE_COLLECTION_ENABLED = False
         app._RESOURCE_SNAPSHOT = None
@@ -84,6 +90,55 @@ class PatchWatcherTests(unittest.TestCase):
         rendered = app.page()
         self.assertIn("&lt;unsafe&gt;", rendered)
         self.assertNotIn("<unsafe>", rendered)
+
+    def test_autonomous_lane_dashboard_is_disabled_by_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app.initialize_autonomous_lanes(
+                Path(directory) / "lanes.json",
+                Path(directory) / "history.jsonl",
+            )
+            rendered = app.page()
+        self.assertIn("Autonomous lanes", rendered)
+        self.assertIn("Global kill switch: Disabled", rendered)
+        self.assertIn("deterministic-test-retest", rendered)
+        self.assertIn("Remote writes per exact revision", rendered)
+
+    def test_lane_global_enable_uses_bound_one_time_confirmation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app.initialize_autonomous_lanes(
+                Path(directory) / "lanes.json",
+                Path(directory) / "history.jsonl",
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                proposal = urlencode({
+                    "csrf_token": app.CSRF_TOKEN,
+                    "mode": "enabled",
+                    "expected_generation": 0,
+                }).encode()
+                confirmation = urlopen(Request(
+                    base + "/autonomous-lanes/global", data=proposal, method="POST"
+                )).read().decode()
+                self.assertFalse(app.AUTONOMOUS_LANE_STORE.load().global_enabled)
+                fields = dict(re.findall(
+                    r"name='([^']+)' value='([^']*)'", confirmation
+                ))
+                body = urlencode(fields).encode()
+                response = urlopen(Request(
+                    base + "/autonomous-lanes/global/confirm", data=body, method="POST"
+                ))
+                self.assertEqual(response.status, 200)
+                self.assertTrue(app.AUTONOMOUS_LANE_STORE.load().global_enabled)
+                with self.assertRaises(HTTPError) as caught:
+                    urlopen(Request(
+                        base + "/autonomous-lanes/global/confirm", data=body, method="POST"
+                    ))
+                self.assertEqual(caught.exception.code, 403)
+            finally:
+                server.shutdown(); server.server_close(); thread.join(timeout=2)
 
     def test_post_parser_rejects_unsupported_oversized_and_invalid_forms(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
@@ -508,6 +563,31 @@ class PatchWatcherTests(unittest.TestCase):
             app.RUN_CONTROLLER = SimpleNamespace(stop=lambda: None)
             app._observe_patch_automation(patch_record)
         self.assertEqual(retest.mode_seen, "disabled")
+
+    def test_standing_policy_sync_repairs_budget_even_when_mode_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            automation = app.initialize_automation_store(root / "automation.sqlite3")
+            patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+            patch_record.update(
+                change_number=68160, patchset=4, revision_sha="d" * 40,
+                project="fs/lustre-release", lifecycle="Open",
+            )
+            app.sync_automation_patch(patch_record)
+            automation.set_policy(
+                "68160", mode="approval", action_budget=1,
+                delivery_budget=2, updated_by="stale-budget",
+            )
+            app._sync_standing_test_policy(
+                patch_record,
+                app.PatchAutomationPolicy(
+                    "68160", test_failures="deterministic", trigger_mode="manual",
+                ),
+            )
+            repaired = automation.get_policy("68160")
+        self.assertEqual(repaired.mode, "approval")
+        self.assertEqual(repaired.action_budget, 4)
+        self.assertEqual(repaired.delivery_budget, 4)
 
     def test_active_managed_run_suppresses_automatic_retest_in_same_patch(self):
         with tempfile.TemporaryDirectory() as temp_dir:

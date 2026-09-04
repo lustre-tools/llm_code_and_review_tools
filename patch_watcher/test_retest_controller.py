@@ -24,6 +24,13 @@ from maloo_adapter import (
 )
 from retest_controller import PatchRevision, RetestController
 from retest_policy import ReviewVote
+from autonomous_lane import (
+    DETERMINISTIC_RETEST_LANE,
+    LaneControlStore,
+    LaneDecisionHistory,
+    LaneRef,
+)
+from autonomous_lane_runtime import AutonomousLaneRuntime
 
 
 SHA = "a" * 40
@@ -39,6 +46,7 @@ def patch(*, sha=SHA, patchset=3, current=True):
         revision_sha=sha,
         lifecycle="open",
         is_current=current,
+        project="fs/lustre-release",
     )
 
 
@@ -143,6 +151,27 @@ def controller(store, maloo, *, fresh=None, notifications=None, worker=None):
     )
 
 
+def lane_runtime(tmp_path, *, global_enabled):
+    controls = LaneControlStore(tmp_path / "lanes.json")
+    state = controls.load()
+    if global_enabled:
+        state = controls.set_global_enabled(True, expected_generation=state.generation)
+    state = controls.set_project_enabled(
+        "fs/lustre-release", True, expected_generation=state.generation,
+    )
+    controls.set_patch_lane(
+        "fs/lustre-release", "review-101", LaneRef(DETERMINISTIC_RETEST_LANE, 1),
+        True, expected_generation=state.generation,
+    )
+    standing = dataclasses.make_dataclass(
+        "Standing", [("trigger_mode", str), ("test_failures", str)]
+    )("automatic", "deterministic")
+    return AutonomousLaneRuntime(
+        controls, LaneDecisionHistory(tmp_path / "lane-history.jsonl"),
+        standing_policy=lambda _patch: standing,
+    )
+
+
 def all_actions(store):
     return [
         action
@@ -219,6 +248,60 @@ def test_automatic_requests_once_across_ticks_and_restart(tmp_path):
     runs = store.list_runs(patch_id=patch().patch_id)
     assert len(runs) == 1
     assert runs[0].status == "waiting_external"
+
+
+def test_enrolled_lane_gates_and_annotates_existing_retest_executor(tmp_path):
+    store = configured_store(tmp_path, global_enabled=True)
+    maloo = FakeMaloo()
+    runtime = lane_runtime(tmp_path, global_enabled=False)
+    service = RetestController(
+        store, maloo, revalidate=lambda _url: patch(), lane_runtime=runtime,
+    )
+
+    rejected = service.tick_patch(patch())
+    assert rejected.lane_decision.code == "global_disabled"
+    assert maloo.requests == []
+    assert all_actions(store) == []
+
+    state = runtime.controls.load()
+    runtime.controls.set_global_enabled(True, expected_generation=state.generation)
+    admitted = service.tick_patch(patch())
+    assert admitted.lane_decision.eligible
+    assert maloo.requests == [("session-1", "LU-12345", "single")]
+    action = all_actions(store)[0]
+    assert action.request["autonomous_lane"]["name"] == DETERMINISTIC_RETEST_LANE
+    assert action.request["autonomous_lane"]["capability"] == "request_retest"
+
+
+def test_action_budget_usage_is_scoped_to_the_exact_revision(tmp_path):
+    store = configured_store(tmp_path, global_enabled=True)
+    maloo = FakeMaloo()
+    service = controller(store, maloo)
+    service.tick_patch(patch())
+
+    assert len(service._existing_action_keys("review-101", SHA)) == 1
+    assert service._existing_action_keys("review-101", "b" * 40) == []
+
+
+def test_lane_kill_switch_is_rechecked_after_remote_reconciliation(tmp_path):
+    store = configured_store(tmp_path, global_enabled=True)
+    maloo = FakeMaloo()
+    runtime = lane_runtime(tmp_path, global_enabled=True)
+
+    def disable_lane():
+        state = runtime.controls.load()
+        runtime.controls.set_global_enabled(False, expected_generation=state.generation)
+
+    maloo.reconcile_hook = disable_lane
+    service = RetestController(
+        store, maloo, revalidate=lambda _url: patch(), lane_runtime=runtime,
+    )
+    service.tick_patch(patch())
+
+    assert maloo.requests == []
+    action = all_actions(store)[0]
+    assert action.status == "cancelled"
+    assert action.failure_code == "lane_authority_changed"
 
 
 def test_approval_requires_durable_exact_approval(tmp_path):

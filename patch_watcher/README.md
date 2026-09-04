@@ -303,6 +303,29 @@ before dispatch and reconciles the proposed commit against all Gerrit
 revisions after either success or an uncertain result. It never blindly
 retries an ambiguous push. Claude never receives Gerrit credentials.
 
+## Autonomous lanes (Phases 6A–6B)
+
+The dashboard now exposes a code-defined, versioned autonomous-lane framework
+with separate global, project, and patch kill switches. Every switch starts
+off. Enabling a scope requires a signed one-use confirmation; disabling it is
+immediate. Controls are stored privately in
+`~/.config/patch-watcher/autonomous-lanes.json`, while exact decisions are
+written to the append-only
+`~/.local/state/patch-watcher/autonomous-lanes.jsonl` audit.
+
+The first lane is `deterministic-test-retest` version 1. It wraps the existing
+Maloo retest evaluator and durable outbox rather than adding a second executor.
+An enrolled patch still requires its confirmed automatic/deterministic
+standing policy and the primary global automation gate. The lane permits at
+most one Maloo retest write per exact revision and grants zero Claude runs and
+no Gerrit, Jenkins, Jira, checkout, or LTVM authority. All controls and the
+fixed lane definition are checked again immediately before the remote write.
+Patches not enrolled in a lane retain their existing behavior.
+
+The dashboard explains every admission or rejection, shows budgets and recent
+outcomes, and can replay all historical decisions through the pure evaluator.
+Replay does not create observations, triggers, runs, actions, or remote writes.
+
 ## Design documents
 
 - `DESIGN_ACTION_FLOW.md` defines the product-policy flow for test failures,

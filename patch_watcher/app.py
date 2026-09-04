@@ -136,6 +136,17 @@ from external_action_views import (
     render_review_reply_confirmation,
     render_review_reply_control,
 )
+from autonomous_lane import (
+    DETERMINISTIC_RETEST_LANE,
+    DETERMINISTIC_RETEST_VERSION,
+    AutonomousLaneConflict,
+    AutonomousLaneError,
+    LaneControlStore,
+    LaneDecisionHistory,
+    LaneRef,
+)
+from autonomous_lane_runtime import AutonomousLaneRuntime
+from lane_views import render_autonomous_lane_summary, render_patch_lane_controls
 
 PATCHES = []
 DEFAULT_SEED_FILE = Path.home() / ".config" / "patch-watcher" / "patches.txt"
@@ -157,6 +168,12 @@ DEFAULT_GERRIT_REPLY_DATABASE = (
 DEFAULT_JENKINS_RETRIGGER_DATABASE = (
     Path.home() / ".local" / "state" / "patch-watcher" / "jenkins-retriggers.sqlite3"
 )
+DEFAULT_AUTONOMOUS_LANE_FILE = (
+    Path.home() / ".config" / "patch-watcher" / "autonomous-lanes.json"
+)
+DEFAULT_AUTONOMOUS_LANE_HISTORY = (
+    Path.home() / ".local" / "state" / "patch-watcher" / "autonomous-lanes.jsonl"
+)
 DEFAULT_WORKER_PROFILE_ID = "host-unsandboxed-mac-v1"
 DEFAULT_ENGINEERING_WORKER_PROFILE_ID = "host-unsandboxed-mac-engineering-v1"
 ACTIVE_WATCH_FILE = DEFAULT_SEED_FILE
@@ -174,6 +191,9 @@ GERRIT_UPLOAD_CONTROLLER = None
 STANDING_POLICY_STORE = None
 GERRIT_REPLY_CONTROLLER = None
 JENKINS_RETRIGGER_CONTROLLER = None
+AUTONOMOUS_LANE_STORE = None
+AUTONOMOUS_LANE_HISTORY = None
+AUTONOMOUS_LANE_RUNTIME = None
 JENKINS_SNAPSHOT_CLIENT = JenkinsSnapshotClient()
 AUTOMATION_OBSERVER = None
 PATCHES_LOCK = threading.RLock()
@@ -209,6 +229,27 @@ def initialize_standing_policy_store(path=DEFAULT_STANDING_POLICY_FILE):
     global STANDING_POLICY_STORE
     STANDING_POLICY_STORE = StandingPolicyStore(path)
     return STANDING_POLICY_STORE
+
+
+def initialize_autonomous_lanes(
+    path=DEFAULT_AUTONOMOUS_LANE_FILE,
+    history_path=DEFAULT_AUTONOMOUS_LANE_HISTORY,
+):
+    """Open the disabled-by-default lane controls and append-only audit."""
+
+    global AUTONOMOUS_LANE_STORE, AUTONOMOUS_LANE_HISTORY, AUTONOMOUS_LANE_RUNTIME
+    AUTONOMOUS_LANE_STORE = LaneControlStore(path)
+    AUTONOMOUS_LANE_HISTORY = LaneDecisionHistory(history_path)
+    AUTONOMOUS_LANE_RUNTIME = AutonomousLaneRuntime(
+        AUTONOMOUS_LANE_STORE,
+        AUTONOMOUS_LANE_HISTORY,
+        standing_policy=lambda patch_id: (
+            STANDING_POLICY_STORE.get(patch_id)
+            if STANDING_POLICY_STORE is not None
+            else PatchAutomationPolicy(patch_id)
+        ),
+    )
+    return AUTONOMOUS_LANE_RUNTIME
 
 
 def initialize_gerrit_reply_controller(database=DEFAULT_GERRIT_REPLY_DATABASE):
@@ -389,6 +430,7 @@ def initialize_retest_controller(*, start_observer=True, maloo=None):
         maloo_adapter,
         revalidate=_fresh_patch_revision,
         notify=_send_retest_notification,
+        lane_runtime=AUTONOMOUS_LANE_RUNTIME,
     )
     RETEST_CONTROLLER.reconcile_startup()
     FAILURE_ACTION_CONTROLLER = FailureActionController(
@@ -535,12 +577,26 @@ def _sync_standing_test_policy(patch, policy):
         retest_mode = "automatic" if policy.trigger_mode == "automatic" else "approval"
     if policy.test_failures == "investigate":
         research_mode = "automatic" if policy.trigger_mode == "automatic" else "manual"
+    retest_budget = 4 if retest_mode != "disabled" else 0
+    project = str(patch.get("project") or "")
+    if (
+        AUTONOMOUS_LANE_RUNTIME is not None
+        and AUTONOMOUS_LANE_RUNTIME.is_enrolled(project, patch_id)
+    ):
+        retest_budget = 1
+        if not AUTONOMOUS_LANE_RUNTIME.effective_enabled(project, patch_id):
+            retest_mode = "disabled"
+            retest_budget = 0
     current = AUTOMATION_STORE.get_policy(patch_id)
-    if current.mode != retest_mode:
+    if (
+        current.mode != retest_mode
+        or current.action_budget != retest_budget
+        or current.delivery_budget != retest_budget
+    ):
         AUTOMATION_STORE.set_policy(
             patch_id, mode=retest_mode,
-            action_budget=4 if retest_mode != "disabled" else 0,
-            delivery_budget=4 if retest_mode != "disabled" else 0,
+            action_budget=retest_budget,
+            delivery_budget=retest_budget,
             updated_by="standing-policy-sync",
         )
     research = AUTOMATION_STORE.get_research_policy(patch_id)
@@ -1230,17 +1286,29 @@ def send_status_email(config=None, *, runner=subprocess.run):
 
 def automation_daily_events(limit=25):
     """Project recent deterministic-run events for reports without secrets."""
-    if AUTOMATION_STORE is None:
-        return []
     events = []
-    for run in AUTOMATION_STORE.list_runs():
-        for event in AUTOMATION_STORE.list_timeline(run.run_id):
-            events.append({
-                "created_at": event.created_at.isoformat(),
-                "patch_id": run.patch_id,
-                "event_type": event.event_type,
-                "summary": str(event.payload.get("summary") or "Recorded")[:500],
-            })
+    if AUTOMATION_STORE is not None:
+        for run in AUTOMATION_STORE.list_runs():
+            for event in AUTOMATION_STORE.list_timeline(run.run_id):
+                events.append({
+                    "created_at": event.created_at.isoformat(),
+                    "patch_id": run.patch_id,
+                    "event_type": event.event_type,
+                    "summary": str(event.payload.get("summary") or "Recorded")[:500],
+                })
+    for record in _lane_records():
+        events.append({
+            "created_at": record.recorded_at,
+            "patch_id": record.decision.identity.patch_id,
+            "event_type": "autonomous_lane_" + (
+                "admitted" if record.decision.eligible else "rejected"
+            ),
+            "summary": (
+                f"{record.decision.lane.name if record.decision.lane else 'unavailable'} "
+                f"v{record.decision.lane.version if record.decision.lane else '—'}: "
+                f"{record.decision.code} — {record.decision.explanation}"
+            )[:500],
+        })
     return sorted(events, key=lambda item: item["created_at"])[-limit:]
 
 
@@ -2383,6 +2451,127 @@ def _standing_policy_html(patch):
     )
 
 
+def _lane_records():
+    if AUTONOMOUS_LANE_HISTORY is None:
+        return ()
+    try:
+        return AUTONOMOUS_LANE_HISTORY.list()
+    except AutonomousLaneError as exc:
+        log_structured_error("autonomous_lane_history", str(exc), "")
+        return ()
+
+
+def _lane_decision_projection(record):
+    decision = record.decision
+    identity = decision.identity
+    return {
+        **decision.to_dict(),
+        "lane_name": decision.lane.name if decision.lane else "unavailable",
+        "lane_version": decision.lane.version if decision.lane else "—",
+        "change_number": identity.change_number,
+        "patchset": identity.patchset,
+        "revision_sha": identity.revision,
+        "occurred_at": record.recorded_at,
+        "state": "admitted" if decision.eligible else "rejected",
+        "summary": decision.explanation,
+    }
+
+
+def autonomous_lane_summary_html():
+    if AUTONOMOUS_LANE_STORE is None:
+        return render_autonomous_lane_summary(None, csrf_token=CSRF_TOKEN)
+    try:
+        controls = AUTONOMOUS_LANE_STORE.load()
+        recent = [_lane_decision_projection(item) for item in _lane_records()[-8:]]
+        replay = AUTONOMOUS_LANE_HISTORY.replay() if AUTONOMOUS_LANE_HISTORY else ()
+        with PATCHES_LOCK:
+            watched_projects = {
+                str(item.get("project") or "") for item in PATCHES
+                if item.get("project")
+            }
+        project_controls = {item.project: item for item in controls.projects}
+        status = {
+            "global_enabled": controls.global_enabled,
+            "lane_name": DETERMINISTIC_RETEST_LANE,
+            "lane_version": DETERMINISTIC_RETEST_VERSION,
+            "expected_generation": controls.generation,
+            "projects": [
+                {
+                    "project": project,
+                    "mode": (
+                        "inherit" if project not in project_controls
+                        else "enabled" if project_controls[project].enabled else "disabled"
+                    ),
+                    "effective_enabled": bool(
+                        controls.global_enabled
+                        and project in project_controls
+                        and project_controls[project].enabled
+                    ),
+                    "expected_generation": controls.generation,
+                }
+                for project in sorted(watched_projects | set(project_controls))
+            ],
+            "budgets": {
+                "actions per exact revision": 1,
+                "remote writes per exact revision": 1,
+                "agent runs": 0,
+            },
+            "outcomes": recent,
+            "replay": {
+                "state": "complete" if replay else "not_run",
+                "summary": (
+                    f"{sum(item.matched for item in replay)}/{len(replay)} decisions match"
+                    if replay else "No decisions recorded yet."
+                ),
+            },
+        }
+        return render_autonomous_lane_summary(status, csrf_token=CSRF_TOKEN)
+    except AutonomousLaneError as exc:
+        return "<section class='card'><h2>Autonomous lanes</h2><p class='error'>" + escape(str(exc)) + "</p></section>"
+
+
+def _patch_lane_html(patch):
+    if AUTONOMOUS_LANE_STORE is None:
+        return ""
+    project = str(patch.get("project") or "")
+    patch_id = str(patch.get("change_number") or "")
+    if not project or not patch_id:
+        return "<p class='detail'>Autonomous lane controls appear after an exact Gerrit refresh.</p>"
+    try:
+        controls = AUTONOMOUS_LANE_STORE.load()
+        control = controls.patch_control(project, patch_id)
+        project_control = controls.project_control(project)
+        records = [
+            item for item in _lane_records()
+            if item.decision.identity.project == project
+            and item.decision.identity.patch_id == patch_id
+        ]
+        latest = records[-1] if records else None
+        policy = {
+            "lane_name": DETERMINISTIC_RETEST_LANE,
+            "lane_version": DETERMINISTIC_RETEST_VERSION,
+            "mode": (
+                "inherit" if control is None
+                else "enabled" if control.enabled else "disabled"
+            ),
+            "effective_enabled": bool(
+                control is not None and control.enabled and controls.global_enabled
+                and project_control is not None and project_control.enabled
+            ),
+            "expected_generation": controls.generation,
+            "project": project,
+        }
+        return render_patch_lane_controls(
+            patch,
+            policy=policy,
+            evaluation=(None if latest is None else _lane_decision_projection(latest)),
+            outcome=(None if latest is None else _lane_decision_projection(latest)),
+            csrf_token=CSRF_TOKEN,
+        )
+    except AutonomousLaneError as exc:
+        return "<p class='error'>Autonomous lane unavailable: " + escape(str(exc)) + "</p>"
+
+
 def _patch_row(patch, jira_base=JIRA_BASE_URL):
     title = patch.get("title", "")
     ticket = ticket_from_title(title)
@@ -2506,6 +2695,7 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
     )
     research_html = _research_and_failure_html(patch, show_policy_form=False)
     standing_policy_html = _standing_policy_html(patch)
+    autonomous_lane_html = _patch_lane_html(patch)
     identity = "patch-actions-" + escape(
         f"{patch.get('change_number', 'unknown')}-{patch.get('patchset', 'unknown')}",
         quote=True,
@@ -2519,6 +2709,7 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         f"<input type='hidden' name='url' value='{escape(patch['url'], quote=True)}'>"
         "<button class='danger' type='submit'>Remove</button></form></div>"
         f"{standing_policy_html}"
+        f"{autonomous_lane_html}"
         "<div class='action-policy-grid'>"
         "<section class='action-policy-item available' aria-label='Build failure handling'>"
         "<div class='policy-heading'><strong>Build failures</strong>"
@@ -2569,6 +2760,7 @@ body{{margin:0;background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}
 <body><style>.research-controls{{width:min(430px,88vw);border:1px solid #d0d5dd;border-radius:8px;padding:8px}}.research-controls>summary{{cursor:pointer;font-weight:700}}.research-controls section{{border-top:1px solid #eaecf0;margin-top:10px;padding-top:10px}}.research-controls form{{display:grid;gap:7px;margin-top:8px}}.research-controls input,.research-controls select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.research-controls dl{{display:grid;gap:6px}}.research-controls dd{{margin:2px 0 6px;word-break:break-word}}.action-approval-card{{background:#fffaeb;border:1px solid #fedf89;border-radius:8px;padding:10px}}</style><main><h1>Patch Watcher</h1><p class='sub'>Track Gerrit patches, managed sessions, and worker resources.</p>
 <div class='resource-toolbar'><form method='post' action='/resources/refresh'><button class='secondary'>Refresh resource status</button></form></div>{resources}{worker_admission}{global_retest_html()}
 {active_runs_html()}{engineering_runs_html()}<section class='card'><h2>Add a patch</h2><form class='add' method='post' action='/add'><input name='url' required placeholder='https://review.whamcloud.com/c/...'><button>Add patch</button></form>{f"<div class='notice'>{escape(message)}</div>" if message else ''}</section>
+{autonomous_lane_summary_html()}
 <section class='card'><div class='section-title'><div><h2>Watched patches <small>({len(patches)} · checks every {refresh_interval}s)</small></h2><div class='detail'>Overall last checked: {escape(overall_last_checked())}</div></div><div class='actions'><form method='post' action='/refresh-all'><button class='secondary'>Refresh all</button></form><form method='post' action='/email'><button class='secondary'>Send status email</button></form></div></div><table><thead><tr><th>Patch</th><th>Watch state / CI</th><th>Review</th><th>Latest change</th><th></th></tr></thead><tbody>{rows}</tbody></table></section>
 </main></body></html>"""
 
@@ -3080,6 +3272,142 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         parts = [item for item in path.split("/") if item]
+        if parts and parts[0] == "autonomous-lanes":
+            token = data.get("csrf_token", [""])[0]
+            if not hmac.compare_digest(token, CSRF_TOKEN):
+                self.send_error(403, "Invalid request token")
+                return
+            if AUTONOMOUS_LANE_STORE is None:
+                self.send_error(503, "Autonomous lane controls are unavailable")
+                return
+            if path == "/autonomous-lanes/replay":
+                try:
+                    results = AUTONOMOUS_LANE_HISTORY.replay()
+                except AutonomousLaneError as exc:
+                    self.send_error(409, str(exc))
+                    return
+                matched = sum(item.matched for item in results)
+                self.respond(page(f"Replay complete: {matched}/{len(results)} decisions match."))
+                return
+            if len(parts) not in {2, 3} or parts[1] not in {"global", "project", "patch"}:
+                self.send_error(404)
+                return
+            if len(parts) == 3 and parts[2] != "confirm":
+                self.send_error(404)
+                return
+            scope = parts[1]
+            confirming = len(parts) == 3 and parts[2] == "confirm"
+            mode = data.get("mode", ["inherit"])[0]
+            if mode not in {"inherit", "enabled", "disabled"}:
+                self.send_error(400, "Invalid autonomous lane mode")
+                return
+            try:
+                expected_generation = int(data.get("expected_generation", ["-1"])[0])
+            except ValueError:
+                self.send_error(400, "Invalid autonomous lane generation")
+                return
+            project = data.get("project", [""])[0]
+            patch_id = data.get("patch_id", [""])[0]
+            if scope == "project":
+                project = data.get("project_id", [project])[0]
+            patch = None
+            if scope == "patch":
+                with PATCHES_LOCK:
+                    patch = next((
+                        item for item in PATCHES
+                        if str(item.get("change_number") or "") == patch_id
+                    ), None)
+                if patch is None or not patch.get("project"):
+                    self.send_error(409, "Refresh the exact Gerrit patch before changing its lane")
+                    return
+                project = str(patch["project"])
+            target = "global" if scope == "global" else project
+            if scope == "patch":
+                target = project + ":" + patch_id
+            if mode == "enabled" and not confirming:
+                expires_at = str(int(time.time()) + ENGINEERING_CONFIRMATION_TTL_SECONDS)
+                confirmation = _signed_confirmation(
+                    "autonomous-lane", scope, target, mode,
+                    expected_generation, expires_at,
+                )
+                hidden = "".join(
+                    f"<input type='hidden' name='{escape(name, quote=True)}' value='{escape(str(value), quote=True)}'>"
+                    for name, value in {
+                        "csrf_token": CSRF_TOKEN,
+                        "mode": mode,
+                        "expected_generation": expected_generation,
+                        "project": project,
+                        "patch_id": patch_id,
+                        "confirmation_expires_at": expires_at,
+                        "confirmation_token": confirmation,
+                    }.items()
+                )
+                self.respond(_standalone_document(
+                    "Confirm autonomous lane",
+                    "<main><p><a href='/'>← Cancel</a></p>"
+                    "<h1>Confirm autonomous lane authority</h1>"
+                    "<p>This enables the narrow deterministic Maloo-retest lane at "
+                    + escape(scope) + " scope for <code>" + escape(target) + "</code>. "
+                    "It still requires the existing automatic deterministic standing policy "
+                    "and primary global automation gate. Its budget is one remote write per "
+                    "exact revision; it grants no Claude, Gerrit, Jenkins, or LTVM capability.</p>"
+                    f"<form method='post' action='/autonomous-lanes/{scope}/confirm'>"
+                    + hidden + "<button type='submit'>Enable this lane scope</button></form></main>",
+                ))
+                return
+            if mode == "enabled":
+                expires_at = data.get("confirmation_expires_at", [""])[0]
+                confirmation = data.get("confirmation_token", [""])[0]
+                if (
+                    not _engineering_confirmation_unexpired(expires_at)
+                    or not _verify_confirmation(
+                        confirmation, "autonomous-lane", scope, target, mode,
+                        expected_generation, expires_at,
+                    )
+                    or not _claim_engineering_confirmation(
+                        confirmation, f"autonomous-lane:{scope}:{target}:{expected_generation}",
+                    )
+                ):
+                    self.send_error(403, "Invalid, expired, or used lane confirmation")
+                    return
+            try:
+                if scope == "global":
+                    saved = AUTONOMOUS_LANE_STORE.set_global_enabled(
+                        mode == "enabled", expected_generation=expected_generation,
+                    )
+                elif scope == "project":
+                    if mode == "inherit":
+                        saved = AUTONOMOUS_LANE_STORE.clear_project(
+                            project, expected_generation=expected_generation,
+                        )
+                    else:
+                        saved = AUTONOMOUS_LANE_STORE.set_project_enabled(
+                            project, mode == "enabled",
+                            expected_generation=expected_generation,
+                        )
+                elif mode == "inherit":
+                    saved = AUTONOMOUS_LANE_STORE.clear_patch_lane(
+                        project, patch_id, expected_generation=expected_generation,
+                    )
+                else:
+                    saved = AUTONOMOUS_LANE_STORE.set_patch_lane(
+                        project, patch_id,
+                        LaneRef(DETERMINISTIC_RETEST_LANE, DETERMINISTIC_RETEST_VERSION),
+                        mode == "enabled", expected_generation=expected_generation,
+                    )
+                del saved
+                with PATCHES_LOCK:
+                    candidates = [dict(item) for item in PATCHES]
+                for candidate in candidates:
+                    if _has_explicit_standing_policy(candidate):
+                        _sync_standing_test_policy(candidate, _standing_policy(candidate))
+            except (AutonomousLaneConflict, AutonomousLaneError, ValueError) as exc:
+                self.send_error(409, str(exc))
+                return
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.end_headers()
+            return
         if parts and parts[0] == "review-replies":
             token = data.get("csrf_token", [""])[0]
             if not hmac.compare_digest(token, CSRF_TOKEN):
@@ -4411,6 +4739,16 @@ if __name__ == "__main__":
         help="private JSON file for per-patch standing automation policies",
     )
     parser.add_argument(
+        "--autonomous-lane-file", type=Path,
+        default=DEFAULT_AUTONOMOUS_LANE_FILE,
+        help="private JSON file for autonomous-lane kill switches",
+    )
+    parser.add_argument(
+        "--autonomous-lane-history", type=Path,
+        default=DEFAULT_AUTONOMOUS_LANE_HISTORY,
+        help="append-only autonomous-lane decision audit",
+    )
+    parser.add_argument(
         "--gerrit-reply-database", type=Path,
         default=DEFAULT_GERRIT_REPLY_DATABASE,
         help="private SQLite ledger for exact Gerrit reply writes",
@@ -4435,6 +4773,9 @@ if __name__ == "__main__":
     initialize_session_store(args.session_database)
     initialize_automation_store(args.automation_database)
     initialize_standing_policy_store(args.standing_policy_file)
+    initialize_autonomous_lanes(
+        args.autonomous_lane_file, args.autonomous_lane_history,
+    )
     initialize_worker_profile(args.worker_profile)
     RESOURCE_COLLECTION_ENABLED = True
     refresh_resource_status(force=True)

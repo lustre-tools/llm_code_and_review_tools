@@ -260,12 +260,29 @@ build, run prescribed tests, and prepare a proposed patch revision. Any
 change remains an artifact for review; uploading a Gerrit patchset requires a
 separate, explicit capability and policy.
 
-### Phase 4: autonomous lanes
+### Phase 6: autonomous lanes
 
-Only well-understood, narrow patch classes can progress without a human at
-every step. Those lanes must have named eligibility rules, strict budgets,
-reversible outcomes where possible, monitoring, and a clear escalation path.
-The default for all other patches remains human approval.
+**Phase 6A and the first Phase 6B lane are implemented.** Lane definitions are
+code-owned, named, and versioned; saved state can select a definition but
+cannot change its predicates or capabilities. Global, project, and patch kill
+switches default off, use optimistic concurrency, and require a signed one-use
+confirmation when authority is widened. Disabling is immediate.
+
+The first lane, `deterministic-test-retest` version 1, wraps the existing
+crash-safe Maloo retest path. It does not introduce a second writer. An
+enrolled patch still needs the existing automatic/deterministic standing
+policy and primary global gate. It admits only one already-safe retest action
+per exact revision, grants no agent run, Gerrit, Jenkins, Jira, or LTVM
+capability, and rechecks every switch immediately before the Maloo write.
+Unknown evidence, incomplete Jira association, a non-Maloo -1, patchset drift,
+budget exhaustion, and external ambiguity all stop rather than widen scope.
+
+Every exact decision stores normalized evidence, the control generation,
+reason, capability, and budget in an append-only private audit. Replay invokes
+only the pure evaluator and creates no triggers, runs, actions, or remote
+writes. The dashboard displays the definition, switches, decision reasons,
+outcomes, budget, and replay result. Patches not enrolled in a lane retain the
+pre-existing approval/standing-policy behavior.
 
 The detailed plan deliberately adds durable-observer and manual read-only-agent
 foundation phases before automatic actions. It also records a later
