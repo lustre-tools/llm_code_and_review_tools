@@ -313,6 +313,26 @@ class ClaudeRunnerTests(unittest.TestCase):
                 **report, "review_snapshot_sha256": "bad",
             })
 
+    def test_build_engineering_report_binds_failure_resolution(self):
+        report = validate_engineering_report({
+            "schema": "patch-watcher-engineering-report/v1",
+            "state": "complete", "summary": "Fixed the compile failure",
+            "changed_files": ["src/file.c"], "validation_requests": [],
+            "jenkins_snapshot_sha256": "b" * 64,
+            "jenkins_resolution": {
+                "build_id": "lustre-reviews/123",
+                "classification": "patch_caused_fixed",
+                "diagnosis": "A missing declaration caused the failed build.",
+            },
+        })
+        self.assertEqual(
+            report["jenkins_resolution"]["classification"], "patch_caused_fixed"
+        )
+        with self.assertRaisesRegex(RunnerProtocolError, "Jenkins snapshot"):
+            validate_engineering_report({
+                **report, "jenkins_snapshot_sha256": "bad",
+            })
+
     def test_source_edit_and_report_kind_must_match(self):
         with self.assertRaisesRegex(ValueError, "source_edit"):
             self.spec(capability_profile="source_edit").validate()

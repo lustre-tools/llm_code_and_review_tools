@@ -102,6 +102,12 @@ from review_views import (
     render_review_start_confirmation,
     render_review_start_control,
 )
+from build_views import (
+    render_build_result,
+    render_build_start_confirmation,
+    render_build_start_control,
+)
+from jenkins_adapter import JenkinsSnapshotClient, JenkinsSnapshotError
 
 PATCHES = []
 DEFAULT_SEED_FILE = Path.home() / ".config" / "patch-watcher" / "patches.txt"
@@ -128,6 +134,7 @@ AUTOMATION_STORE = None
 RETEST_CONTROLLER = None
 FAILURE_ACTION_CONTROLLER = None
 GERRIT_UPLOAD_CONTROLLER = None
+JENKINS_SNAPSHOT_CLIENT = JenkinsSnapshotClient()
 AUTOMATION_OBSERVER = None
 PATCHES_LOCK = threading.RLock()
 CSRF_TOKEN = secrets.token_urlsafe(32)
@@ -142,6 +149,7 @@ ENGINEERING_CONFIRMATION_TTL_SECONDS = 60 * 60
 ENGINEERING_CONFIRMATION_MAX_ENTRIES = 4096
 _ENGINEERING_CONFIRMATION_LOCK = threading.Lock()
 _ENGINEERING_USED_CONFIRMATIONS = {}
+_AUTO_UPLOAD_LOCK = threading.Lock()
 ENGINEERING_RETRYABLE_STATES = {
     "succeeded", "failed", "cancelled", "stale", "resource_exhausted",
 }
@@ -351,6 +359,10 @@ def _observe_patch_automation(patch):
         collect_research_evidence=research_mode != "disabled",
     )
     _advance_failure_action_runs(result.patch_id)
+    if SESSION_STORE is not None:
+        for session in SESSION_STORE.list_sessions(include_terminal=True):
+            if session.state == "succeeded" and session.patch_id == str(result.patch_id):
+                _process_automatic_completion(session)
     if (
         research_mode == "automatic"
         and AUTOMATION_STORE.get_global_automation().enabled
@@ -390,6 +402,43 @@ def _find_exact_patch(change_number, patchset, revision):
             and str(item.get("revision_sha") or "").lower()
             == str(revision or "").lower()
         ), None)
+
+
+def _capture_build_failure_snapshot(patch):
+    """Bracket one exact Jenkins failure with current Gerrit observations."""
+
+    client = GerritStatusClient.configured()
+    before = client.fetch(patch["url"])
+
+    def identity(value):
+        return (
+            int(value.get("change_number") or 0),
+            int(value.get("patchset") or 0),
+            str(value.get("revision_sha") or "").lower(),
+            str(value.get("revision_ref") or ""),
+            str(value.get("project") or ""),
+            str(value.get("branch") or ""),
+            str(value.get("jenkins") or "").upper(),
+            str(value.get("jenkins_url") or ""),
+        )
+
+    expected = identity(patch)
+    if identity(before) != expected or expected[6] != "FAIL" or not expected[7]:
+        raise JenkinsSnapshotError(
+            "The watched patch no longer identifies this exact Jenkins failure"
+        )
+    snapshot = JENKINS_SNAPSHOT_CLIENT.fetch_failure_snapshot(
+        before["jenkins_url"],
+        change_number=before["change_number"], patchset=before["patchset"],
+        revision_sha=before["revision_sha"], revision_ref=before["revision_ref"],
+        project=before["project"], branch=before.get("branch", ""),
+    )
+    after = client.fetch(patch["url"])
+    if identity(after) != expected:
+        raise JenkinsSnapshotError(
+            "Gerrit or its current Jenkins build changed while capturing evidence"
+        )
+    return snapshot
 
 
 def sync_automation_patch(patch):
@@ -489,14 +538,53 @@ def initialize_gerrit_upload_controller(database=DEFAULT_GERRIT_UPLOAD_DATABASE)
         raise RuntimeError("initialize the run controller before Gerrit upload")
     root = RUN_CONTROLLER.runs_directory / "gerrit-upload-workspaces"
     GERRIT_UPLOAD_CONTROLLER = configured_upload_controller(database, root)
-    RUN_CONTROLLER.completion_callback = _process_review_completion
+    RUN_CONTROLLER.completion_callback = _process_automatic_completion
     # A host failure can occur after the immutable worker result is committed
-    # but before publication dispatch. Reconcile every successful review run;
+    # but before publication dispatch. Reconcile every successful preauthorized run;
     # the upload ledger and result events make this idempotent.
     for session in SESSION_STORE.list_sessions(include_terminal=True):
-        if session.state == "succeeded" and session.run_id.startswith("pw-review-"):
-            _process_review_completion(session)
+        if session.state == "succeeded" and session.run_id.startswith(
+            ("pw-review-", "pw-build-")
+        ):
+            _process_automatic_completion(session)
     return GERRIT_UPLOAD_CONTROLLER
+
+
+def _process_automatic_completion(session):
+    """Dispatch controller-owned publication for one qualifying workflow."""
+
+    if not _AUTO_UPLOAD_LOCK.acquire(blocking=False):
+        return
+    try:
+        _process_automatic_completion_locked(session)
+    finally:
+        _AUTO_UPLOAD_LOCK.release()
+
+
+def _process_automatic_completion_locked(session):
+    """Single-dispatch implementation; caller owns the publication lock."""
+
+    if RUN_CONTROLLER is None:
+        return
+    if SESSION_STORE is not None and any(
+        event.event_type.endswith(("_blocked", "_not_needed"))
+        for event in SESSION_STORE.list_events(session.session_id)
+        if event.event_type.startswith(("review_auto_upload_", "build_auto_upload_"))
+    ):
+        return
+    upload_store = getattr(GERRIT_UPLOAD_CONTROLLER, "store", None)
+    if upload_store is not None:
+        existing = upload_store.get_by_run(session.run_id)
+        if existing is not None and existing.state in {"succeeded", "failed", "stale"}:
+            return
+    try:
+        request = RUN_CONTROLLER._request_payload(session)
+    except RunControllerError:
+        return
+    if request.get("request_kind") == "review_comments":
+        _process_review_completion(session)
+    elif request.get("request_kind") == "build_failure":
+        _process_build_failure_completion(session)
 
 
 def _process_review_completion(session):
@@ -595,6 +683,104 @@ def _process_review_completion(session):
             refresh_watched_patch(watched)
     elif upload.state in {"ambiguous", "failed", "stale"}:
         alert_human("review_auto_upload_" + upload.state)
+
+
+def _process_build_failure_completion(session):
+    """Publish one exact, repaired, validated Jenkins failure idempotently."""
+
+    if RUN_CONTROLLER is None or GERRIT_UPLOAD_CONTROLLER is None:
+        return
+    try:
+        request = RUN_CONTROLLER._request_payload(session)
+    except RunControllerError:
+        return
+    if request.get("request_kind") != "build_failure":
+        return
+
+    def alert_human(reason):
+        sender = getattr(RUN_CONTROLLER, "_send_alert_once", None)
+        if sender is not None:
+            sender(
+                session, reason,
+                key="build-auto-upload-alert:" + session.run_id + ":" + reason,
+            )
+
+    upload_store = getattr(GERRIT_UPLOAD_CONTROLLER, "store", None)
+    existing_upload = (
+        upload_store.get_by_run(session.run_id) if upload_store is not None else None
+    )
+    if existing_upload is not None and existing_upload.state == "succeeded":
+        return
+    with PATCHES_LOCK:
+        patch = next((
+            dict(item) for item in PATCHES
+            if int(item.get("change_number") or 0) == int(session.patch_id)
+            and int(item.get("patchset") or 0) == int(session.patchset or 0)
+            and str(item.get("revision_sha") or "").lower()
+                == str(session.revision or "").lower()
+        ), None)
+    if patch is None:
+        SESSION_STORE.append_event(
+            session.session_id, "build_auto_upload_blocked",
+            {"reason": "watched patch is no longer the exact run revision"},
+            idempotency_key="build-auto-upload-blocked:" + session.run_id,
+        )
+        alert_human("build_auto_upload_stale_revision")
+        return
+    diffs = [
+        item for item in RUN_CONTROLLER.engineering_store.list_artifacts(session.run_id)
+        if item.kind == "diff"
+    ]
+    if len(diffs) == 1 and diffs[0].size_bytes == 0:
+        SESSION_STORE.append_event(
+            session.session_id, "build_auto_upload_not_needed",
+            {"reason": "build handling produced no source diff"},
+            idempotency_key="build-auto-upload-not-needed:" + session.run_id,
+        )
+        alert_human("build_auto_upload_no_diff")
+        return
+    try:
+        snapshot = _capture_build_failure_snapshot(patch)
+        values = RUN_CONTROLLER.build_failure_upload_inputs(
+            session.run_id, patch, snapshot
+        )
+        upload = GERRIT_UPLOAD_CONTROLLER.prepare(**values)
+        if upload.state == "commit_ready":
+            upload = GERRIT_UPLOAD_CONTROLLER.execute(
+                upload.upload_id, expected_binding_digest=upload.binding_digest
+            )
+        elif upload.state in {"push_claimed", "ambiguous"}:
+            upload = GERRIT_UPLOAD_CONTROLLER.reconcile(upload.upload_id)
+    except (
+        GerritConfigError, GerritRequestError, GerritUploadError,
+        JenkinsSnapshotError, RunControllerError, OSError,
+    ) as exc:
+        SESSION_STORE.append_event(
+            session.session_id, "build_auto_upload_blocked",
+            {"reason": str(exc)[:500]},
+            idempotency_key="build-auto-upload-blocked:" + session.run_id,
+        )
+        alert_human("build_auto_upload_blocked")
+        return
+    SESSION_STORE.append_event(
+        session.session_id, "build_auto_upload_" + upload.state,
+        {
+            "upload_id": upload.upload_id, "state": upload.state,
+            "new_patchset": upload.new_patchset,
+            "new_revision_sha": upload.new_revision_sha,
+        },
+        idempotency_key="build-auto-upload-result:" + upload.upload_id + ":" + upload.state,
+    )
+    if upload.state == "succeeded":
+        with PATCHES_LOCK:
+            watched = next((
+                item for item in PATCHES
+                if int(item.get("change_number") or 0) == upload.change_number
+            ), None)
+        if watched is not None:
+            refresh_watched_patch(watched)
+    elif upload.state in {"ambiguous", "failed", "stale"}:
+        alert_human("build_auto_upload_" + upload.state)
 
 
 def worker_admission_html():
@@ -918,6 +1104,53 @@ def _active_session_for_patch(change_number):
         return None
     for session in SESSION_STORE.list_sessions(include_terminal=False):
         if session.patch_id == str(change_number):
+            return session
+    # A completed worker whose preauthorized publication is still unresolved
+    # continues to own the patch.  This closes the otherwise dangerous window
+    # where a second writable run could begin after Claude exits but before an
+    # ambiguous Gerrit push has been reconciled.
+    upload_store = getattr(GERRIT_UPLOAD_CONTROLLER, "store", None)
+    if upload_store is None:
+        return None
+    for session in SESSION_STORE.list_sessions(include_terminal=True):
+        if session.patch_id != str(change_number) or session.state != "succeeded":
+            continue
+        try:
+            request = RUN_CONTROLLER._request_payload(session) if RUN_CONTROLLER else {}
+        except RunControllerError:
+            continue
+        if (
+            request.get("request_kind") not in {"review_comments", "build_failure"}
+            or request.get("auto_upload_patchset") is not True
+        ):
+            continue
+        upload = upload_store.get_by_run(session.run_id)
+        if upload is not None and upload.state in {
+            "prepared", "commit_ready", "push_claimed", "ambiguous",
+        }:
+            return session
+        if upload is None:
+            settled = any(
+                event.event_type.endswith(("_blocked", "_not_needed"))
+                for event in SESSION_STORE.list_events(session.session_id)
+                if event.event_type.startswith(("review_auto_upload_", "build_auto_upload_"))
+            )
+            if not settled:
+                return session
+    return None
+
+
+def _latest_session_for_patch_kind(change_number, request_kind):
+    if SESSION_STORE is None or RUN_CONTROLLER is None:
+        return None
+    for session in SESSION_STORE.list_sessions(include_terminal=True):
+        if session.patch_id != str(change_number):
+            continue
+        try:
+            request = RUN_CONTROLLER._request_payload(session)
+        except RunControllerError:
+            continue
+        if request.get("request_kind") == request_kind:
             return session
     return None
 
@@ -1728,6 +1961,7 @@ def run_detail_html(session):
     question = next((item for item in reversed(questions) if item.status == "open"), None)
     admission = SESSION_STORE.get_worker_admission(session.session_id)
     review_html = ""
+    build_html = ""
     if RUN_CONTROLLER is not None:
         try:
             request = RUN_CONTROLLER._request_payload(session)
@@ -1741,6 +1975,14 @@ def run_detail_html(session):
                 if GERRIT_UPLOAD_CONTROLLER is not None else None
             )
             review_html = render_review_result(request, report, upload)
+        elif request.get("request_kind") == "build_failure":
+            terminal = SESSION_STORE.get_terminal_result(session.session_id)
+            report = terminal.result if terminal is not None else {}
+            upload = (
+                GERRIT_UPLOAD_CONTROLLER.store.get_by_run(session.run_id)
+                if GERRIT_UPLOAD_CONTROLLER is not None else None
+            )
+            build_html = render_build_result(request, report, upload)
     return render_run_detail(
         _run_projection(session),
         messages=_run_messages(session),
@@ -1749,7 +1991,7 @@ def run_detail_html(session):
         question=question,
         csrf_token=CSRF_TOKEN,
         idempotency_token=secrets.token_urlsafe(18),
-    ) + review_html
+    ) + review_html + build_html
 
 
 def _standalone_document(title, body):
@@ -1817,6 +2059,32 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
             and GERRIT_UPLOAD_CONTROLLER.enabled
         ),
     )
+    build_html = render_build_start_control(
+        investigation_patch,
+        None,
+        csrf_token=CSRF_TOKEN,
+        idempotency_token=secrets.token_urlsafe(18),
+        build_eligible=bool(
+            active is None
+            and str(patch.get("jenkins") or "").upper() == "FAIL"
+            and patch.get("jenkins_url")
+            and investigation_patch["investigation_eligible"]
+        ),
+        upload_enabled=bool(
+            GERRIT_UPLOAD_CONTROLLER is not None
+            and GERRIT_UPLOAD_CONTROLLER.enabled
+        ),
+    )
+    latest_build_run = _latest_session_for_patch_kind(
+        patch.get("change_number"), "build_failure"
+    )
+    if latest_build_run is not None:
+        build_html += (
+            "<p class='detail'>Latest build run: <a href='/runs/"
+            + escape(latest_build_run.run_id, quote=True) + "'>"
+            + escape(latest_build_run.state.replace("_", " "))
+            + "</a> · <code>" + escape(latest_build_run.run_id) + "</code></p>"
+        )
     (
         retest_policy,
         retest_evaluation,
@@ -1845,13 +2113,10 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         f"<input type='hidden' name='url' value='{escape(patch['url'], quote=True)}'>"
         "<button class='danger' type='submit'>Remove</button></form></div>"
         "<div class='action-policy-grid'>"
-        "<section class='action-policy-item unavailable' aria-label='Build failure handling'>"
+        "<section class='action-policy-item available' aria-label='Build failure handling'>"
         "<div class='policy-heading'><strong>Build failures</strong>"
-        "<span class='availability'>Planned</span></div>"
-        "<ul class='future-options'><li>Notify human</li>"
-        "<li>Diagnose and prepare a fix</li>"
-        "<li>Create a new patchset</li></ul>"
-        "<p class='detail'>Jenkins failures are currently observed only.</p></section>"
+        "<span class='availability'>Available</span></div>"
+        f"{build_html}</section>"
         "<section class='action-policy-item available' aria-label='Test failure handling'>"
         "<div class='policy-heading'><strong>Test failures</strong>"
         "<span class='availability'>Available</span></div>"
@@ -1938,6 +2203,52 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         parts = [item for item in path.split("/") if item]
+        if path == "/build-runs/confirm-start":
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            try:
+                change = int(query.get("change_number", ["0"])[0])
+                patchset = int(query.get("patchset", ["0"])[0])
+                build_number = int(query.get("build_number", ["0"])[0])
+            except ValueError:
+                self.send_error(400, "Invalid build-failure identity")
+                return
+            revision = query.get("revision_sha", [""])[0].lower()
+            build_job = query.get("build_job", [""])[0]
+            digest = query.get("snapshot_sha256", [""])[0]
+            confirmation = query.get("confirmation_token", [""])[0]
+            request_id = query.get("idempotency_token", [""])[0]
+            expires_at = query.get("confirmation_expires_at", [""])[0]
+            patch = _find_exact_patch(change, patchset, revision)
+            if patch is None:
+                self.send_error(409, "The patch changed; prepare build handling again")
+                return
+            try:
+                snapshot = _capture_build_failure_snapshot(patch)
+            except (
+                GerritConfigError, GerritRequestError, JenkinsSnapshotError, ValueError,
+            ) as exc:
+                self.respond(page("Could not capture the exact Jenkins failure: " + str(exc)))
+                return
+            build = snapshot["build"]
+            if (
+                snapshot.get("snapshot_sha256") != digest
+                or build.get("job_name") != build_job
+                or int(build.get("build_number") or 0) != build_number
+                or not _engineering_confirmation_unexpired(expires_at)
+                or not _verify_confirmation(
+                    confirmation, "build-start", change, patchset, revision,
+                    build_job, build_number, digest, True, request_id, expires_at,
+                )
+            ):
+                self.send_error(403, "Invalid or stale build-failure confirmation")
+                return
+            body = render_build_start_confirmation(
+                patch, snapshot, confirmation_token=confirmation,
+                idempotency_token=request_id,
+                confirmation_expires_at=expires_at, csrf_token=CSRF_TOKEN,
+            )
+            self.respond(_standalone_document("Confirm build-failure handling", body))
+            return
         if path == "/review-runs/confirm-start":
             query = parse_qs(parsed.query, keep_blank_values=True)
             try:
@@ -2212,7 +2523,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if len(parts) == 4 and parts[2] == "artifacts":
                 if RUN_CONTROLLER is None or not session.run_id.startswith(
-                    ("pw-engineer-", "pw-review-")
+                    ("pw-engineer-", "pw-review-", "pw-build-")
                 ):
                     self.send_error(404)
                     return
@@ -2311,6 +2622,99 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         parts = [item for item in path.split("/") if item]
+        if parts and parts[0] == "build-runs":
+            token = data.get("csrf_token", [""])[0]
+            if not hmac.compare_digest(token, CSRF_TOKEN):
+                self.send_error(403, "Invalid request token")
+                return
+            if path not in {"/build-runs/prepare", "/build-runs/start"}:
+                self.send_error(404)
+                return
+            if (
+                RUN_CONTROLLER is None or GERRIT_UPLOAD_CONTROLLER is None
+                or not GERRIT_UPLOAD_CONTROLLER.enabled
+            ):
+                self.send_error(503, "Build handling or automatic patchset upload is disabled")
+                return
+            try:
+                change = int(data.get("change_number", ["0"])[0])
+                patchset = int(data.get("patchset", ["0"])[0])
+            except ValueError:
+                self.send_error(400, "Invalid build-failure revision identity")
+                return
+            revision = data.get("revision_sha", [""])[0].lower()
+            patch = _find_exact_patch(change, patchset, revision)
+            if patch is None or _active_session_for_patch(change) is not None:
+                self.send_error(409, "The patch changed or already has an active run")
+                return
+            try:
+                snapshot = _capture_build_failure_snapshot(patch)
+            except (
+                GerritConfigError, GerritRequestError, JenkinsSnapshotError, ValueError,
+            ) as exc:
+                self.respond(page("Could not capture the exact Jenkins failure: " + str(exc)))
+                return
+            build = snapshot["build"]
+            digest = str(snapshot["snapshot_sha256"])
+            build_job = str(build["job_name"])
+            build_number = int(build["build_number"])
+            request_id = data.get("idempotency_token", [""])[0].strip()
+            if not request_id:
+                request_id = secrets.token_urlsafe(18)
+            if path == "/build-runs/prepare":
+                expires_at = str(int(time.time()) + ENGINEERING_CONFIRMATION_TTL_SECONDS)
+                confirmation = _signed_confirmation(
+                    "build-start", change, patchset, revision, build_job,
+                    build_number, digest, True, request_id, expires_at,
+                )
+                query = urlencode({
+                    "change_number": change, "patchset": patchset,
+                    "revision_sha": revision, "build_job": build_job,
+                    "build_number": build_number, "snapshot_sha256": digest,
+                    "confirmation_token": confirmation,
+                    "idempotency_token": request_id,
+                    "confirmation_expires_at": expires_at,
+                })
+                self.send_response(303)
+                self.send_header("Location", "/build-runs/confirm-start?" + query)
+                self.end_headers()
+                return
+            confirmation = data.get("confirmation_token", [""])[0]
+            expires_at = data.get("confirmation_expires_at", [""])[0]
+            submitted_digest = data.get("build_snapshot_sha256", [""])[0]
+            submitted_job = data.get("build_job", [""])[0]
+            try:
+                submitted_number = int(data.get("build_number", ["0"])[0])
+            except ValueError:
+                submitted_number = 0
+            if (
+                submitted_digest != digest or submitted_job != build_job
+                or submitted_number != build_number
+                or not _engineering_confirmation_unexpired(expires_at)
+                or not _verify_confirmation(
+                    confirmation, "build-start", change, patchset, revision,
+                    build_job, build_number, digest, True, request_id, expires_at,
+                )
+            ):
+                self.send_error(403, "Invalid or stale build-failure confirmation")
+                return
+            if not _claim_engineering_confirmation(confirmation, request_id):
+                self.send_error(409, "Build-failure confirmation was already used")
+                return
+            try:
+                session = RUN_CONTROLLER.request_build_failure(
+                    patch, snapshot, request_id=request_id
+                )
+            except (
+                RunControllerError, InvalidSessionOperation,
+                SessionAlreadyExists, ValueError,
+            ) as exc:
+                self.respond(page(str(exc)))
+                return
+            self.send_response(303)
+            self.send_header("Location", f"/runs/{session.run_id}")
+            self.end_headers()
+            return
         if parts and parts[0] == "review-runs":
             token = data.get("csrf_token", [""])[0]
             if not hmac.compare_digest(token, CSRF_TOKEN):

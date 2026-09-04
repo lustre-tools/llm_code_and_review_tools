@@ -116,6 +116,23 @@ ENGINEERING_REPORT_SCHEMA: Mapping[str, Any] = {
                 "required": ["comment_id", "assessment", "disposition", "summary", "changed_files"],
             },
         },
+        "jenkins_snapshot_sha256": {
+            "type": "string", "pattern": "^[0-9a-f]{64}$"
+        },
+        "jenkins_resolution": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "build_id": {"type": "string", "minLength": 1, "maxLength": 500},
+                "classification": {
+                    "enum": [
+                        "patch_caused_fixed", "infrastructure", "transient",
+                        "unrelated", "ambiguous", "needs_human",
+                    ]
+                },
+                "diagnosis": {"type": "string", "minLength": 1, "maxLength": 4000},
+            },
+            "required": ["build_id", "classification", "diagnosis"],
+        },
         "question": {"type": "string", "minLength": 1, "maxLength": 2000},
     },
     "required": ["schema", "state", "summary", "changed_files", "validation_requests"],
@@ -551,6 +568,7 @@ def validate_engineering_report(value: Any) -> Mapping[str, Any]:
     allowed = {
         "schema", "state", "summary", "changed_files", "validation_requests", "question",
         "review_mode", "review_snapshot_sha256", "comment_results",
+        "jenkins_snapshot_sha256", "jenkins_resolution",
     }
     unknown = set(value) - allowed
     if unknown:
@@ -680,6 +698,30 @@ def validate_engineering_report(value: Any) -> Mapping[str, Any]:
             if reply_draft is not None:
                 normalized_item["reply_draft"] = reply_draft
             normalized_comments.append(normalized_item)
+    jenkins_digest = value.get("jenkins_snapshot_sha256")
+    jenkins_resolution = value.get("jenkins_resolution")
+    jenkins_fields = (jenkins_digest, jenkins_resolution)
+    if any(item is not None for item in jenkins_fields):
+        if not isinstance(jenkins_digest, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", jenkins_digest
+        ):
+            raise RunnerProtocolError("engineering report Jenkins snapshot is invalid")
+        if not isinstance(jenkins_resolution, Mapping) or set(jenkins_resolution) != {
+            "build_id", "classification", "diagnosis",
+        }:
+            raise RunnerProtocolError("engineering report Jenkins resolution fields are invalid")
+        build_id = jenkins_resolution.get("build_id")
+        classification = jenkins_resolution.get("classification")
+        diagnosis = jenkins_resolution.get("diagnosis")
+        if not isinstance(build_id, str) or not build_id.strip() or len(build_id) > 500:
+            raise RunnerProtocolError("engineering report Jenkins build ID is invalid")
+        if classification not in {
+            "patch_caused_fixed", "infrastructure", "transient", "unrelated",
+            "ambiguous", "needs_human",
+        }:
+            raise RunnerProtocolError("engineering report Jenkins classification is invalid")
+        if not isinstance(diagnosis, str) or not diagnosis.strip() or len(diagnosis) > 4000:
+            raise RunnerProtocolError("engineering report Jenkins diagnosis is invalid")
     normalized: Dict[str, Any] = {
         "schema": value["schema"], "state": state, "summary": summary.strip(),
         "changed_files": normalized_files, "validation_requests": normalized_requests,
@@ -690,6 +732,13 @@ def validate_engineering_report(value: Any) -> Mapping[str, Any]:
         normalized["review_mode"] = review_mode
         normalized["review_snapshot_sha256"] = snapshot_digest
         normalized["comment_results"] = normalized_comments
+    if any(item is not None for item in jenkins_fields):
+        normalized["jenkins_snapshot_sha256"] = jenkins_digest
+        normalized["jenkins_resolution"] = {
+            "build_id": build_id.strip(),
+            "classification": classification,
+            "diagnosis": diagnosis.strip(),
+        }
     return normalized
 
 

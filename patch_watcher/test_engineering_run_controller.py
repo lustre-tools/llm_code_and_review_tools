@@ -48,6 +48,27 @@ def review_snapshot(revision=DEFAULT_REVISION):
     }
 
 
+def build_snapshot(revision=DEFAULT_REVISION, digest="b" * 64):
+    return {
+        "schema": "patch-watcher-jenkins-failure-snapshot/v1",
+        "complete": True,
+        "change": {
+            "change_number": 68160, "patchset": 4,
+            "revision_sha": revision, "revision_ref": "refs/changes/60/68160/4",
+            "project": "fs/lustre-release", "branch": "master",
+        },
+        "build": {
+            "job_name": "lustre-reviews", "build_number": 123,
+            "url": "https://build.whamcloud.com/job/lustre-reviews/123/",
+            "result": "FAILURE", "completed_at": "2026-09-01T14:00:00+00:00",
+            "duration_ms": 1000,
+        },
+        "parent_console_tail": ["FAILURE"], "failed_runs": [],
+        "captured_at": "2026-09-01T14:01:00+00:00",
+        "snapshot_sha256": digest,
+    }
+
+
 class EngineeringRunner:
     def __init__(self):
         self.starts = []
@@ -235,6 +256,36 @@ class EngineeringRunControllerTests(unittest.TestCase):
         self.assertIn("review-comments.json", spec.prompt)
         self.assertIn("reply", spec.prompt.lower())
         snapshot_path = self.root / "runs" / session.run_id / "work" / "input" / "review-comments.json"
+        self.assertTrue(snapshot_path.is_file())
+        self.assertEqual(snapshot_path.stat().st_mode & 0o777, 0o400)
+
+    def test_build_failure_request_binds_snapshot_and_rejects_reused_identity(self):
+        controller = self.controller()
+        session = controller.request_build_failure(
+            engineering_patch(), build_snapshot(), request_id="build-request-1",
+        )
+        replay = controller.request_build_failure(
+            engineering_patch(), build_snapshot(), request_id="build-request-1",
+        )
+        self.assertEqual(replay.session_id, session.session_id)
+        with self.assertRaisesRegex(RunControllerError, "reused"):
+            controller.request_build_failure(
+                engineering_patch(), build_snapshot(digest="c" * 64),
+                request_id="build-request-1",
+            )
+        request = controller._request_payload(session)
+        self.assertEqual(request["request_kind"], "build_failure")
+        self.assertEqual(request["build_id"], "lustre-reviews/123")
+        self.assertTrue(request["auto_upload_patchset"])
+
+        controller.tick()
+        spec = self.runner.starts[0]
+        self.assertIn("jenkins-failure.json", spec.prompt)
+        self.assertIn("open-ended", spec.prompt)
+        snapshot_path = (
+            self.root / "runs" / session.run_id / "work" / "input"
+            / "jenkins-failure.json"
+        )
         self.assertTrue(snapshot_path.is_file())
         self.assertEqual(snapshot_path.stat().st_mode & 0o777, 0o400)
 
@@ -581,6 +632,59 @@ class EngineeringRunControllerTests(unittest.TestCase):
         value = json.loads(plan.read_text(encoding="utf-8"))
         self.assertEqual(value["comment_results"][0]["comment_id"], "comment-1")
         self.assertEqual(value["review_mode"], "all")
+
+    def test_build_terminal_report_maps_exact_failure_and_resolution_artifact(self):
+        seed, revision = self.create_seed_repository()
+
+        def checkout(destination, _requested):
+            subprocess.run(
+                ["git", "clone", "--quiet", "--no-local", str(seed), str(destination)],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(destination), "checkout", "--quiet", "--detach", revision],
+                check=True,
+            )
+            return Path(destination)
+
+        controller = self.controller(checkout)
+        patch = engineering_patch(revision=revision)
+        snapshot = build_snapshot(revision)
+        snapshot["change"]["revision_sha"] = revision
+        session = controller.request_build_failure(
+            patch, snapshot, request_id="build-terminal",
+        )
+        controller.tick()
+        allocation = controller.engineering_store.get_allocation_by_run(session.run_id)
+        (allocation.checkout_path / "tracked.txt").write_text("after\n", encoding="utf-8")
+        self.runner.events_by_session[session.session_id] = [RunnerEvent(
+            1, self.now.timestamp(), "worker_report", {
+                "schema": "patch-watcher-engineering-report/v1",
+                "state": "complete", "summary": "Fixed the Jenkins compile failure.",
+                "changed_files": ["tracked.txt"], "validation_requests": [],
+                "jenkins_snapshot_sha256": "b" * 64,
+                "jenkins_resolution": {
+                    "build_id": "lustre-reviews/123",
+                    "classification": "patch_caused_fixed",
+                    "diagnosis": "A missing declaration caused the compile failure.",
+                },
+            },
+        )]
+        controller.tick()
+
+        self.assertEqual(self.store.get_session(session.session_id).state, "succeeded")
+        artifacts = controller.engineering_store.list_artifacts(session.run_id)
+        self.assertEqual(
+            {artifact.kind for artifact in artifacts},
+            {"diff", "status", "jenkins_resolution"},
+        )
+        plan = (
+            self.root / "runs" / "engineering-artifacts" / session.run_id
+            / "jenkins-resolution.json"
+        )
+        value = json.loads(plan.read_text(encoding="utf-8"))
+        self.assertEqual(value["build_id"], "lustre-reviews/123")
+        self.assertEqual(value["resolution"]["classification"], "patch_caused_fixed")
 
     def test_simple_review_rejects_nontrivial_comment_assessment(self):
         seed, revision = self.create_seed_repository()

@@ -1450,24 +1450,54 @@ Exit criteria:
 - all edits map to a specific comment and pinned revision;
 - containerization/isolation gate is met before executing patch code.
 
-### Phase 5: Jenkins build handling and broader controlled Gerrit writes
+### Phase 5A: Jenkins build-failure repair (implemented)
 
 Build:
 
-- design and implement Jenkins failure classification separately from Maloo
-  retesting;
-- narrowly granted Gerrit replies/messages and reuse of the separately proven
-  Phase 3C patchset-upload controller;
-- pre-write revision revalidation, approval, idempotency, and audit;
-- post-upload observation of the new patchset as a new revision/run boundary.
+- expose a manual action only for one completed failed Jenkins build belonging
+  to the exact current Gerrit patchset;
+- require one confirmation that binds the run to the immutable change,
+  patchset, revision SHA/ref, Jenkins job/build, and complete bounded-log
+  snapshot digest;
+- give the worker a dedicated full checkout and open-ended commands only in
+  LTVM guests carrying the exact session owner; keep Gerrit and Jenkins
+  credentials, host command execution, and publication in the controller;
+- require a structured classification of `patch_caused_fixed`, infrastructure,
+  transient, unrelated, or ambiguous, plus an independently captured nonempty
+  diff and successful explicitly tagged build and test evidence;
+- for `patch_caused_fixed` only, treat the run-start confirmation as authority
+  for one idempotent controller-owned patchset upload without a second
+  approval;
+- revalidate the exact Gerrit revision and Jenkins snapshot, stage and verify
+  the proposed commit privately, then use the Phase 3C upload ledger and
+  writer;
+- after success, refresh and observe the new patchset as a new revision and
+  make the completed run's authority stale.
 
 Exit criteria:
 
-- every write is previewed or policy-authorized, revision-pinned, and
-  controller-mediated;
-- an upload never targets or rebases over an unexpected patchset;
-- ambiguous posts/uploads reconcile before retry;
-- rollback/recovery and human escalation are tested.
+- only `patch_caused_fixed` with a nonempty diff and successful explicit build
+  and test evidence can reach publication;
+- stale revisions or evidence, infrastructure/transient/unrelated/ambiguous
+  results, no diff, failed/incomplete validation, resource exhaustion, and
+  preparation or upload trouble fail to a human without widening capability;
+- an upload never targets or rebases over an unexpected patchset and the
+  worker never receives service credentials;
+- request, report, diff, evidence, staging commit, and upload identities are
+  durable and one publication binding covers the exact run, change, patchset,
+  revision, diff, and validation evidence;
+- a claimed or ambiguous push is reconciled against Gerrit after completion
+  callback or restart and is never blindly repeated.
+
+### Future Phase 5B: wider Jenkins and Gerrit write actions
+
+Jenkins retriggers, aborts, configuration changes, Gerrit messages/replies,
+and other write operations are not part of Phase 5A. Each needs its own narrow
+capability, policy and approval rule, exact remote-state binding, idempotency
+contract, reconciliation behavior, action budget, audit trail, and tested
+human-escalation path. Review-comment replies from Phase 4 remain drafts; the
+implemented review and build flows may upload qualifying patchsets but do not
+post those replies or perform Jenkins writes.
 
 ### Phase 6: autonomous lanes
 

@@ -198,8 +198,33 @@ show a WIP badge, so there is no ambiguous “Active” label.
 
 Each patch has one compact **Actions** disclosure. It groups build failures,
 test failures, and review comments; only implemented controls are interactive.
-Build/review actions remain clearly marked as planned, while the current
-test-failure policies retain their working controls.
+The current test-failure policies retain their working controls. Review and
+Jenkins build-failure runs are manual exact-revision actions and appear only
+when their captured inputs and the separate upload capability make them
+eligible.
+
+## Jenkins build-failure repair
+
+For a completed failed Jenkins build attached to the exact current Gerrit
+revision, **Handle build failure** captures an immutable job, build, revision,
+and bounded log snapshot. One confirmation starts a dedicated full checkout
+and also preauthorizes one controller-owned patchset upload if, and only if,
+the worker reports `patch_caused_fixed`, produces a nonempty diff, and supplies
+successful explicitly tagged build and test evidence. There is no second
+upload confirmation.
+
+The worker has no Gerrit or Jenkins credentials. Its command capability is
+open-ended only inside LTVM guests carrying that exact run's owner ID. Stale or
+changed inputs, infrastructure/transient/unrelated/ambiguous diagnoses,
+no-diff or validation failures, resource exhaustion, and publication trouble
+all stop for a human. Upload preparation and dispatch use the durable,
+controller-owned writer with one idempotency binding over the run, change,
+patchset, revision, diff, and validation evidence. A claimed or ambiguous push
+is reconciled against Gerrit, including during periodic restart recovery, and
+is never blindly repeated. A successful upload is refreshed as a new patchset,
+making the completed run stale. This phase does not retrigger, abort, or
+otherwise write to Jenkins; broader Jenkins actions remain future, separately
+gated work.
 
 ## Controlled engineering runs (Phases 3A–3C)
 
@@ -236,7 +261,7 @@ retries an ambiguous push. Claude never receives Gerrit credentials.
 ## Design documents
 
 - `DESIGN_ACTION_FLOW.md` defines the product-policy flow for test failures,
-  Jenkins failures, and future review handling.
+  Jenkins build-failure repair, and review handling.
 - `AGENT_ORCHESTRATION_DESIGN.md` defines the implementation architecture,
   durable state machines, native Claude runner, human messaging,
   LTVM/resource lifecycle, isolation roadmap, dashboard, recovery behavior,

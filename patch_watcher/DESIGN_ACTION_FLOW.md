@@ -4,8 +4,9 @@ This document describes the product flow toward Patch Shepherd-style patch
 handling. Phase 1's deterministic Maloo retest and Phase 2's read-only
 unknown-failure research are implemented. Existing-Jira association followed
 by a retest is available only as a two-step, operator-approved workflow;
-later build, review, and source-editing actions remain designs or disabled
-stubs.
+manual review-comment handling and exact Jenkins build-failure repair are also
+implemented as isolated engineering runs. Broader autonomous source editing
+and wider Jenkins/Gerrit mutations remain future work.
 
 The implementation-grade state, persistence, native Claude runner, human
 messaging, LTVM, security, recovery, and phased-delivery contracts are in
@@ -26,7 +27,8 @@ Each watched Gerrit patch gets its own test-error policy beside its status:
   global external-execution gate is enabled.
 
 The control also sets a per-revision action budget and exposes a dry-run
-evaluation. Build and review handlers remain disabled stubs.
+evaluation. Review and Jenkins build-failure handling are separate, manually
+started exact-revision actions; they are not enabled by this test-error policy.
 
 The settings belong to the individual patch, not to the page globally. They
 must remain visible while the patch is refreshed so an operator can see both
@@ -39,7 +41,8 @@ Newly added patches use safe defaults:
 - Test-error policy: **Disabled**
 - Per-revision external-action budget: zero until an operator saves a policy
 - Global automatic-execution gate: **Disabled**
-- Build and review handlers: unavailable
+- Review and Jenkins build-failure handlers: manual only, with the separate
+  Gerrit-upload capability disabled by default
 
 Defaults should be configurable later, but changing them must never silently
 enable an automated action for existing patches.
@@ -86,12 +89,40 @@ The implemented test-error flow is:
 
 ## Build-error handling (Jenkins)
 
-Build-failure handling means a Jenkins build failure specifically. It is
-intentionally a stub in the first implementation: it may record and surface
-the Jenkins failure, but does not attempt diagnosis or other follow-up.
-Retesting belongs to the test-error branch, not this build-failure stub. The
-build branch is therefore a deliberate dead end until its criteria and
-actions are designed separately.
+Build-failure handling means repair of one completed Jenkins failure for the
+exact current Gerrit revision. It is distinct from Maloo test-error retesting.
+The user starts it manually and sees one confirmation page binding all granted
+authority to the change, patchset, revision SHA, Gerrit ref, Jenkins job and
+build number, and a digest of the captured build and bounded console-log
+snapshot.
+
+After that single confirmation, Patch Watcher creates a dedicated full
+checkout. Claude may edit it and run open-ended diagnostic, build, and test
+commands only inside LTVM guests carrying the exact run-owner ID. It receives
+neither Gerrit nor Jenkins credentials and has no host-command capability.
+The immutable result classifies the failure as `patch_caused_fixed`,
+infrastructure, transient, unrelated, or ambiguous and records the diagnosis,
+actual diff, and explicit guest build and test evidence.
+
+Only `patch_caused_fixed` may publish, and only when the diff is nonempty and
+both an explicitly tagged build step and an explicitly tagged test step
+succeeded. The run-start confirmation preauthorizes exactly one
+controller-owned patchset upload, so there is no second upload confirmation.
+Immediately before publication the controller recaptures the exact Jenkins
+failure, rechecks the Gerrit revision, reconstructs and validates the proposed
+commit in private staging, and uses the durable upload ledger's idempotency
+binding over the run, change, patchset, revision, diff, and validation evidence.
+
+A stale revision or build snapshot, infrastructure/transient/unrelated/
+ambiguous classification, missing diff, failed or incomplete validation,
+resource exhaustion, or preparation/upload problem escalates to a human.
+After a claimed or ambiguous push, normal completion and periodic restart
+reconciliation inspect Gerrit for the proposed commit; they never blindly
+repeat the push. Success refreshes the watched change so the uploaded patchset
+is observed as a new revision and the completed run's old authority cannot be
+reused. Jenkins retriggers, aborts, configuration changes, and other wider
+Jenkins writes are outside this phase and remain future, separately gated
+work.
 
 ## Handle reviews (Phase 4A)
 

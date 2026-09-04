@@ -422,12 +422,21 @@ def render_run_detail(
     csrf_token=None, idempotency_token=None, base_url="/runs",
 ):
     """Render complete Phase 0C run detail without unsafe mutations."""
+    engineering = _state(_get(run, "execution_profile", "profile")) == "engineering"
+    heading = "Engineering run" if engineering else "Read-only investigation"
+    boundary = (
+        "<p class='safety-note'><strong>Engineering boundary:</strong> source edits and "
+        "open-ended commands are allowed only in the run checkout and exact-owner LTVM "
+        "guests. External writes remain controller-owned.</p>"
+        if engineering else
+        "<p class='safety-note'><strong>Read-only run:</strong> no Gerrit or CI "
+        "write capability is available.</p>"
+    )
     return (
         "<main class='run-detail'><header><p><a href='/'>← Patch Watcher</a></p>"
-        f"<h2>Read-only investigation · {escape(_plain(_get(run, 'subject', 'patch_subject', 'change_number')))}</h2>"
+        f"<h2>{heading} · {escape(_plain(_get(run, 'subject', 'patch_subject', 'change_number')))}</h2>"
         f"{_status_badge(_get(run, 'state', 'status'))}"
-        "<p class='safety-note'><strong>Read-only run:</strong> no Gerrit or CI "
-        "write capability is available.</p></header>"
+        + boundary + "</header>"
         "<section aria-labelledby='run-identity-title'><h3 id='run-identity-title'>Run identity</h3><dl>"
         + _field("Run", _get(run, "run_id", "id"), code=True)
         + _field("Change", _get(run, "change_number", "change"))
