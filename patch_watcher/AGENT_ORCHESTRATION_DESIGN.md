@@ -1165,7 +1165,31 @@ agent is also implemented for failures that cannot pass Phase 1's evidence
 rules. Its report cannot write externally. A narrow follow-on workflow can
 associate an operator-supplied existing Jira key and then request a retest,
 but those are separately approved controller actions with no agent authority.
-The next implementation slice is Phase 3's isolated execution foundation.
+
+Phase 3's controlled engineering runs are now implemented. Phase 3A creates a
+dedicated full clone and lets Claude edit source without a host shell or
+service credentials, with the actual diff captured independently. Phase 3B
+grants a confirmed run open-ended command execution inside only its exactly
+owner-matched LTVM guests, revalidating ownership before every command and
+writing immutable command/result audit records. Phase 3C adds the separate
+controller-owned patchset upload path: disabled by default, eligible only on a
+nonempty immutable diff plus guest test evidence, rebuilt in a fresh staging
+checkout, one-use POST to push, and reconciliation rather than blind retry
+after an ambiguous result. Claude never receives Gerrit credentials.
+
+Phase 4A is implemented as the first review-handling slice. An operator starts
+one exact-revision run in `simple` or `all` mode against a confirmed immutable
+unresolved-comment snapshot; the run records one disposition per target
+comment, captures the proposed diff and reply drafts, and requires successful
+LTVM test evidence. That single run-start approval preauthorizes one Phase 3C
+upload after the revision and snapshot digest are revalidated. Review replies
+remain drafts and are never posted.
+
+The remaining Phase 4 work is the standing-policy form of both modes — they
+are operator-started per revision today, not automatic policies — and the
+containerization/isolation gate, which is still unmet: the shipped profile is
+the truthful `Unsandboxed host worker`. That gate is an entry criterion for
+Phase 5's broader controlled Gerrit writes and for any Phase 6 lane.
 
 ### Phase 0A: durable observer
 
