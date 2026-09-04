@@ -30,13 +30,58 @@ def load_program(vmcore, vmlinux):
     """Load a vmcore into a drgn Program."""
     prog = drgn.Program()
     prog.set_core_dump(vmcore)
+    exc = None
     try:
         prog.load_debug_info([vmlinux], default=True)
-    except drgn.MissingDebugInfoError:
-        # Missing module debug info is fine for kernel-level
-        # analysis -- we only need the vmlinux symbols.
-        pass
+    except drgn.MissingDebugInfoError as e:
+        # Missing MODULE debug info is fine for kernel-level analysis,
+        # but a missing/mismatched vmlinux is not -- check below.
+        exc = e
+    _verify_kernel_symbols(prog, vmlinux, exc)
     return prog
+
+def _verify_kernel_symbols(prog, vmlinux, exc=None):
+    """Fail loudly if the vmlinux did not actually load.
+
+    drgn refuses a vmlinux whose GNU build ID does not match the
+    vmcore ("did not match any loaded modules; ignoring") and only
+    raises MissingDebugInfoError, which callers used to swallow.  The
+    Program then has no kernel symbols and every later lookup dies
+    with a baffling "could not find 'init_uts_ns'".  Turn that into
+    one actionable message naming both build IDs.
+    """
+    try:
+        prog["init_uts_ns"]
+        return
+    except Exception:
+        pass
+
+    def _build_id(path):
+        try:
+            import subprocess
+            out = subprocess.run(["readelf", "-n", path],
+                                 capture_output=True, text=True).stdout
+            for line in out.splitlines():
+                if "Build ID" in line:
+                    return line.split(":")[-1].strip()
+        except Exception:
+            pass
+        return "unknown"
+
+    raise RuntimeError(
+        "vmlinux does not match this vmcore, so no kernel symbols "
+        "loaded.\n"
+        "  vmlinux:  %s (build ID %s)\n"
+        "  The vmcore's kernel has a different build ID -- a rebuilt "
+        "kernel keeps the same version string but changes the build "
+        "ID, so 'uname -r' matching is not sufficient.\n"
+        "  Find the matching vmlinux (check the VM image the vmcore "
+        "came from, or /usr/lib/debug/lib/modules/<kver>/vmlinux), or "
+        "read vmcore-dmesg.txt from the crash dir instead.%s"
+        % (vmlinux, _build_id(vmlinux),
+           "\n  original drgn error: %s" % exc if exc else "")
+    )
+
 
 
 def _get_task_state_str(task):
