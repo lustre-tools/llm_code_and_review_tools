@@ -144,6 +144,7 @@ lreview run 64086 64087 --repo lustre-release   # Review (no post)
 lreview post                         # Post collected findings
 lreview run 64086 --post             # Review + post in one go
 lreview run --mode light 64086 --repo lustre-release  # cheap single-pass
+lreview chat 64086                   # interactive session over an existing review
 lreview run --repo ~/tree --last 3   # Review the newest 3 local commits
 ```
 

@@ -7,6 +7,8 @@ Subcommands:
     setup  - guided first-time setup (agent CLI, prompts, Gerrit)
     check  - verify the review prompts / agent CLI / Gerrit creds
     run    - review a batch of Gerrit changes in parallel
+    chat   - interactive session over an existing review
+    render - regenerate Markdown reports from review JSONs
     post   - post previously collected results to Gerrit
 """
 
@@ -432,6 +434,38 @@ def cmd_run(args) -> int:
     return 1 if failed else 0
 
 
+def cmd_chat(args) -> int:
+    results_dir = Path(args.results_dir).expanduser().resolve()
+    worktrees_dir = (Path(args.worktrees_dir).expanduser().resolve()
+                     if args.worktrees_dir else None)
+    from .memory import default_db_dir
+    from .prompts import _REPO_ROOT
+    db_dir = (Path(args.db).expanduser().resolve() if args.db
+              else default_db_dir(_REPO_ROOT))
+
+    from .agents import get_agent
+    if not get_agent(args.agent).verified:
+        print(f"note: the '{args.agent}' backend is best-effort and "
+              "not yet verified end-to-end; only claude is.")
+    if args.effort and args.agent != "claude":
+        print(f"note: --effort is claude-only; ignored for "
+              f"'{args.agent}'")
+
+    if not args.local and not args.change:
+        print("error: a change number/URL is required "
+              "(or --local [REF] for a local review)")
+        return 1
+
+    from .chat import run_chat
+    return run_chat(
+        args.change, results_dir=results_dir,
+        repo=Path(args.repo) if args.repo else None,
+        worktrees_dir=worktrees_dir, db_dir=db_dir, agent=args.agent,
+        model=args.model, effort=args.effort,
+        agent_args=args.agent_arg or [], local=args.local,
+        keep_worktree=args.keep_worktree)
+
+
 def cmd_render(args) -> int:
     from .markdown import render_existing
     results_dir = Path(args.results_dir).expanduser().resolve()
@@ -525,12 +559,13 @@ def build_parser() -> argparse.ArgumentParser:
             "  lreview run --repo lustre-release --post -j 8 64086 64087\n"
             "  lreview run --repo ~/lustre-release --last 3 -o rev.txt\n"
             "  lreview post 64086 --force\n"
+            "  lreview chat 64086          # discuss an existing review\n"
         ),
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True,
-                                metavar="{setup,check,run,render,post}")
+                                metavar="{setup,check,run,chat,render,post}")
 
     from .agents import AGENTS
     default_prefix = os.environ.get("LREVIEW_PREFIX")
@@ -668,6 +703,65 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--prompts-dir", default=default_prompts, help=prompts_help)
     run_p.set_defaults(func=cmd_run)
+
+    chat_p = sub.add_parser(
+        "chat", help="Interactive session over an existing review "
+                     "(ask about findings, how the patch works)")
+    chat_p.add_argument(
+        "change", nargs="?", default=None,
+        help="Gerrit change number or URL (with --local: a git ref "
+             "of --repo, default HEAD). The reviewed revision and "
+             "its artifacts come from the results manifest when the "
+             "change was reviewed before; otherwise the current "
+             "patchset is resolved from Gerrit.")
+    chat_p.add_argument(
+        "--local", action="store_true",
+        help="Discuss a local review: the change argument is a git "
+             "ref of --repo (default HEAD), matched against local "
+             "review results by commit — when the ref moved since "
+             "(e.g. amended), the reviewed revision is discussed")
+    chat_p.add_argument(
+        "--repo", default=None,
+        help="Path to the source git repository (default: the repo "
+             "the change was reviewed from, per the results "
+             "manifest; else cwd)")
+    chat_p.add_argument(
+        "--results-dir", default=default_results_dir(),
+        help="Results directory holding the review artifacts "
+             "(default: as for run)")
+    chat_p.add_argument(
+        "--worktrees-dir", default=None,
+        help="Where the discussion worktree is created (default: as "
+             "for run)")
+    chat_p.add_argument(
+        "--db", default=None, metavar="DIR",
+        help="Memory database directory (default: as for run); the "
+             "change's memory document is offered to the session "
+             "read-only")
+    chat_p.add_argument(
+        "--agent", choices=sorted(AGENTS), default=default_agent,
+        help="Agent CLI for the interactive session (default: "
+             "$LREVIEW_AGENT or claude; claude is the verified "
+             "backend, others are best-effort)")
+    chat_p.add_argument(
+        "--model", default=None,
+        help="Model for the interactive session (default: the "
+             "agent's own default)")
+    chat_p.add_argument(
+        "--effort", choices=["low", "medium", "high", "xhigh", "max"],
+        default=os.environ.get("LREVIEW_EFFORT"),
+        help="Reasoning effort for the session (default: "
+             "$LREVIEW_EFFORT or claude's own default; claude-only)")
+    chat_p.add_argument(
+        "--keep-worktree", action="store_true",
+        help="Keep the discussion worktree after the session ends")
+    chat_p.add_argument(
+        "--agent-arg", "--claude-arg", action="append", dest="agent_arg",
+        metavar="ARG",
+        help="Extra argument passed through to the agent CLI "
+             "(repeatable; use --agent-arg=--flag for arguments "
+             "starting with a dash)")
+    chat_p.set_defaults(func=cmd_chat)
 
     render_p = sub.add_parser(
         "render", help="Render existing review JSONs to Markdown reports")

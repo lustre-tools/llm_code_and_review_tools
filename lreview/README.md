@@ -372,12 +372,50 @@ lreview run <change|url>... [options]
 lreview run --repo DIR --last N  # review the newest N commits locally
 lreview render [file.json...]    # (re)generate Markdown reports from
                                  # existing review JSONs (--results-dir)
+lreview chat <change|url>        # interactive session over an existing
+                                 # review (findings, how the patch works)
 lreview post [<change|url>...] [options]
 ```
 
 Changes are Gerrit change numbers or URLs; flags may come before or
 after them, but keep the change list contiguous (argparse cannot
 rejoin a positional list split around a flag).
+
+### chat — discuss an existing review interactively
+
+`lreview chat 64086` checks the **reviewed revision** out into a
+worktree (taken from the results manifest, so it matches the report
+byte-for-byte and needs no network; an unreviewed change is resolved
+from Gerrit instead) and starts an **interactive claude session**
+primed with the change's artifacts — findings JSON, report, severity
+metadata, event log, and the review memory document. Ask why a
+finding was raised, whether it survives a counter-argument, how the
+patch works, anything. The session is instructed to verify claims
+against the checked-out code rather than trusting the report, never
+to modify the checkout or post anywhere, and to touch the memory
+document only when explicitly asked to record something. The
+worktree is removed when the session ends (`--keep-worktree` to
+keep it); `--model` and `--agent-arg` pass through to the agent CLI.
+
+`chat --local [REF]` (default HEAD) discusses a **local review**
+instead: the ref is resolved in `--repo` (or the cwd) and matched
+against local review results by commit; when the ref has moved since
+the review (an amend), the session pins to the revision that was
+actually reviewed and says so. Without `--local`, `--repo` is rarely
+needed: chat defaults to the repository recorded in the manifest at
+review time.
+
+Like `run`, chat picks its backend with `--agent
+{claude,codex,gemini,opencode}` or `$LREVIEW_AGENT` (default claude —
+the verified one; the others are best-effort). The interactive
+invocations are taken from each CLI's official docs: claude and
+codex take the seed prompt as a bare positional argument, gemini
+needs `-i/--prompt-interactive` (`-p` and, on older releases, a bare
+positional are one-shot), and opencode takes `--prompt` (its root
+positional is a project *path*). All are auto-submitted as the first
+turn, and the session then stays interactive with the CLI's normal
+permission prompts — chat never passes approval-bypass flags. Note
+opencode's `--model` wants the `provider/model` form.
 
 ### run options
 

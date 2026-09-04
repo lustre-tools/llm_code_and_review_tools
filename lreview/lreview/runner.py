@@ -812,12 +812,13 @@ def run_batch(
                     if in_place:
                         _remove_artifacts(config.repo)
     finally:
-        update_summary(config.results_dir, results)
+        update_summary(config.results_dir, results, repo=config.repo)
 
     return results
 
 
-def update_summary(results_dir: Path, results: list[ReviewResult]) -> None:
+def update_summary(results_dir: Path, results: list[ReviewResult],
+                   repo: Optional[Path] = None) -> None:
     """Merge results into the summary manifest (keyed by change).
 
     A posted flag survives a re-review of the same revision; a review
@@ -853,6 +854,7 @@ def update_summary(results_dir: Path, results: list[ReviewResult]) -> None:
                 "web_url": getattr(change, "url", None),
                 "subject": change.subject,
                 "base_url": change.base_url,
+                "repo": str(repo) if repo else None,
                 "status": result.status,
                 "findings": result.findings,
                 "severity": result.severity,

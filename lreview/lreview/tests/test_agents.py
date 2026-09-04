@@ -55,3 +55,41 @@ class TestBuildCmd:
             "anthropic/claude-sonnet-5", None, [], PROMPT)
         assert cmd == ["opencode", "run",
                        "--model", "anthropic/claude-sonnet-5", PROMPT]
+
+
+class TestBuildInteractiveCmd:
+    """Interactive argv shapes, verified against each CLI's official
+    docs: claude and codex take a bare positional prompt; gemini
+    needs -i (bare positional / -p are one-shot); opencode's root
+    positional is a project path, so the prompt goes in --prompt."""
+
+    def test_claude_positional_prompt(self):
+        cmd = get_agent("claude").build_interactive_cmd(
+            "opus", ["--add-dir", "/x"], PROMPT)
+        assert cmd == ["claude", "--model", "opus",
+                       "--add-dir", "/x", PROMPT]
+
+    def test_codex_positional_prompt(self):
+        cmd = get_agent("codex").build_interactive_cmd(None, [], PROMPT)
+        assert cmd == ["codex", PROMPT]
+        assert get_agent("codex").build_interactive_cmd(
+            "gpt-5", [], PROMPT)[:3] == ["codex", "-m", "gpt-5"]
+
+    def test_gemini_uses_prompt_interactive_flag(self):
+        cmd = get_agent("gemini").build_interactive_cmd(None, [], PROMPT)
+        assert cmd == ["gemini", "-i", PROMPT]
+
+    def test_opencode_prompt_is_a_flag_not_positional(self):
+        cmd = get_agent("opencode").build_interactive_cmd(
+            "anthropic/claude-sonnet-5", [], PROMPT)
+        assert cmd == ["opencode",
+                       "--model", "anthropic/claude-sonnet-5",
+                       "--prompt", PROMPT]
+
+    def test_no_bypass_flags_in_interactive_mode(self):
+        for name in ("claude", "codex", "gemini", "opencode"):
+            cmd = get_agent(name).build_interactive_cmd(None, [], PROMPT)
+            joined = " ".join(cmd)
+            assert "yolo" not in joined
+            assert "dangerously" not in joined
+            assert "bypass" not in joined
