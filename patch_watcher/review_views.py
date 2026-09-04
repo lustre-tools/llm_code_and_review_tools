@@ -40,7 +40,7 @@ def render_review_start_control(
         f"<button type='submit'{disabled}>Review and start…</button></form>"
         + (f"<p class='detail'>{escape(reason)}</p>" if not eligible else "")
         + "<p class='detail'><strong>Successful validated runs upload one new patchset automatically.</strong> "
-          "Reply text remains a draft and is never posted.</p></div>"
+          "Reply text remains a draft unless the separate controller action is used later.</p></div>"
     )
 
 
@@ -59,7 +59,8 @@ def render_review_start_confirmation(
         "<p>This approval starts an isolated writable run and preauthorizes one controller-owned "
         "patchset upload only if the exact revision and comment snapshot remain unchanged, the "
         "result has a nonempty diff, and all guest validation passes with explicit test evidence. "
-        "There is no later upload confirmation. Review replies remain drafts and are never posted.</p>"
+        "There is no later upload confirmation. Review replies remain drafts unless the "
+        "separate controller action is explicitly used later.</p>"
         f"<form method='post' action='{escape(action, quote=True)}'>"
         f"<input type='hidden' name='csrf_token' value='{escape(csrf_token, quote=True)}'>"
         f"<input type='hidden' name='change_number' value='{escape(str(patch['change_number']), quote=True)}'>"
@@ -95,7 +96,7 @@ def render_review_result(request, report, upload=None):
         f"snapshot <code>{escape(str(request.get('review_snapshot_sha256') or ''))}</code></p>"
         "<p>Patchset publication: <strong>"
         + escape(upload_state or "not ready")
-        + "</strong>. Reply drafts are not posted.</p><ul>" + "".join(rows) + "</ul></section>"
+        + "</strong>. Reply drafts are not posted automatically.</p><ul>" + "".join(rows) + "</ul></section>"
     )
 
 

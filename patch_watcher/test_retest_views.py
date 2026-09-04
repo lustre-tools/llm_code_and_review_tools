@@ -15,6 +15,7 @@ class RetestViewTests(unittest.TestCase):
             execution_enabled=False, csrf_token="csrf<&"
         )
         self.assertIn("Global execution: Disabled", off)
+        self.assertIn("Automatic actions", off)
         self.assertIn("href='/automation/global/confirm-enable'", off)
         self.assertNotIn("method='get'", off.casefold())
         on = render_global_retest_status(

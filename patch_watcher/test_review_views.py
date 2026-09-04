@@ -33,7 +33,7 @@ class ReviewViewsTests(unittest.TestCase):
         self.assertIn("Handle simple comments", html)
         self.assertIn("Handle all comments", html)
         self.assertIn("upload one new patchset automatically", html)
-        self.assertIn("never posted", html)
+        self.assertIn("separate controller action", html)
         self.assertNotIn(" disabled", html)
 
     def test_control_fails_closed_when_upload_is_disabled(self):
@@ -52,7 +52,7 @@ class ReviewViewsTests(unittest.TestCase):
         )
         self.assertIn("a" * 64, html)
         self.assertIn("There is no later upload confirmation", html)
-        self.assertIn("never posted", html)
+        self.assertIn("separate controller action", html)
 
     def test_result_escapes_untrusted_reply_and_has_no_post_control(self):
         html = render_review_result(

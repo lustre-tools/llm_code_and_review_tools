@@ -63,6 +63,8 @@ class GerritConfig:
     upload_enabled: bool = False
     git_name: str = ""
     git_email: str = ""
+    reply_enabled: bool = False
+    jenkins_retrigger_enabled: bool = False
 
     @classmethod
     def load(cls, path: Path | None = None) -> "GerritConfig":
@@ -109,6 +111,7 @@ class GerritConfig:
                 "REFRESH_INTERVAL_SECONDS", "EMAIL_ENABLED", "EMAIL_TO",
                 "SENDMAIL_PATH",
                 "GERRIT_UPLOAD_ENABLED", "GERRIT_GIT_NAME", "GERRIT_GIT_EMAIL",
+                "GERRIT_REPLY_ENABLED", "JENKINS_RETRIGGER_ENABLED",
             }:
                 values[key] = value
 
@@ -166,6 +169,14 @@ class GerritConfig:
                 "Gerrit upload is enabled."
             )
 
+        def enabled_flag(name: str) -> bool:
+            value = values.get(name, "false").casefold()
+            if value not in {"true", "false", "yes", "no", "1", "0"}:
+                raise GerritConfigError(
+                    f"{name} must be true/false, yes/no, or 1/0."
+                )
+            return value in {"true", "yes", "1"}
+
         return cls(
             values["GERRIT_URL"].rstrip("/"),
             values["GERRIT_USER"],
@@ -177,6 +188,8 @@ class GerritConfig:
             upload_enabled,
             git_name,
             git_email,
+            enabled_flag("GERRIT_REPLY_ENABLED"),
+            enabled_flag("JENKINS_RETRIGGER_ENABLED"),
         )
 
 
@@ -245,7 +258,8 @@ class GerritStatusClient:
         }
 
     def fetch_review_snapshot(
-        self, change_url: str, *, expected_revision: str | None = None
+        self, change_url: str, *, expected_revision: str | None = None,
+        require_current: bool = True,
     ) -> dict[str, Any]:
         """Capture one fail-closed unresolved-comment snapshot.
 
@@ -256,9 +270,13 @@ class GerritStatusClient:
 
         change_number = parse_change_number(change_url)
         before = self.fetch_identity(change_url)
-        revision = str(before.get("revision_sha") or "").lower()
-        if expected_revision and revision != str(expected_revision).lower():
+        current_revision = str(before.get("revision_sha") or "").lower()
+        revision = str(expected_revision or current_revision).lower()
+        if expected_revision and current_revision != revision and require_current:
             raise GerritRequestError("Gerrit revision changed before comment capture.")
+        revision_numbers = before.get("revision_numbers") or {}
+        if revision != current_revision and revision not in revision_numbers:
+            raise GerritRequestError("The requested Gerrit revision is no longer in the change.")
         if not re.fullmatch(r"[0-9a-f]{40}", revision):
             raise GerritRequestError("Gerrit returned an invalid current revision.")
         encoded_change = quote(str(change_number), safe="")
@@ -277,7 +295,12 @@ class GerritStatusClient:
         )
         if any(before.get(key) != after.get(key) for key in identity_keys):
             raise GerritRequestError("Gerrit changed during comment capture.")
-        return normalize_review_snapshot(before, direct, ported)
+        target_identity = dict(before)
+        target_identity["revision_sha"] = revision
+        target_identity["patchset"] = int(
+            revision_numbers.get(revision) or before.get("patchset") or 0
+        )
+        return normalize_review_snapshot(target_identity, direct, ported)
 
     def _fetch_detail(self, change_number: int, options: str) -> dict[str, Any]:
         endpoint = f"/a/changes/{quote(str(change_number), safe='')}/detail?{options}"

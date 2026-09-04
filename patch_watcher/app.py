@@ -108,6 +108,34 @@ from build_views import (
     render_build_start_control,
 )
 from jenkins_adapter import JenkinsSnapshotClient, JenkinsSnapshotError
+from standing_policy import (
+    ActivePatchRun,
+    PatchAutomationPolicy,
+    RevisionIdentity,
+    StandingPolicyConflict,
+    StandingPolicyError,
+    StandingPolicyStore,
+    TriggerObservation,
+    decide_trigger,
+)
+from gerrit_reply import (
+    GerritReplyConflict,
+    GerritReplyError,
+    configured_reply_controller,
+)
+from jenkins_retrigger import (
+    JenkinsRetriggerConflict,
+    JenkinsRetriggerController,
+    JenkinsRetriggerError,
+    JenkinsRetriggerStore,
+    configured_jenkins_writer,
+)
+from external_action_views import (
+    render_jenkins_retrigger_confirmation,
+    render_jenkins_retrigger_control,
+    render_review_reply_confirmation,
+    render_review_reply_control,
+)
 
 PATCHES = []
 DEFAULT_SEED_FILE = Path.home() / ".config" / "patch-watcher" / "patches.txt"
@@ -119,6 +147,15 @@ DEFAULT_AUTOMATION_DATABASE = (
 )
 DEFAULT_GERRIT_UPLOAD_DATABASE = (
     Path.home() / ".local" / "state" / "patch-watcher" / "gerrit-uploads.sqlite3"
+)
+DEFAULT_STANDING_POLICY_FILE = (
+    Path.home() / ".config" / "patch-watcher" / "standing-policies.json"
+)
+DEFAULT_GERRIT_REPLY_DATABASE = (
+    Path.home() / ".local" / "state" / "patch-watcher" / "gerrit-replies.sqlite3"
+)
+DEFAULT_JENKINS_RETRIGGER_DATABASE = (
+    Path.home() / ".local" / "state" / "patch-watcher" / "jenkins-retriggers.sqlite3"
 )
 DEFAULT_WORKER_PROFILE_ID = "host-unsandboxed-mac-v1"
 DEFAULT_ENGINEERING_WORKER_PROFILE_ID = "host-unsandboxed-mac-engineering-v1"
@@ -134,6 +171,9 @@ AUTOMATION_STORE = None
 RETEST_CONTROLLER = None
 FAILURE_ACTION_CONTROLLER = None
 GERRIT_UPLOAD_CONTROLLER = None
+STANDING_POLICY_STORE = None
+GERRIT_REPLY_CONTROLLER = None
+JENKINS_RETRIGGER_CONTROLLER = None
 JENKINS_SNAPSHOT_CLIENT = JenkinsSnapshotClient()
 AUTOMATION_OBSERVER = None
 PATCHES_LOCK = threading.RLock()
@@ -161,6 +201,54 @@ def initialize_automation_store(database=DEFAULT_AUTOMATION_DATABASE):
     ACTIVE_AUTOMATION_DATABASE = Path(database)
     AUTOMATION_STORE = AutomationStateStore(ACTIVE_AUTOMATION_DATABASE)
     return AUTOMATION_STORE
+
+
+def initialize_standing_policy_store(path=DEFAULT_STANDING_POLICY_FILE):
+    """Open the private per-patch standing-policy document."""
+
+    global STANDING_POLICY_STORE
+    STANDING_POLICY_STORE = StandingPolicyStore(path)
+    return STANDING_POLICY_STORE
+
+
+def initialize_gerrit_reply_controller(database=DEFAULT_GERRIT_REPLY_DATABASE):
+    """Open the controller-only exact-review-reply ledger and transport."""
+
+    global GERRIT_REPLY_CONTROLLER
+    try:
+        GERRIT_REPLY_CONTROLLER = configured_reply_controller(database)
+    except GerritConfigError:
+        GERRIT_REPLY_CONTROLLER = None
+    return GERRIT_REPLY_CONTROLLER
+
+
+def _jenkins_status_identity(change_number):
+    return GerritStatusClient.configured().fetch_identity(
+        f"https://review.whamcloud.com/{int(change_number)}"
+    )
+
+
+def initialize_jenkins_retrigger_controller(
+    database=DEFAULT_JENKINS_RETRIGGER_DATABASE,
+):
+    """Open the controller-only Jenkins retrigger ledger when enabled."""
+
+    global JENKINS_RETRIGGER_CONTROLLER
+    try:
+        config = GerritConfig.load()
+        JENKINS_RETRIGGER_CONTROLLER = JenkinsRetriggerController(
+            JenkinsRetriggerStore(database),
+            configured_jenkins_writer(),
+            status_fetcher=_jenkins_status_identity,
+            failure_fetcher=JENKINS_SNAPSHOT_CLIENT.fetch_failure_snapshot,
+            capability_check=lambda binding: (
+                binding.get("capability") == "jenkins_retrigger"
+            ),
+            enabled=config.jenkins_retrigger_enabled,
+        )
+    except (GerritConfigError, ImportError, ModuleNotFoundError, ValueError):
+        JENKINS_RETRIGGER_CONTROLLER = None
+    return JENKINS_RETRIGGER_CONTROLLER
 
 
 def _fresh_patch_revision(gerrit_url):
@@ -349,21 +437,41 @@ def _advance_failure_action_runs(patch_id=None):
 def _observe_patch_automation(patch):
     """Collect one snapshot, reconcile writes, and apply the research trigger."""
     patch_record = sync_automation_patch(patch)
+    # Persist the canonical standing-policy projection before any legacy
+    # controller gets a chance to act.  This closes the restart/crash window
+    # where an older automatic retest policy could otherwise survive a newly
+    # saved standing-policy change.
+    standing_session = None
+    if _has_explicit_standing_policy(patch):
+        standing_policy = _standing_policy(patch)
+        _sync_standing_test_policy(patch, standing_policy)
+        standing_session = _apply_standing_policy(patch, policy=standing_policy)
     research_mode = "disabled"
     if patch_record is not None:
         research_mode = AUTOMATION_STORE.get_research_policy(
             patch_record.patch_id
         ).mode
-    result = RETEST_CONTROLLER.tick_patch(
-        patch,
-        collect_research_evidence=research_mode != "disabled",
-    )
-    _advance_failure_action_runs(result.patch_id)
+    result = None
+    # A selected engineering handler owns this observation cycle.  Do not also
+    # dispatch a Maloo write from the same poll.
+    active_session = _active_session_for_patch(patch.get("change_number"))
+    if standing_session is None and active_session is None:
+        result = RETEST_CONTROLLER.tick_patch(
+            patch,
+            collect_research_evidence=research_mode != "disabled",
+        )
+        _advance_failure_action_runs(result.patch_id)
     if SESSION_STORE is not None:
         for session in SESSION_STORE.list_sessions(include_terminal=True):
-            if session.state == "succeeded" and session.patch_id == str(result.patch_id):
+            if (
+                session.state == "succeeded"
+                and session.patch_id == str(patch_record.patch_id)
+            ):
                 _process_automatic_completion(session)
     if (
+        standing_session is None
+        and active_session is None
+        and
         research_mode == "automatic"
         and AUTOMATION_STORE.get_global_automation().enabled
     ):
@@ -386,6 +494,205 @@ def _observe_patch_automation(patch):
             # are normal polling outcomes, but remain durably inspectable.
             _record_research_trigger_decision(patch, "not_started", str(exc))
     return result
+
+
+def _standing_identity(patch):
+    return RevisionIdentity(
+        patch_id=str(patch.get("change_number") or ""),
+        change_number=int(patch.get("change_number") or 0),
+        patchset=int(patch.get("patchset") or 0),
+        revision=str(patch.get("revision_sha") or ""),
+    )
+
+
+def _standing_policy(patch):
+    patch_id = str(patch.get("change_number") or "")
+    if STANDING_POLICY_STORE is None or not patch_id:
+        return PatchAutomationPolicy(patch_id or "unknown")
+    return STANDING_POLICY_STORE.get(patch_id)
+
+
+def _has_explicit_standing_policy(patch):
+    if STANDING_POLICY_STORE is None:
+        return False
+    patch_id = str(patch.get("change_number") or "")
+    return bool(patch_id) and any(
+        item.patch_id == patch_id for item in STANDING_POLICY_STORE.list()
+    )
+
+
+def _sync_standing_test_policy(patch, policy):
+    """Keep the existing deterministic/research controllers under one policy."""
+
+    if AUTOMATION_STORE is None:
+        return
+    patch_id = str(patch.get("change_number") or "")
+    if not patch_id:
+        return
+    retest_mode = "disabled"
+    research_mode = "disabled"
+    if policy.test_failures != "off":
+        retest_mode = "automatic" if policy.trigger_mode == "automatic" else "approval"
+    if policy.test_failures == "investigate":
+        research_mode = "automatic" if policy.trigger_mode == "automatic" else "manual"
+    current = AUTOMATION_STORE.get_policy(patch_id)
+    if current.mode != retest_mode:
+        AUTOMATION_STORE.set_policy(
+            patch_id, mode=retest_mode,
+            action_budget=4 if retest_mode != "disabled" else 0,
+            delivery_budget=4 if retest_mode != "disabled" else 0,
+            updated_by="standing-policy-sync",
+        )
+    research = AUTOMATION_STORE.get_research_policy(patch_id)
+    if research.mode != research_mode:
+        AUTOMATION_STORE.set_research_policy(
+            patch_id, mode=research_mode,
+            run_budget=2 if research_mode != "disabled" else 0,
+            updated_by="standing-policy-sync",
+        )
+
+
+def _record_standing_decision(patch, decision, *, outcome=""):
+    if AUTOMATION_STORE is None:
+        return
+    payload = decision.to_dict()
+    if outcome:
+        payload["outcome"] = str(outcome)[:500]
+    AUTOMATION_STORE.record_observation(
+        str(patch.get("change_number") or ""),
+        revision=str(patch.get("revision_sha") or ""),
+        source="standing_policy",
+        kind="standing_policy_trigger_decision",
+        fingerprint=hashlib.sha256(json.dumps(
+            payload, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest(),
+        payload=payload,
+    )
+
+
+def _consumed_standing_keys(patch):
+    """Return exact standing events that already reserved a managed run."""
+
+    if AUTOMATION_STORE is None:
+        return frozenset()
+    patch_id = str(patch.get("change_number") or "")
+    revision = str(patch.get("revision_sha") or "")
+    if not patch_id:
+        return frozenset()
+    return frozenset(
+        str(item.payload.get("coalescing_key"))
+        for item in AUTOMATION_STORE.list_observations(patch_id)
+        if item.source == "standing_policy"
+        and item.kind == "standing_policy_trigger_decision"
+        and item.revision == revision
+        and item.payload.get("eligible") is True
+        and item.payload.get("outcome")
+        and item.payload.get("coalescing_key")
+    )
+
+
+def _automatic_standing_decision(patch, policy, kind, fingerprint):
+    identity = _standing_identity(patch)
+    active = _active_session_for_patch(patch.get("change_number"))
+    active_run = None
+    if active is not None:
+        active_run = ActivePatchRun(
+            run_id=active.run_id, patch_id=identity.patch_id, state="running"
+        )
+    observation = TriggerObservation(kind, identity, fingerprint)
+    return decide_trigger(
+        policy, observation, identity, source="automatic", active_run=active_run,
+        consumed_keys=_consumed_standing_keys(patch),
+    )
+
+
+def _apply_standing_policy(patch, *, policy=None):
+    """Start at most one exact-revision handler from an explicit standing policy."""
+
+    if (
+        STANDING_POLICY_STORE is None or RUN_CONTROLLER is None
+        or AUTOMATION_STORE is None
+    ):
+        return None
+    try:
+        policy = policy or _standing_policy(patch)
+        _sync_standing_test_policy(patch, policy)
+        if (
+            policy.trigger_mode != "automatic"
+            or not AUTOMATION_STORE.get_global_automation().enabled
+        ):
+            return None
+        upload_enabled = bool(
+            GERRIT_UPLOAD_CONTROLLER is not None
+            and GERRIT_UPLOAD_CONTROLLER.enabled
+        )
+        # Review work wins when both review and build signals arrive together;
+        # the one-run owner invariant defers the build event to a later poll.
+        if (
+            upload_enabled
+            and policy.review_comments != "off"
+            and int(patch.get("unresolved") or 0) > 0
+        ):
+            snapshot = GerritStatusClient.configured().fetch_review_snapshot(
+                patch["url"], expected_revision=str(patch.get("revision_sha") or "")
+            )
+            decision = _automatic_standing_decision(
+                patch, policy, "review_comments", snapshot["snapshot_sha256"],
+            )
+            if decision.eligible:
+                session = RUN_CONTROLLER.request_review_comments(
+                    patch, snapshot, mode=policy.review_comments,
+                    request_id=decision.coalescing_key,
+                )
+                SESSION_STORE.append_event(
+                    session.session_id, "standing_policy_triggered", decision.to_dict(),
+                    idempotency_key="standing-trigger:" + decision.coalescing_key,
+                )
+                _record_standing_decision(patch, decision, outcome=session.run_id)
+                return session
+            _record_standing_decision(patch, decision)
+        if (
+            upload_enabled
+            and
+            policy.build_failures == "repair"
+            and str(patch.get("jenkins") or "").upper() == "FAIL"
+            and patch.get("jenkins_url")
+        ):
+            seed = hashlib.sha256(json.dumps({
+                "revision": patch.get("revision_sha"),
+                "jenkins_url": patch.get("jenkins_url"),
+            }, sort_keys=True).encode("utf-8")).hexdigest()
+            preliminary = _automatic_standing_decision(
+                patch, policy, "build_failure", seed,
+            )
+            if not preliminary.eligible:
+                _record_standing_decision(patch, preliminary)
+                if preliminary.code != "duplicate":
+                    return None
+            snapshot = _capture_build_failure_snapshot(patch)
+            decision = _automatic_standing_decision(
+                patch, policy, "build_failure", snapshot["snapshot_sha256"],
+            )
+            if decision.eligible:
+                session = RUN_CONTROLLER.request_build_failure(
+                    patch, snapshot, request_id=decision.coalescing_key,
+                )
+                SESSION_STORE.append_event(
+                    session.session_id, "standing_policy_triggered", decision.to_dict(),
+                    idempotency_key="standing-trigger:" + decision.coalescing_key,
+                )
+                _record_standing_decision(patch, decision, outcome=session.run_id)
+                return session
+            _record_standing_decision(patch, decision)
+    except (
+        AutomationConflict, GerritConfigError, GerritRequestError,
+        JenkinsSnapshotError, RunControllerError, SessionAlreadyExists,
+        StandingPolicyError, ValueError,
+    ) as exc:
+        log_structured_error(
+            "standing_policy", str(exc), str(patch.get("url") or ""),
+        )
+    return None
 
 
 def _patch_snapshot():
@@ -1515,7 +1822,7 @@ def _pending_failure_actions(patch):
     return result[:6]
 
 
-def _research_and_failure_html(patch):
+def _research_and_failure_html(patch, *, show_policy_form=True):
     policy, failures, session, report = _research_context(patch)
     active = _active_session_for_patch(patch.get("change_number"))
     research_patch = dict(patch)
@@ -1528,20 +1835,20 @@ def _research_and_failure_html(patch):
             else ""
         ),
     })
-    sections = [
-        render_research_policy_form(
+    sections = []
+    if show_policy_form:
+        sections.append(render_research_policy_form(
             research_patch,
             policy=policy,
             csrf_token=CSRF_TOKEN,
             idempotency_token=secrets.token_urlsafe(18),
-        ),
-        render_unknown_failure_control(
+        ))
+    sections.append(render_unknown_failure_control(
             research_patch,
             policy=policy,
             csrf_token=CSRF_TOKEN,
             idempotency_token=secrets.token_urlsafe(18),
-        ),
-    ]
+        ))
     if AUTOMATION_STORE is not None:
         try:
             decision = next((
@@ -1956,6 +2263,37 @@ def _run_events(session):
     return result
 
 
+def _review_reply_control_html(session, request, report, upload):
+    plan = None
+    if GERRIT_REPLY_CONTROLLER is not None:
+        plan = GERRIT_REPLY_CONTROLLER.store.get_by_run(session.run_id)
+    resolution = ()
+    if RUN_CONTROLLER is not None:
+        resolution = tuple(
+            item for item in RUN_CONTROLLER.engineering_store.list_artifacts(session.run_id)
+            if item.kind == "review_resolution"
+        )
+    eligible = bool(
+        session.state == "succeeded"
+        and upload is not None and upload.state == "succeeded"
+        and len(resolution) == 1
+        and any(item.get("reply_draft") for item in (report or {}).get("comment_results", ()))
+        and request.get("review_snapshot", {}).get("complete") is True
+    )
+    if not eligible:
+        reason = (
+            "Replies become available after the exact review run succeeds, its patchset is "
+            "published, and an immutable resolution artifact exists."
+        )
+    else:
+        reason = ""
+    return render_review_reply_control(
+        run_id=session.run_id, plan=plan,
+        enabled=bool(GERRIT_REPLY_CONTROLLER and GERRIT_REPLY_CONTROLLER.enabled),
+        eligible=eligible, reason=reason, csrf_token=CSRF_TOKEN,
+    )
+
+
 def run_detail_html(session):
     questions = SESSION_STORE.list_human_questions(session.session_id)
     question = next((item for item in reversed(questions) if item.status == "open"), None)
@@ -1975,6 +2313,7 @@ def run_detail_html(session):
                 if GERRIT_UPLOAD_CONTROLLER is not None else None
             )
             review_html = render_review_result(request, report, upload)
+            review_html += _review_reply_control_html(session, request, report, upload)
         elif request.get("request_kind") == "build_failure":
             terminal = SESSION_STORE.get_terminal_result(session.session_id)
             report = terminal.result if terminal is not None else {}
@@ -1997,6 +2336,51 @@ def run_detail_html(session):
 def _standalone_document(title, body):
     return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>{escape(title)}</title><style>
 body{{margin:0;background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1100px;margin:42px auto;padding:24px;background:white;border:1px solid #e4e7ec;border-radius:14px}}section{{border-top:1px solid #eaecf0;padding-top:18px;margin-top:18px}}dl{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}}dt{{font-size:12px;color:#667085}}dd{{margin:4px 0;word-break:break-word}}textarea{{width:min(720px,95%);min-height:90px;display:block;margin:8px 0}}button{{border:0;border-radius:8px;padding:10px 14px;background:#315efb;color:white;font-weight:600}}form.inline-control{{display:inline-block;margin:5px}}.danger-link,.danger{{color:#b42318}}.run-state,.worker-boundary{{display:inline-block;border-radius:999px;padding:4px 8px;background:#f2f4f7;margin:3px}}.tone-good{{background:#dcfce7}}.tone-warn{{background:#fef3c7}}.tone-bad{{background:#fee2e2}}.run-conversation,.run-timeline{{max-height:400px;overflow:auto}}.safety-note{{padding:10px;background:#eff8ff;border-radius:8px}}code{{word-break:break-all}}</style></head><body>{body}</body></html>"""
+
+
+def _standing_policy_html(patch):
+    try:
+        policy = _standing_policy(patch)
+    except (StandingPolicyError, ValueError) as exc:
+        return "<p class='error'>Standing policy unavailable: " + escape(str(exc)) + "</p>"
+
+    def options(values, selected):
+        return "".join(
+            "<option value='" + escape(value, quote=True) + "'"
+            + (" selected" if value == selected else "") + ">"
+            + escape(value.replace("_", " ").title()) + "</option>"
+            for value in values
+        )
+
+    global_enabled = bool(
+        AUTOMATION_STORE is not None
+        and AUTOMATION_STORE.get_global_automation().enabled
+    )
+    gate = "enabled" if global_enabled else "disabled"
+    return (
+        "<section class='standing-policy'><div class='policy-heading'>"
+        "<strong>Standing automation</strong><span class='availability'>"
+        + escape(policy.trigger_mode.title()) + "</span></div>"
+        "<form method='post' action='/standing-policy'>"
+        f"<input type='hidden' name='csrf_token' value='{escape(CSRF_TOKEN, quote=True)}'>"
+        f"<input type='hidden' name='change_number' value='{escape(str(patch.get('change_number') or ''), quote=True)}'>"
+        f"<input type='hidden' name='patchset' value='{escape(str(patch.get('patchset') or ''), quote=True)}'>"
+        f"<input type='hidden' name='revision_sha' value='{escape(str(patch.get('revision_sha') or ''), quote=True)}'>"
+        f"<input type='hidden' name='expected_version' value='{policy.version}'>"
+        "<label>Trigger<select name='trigger_mode'>"
+        + options(("manual", "automatic"), policy.trigger_mode) + "</select></label>"
+        "<label>Tests<select name='test_failures'>"
+        + options(("off", "deterministic", "investigate"), policy.test_failures)
+        + "</select></label><label>Builds<select name='build_failures'>"
+        + options(("off", "repair"), policy.build_failures)
+        + "</select></label><label>Reviews<select name='review_comments'>"
+        + options(("off", "simple", "all"), policy.review_comments)
+        + "</select></label><button class='secondary' type='submit'>Save policy</button>"
+        "</form><p class='detail'>Global automation is <strong>" + gate
+        + "</strong>. Automatic handlers still pin one exact revision, coalesce duplicates, "
+        "and fail to human on uncertainty. Gerrit replies and Jenkins retriggers remain "
+        "separate controller actions.</p></section>"
+    )
 
 
 def _patch_row(patch, jira_base=JIRA_BASE_URL):
@@ -2075,6 +2459,26 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
             and GERRIT_UPLOAD_CONTROLLER.enabled
         ),
     )
+    retrigger_plan = None
+    if (
+        JENKINS_RETRIGGER_CONTROLLER is not None
+        and patch.get("jenkins_url")
+    ):
+        try:
+            retrigger_plan = JENKINS_RETRIGGER_CONTROLLER.store.get_by_build_url(
+                str(patch["jenkins_url"])
+            )
+        except JenkinsRetriggerError:
+            retrigger_plan = None
+    build_html += render_jenkins_retrigger_control(
+        investigation_patch,
+        plan=retrigger_plan,
+        enabled=bool(
+            JENKINS_RETRIGGER_CONTROLLER is not None
+            and JENKINS_RETRIGGER_CONTROLLER.enabled
+        ),
+        csrf_token=CSRF_TOKEN,
+    )
     latest_build_run = _latest_session_for_patch_kind(
         patch.get("change_number"), "build_failure"
     )
@@ -2098,8 +2502,10 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         timeline=retest_timeline,
         approval_action=retest_approval,
         csrf_token=CSRF_TOKEN,
+        show_policy_form=False,
     )
-    research_html = _research_and_failure_html(patch)
+    research_html = _research_and_failure_html(patch, show_policy_form=False)
+    standing_policy_html = _standing_policy_html(patch)
     identity = "patch-actions-" + escape(
         f"{patch.get('change_number', 'unknown')}-{patch.get('patchset', 'unknown')}",
         quote=True,
@@ -2112,6 +2518,7 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         f"<form class='quick-action' method='post' action='/remove'>"
         f"<input type='hidden' name='url' value='{escape(patch['url'], quote=True)}'>"
         "<button class='danger' type='submit'>Remove</button></form></div>"
+        f"{standing_policy_html}"
         "<div class='action-policy-grid'>"
         "<section class='action-policy-item available' aria-label='Build failure handling'>"
         "<div class='policy-heading'><strong>Build failures</strong>"
@@ -2158,7 +2565,7 @@ def page(message="", jira_base=JIRA_BASE_URL):
     ) or "<tr><td colspan='5' class='empty'>No patches yet. Add a Gerrit change to start watching.</td></tr>"
     return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>Patch Watcher</title><style>
-body{{margin:0;background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1450px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card,.resource-card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a;overflow-x:auto}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input,textarea,select{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px}}input,textarea{{flex:1;min-width:240px}}textarea{{display:block;width:min(620px,95%);min-height:70px;margin:7px 0 10px}}button,.button-link{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}.button-link{{display:inline-block;text-decoration:none}}button:disabled{{cursor:not-allowed;opacity:.68}}button.danger,button.secondary,.button-link.danger-link{{background:#fff;padding:7px 11px}}button.danger,.button-link.danger-link{{color:#b42318;border:1px solid #fecdca}}button.secondary{{color:#344054;border:1px solid #d0d5dd}}table{{width:100%;border-collapse:collapse;margin-top:18px;min-width:1050px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url,.detail{{color:#667085;font-size:12px;margin-top:4px;word-break:break-word}}.patch-meta{{display:flex;align-items:center;gap:6px;color:#667085;font-size:12px;margin-top:7px}}.ticket{{display:inline-block;margin-left:8px;font-size:12px}}.error{{color:#b42318;font-size:12px;margin-top:5px;max-width:340px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}.section-title{{display:flex;justify-content:space-between;align-items:center;gap:16px}}small{{display:block;color:#667085;margin-top:4px}}details{{margin-top:7px;font-size:12px;color:#475467}}details ol{{padding-left:18px;max-height:140px;overflow:auto}}details li{{margin:5px 0}}details time{{font-variant-numeric:tabular-nums}}.history-state{{color:#667085}}.status-chip,.resource-status,.admission-status,.worker-boundary{{display:inline-block;border:1px solid transparent;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;line-height:1.35;white-space:nowrap}}.tone-good{{background:#dcfce7;border-color:#86efac;color:#166534}}.tone-bad{{background:#fee2e2;border-color:#fca5a5;color:#991b1b}}.tone-warn{{background:#fef3c7;border-color:#fcd34d;color:#78350f}}.tone-info{{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}}.tone-neutral{{background:#f2f4f7;border-color:#d0d5dd;color:#344054}}.status-link{{text-decoration:none}}.status-link:focus-visible .status-chip{{outline:3px solid #315efb;outline-offset:2px}}.ci-stack{{display:flex;align-items:flex-start;gap:5px;flex-wrap:wrap;margin-top:8px}}.patch-actions{{width:min(720px,80vw)}}.patch-actions>summary{{cursor:pointer;display:inline-flex;align-items:center;border:1px solid #d0d5dd;border-radius:8px;padding:7px 11px;background:white;color:#344054;font-weight:700}}.quick-actions{{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}}.quick-action{{margin:0}}.action-policy-grid{{display:grid;grid-template-columns:repeat(3,minmax(190px,1fr));gap:10px}}.action-policy-item{{border:1px solid #d0d5dd;border-radius:10px;padding:10px;background:#fff}}.action-policy-item.unavailable{{background:#f8fafc;color:#667085}}.policy-heading{{display:flex;justify-content:space-between;gap:8px;align-items:center}}.availability{{border:1px solid #d0d5dd;border-radius:999px;padding:2px 6px;font-size:10px;text-transform:uppercase;font-weight:700}}.available .availability{{background:#dcfce7;border-color:#86efac;color:#166534}}.future-options{{padding-left:18px;margin:8px 0}}.retest-control,.research-controls{{width:auto;padding:6px 8px;border:1px solid #d0d5dd;border-radius:8px}}.retest-control form{{display:grid;gap:7px;margin-top:9px}}.retest-control label{{display:grid;gap:4px}}.retest-control input,.retest-control select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.retest-decision,.retest-approval{{display:grid;gap:6px;margin-top:9px;padding:8px;background:#f8fafc;border-radius:7px}}.retest-approval{{background:#fffaeb}}.retest-timeline{{padding-left:18px}}.retest-global form{{margin-top:12px}}.resource-toolbar{{display:flex;justify-content:flex-end;margin-top:20px}}.resource-dashboard{{display:grid;gap:18px}}.resource-card{{margin-top:0}}.resource-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}}.resource-metric{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:12px}}.resource-metric dt{{font-size:12px;color:#667085}}.resource-metric dd{{margin:5px 0 0;font-size:18px;font-weight:700}}.resource-errors{{color:#b42318}}.resource-ok{{color:#027a48}}.session-controls{{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-top:16px}}fieldset{{border:1px solid #fecdca;border-radius:8px}}.message-content{{white-space:pre-wrap;margin-top:3px}}.worker-admission{{margin-top:18px}}.worker-admission-heading{{display:flex;justify-content:space-between;gap:12px;align-items:center}}.worker-boundaries{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}.worker-provenance{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}}.worker-provenance div{{background:#f8fafc;border:1px solid #eaecf0;border-radius:8px;padding:10px}}.worker-provenance dt{{font-size:12px;color:#667085}}.worker-provenance dd{{margin:4px 0 0;word-break:break-word}}.admission-failures{{color:#b42318}}@media(max-width:980px){{.action-policy-grid{{grid-template-columns:1fr}}}}@media(max-width:760px){{.session-controls{{grid-template-columns:1fr}}}}</style></head>
+body{{margin:0;background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1450px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card,.resource-card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a;overflow-x:auto}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input,textarea,select{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px}}input,textarea{{flex:1;min-width:240px}}textarea{{display:block;width:min(620px,95%);min-height:70px;margin:7px 0 10px}}button,.button-link{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}.button-link{{display:inline-block;text-decoration:none}}button:disabled{{cursor:not-allowed;opacity:.68}}button.danger,button.secondary,.button-link.danger-link{{background:#fff;padding:7px 11px}}button.danger,.button-link.danger-link{{color:#b42318;border:1px solid #fecdca}}button.secondary{{color:#344054;border:1px solid #d0d5dd}}table{{width:100%;border-collapse:collapse;margin-top:18px;min-width:1050px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url,.detail{{color:#667085;font-size:12px;margin-top:4px;word-break:break-word}}.patch-meta{{display:flex;align-items:center;gap:6px;color:#667085;font-size:12px;margin-top:7px}}.ticket{{display:inline-block;margin-left:8px;font-size:12px}}.error{{color:#b42318;font-size:12px;margin-top:5px;max-width:340px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}.section-title{{display:flex;justify-content:space-between;align-items:center;gap:16px}}small{{display:block;color:#667085;margin-top:4px}}details{{margin-top:7px;font-size:12px;color:#475467}}details ol{{padding-left:18px;max-height:140px;overflow:auto}}details li{{margin:5px 0}}details time{{font-variant-numeric:tabular-nums}}.history-state{{color:#667085}}.status-chip,.resource-status,.admission-status,.worker-boundary{{display:inline-block;border:1px solid transparent;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;line-height:1.35;white-space:nowrap}}.tone-good{{background:#dcfce7;border-color:#86efac;color:#166534}}.tone-bad{{background:#fee2e2;border-color:#fca5a5;color:#991b1b}}.tone-warn{{background:#fef3c7;border-color:#fcd34d;color:#78350f}}.tone-info{{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}}.tone-neutral{{background:#f2f4f7;border-color:#d0d5dd;color:#344054}}.status-link{{text-decoration:none}}.status-link:focus-visible .status-chip{{outline:3px solid #315efb;outline-offset:2px}}.ci-stack{{display:flex;align-items:flex-start;gap:5px;flex-wrap:wrap;margin-top:8px}}.patch-actions{{width:min(720px,80vw)}}.patch-actions>summary{{cursor:pointer;display:inline-flex;align-items:center;border:1px solid #d0d5dd;border-radius:8px;padding:7px 11px;background:white;color:#344054;font-weight:700}}.quick-actions{{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}}.quick-action{{margin:0}}.standing-policy{{border:1px solid #b2ccff;border-radius:10px;padding:10px;background:#f5f8ff;margin:10px 0}}.standing-policy form{{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr)) auto;gap:7px;align-items:end;margin-top:8px}}.standing-policy label{{display:grid;gap:3px}}.standing-policy select{{min-width:0;width:100%;padding:7px}}.action-policy-grid{{display:grid;grid-template-columns:repeat(3,minmax(190px,1fr));gap:10px}}.action-policy-item{{border:1px solid #d0d5dd;border-radius:10px;padding:10px;background:#fff}}.action-policy-item.unavailable{{background:#f8fafc;color:#667085}}.policy-heading{{display:flex;justify-content:space-between;gap:8px;align-items:center}}.availability{{border:1px solid #d0d5dd;border-radius:999px;padding:2px 6px;font-size:10px;text-transform:uppercase;font-weight:700}}.available .availability{{background:#dcfce7;border-color:#86efac;color:#166534}}.future-options{{padding-left:18px;margin:8px 0}}.retest-control,.research-controls{{width:auto;padding:6px 8px;border:1px solid #d0d5dd;border-radius:8px}}.retest-control form{{display:grid;gap:7px;margin-top:9px}}.retest-control label{{display:grid;gap:4px}}.retest-control input,.retest-control select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.retest-decision,.retest-approval{{display:grid;gap:6px;margin-top:9px;padding:8px;background:#f8fafc;border-radius:7px}}.retest-approval{{background:#fffaeb}}.retest-timeline{{padding-left:18px}}.retest-global form{{margin-top:12px}}.resource-toolbar{{display:flex;justify-content:flex-end;margin-top:20px}}.resource-dashboard{{display:grid;gap:18px}}.resource-card{{margin-top:0}}.resource-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}}.resource-metric{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:12px}}.resource-metric dt{{font-size:12px;color:#667085}}.resource-metric dd{{margin:5px 0 0;font-size:18px;font-weight:700}}.resource-errors{{color:#b42318}}.resource-ok{{color:#027a48}}.session-controls{{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-top:16px}}fieldset{{border:1px solid #fecdca;border-radius:8px}}.message-content{{white-space:pre-wrap;margin-top:3px}}.worker-admission{{margin-top:18px}}.worker-admission-heading{{display:flex;justify-content:space-between;gap:12px;align-items:center}}.worker-boundaries{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}.worker-provenance{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}}.worker-provenance div{{background:#f8fafc;border:1px solid #eaecf0;border-radius:8px;padding:10px}}.worker-provenance dt{{font-size:12px;color:#667085}}.worker-provenance dd{{margin:4px 0 0;word-break:break-word}}.admission-failures{{color:#b42318}}@media(max-width:980px){{.action-policy-grid{{grid-template-columns:1fr}}.standing-policy form{{grid-template-columns:repeat(2,minmax(140px,1fr))}}}}@media(max-width:760px){{.session-controls{{grid-template-columns:1fr}}}}</style></head>
 <body><style>.research-controls{{width:min(430px,88vw);border:1px solid #d0d5dd;border-radius:8px;padding:8px}}.research-controls>summary{{cursor:pointer;font-weight:700}}.research-controls section{{border-top:1px solid #eaecf0;margin-top:10px;padding-top:10px}}.research-controls form{{display:grid;gap:7px;margin-top:8px}}.research-controls input,.research-controls select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.research-controls dl{{display:grid;gap:6px}}.research-controls dd{{margin:2px 0 6px;word-break:break-word}}.action-approval-card{{background:#fffaeb;border:1px solid #fedf89;border-radius:8px;padding:10px}}</style><main><h1>Patch Watcher</h1><p class='sub'>Track Gerrit patches, managed sessions, and worker resources.</p>
 <div class='resource-toolbar'><form method='post' action='/resources/refresh'><button class='secondary'>Refresh resource status</button></form></div>{resources}{worker_admission}{global_retest_html()}
 {active_runs_html()}{engineering_runs_html()}<section class='card'><h2>Add a patch</h2><form class='add' method='post' action='/add'><input name='url' required placeholder='https://review.whamcloud.com/c/...'><button>Add patch</button></form>{f"<div class='notice'>{escape(message)}</div>" if message else ''}</section>
@@ -2203,6 +2610,57 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         parts = [item for item in path.split("/") if item]
+        if len(parts) == 3 and parts[0] == "review-replies" and parts[2] == "confirm":
+            if (
+                GERRIT_REPLY_CONTROLLER is None
+                or not GERRIT_REPLY_CONTROLLER.enabled
+            ):
+                self.send_error(503, "Gerrit reply writes are disabled")
+                return
+            try:
+                plan = GERRIT_REPLY_CONTROLLER.store.get(parts[1])
+            except GerritReplyError:
+                self.send_error(404)
+                return
+            if plan.state != "prepared":
+                self.send_error(409, "This exact reply write is not awaiting confirmation")
+                return
+            expires_at = str(int(time.time()) + ENGINEERING_CONFIRMATION_TTL_SECONDS)
+            token = _signed_confirmation(
+                "review-reply", plan.reply_id, plan.binding_digest, expires_at,
+            )
+            body = render_review_reply_confirmation(
+                plan, token=token, expires_at=expires_at, csrf_token=CSRF_TOKEN,
+            )
+            self.respond(_standalone_document("Confirm Gerrit replies", body))
+            return
+        if (
+            len(parts) == 3 and parts[0] == "jenkins-retriggers"
+            and parts[2] == "confirm"
+        ):
+            if (
+                JENKINS_RETRIGGER_CONTROLLER is None
+                or not JENKINS_RETRIGGER_CONTROLLER.enabled
+            ):
+                self.send_error(503, "Jenkins retriggers are disabled")
+                return
+            try:
+                plan = JENKINS_RETRIGGER_CONTROLLER.store.get(parts[1])
+            except JenkinsRetriggerError:
+                self.send_error(404)
+                return
+            if plan.state != "prepared":
+                self.send_error(409, "This exact retrigger is not awaiting confirmation")
+                return
+            expires_at = str(int(time.time()) + ENGINEERING_CONFIRMATION_TTL_SECONDS)
+            token = _signed_confirmation(
+                "jenkins-retrigger", plan.action_id, plan.binding_digest, expires_at,
+            )
+            body = render_jenkins_retrigger_confirmation(
+                plan, token=token, expires_at=expires_at, csrf_token=CSRF_TOKEN,
+            )
+            self.respond(_standalone_document("Confirm Jenkins retrigger", body))
+            return
         if path == "/build-runs/confirm-start":
             query = parse_qs(parsed.query, keep_blank_values=True)
             try:
@@ -2622,6 +3080,333 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         parts = [item for item in path.split("/") if item]
+        if parts and parts[0] == "review-replies":
+            token = data.get("csrf_token", [""])[0]
+            if not hmac.compare_digest(token, CSRF_TOKEN):
+                self.send_error(403, "Invalid request token")
+                return
+            if GERRIT_REPLY_CONTROLLER is None:
+                self.send_error(503, "Gerrit reply controller is unavailable")
+                return
+            if (
+                not (len(parts) == 3 and parts[2] == "reconcile")
+                and not GERRIT_REPLY_CONTROLLER.enabled
+            ):
+                self.send_error(503, "Gerrit reply writes are disabled")
+                return
+            if path == "/review-replies/prepare":
+                run_id = data.get("run_id", [""])[0]
+                try:
+                    session = _find_session_by_run_id(run_id)
+                    request = RUN_CONTROLLER._request_payload(session)
+                    terminal = SESSION_STORE.get_terminal_result(session.session_id)
+                    report = terminal.result if terminal is not None else {}
+                    upload = GERRIT_UPLOAD_CONTROLLER.store.get_by_run(run_id)
+                    artifacts = tuple(
+                        item for item in RUN_CONTROLLER.engineering_store.list_artifacts(run_id)
+                        if item.kind == "review_resolution"
+                    )
+                    if (
+                        session.state != "succeeded"
+                        or request.get("request_kind") != "review_comments"
+                        or upload is None or upload.state != "succeeded"
+                        or len(artifacts) != 1
+                        or not any(
+                            item.get("reply_draft")
+                            for item in report.get("comment_results", ())
+                        )
+                    ):
+                        raise GerritReplyConflict(
+                            "The exact review run is not eligible to post replies"
+                        )
+                    artifact = artifacts[0]
+                    artifact_root = (
+                        RUN_CONTROLLER.runs_directory / "engineering-artifacts" / run_id
+                    ).resolve()
+                    resolution_path = artifact.resolve_path(
+                        artifact_root, must_exist=True,
+                    )
+                    key = "dashboard-review-reply:" + hashlib.sha256(
+                        (run_id + artifact.sha256 + str(
+                            request.get("review_snapshot_sha256") or ""
+                        )).encode("utf-8")
+                    ).hexdigest()
+                    plan = GERRIT_REPLY_CONTROLLER.prepare(
+                        run_id=run_id, session_id=session.session_id,
+                        review_snapshot=request["review_snapshot"],
+                        resolution_path=resolution_path,
+                        resolution_artifact_id=artifact.artifact_id,
+                        resolution_sha256=artifact.sha256,
+                        requested_by="dashboard-operator", idempotency_key=key,
+                    )
+                except (
+                    AttributeError, GerritReplyError, RunControllerError,
+                    SessionNotFound, ValueError,
+                ) as exc:
+                    self.send_error(409, str(exc))
+                    return
+                if plan.state != "prepared":
+                    self.respond(_standalone_document(
+                        "Gerrit reply state",
+                        "<main><h1>Gerrit reply state</h1>"
+                        + render_review_reply_control(
+                            run_id=run_id, plan=plan, csrf_token=CSRF_TOKEN,
+                        )
+                        + "<p><a href='/runs/" + escape(run_id, quote=True)
+                        + "'>Return to run</a></p></main>",
+                    ))
+                    return
+                self.send_response(303)
+                self.send_header("Location", f"/review-replies/{plan.reply_id}/confirm")
+                self.end_headers()
+                return
+            if len(parts) == 3 and parts[2] in {"execute", "reconcile"}:
+                try:
+                    plan = GERRIT_REPLY_CONTROLLER.store.get(parts[1])
+                    if parts[2] == "execute":
+                        binding = data.get("binding_digest", [""])[0]
+                        expires_at = data.get("confirmation_expires_at", [""])[0]
+                        confirmation = data.get("confirmation_token", [""])[0]
+                        if (
+                            not _engineering_confirmation_unexpired(expires_at)
+                            or not _verify_confirmation(
+                                confirmation, "review-reply", plan.reply_id,
+                                binding, expires_at,
+                            )
+                            or not _claim_engineering_confirmation(
+                                confirmation, plan.reply_id,
+                            )
+                        ):
+                            self.send_error(403, "Invalid, expired, or used confirmation")
+                            return
+                        plan = GERRIT_REPLY_CONTROLLER.execute(
+                            plan.reply_id, expected_binding_digest=binding,
+                        )
+                    else:
+                        plan = GERRIT_REPLY_CONTROLLER.reconcile(plan.reply_id)
+                except GerritReplyError as exc:
+                    self.send_error(409, str(exc))
+                    return
+                self.respond(_standalone_document(
+                    "Gerrit reply state",
+                    "<main><h1>Gerrit reply state</h1>"
+                    + render_review_reply_control(
+                        run_id=plan.run_id, plan=plan, csrf_token=CSRF_TOKEN,
+                    )
+                    + "<p><a href='/runs/" + escape(plan.run_id, quote=True)
+                    + "'>Return to run</a></p></main>",
+                ))
+                return
+            self.send_error(404)
+            return
+        if parts and parts[0] == "jenkins-retriggers":
+            token = data.get("csrf_token", [""])[0]
+            if not hmac.compare_digest(token, CSRF_TOKEN):
+                self.send_error(403, "Invalid request token")
+                return
+            if JENKINS_RETRIGGER_CONTROLLER is None:
+                self.send_error(503, "Jenkins retrigger controller is unavailable")
+                return
+            if (
+                not (len(parts) == 3 and parts[2] == "reconcile")
+                and not JENKINS_RETRIGGER_CONTROLLER.enabled
+            ):
+                self.send_error(503, "Jenkins retriggers are disabled")
+                return
+            if path == "/jenkins-retriggers/prepare":
+                try:
+                    change = int(data.get("change_number", ["0"])[0])
+                    patchset = int(data.get("patchset", ["0"])[0])
+                except ValueError:
+                    self.send_error(400, "Invalid Jenkins retrigger identity")
+                    return
+                revision = data.get("revision_sha", [""])[0].lower()
+                patch = _find_exact_patch(change, patchset, revision)
+                if patch is None:
+                    self.send_error(409, "The patch changed; refresh before retriggering")
+                    return
+                try:
+                    snapshot = _capture_build_failure_snapshot(patch)
+                    digest = str(snapshot["snapshot_sha256"])
+                    key = "dashboard-jenkins-retrigger:" + digest
+                    run_id = "manual-jenkins-retrigger-" + digest[:32]
+                    plan = JENKINS_RETRIGGER_CONTROLLER.prepare(
+                        snapshot=snapshot, idempotency_key=key,
+                        run_id=run_id, session_id=run_id,
+                        requested_by="dashboard-operator",
+                        action_budget=1, actions_used=0,
+                    )
+                except (
+                    GerritConfigError, GerritRequestError, JenkinsSnapshotError,
+                    JenkinsRetriggerError, ValueError,
+                ) as exc:
+                    self.send_error(409, str(exc))
+                    return
+                if plan.state != "prepared":
+                    self.respond(_standalone_document(
+                        "Jenkins retrigger state",
+                        "<main><h1>Jenkins retrigger state</h1>"
+                        + render_jenkins_retrigger_control(
+                            patch, plan=plan, csrf_token=CSRF_TOKEN,
+                        )
+                        + "<p><a href='/'>Return to patches</a></p></main>",
+                    ))
+                    return
+                self.send_response(303)
+                self.send_header(
+                    "Location", f"/jenkins-retriggers/{plan.action_id}/confirm"
+                )
+                self.end_headers()
+                return
+            if len(parts) == 3 and parts[2] in {"execute", "reconcile"}:
+                try:
+                    plan = JENKINS_RETRIGGER_CONTROLLER.store.get(parts[1])
+                    if parts[2] == "execute":
+                        binding = data.get("binding_digest", [""])[0]
+                        expires_at = data.get("confirmation_expires_at", [""])[0]
+                        confirmation = data.get("confirmation_token", [""])[0]
+                        if (
+                            not _engineering_confirmation_unexpired(expires_at)
+                            or not _verify_confirmation(
+                                confirmation, "jenkins-retrigger", plan.action_id,
+                                binding, expires_at,
+                            )
+                            or not _claim_engineering_confirmation(
+                                confirmation, plan.action_id,
+                            )
+                        ):
+                            self.send_error(403, "Invalid, expired, or used confirmation")
+                            return
+                        plan = JENKINS_RETRIGGER_CONTROLLER.execute(
+                            plan.action_id, expected_binding_digest=binding,
+                        )
+                    else:
+                        plan = JENKINS_RETRIGGER_CONTROLLER.reconcile(plan.action_id)
+                except JenkinsRetriggerError as exc:
+                    self.send_error(409, str(exc))
+                    return
+                self.respond(_standalone_document(
+                    "Jenkins retrigger state",
+                    "<main><h1>Jenkins retrigger state</h1>"
+                    + render_jenkins_retrigger_control(
+                        {}, plan=plan, csrf_token=CSRF_TOKEN,
+                    )
+                    + "<p><a href='/'>Return to patches</a></p></main>",
+                ))
+                return
+            self.send_error(404)
+            return
+        if path in {"/standing-policy", "/standing-policy/confirm"}:
+            token = data.get("csrf_token", [""])[0]
+            if not hmac.compare_digest(token, CSRF_TOKEN):
+                self.send_error(403, "Invalid request token")
+                return
+            if STANDING_POLICY_STORE is None or AUTOMATION_STORE is None:
+                self.send_error(503, "Standing policy state is not initialized")
+                return
+            try:
+                change = int(data.get("change_number", ["0"])[0])
+                patchset = int(data.get("patchset", ["0"])[0])
+                expected_version = int(data.get("expected_version", ["0"])[0])
+            except ValueError:
+                self.send_error(400, "Invalid standing-policy identity")
+                return
+            revision = data.get("revision_sha", [""])[0].lower()
+            patch = _find_exact_patch(change, patchset, revision)
+            if patch is None:
+                self.send_error(409, "The patch changed; refresh before saving its policy")
+                return
+            try:
+                proposed = PatchAutomationPolicy(
+                    patch_id=str(change),
+                    test_failures=data.get("test_failures", ["off"])[0],
+                    build_failures=data.get("build_failures", ["off"])[0],
+                    review_comments=data.get("review_comments", ["off"])[0],
+                    trigger_mode=data.get("trigger_mode", ["manual"])[0],
+                    version=expected_version,
+                )
+                if path == "/standing-policy" and proposed.trigger_mode == "automatic":
+                    expires_at = str(
+                        int(time.time()) + ENGINEERING_CONFIRMATION_TTL_SECONDS
+                    )
+                    confirmation = _signed_confirmation(
+                        "standing-policy", change, patchset, revision,
+                        proposed.test_failures, proposed.build_failures,
+                        proposed.review_comments, proposed.trigger_mode,
+                        expected_version, expires_at,
+                    )
+                    body = (
+                        "<main><p><a href='/'>← Keep current policy</a></p>"
+                        "<h1>Confirm automatic patch handlers</h1>"
+                        "<p>No policy has changed yet. This authorizes automatic "
+                        "handlers for the exact configured capabilities whenever the "
+                        "independent global automation gate is enabled.</p>"
+                        "<dl><dt>Change</dt><dd>" + escape(str(change))
+                        + ", PS " + escape(str(patchset)) + "</dd>"
+                        "<dt>Tests</dt><dd>" + escape(proposed.test_failures)
+                        + "</dd><dt>Builds</dt><dd>"
+                        + escape(proposed.build_failures)
+                        + "</dd><dt>Reviews</dt><dd>"
+                        + escape(proposed.review_comments) + "</dd></dl>"
+                        "<p>Build and review handlers may start Claude/LTVM work and "
+                        "upload exactly one validated patchset. Gerrit replies and "
+                        "Jenkins retriggers remain independently disabled unless their "
+                        "controller switches are enabled.</p>"
+                        "<form method='post' action='/standing-policy/confirm'>"
+                        f"<input type='hidden' name='csrf_token' value='{escape(CSRF_TOKEN, quote=True)}'>"
+                        f"<input type='hidden' name='change_number' value='{change}'>"
+                        f"<input type='hidden' name='patchset' value='{patchset}'>"
+                        f"<input type='hidden' name='revision_sha' value='{escape(revision, quote=True)}'>"
+                        f"<input type='hidden' name='expected_version' value='{expected_version}'>"
+                        f"<input type='hidden' name='test_failures' value='{escape(proposed.test_failures, quote=True)}'>"
+                        f"<input type='hidden' name='build_failures' value='{escape(proposed.build_failures, quote=True)}'>"
+                        f"<input type='hidden' name='review_comments' value='{escape(proposed.review_comments, quote=True)}'>"
+                        "<input type='hidden' name='trigger_mode' value='automatic'>"
+                        f"<input type='hidden' name='confirmation_expires_at' value='{expires_at}'>"
+                        f"<input type='hidden' name='confirmation_token' value='{confirmation}'>"
+                        "<button type='submit'>Enable this automatic policy</button>"
+                        "</form></main>"
+                    )
+                    self.respond(_standalone_document(
+                        "Confirm automatic patch handlers", body,
+                    ))
+                    return
+                if path == "/standing-policy/confirm":
+                    expires_at = data.get("confirmation_expires_at", [""])[0]
+                    confirmation = data.get("confirmation_token", [""])[0]
+                    if (
+                        proposed.trigger_mode != "automatic"
+                        or not _engineering_confirmation_unexpired(expires_at)
+                        or not _verify_confirmation(
+                            confirmation, "standing-policy", change, patchset,
+                            revision, proposed.test_failures,
+                            proposed.build_failures, proposed.review_comments,
+                            proposed.trigger_mode, expected_version, expires_at,
+                        )
+                        or not _claim_engineering_confirmation(
+                            confirmation,
+                            f"standing-policy:{change}:{expected_version}",
+                        )
+                    ):
+                        self.send_error(403, "Invalid, expired, or used policy confirmation")
+                        return
+                saved = STANDING_POLICY_STORE.save(
+                    proposed, expected_version=expected_version,
+                )
+                sync_automation_patch(patch)
+                _sync_standing_test_policy(patch, saved)
+                if saved.trigger_mode == "automatic":
+                    _apply_standing_policy(patch)
+            except (
+                AutomationConflict, StandingPolicyConflict,
+                StandingPolicyError, ValueError,
+            ) as exc:
+                self.send_error(409, str(exc))
+                return
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.end_headers()
+            return
         if parts and parts[0] == "build-runs":
             token = data.get("csrf_token", [""])[0]
             if not hmac.compare_digest(token, CSRF_TOKEN):
@@ -3620,6 +4405,22 @@ if __name__ == "__main__":
         help="private SQLite database for Phase 3C upload plans",
     )
     parser.add_argument(
+        "--standing-policy-file",
+        type=Path,
+        default=DEFAULT_STANDING_POLICY_FILE,
+        help="private JSON file for per-patch standing automation policies",
+    )
+    parser.add_argument(
+        "--gerrit-reply-database", type=Path,
+        default=DEFAULT_GERRIT_REPLY_DATABASE,
+        help="private SQLite ledger for exact Gerrit reply writes",
+    )
+    parser.add_argument(
+        "--jenkins-retrigger-database", type=Path,
+        default=DEFAULT_JENKINS_RETRIGGER_DATABASE,
+        help="private SQLite ledger for exact Jenkins retriggers",
+    )
+    parser.add_argument(
         "--worker-profile",
         default=DEFAULT_WORKER_PROFILE_ID,
         help="checked-in worker profile ID for newly admitted runs",
@@ -3633,6 +4434,7 @@ if __name__ == "__main__":
     ACTIVE_WATCH_FILE = args.seed_file
     initialize_session_store(args.session_database)
     initialize_automation_store(args.automation_database)
+    initialize_standing_policy_store(args.standing_policy_file)
     initialize_worker_profile(args.worker_profile)
     RESOURCE_COLLECTION_ENABLED = True
     refresh_resource_status(force=True)
@@ -3648,6 +4450,8 @@ if __name__ == "__main__":
         raise SystemExit(0 if result.sent or not config.email_enabled else 1)
     initialize_run_controller()
     initialize_gerrit_upload_controller(args.gerrit_upload_database)
+    initialize_gerrit_reply_controller(args.gerrit_reply_database)
+    initialize_jenkins_retrigger_controller(args.jenkins_retrigger_database)
     initialize_retest_controller()
     print(f"Patch Watcher listening on http://127.0.0.1:{args.port}")
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()

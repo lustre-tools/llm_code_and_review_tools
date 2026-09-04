@@ -1177,19 +1177,23 @@ nonempty immutable diff plus guest test evidence, rebuilt in a fresh staging
 checkout, one-use POST to push, and reconciliation rather than blind retry
 after an ambiguous result. Claude never receives Gerrit credentials.
 
-Phase 4A is implemented as the first review-handling slice. An operator starts
-one exact-revision run in `simple` or `all` mode against a confirmed immutable
-unresolved-comment snapshot; the run records one disposition per target
-comment, captures the proposed diff and reply drafts, and requires successful
-LTVM test evidence. That single run-start approval preauthorizes one Phase 3C
-upload after the revision and snapshot digest are revalidated. Review replies
-remain drafts and are never posted.
+Phase 4A is implemented as the first review-handling slice. A manual start or
+explicitly confirmed standing automatic policy starts one exact-revision run
+in `simple` or `all` mode against an immutable unresolved-comment snapshot;
+the run records one disposition per target comment, captures the proposed diff
+and reply drafts, and requires successful LTVM test evidence. The bounded
+run-start authorization preauthorizes one Phase 3C upload after the revision
+and snapshot digest are revalidated. Review replies
+remain drafts during the run; Phase 5B can post them only through its separate
+manual, exact-snapshot action and kill switch.
 
-The remaining Phase 4 work is the standing-policy form of both modes — they
-are operator-started per revision today, not automatic policies — and the
-containerization/isolation gate, which is still unmet: the shipped profile is
-the truthful `Unsandboxed host worker`. That gate is an entry criterion for
-Phase 5's broader controlled Gerrit writes and for any Phase 6 lane.
+The standing-policy form of both review modes and build-failure repair is now
+implemented. Each automatic policy must be explicitly confirmed for that
+patch, and automatic triggers still require the independent global execution
+gate and share the same exact-evidence coalescing identity as manual starts. The
+containerization/isolation gate remains unmet: the shipped profile is the
+truthful `Unsandboxed host worker`. That gate is an entry criterion for any
+broader automatic external-write policy or Phase 6 lane.
 
 ### Phase 0A: durable observer
 
@@ -1396,8 +1400,10 @@ verify before granting guest execution.
 Implemented as a distinct upload capability. It remains
 disabled by default and is never implied by permission to edit, build, or
 test. Upload requires an exact-current-patchset recheck, a reviewable diff and
-test evidence, a controller-generated upload plan, and explicit operator
-approval. Ambiguous upload outcomes reconcile with Gerrit before any retry.
+test evidence, and a controller-generated upload plan. For review and build
+repair, the single run-start confirmation preauthorizes one qualifying upload;
+there is no second approval. Ambiguous upload outcomes reconcile with Gerrit
+before any retry.
 The uploaded patchset becomes a new observed revision and cannot silently
 reuse the old run's authority.
 
@@ -1406,9 +1412,9 @@ controller-only staging checkout reconstructed from the immutable diff artifact
 after the worker checkout has been deleted. Validation requests carry an
 explicit `evidence_role`; upload requires at least one successful `test` role
 and never infers a test from a command label. Preparation verifies the old
-Gerrit Change-Id and records the amended commit SHA before the confirmation
-page is rendered. The final one-use token binds the complete plan digest,
-including the old revision, diff, test evidence, and proposed commit.
+Gerrit Change-Id and records the amended commit SHA before dispatch. The
+one-use durable binding covers the complete plan, including the old revision,
+diff, test evidence, and proposed commit.
 
 Exit criteria:
 
@@ -1443,8 +1449,9 @@ Exit criteria:
 - “simple” mode escalates any ambiguous/nontrivial comment without attempting
   it;
 - “all” mode attempts broadly but still escalates uncertainty;
-- neither mode posts review replies automatically; replies remain drafts;
-- a qualifying manually started run uploads one new patchset without a second
+- neither engineering mode posts review replies as part of patchset upload;
+  replies remain drafts until the separate Phase 5B action;
+- a qualifying review-handling run uploads one new patchset without a second
   approval step, using the Phase 3C writer's kill switch, idempotency ledger,
   exact-revision checks, and reconciliation-only handling of ambiguity;
 - all edits map to a specific comment and pinned revision;
@@ -1454,8 +1461,9 @@ Exit criteria:
 
 Build:
 
-- expose a manual action only for one completed failed Jenkins build belonging
-  to the exact current Gerrit patchset;
+- expose a manual action, plus explicitly confirmed standing automatic policy,
+  only for one completed failed Jenkins build belonging to the exact current
+  Gerrit patchset; automatic starts also require the independent global gate;
 - require one confirmation that binds the run to the immutable change,
   patchset, revision SHA/ref, Jenkins job/build, and complete bounded-log
   snapshot digest;
@@ -1489,15 +1497,42 @@ Exit criteria:
 - a claimed or ambiguous push is reconciled against Gerrit after completion
   callback or restart and is never blindly repeated.
 
-### Future Phase 5B: wider Jenkins and Gerrit write actions
+### Phase 5B: initial wider Jenkins and Gerrit writes (implemented)
 
-Jenkins retriggers, aborts, configuration changes, Gerrit messages/replies,
-and other write operations are not part of Phase 5A. Each needs its own narrow
-capability, policy and approval rule, exact remote-state binding, idempotency
-contract, reconciliation behavior, action budget, audit trail, and tested
-human-escalation path. Review-comment replies from Phase 4 remain drafts; the
-implemented review and build flows may upload qualifying patchsets but do not
-post those replies or perform Jenkins writes.
+The first two independently gated, controller-owned actions are implemented:
+
+- **Post review replies:** after a successful exact-snapshot review run and
+  successful patchset upload, an operator may confirm the immutable reply
+  artifact. A reply remains bound to the historical original revision and the
+  exact comment ID and file/line/range from that snapshot; it is not rebound to
+  the newer patchset produced by the handler. Immediately before POST, the
+  controller verifies that original revision and exact unresolved comment and
+  location. It uses a deterministic Gerrit tag and a durable pre-write claim;
+  uncertainty is reconciliation-only and never a blind retry.
+- **Retrigger Jenkins:** an operator may confirm one retrigger of the exact
+  completed failed parent build bound to the current revision, Gerrit ref,
+  project/branch, and failure-snapshot digest. The controller checks for a
+  newer equivalent build before dispatch, spends one action budget, claims the
+  write durably, and reconciles only against a newer build with the same exact
+  Gerrit parameters.
+
+The exact failed Jenkins build is a terminal one-use dispatch identity. Once
+claimed, success completes it; a failed or ambiguous dispatch can only be
+reconciled against remote state and is not blindly retryable. A new failed
+build is a distinct input and action identity.
+
+Both transports hold credentials exclusively in the controller. Their kill
+switches are independent from patchset upload and from each other, default
+off, and their durable ledgers are append-audited. Standing automatic build or
+review handling additionally requires explicit confirmation of that patch's
+automatic policy and the independent global gate. It starts the engineering
+run only; it does not silently grant reply posting or Jenkins retrigger
+authority.
+
+Jenkins aborts, configuration changes, general Gerrit messages/votes, and
+automatic external-write policy remain future work. Each still needs its own
+narrow capability, approval rule, exact-state binding, idempotency contract,
+reconciliation behavior, budget, audit trail, and escalation path.
 
 ### Phase 6: autonomous lanes
 

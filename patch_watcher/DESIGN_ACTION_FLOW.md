@@ -5,8 +5,10 @@ handling. Phase 1's deterministic Maloo retest and Phase 2's read-only
 unknown-failure research are implemented. Existing-Jira association followed
 by a retest is available only as a two-step, operator-approved workflow;
 manual review-comment handling and exact Jenkins build-failure repair are also
-implemented as isolated engineering runs. Broader autonomous source editing
-and wider Jenkins/Gerrit mutations remain future work.
+implemented as isolated engineering runs. The first Phase 5B controller
+writes—exact Gerrit review replies and exact Jenkins retriggers—are implemented
+as manual, independently gated actions. Broader autonomous external writes
+remain future work.
 
 The implementation-grade state, persistence, native Claude runner, human
 messaging, LTVM, security, recovery, and phased-delivery contracts are in
@@ -17,18 +19,19 @@ the admitted execution environment in which an agent may perform that flow.
 
 ## Per-patch controls
 
-Each watched Gerrit patch gets its own test-error policy beside its status:
+Each watched Gerrit patch has one compact standing policy beside its status:
 
-- **Disabled:** observe the safe top-level gates but create no action;
-- **Advise:** calculate and display the exact eligible action;
-- **Approval:** prepare a durable action and require a separate operator
-  confirmation; or
-- **Automatic:** permit an eligible action only while the separately confirmed
-  global external-execution gate is enabled.
+- **Trigger:** manual or automatic;
+- **Tests:** off, deterministic handling, or investigate unknown failures;
+- **Builds:** off or repair the exact Jenkins failure; and
+- **Reviews:** off, handle simple comments, or handle all comments.
 
-The control also sets a per-revision action budget and exposes a dry-run
-evaluation. Review and Jenkins build-failure handling are separate, manually
-started exact-revision actions; they are not enabled by this test-error policy.
+The saved policy follows the Gerrit change, while every decision binds to an
+exact patchset, revision SHA, and evidence fingerprint. Manual buttons and
+automatic observation use the same coalescing identity, so the same event does
+not start two runs. Automatic triggers require the independent global
+execution gate. The controller retains bounded per-revision action/run budgets
+for the underlying deterministic and research flows.
 
 The settings belong to the individual patch, not to the page globally. They
 must remain visible while the patch is refreshed so an operator can see both
@@ -38,11 +41,11 @@ the current Gerrit state and the selected handling policy.
 
 Newly added patches use safe defaults:
 
-- Test-error policy: **Disabled**
+- Trigger: **Manual**
+- Tests, builds, and reviews: **Off**
 - Per-revision external-action budget: zero until an operator saves a policy
 - Global automatic-execution gate: **Disabled**
-- Review and Jenkins build-failure handlers: manual only, with the separate
-  Gerrit-upload capability disabled by default
+- Gerrit upload/reply and Jenkins-retrigger capabilities: **Disabled**
 
 Defaults should be configurable later, but changing them must never silently
 enable an automated action for existing patches.
@@ -91,7 +94,8 @@ The implemented test-error flow is:
 
 Build-failure handling means repair of one completed Jenkins failure for the
 exact current Gerrit revision. It is distinct from Maloo test-error retesting.
-The user starts it manually and sees one confirmation page binding all granted
+It starts either manually or from an explicitly confirmed automatic standing
+policy while the independent global gate is enabled. The start grant binds all
 authority to the change, patchset, revision SHA, Gerrit ref, Jenkins job and
 build number, and a digest of the captured build and bounded console-log
 snapshot.
@@ -121,13 +125,18 @@ reconciliation inspect Gerrit for the proposed commit; they never blindly
 repeat the push. Success refreshes the watched change so the uploaded patchset
 is observed as a new revision and the completed run's old authority cannot be
 reused. Jenkins retriggers, aborts, configuration changes, and other wider
-Jenkins writes are outside this phase and remain future, separately gated
-work.
+Jenkins writes are outside this phase. Exact Jenkins retrigger is implemented
+separately in Phase 5B and disabled by default; aborts, configuration changes,
+and other wider writes remain future work. The same exact failed build is a
+terminal one-use dispatch identity: failure or ambiguity after a claim permits
+reconciliation only, not another blind submission.
 
 ## Handle reviews (Phase 4A)
 
-The page offers two manually started, exact-revision review-handling choices.
-Starting either mode confirms the immutable unresolved-comment snapshot and
+The page offers two exact-revision review-handling choices. Either may be
+started manually or by a standing automatic policy, but automatic use requires
+an explicit confirmation of that policy plus the independent global execution
+gate. Starting either mode binds the immutable unresolved-comment snapshot and
 authorizes an isolated Claude Code run. The worker has no Gerrit credentials.
 
 - **Handle simple comments:** shell out to Claude Code with a narrowly scoped
@@ -145,9 +154,31 @@ diff and reply drafts, and requires successful LTVM test evidence. A qualifying
 run uploads one new patchset automatically under the run-start authorization;
 there is no second upload confirmation. The controller rechecks both the
 revision and comment-snapshot digest immediately before upload and reconciles
-an ambiguous push without blindly retrying. Review replies remain drafts and
-are never posted by this flow. Any ambiguity or incomplete result fails to the
-human instead of widening authority.
+an ambiguous push without blindly retrying. Review replies remain drafts
+during this engineering flow. If the separate reply capability is enabled, an
+operator may later confirm posting the exact immutable drafts. Any ambiguity
+or incomplete result fails to the human instead of widening authority.
+
+## Phase 5B controller writes
+
+Exact Jenkins retrigger and immutable Gerrit review-reply posting are
+implemented as two independent controller capabilities. Both default to off,
+have separate kill switches and durable claims, and never expose credentials
+to a worker. Enabling patchset upload enables neither action.
+
+A Jenkins retrigger is bound to one completed failed parent build and its exact
+change, patchset, revision, ref, project/branch, and failure-snapshot digest.
+Its dispatch identity is terminal and one-use: success is complete, while a
+failed or ambiguous dispatch is reconciliation-only and cannot be blindly
+retried as the same action.
+
+A review reply is bound to the immutable comment ID and file/line/range on the
+revision where the comment was originally made. That original revision may be
+historical after the review handler uploads a new patchset. The preflight must
+therefore verify the original revision and exact unresolved comment/location;
+it must not rewrite the target to the newly current revision. Posting remains
+a separately confirmed action and uses a deterministic tag plus a one-use,
+reconciliation-only claim.
 
 ## Agent orchestration roadmap
 

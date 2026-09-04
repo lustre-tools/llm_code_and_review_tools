@@ -3,11 +3,12 @@
 Patch Watcher watches Gerrit changes over time and provides a deliberately
 bounded engineering-control surface. It presents current review and CI state,
 persists decisions and action history, and recommends the next human action.
-Its first executable capability is one deterministic Maloo retest for a
-revision whose enforced failures all have accepted Jira evidence. It does not
-vote, post comments, modify source, upload patchsets, or invoke Claude for that
-mechanical flow. Every patch starts Disabled and automatic external execution
-also starts globally Disabled.
+It now supports deterministic Maloo retests, bounded research, controlled
+engineering/review/build-repair runs, and exact controller-owned patchset,
+review-reply, and Jenkins-retrigger writes. Workers never receive Gerrit or
+Jenkins credentials. Every patch starts with all standing actions off,
+automatic triggering starts off, and every remote-write kill switch starts
+off.
 
 The status rules intentionally follow Marc Vef's Gerrit graph implementation:
 
@@ -23,8 +24,9 @@ The status rules intentionally follow Marc Vef's Gerrit graph implementation:
 
 Patch Watcher's explicit watch state (`awaiting-ci`, `needs-review`,
 `needs-attention`, `ci-failed`, `ready`, or `terminal`) is an extension point
-inspired by Patch Shepherd. Recommendations are display-only; guarded actions
-may be added later.
+inspired by Patch Shepherd. Guarded actions are exposed separately from status,
+with exact-state bindings, durable history, bounded authority, and explicit
+kill switches.
 
 ## Private configuration
 
@@ -48,6 +50,8 @@ EMAIL_ENABLED=false
 EMAIL_TO=paf@mulberrytree.us
 SENDMAIL_PATH=/usr/sbin/sendmail
 GERRIT_UPLOAD_ENABLED=false
+GERRIT_REPLY_ENABLED=false
+JENKINS_RETRIGGER_ENABLED=false
 # Required only when the separate upload kill switch is enabled:
 GERRIT_GIT_NAME=Your Name
 GERRIT_GIT_EMAIL=you@example.com
@@ -56,6 +60,12 @@ GERRIT_GIT_EMAIL=you@example.com
 Generate the HTTP password in Gerrit under **Settings → HTTP Credentials**.
 Never add the private configuration to this repository. Email remains a dry
 run until `EMAIL_ENABLED=true` is explicitly configured.
+
+Gerrit patchset upload and reply posting reuse the Gerrit credentials above,
+but have independent kill switches. Jenkins retrigger uses the existing
+`jenkins_tool` private configuration at `~/.config/jenkins-tool/.env` and is
+available only when `JENKINS_RETRIGGER_ENABLED=true`. Enabling one write type
+does not enable another.
 
 ## Run locally
 
@@ -127,14 +137,18 @@ links and GET requests cannot mutate a run. Phase 0C grants no Gerrit, CI,
 Jira, LTVM, source-editing, shell, or upload capability.
 
 Phase 1 adds deterministic Maloo test-error handling without a Claude
-session. Each exact patch revision has one of four explicit policies:
+session. The compact standing-policy form persists four independent
+per-patch choices: trigger mode (`manual` or `automatic`), test failures
+(`off`, `deterministic`, or `investigate`), build failures (`off` or `repair`),
+and review comments (`off`, `simple`, or `all`). Automatic triggering also
+requires the separately confirmed global execution gate. Exact-revision
+fingerprints coalesce duplicate observations and one patch cannot acquire a
+second active managed run.
 
-- **Disabled**: apply the Gerrit gates and record why no flow ran;
-- **Advise**: show the exact session-level retest that would be requested;
-- **Approval**: prepare one exact action and wait for a separate operator
-  confirmation tied to the revision and policy snapshot; or
-- **Automatic**: execute only when the independently confirmed global gate is
-  also enabled.
+For test failures, `manual` maps deterministic actions to approval and unknown
+failures to manually started research; `automatic` permits those exact actions
+only when the independently confirmed global gate is also enabled. The dry-run
+view remains available for inspecting the deterministic decision.
 
 The controller checks the non-Maloo Code-Review `-1` gate before querying
 Maloo, groups enforced failures by Maloo session, requires accepted Jira
@@ -175,6 +189,11 @@ The automation ledger is private WAL-backed SQLite state:
 ~/.local/state/patch-watcher/automation.sqlite3
 ```
 
+Standing policy is stored atomically with mode `0600` in
+`~/.config/patch-watcher/standing-policies.json`. Gerrit reply and Jenkins
+retrigger claims have separate private SQLite ledgers so restarts cannot erase
+or duplicate a claimed external write.
+
 Automatic policy changes and the global execution switch each use a separate
 confirmation page. GET requests never enable or approve an external action.
 
@@ -199,9 +218,11 @@ show a WIP badge, so there is no ambiguous “Active” label.
 Each patch has one compact **Actions** disclosure. It groups build failures,
 test failures, and review comments; only implemented controls are interactive.
 The current test-failure policies retain their working controls. Review and
-Jenkins build-failure runs are manual exact-revision actions and appear only
-when their captured inputs and the separate upload capability make them
-eligible.
+Jenkins build-failure runs may be started manually. They may also start from
+standing policy, but only after the operator explicitly confirms that patch's
+automatic policy and independently enables the global automatic-execution
+gate. In both cases the run is bound to captured exact-revision inputs, and
+the separate upload capability must be enabled for publication.
 
 ## Jenkins build-failure repair
 
@@ -222,9 +243,31 @@ controller-owned writer with one idempotency binding over the run, change,
 patchset, revision, diff, and validation evidence. A claimed or ambiguous push
 is reconciled against Gerrit, including during periodic restart recovery, and
 is never blindly repeated. A successful upload is refreshed as a new patchset,
-making the completed run stale. This phase does not retrigger, abort, or
-otherwise write to Jenkins; broader Jenkins actions remain future, separately
-gated work.
+making the completed run stale. The separate **Retrigger Jenkins** action can
+retrigger the exact failed build when its independent kill switch is enabled;
+it does not grant the repair worker Jenkins credentials. The exact failed
+build is a terminal one-use action identity: after dispatch is claimed, a
+failed or ambiguous response permits reconciliation only, never another blind
+dispatch. A genuinely new failed build is a new identity. Abort,
+configuration, and other Jenkins writes remain future work.
+
+## Review handling and replies
+
+**Handle simple comments** and **Handle all comments** capture one immutable
+unresolved-comment snapshot and start an exact-revision engineering run. The
+single run-start confirmation preauthorizes exactly one qualifying patchset
+upload after a nonempty diff and successful LTVM test evidence; it does not
+ask for a second upload approval. Standing automatic starts require their own
+explicit policy confirmation and the global automatic-execution gate.
+
+Reply posting is a separate Phase 5B controller write, independently disabled
+by default. A reply intentionally targets the original revision and exact
+comment/location from the run snapshot, even when the handler has since
+uploaded a newer patchset. Immediately before posting, the controller verifies
+that historical revision, comment identity, file/line/range, and unresolved
+state rather than incorrectly rebinding the reply to the new current revision.
+The immutable reply plan is one-use and reconciliation-only after an uncertain
+dispatch. Claude never receives Gerrit credentials.
 
 ## Controlled engineering runs (Phases 3A–3C)
 
@@ -253,7 +296,9 @@ test evidence. Preparing an upload rebuilds the exact pinned revision in a
 fresh private staging checkout, verifies the diff, preserves the Gerrit
 Change-Id, and records the proposed commit SHA. A second page shows the exact
 old patchset/revision, diff digest, test-evidence digest, and proposed commit;
-only its one-use POST can push. The controller rechecks Gerrit immediately
+only its one-use POST can push. Review-handling and build-repair runs instead
+use their already confirmed run-start grant for exactly one qualifying upload,
+with no second approval. The controller rechecks Gerrit immediately
 before dispatch and reconciles the proposed commit against all Gerrit
 revisions after either success or an uncertain result. It never blindly
 retries an ambiguous push. Claude never receives Gerrit credentials.

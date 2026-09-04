@@ -38,6 +38,9 @@ class PatchWatcherTests(unittest.TestCase):
         app.WORKER_PROFILE = None
         app.ENGINEERING_WORKER_PROFILE = None
         app.GERRIT_UPLOAD_CONTROLLER = None
+        app.GERRIT_REPLY_CONTROLLER = None
+        app.JENKINS_RETRIGGER_CONTROLLER = None
+        app.STANDING_POLICY_STORE = None
         app._ENGINEERING_USED_CONFIRMATIONS.clear()
         app.RESOURCE_COLLECTION_ENABLED = False
         app._RESOURCE_SNAPSHOT = None
@@ -153,6 +156,77 @@ class PatchWatcherTests(unittest.TestCase):
         self.assertIn("method='post' action='/uploads/", body)
         self.assertIn(plan.binding_digest, body)
         self.assertEqual(final_state, "commit_ready")
+
+    def test_external_write_confirmation_routes_fail_closed_when_disabled(self):
+        app.GERRIT_REPLY_CONTROLLER = SimpleNamespace(enabled=False)
+        app.JENKINS_RETRIGGER_CONTROLLER = SimpleNamespace(enabled=False)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        try:
+            for route in (
+                "/review-replies/reply-1/confirm",
+                "/jenkins-retriggers/action-1/confirm",
+            ):
+                with self.subTest(route=route):
+                    with self.assertRaises(HTTPError) as caught:
+                        urlopen(base + route)
+                    self.assertEqual(caught.exception.code, 503)
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    def test_disabled_external_write_switches_still_allow_read_only_reconciliation(self):
+        reply = SimpleNamespace(
+            reply_id="reply-1", run_id="review-run", state="ambiguous",
+            summary="Reply outcome uncertain.",
+        )
+        retrigger = SimpleNamespace(
+            action_id="action-1", state="ambiguous",
+            summary="Retrigger outcome uncertain.",
+        )
+
+        class FakeStore:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self, _identity):
+                return self.value
+
+        class FakeController:
+            enabled = False
+
+            def __init__(self, value):
+                self.store = FakeStore(value)
+                self.calls = 0
+
+            def reconcile(self, _identity):
+                self.calls += 1
+                return self.store.value
+
+        reply_controller = FakeController(reply)
+        jenkins_controller = FakeController(retrigger)
+        app.GERRIT_REPLY_CONTROLLER = reply_controller
+        app.JENKINS_RETRIGGER_CONTROLLER = jenkins_controller
+        server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        try:
+            for route in (
+                "/review-replies/reply-1/reconcile",
+                "/jenkins-retriggers/action-1/reconcile",
+            ):
+                request = Request(
+                    base + route,
+                    data=urlencode({"csrf_token": app.CSRF_TOKEN}).encode(),
+                    method="POST",
+                )
+                self.assertIn("ambiguous", urlopen(request).read().decode())
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=2)
+        self.assertEqual(reply_controller.calls, 1)
+        self.assertEqual(jenkins_controller.calls, 1)
 
     def test_page_displays_review_and_ci_criteria_as_links(self):
         patch_record, _ = app.add_patch(
@@ -279,11 +353,14 @@ class PatchWatcherTests(unittest.TestCase):
         self.assertIn("Both bail to human when judgment is required", rendered)
         self.assertIn("action='/review-runs/prepare'", rendered)
         self.assertIn("upload one new patchset automatically", rendered)
-        self.assertIn("never posted", rendered)
+        self.assertIn("separate controller action", rendered)
         self.assertIn("Handle build failure", rendered)
         self.assertIn("action='/build-runs/prepare'", rendered)
         self.assertNotIn("aria-labelledby='handle-reviews-title'", rendered)
-        self.assertIn("method='post' action='/automation/policy'", rendered)
+        self.assertIn("method='post' action='/standing-policy'", rendered)
+        self.assertIn("name='test_failures'", rendered)
+        self.assertIn("name='build_failures'", rendered)
+        self.assertIn("name='review_comments'", rendered)
         self.assertIn("method='post' action='/automation/dry-run'", rendered)
         self.assertIn("method='post' action='/runs/investigate'", rendered)
         self.assertIn("method='post' action='/engineering-runs/prepare'", rendered)
@@ -309,6 +386,248 @@ class PatchWatcherTests(unittest.TestCase):
         self.assertIn("<strong>Build failures</strong>", rendered)
         self.assertIn("<strong>Review comments</strong>", rendered)
 
+    def test_standing_policy_post_persists_all_capabilities(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app.initialize_automation_store(root / "automation.sqlite3")
+            store = app.initialize_standing_policy_store(root / "standing.json")
+            patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+            patch_record.update(
+                change_number=68160, patchset=4, revision_sha="d" * 40,
+                revision_ref="refs/changes/60/68160/4",
+                project="fs/lustre-release", lifecycle="Open",
+            )
+            app.sync_automation_patch(patch_record)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            try:
+                request = Request(
+                    base + "/standing-policy",
+                    data=urlencode({
+                        "csrf_token": app.CSRF_TOKEN,
+                        "change_number": "68160", "patchset": "4",
+                        "revision_sha": "d" * 40, "expected_version": "0",
+                        "trigger_mode": "manual", "test_failures": "investigate",
+                        "build_failures": "repair", "review_comments": "simple",
+                    }).encode(), method="POST",
+                )
+                urlopen(request).read()
+            finally:
+                server.shutdown(); server.server_close(); thread.join(timeout=2)
+            policy = store.get("68160")
+        self.assertEqual(policy.test_failures, "investigate")
+        self.assertEqual(policy.build_failures, "repair")
+        self.assertEqual(policy.review_comments, "simple")
+        self.assertEqual(policy.trigger_mode, "manual")
+
+    def test_standing_automatic_policy_requires_exact_one_use_confirmation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app.initialize_automation_store(root / "automation.sqlite3")
+            store = app.initialize_standing_policy_store(root / "standing.json")
+            patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+            patch_record.update(
+                change_number=68160, patchset=4, revision_sha="d" * 40,
+                revision_ref="refs/changes/60/68160/4",
+                project="fs/lustre-release", lifecycle="Open",
+            )
+            app.sync_automation_patch(patch_record)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            values = {
+                "csrf_token": app.CSRF_TOKEN,
+                "change_number": "68160", "patchset": "4",
+                "revision_sha": "d" * 40, "expected_version": "0",
+                "trigger_mode": "automatic", "test_failures": "investigate",
+                "build_failures": "repair", "review_comments": "simple",
+            }
+            try:
+                proposal = Request(
+                    base + "/standing-policy", data=urlencode(values).encode(),
+                    method="POST",
+                )
+                confirmation = urlopen(proposal).read().decode()
+                self.assertIn("Confirm automatic patch handlers", confirmation)
+                self.assertEqual(store.get("68160").trigger_mode, "manual")
+                token = re.search(
+                    r"name='confirmation_token' value='([^']+)'", confirmation
+                ).group(1)
+                expires = re.search(
+                    r"name='confirmation_expires_at' value='([^']+)'", confirmation
+                ).group(1)
+                final_values = {
+                    **values,
+                    "confirmation_token": token,
+                    "confirmation_expires_at": expires,
+                }
+                final = Request(
+                    base + "/standing-policy/confirm",
+                    data=urlencode(final_values).encode(), method="POST",
+                )
+                urlopen(final).read()
+                self.assertEqual(store.get("68160").trigger_mode, "automatic")
+                replay = Request(
+                    base + "/standing-policy/confirm",
+                    data=urlencode(final_values).encode(), method="POST",
+                )
+                with self.assertRaises(HTTPError) as caught:
+                    urlopen(replay)
+                self.assertIn(caught.exception.code, {403, 409})
+            finally:
+                server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    def test_observer_syncs_standing_policy_before_legacy_retest_tick(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            automation = app.initialize_automation_store(root / "automation.sqlite3")
+            standing = app.initialize_standing_policy_store(root / "standing.json")
+            patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+            patch_record.update(
+                change_number=68160, patchset=4, revision_sha="d" * 40,
+                revision_ref="refs/changes/60/68160/4",
+                project="fs/lustre-release", lifecycle="Open",
+            )
+            app.sync_automation_patch(patch_record)
+            automation.set_policy(
+                "68160", mode="automatic", action_budget=1,
+                delivery_budget=1, updated_by="old-process",
+            )
+            standing.save(app.PatchAutomationPolicy("68160"))
+
+            class FakeRetestController:
+                def tick_patch(self, patch, **options):
+                    self.mode_seen = automation.get_policy("68160").mode
+                    return SimpleNamespace(patch_id="68160")
+
+            retest = FakeRetestController()
+            app.RETEST_CONTROLLER = retest
+            app.RUN_CONTROLLER = SimpleNamespace(stop=lambda: None)
+            app._observe_patch_automation(patch_record)
+        self.assertEqual(retest.mode_seen, "disabled")
+
+    def test_active_managed_run_suppresses_automatic_retest_in_same_patch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            automation = app.initialize_automation_store(root / "automation.sqlite3")
+            standing = app.initialize_standing_policy_store(root / "standing.json")
+            patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+            patch_record.update(
+                change_number=68160, patchset=4, revision_sha="d" * 40,
+                revision_ref="refs/changes/60/68160/4",
+                project="fs/lustre-release", lifecycle="Open",
+            )
+            app.sync_automation_patch(patch_record)
+            standing.save(app.PatchAutomationPolicy(
+                "68160", test_failures="deterministic", trigger_mode="automatic",
+            ))
+            automation.set_global_automation(True, changed_by="test", reason="test")
+            active = SimpleNamespace(
+                patch_id="68160", state="running", run_id="review-run",
+            )
+
+            class FakeSessions:
+                def list_sessions(self, include_terminal=False):
+                    return [active]
+
+            class ForbiddenRetest:
+                def tick_patch(self, *args, **kwargs):
+                    raise AssertionError("active patch owner must suppress retest")
+
+            app.SESSION_STORE = FakeSessions()
+            app.RETEST_CONTROLLER = ForbiddenRetest()
+            app.RUN_CONTROLLER = SimpleNamespace(stop=lambda: None)
+            app._observe_patch_automation(patch_record)
+
+    def test_standing_review_event_is_consumed_then_build_can_progress(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            automation = app.initialize_automation_store(root / "automation.sqlite3")
+            standing = app.initialize_standing_policy_store(root / "standing.json")
+            patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+            patch_record.update(
+                change_number=68160, patchset=4, revision_sha="d" * 40,
+                revision_ref="refs/changes/60/68160/4",
+                project="fs/lustre-release", lifecycle="Open", unresolved=1,
+                jenkins="FAIL", jenkins_url="https://build.whamcloud.com/job/x/4/",
+            )
+            app.sync_automation_patch(patch_record)
+            standing.save(app.PatchAutomationPolicy(
+                "68160", build_failures="repair", review_comments="simple",
+                trigger_mode="automatic",
+            ))
+            automation.set_global_automation(True, changed_by="test", reason="test")
+
+            class FakeSessions:
+                def list_sessions(self, include_terminal=True):
+                    return []
+
+                def append_event(self, *args, **kwargs):
+                    return None
+
+            class FakeRuns:
+                def __init__(self):
+                    self.review_calls = 0
+                    self.build_calls = 0
+
+                def stop(self):
+                    return None
+
+                def request_review_comments(self, *args, **kwargs):
+                    self.review_calls += 1
+                    return SimpleNamespace(session_id="review-session", run_id="review-run")
+
+                def request_build_failure(self, *args, **kwargs):
+                    self.build_calls += 1
+                    return SimpleNamespace(session_id="build-session", run_id="build-run")
+
+            class FakeGerrit:
+                def fetch_review_snapshot(self, *args, **kwargs):
+                    return {"snapshot_sha256": "a" * 64}
+
+            runs = FakeRuns()
+            app.SESSION_STORE = FakeSessions()
+            app.RUN_CONTROLLER = runs
+            app.GERRIT_UPLOAD_CONTROLLER = SimpleNamespace(enabled=True)
+            review_configured = patch.object(
+                app.GerritStatusClient, "configured", return_value=FakeGerrit()
+            )
+            build_snapshot = patch.object(
+                app, "_capture_build_failure_snapshot",
+                return_value={"snapshot_sha256": "b" * 64},
+            )
+            with review_configured, build_snapshot:
+                self.assertEqual(app._apply_standing_policy(patch_record).run_id, "review-run")
+                self.assertEqual(app._apply_standing_policy(patch_record).run_id, "build-run")
+                self.assertIsNone(app._apply_standing_policy(patch_record))
+        self.assertEqual(runs.review_calls, 1)
+        self.assertEqual(runs.build_calls, 1)
+
+    def test_standing_build_and_review_require_upload_kill_switch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            automation = app.initialize_automation_store(root / "automation.sqlite3")
+            standing = app.initialize_standing_policy_store(root / "standing.json")
+            patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
+            patch_record.update(
+                change_number=68160, patchset=4, revision_sha="d" * 40,
+                revision_ref="refs/changes/60/68160/4",
+                project="fs/lustre-release", lifecycle="Open", unresolved=1,
+                jenkins="FAIL", jenkins_url="https://build.whamcloud.com/job/x/4/",
+            )
+            app.sync_automation_patch(patch_record)
+            standing.save(app.PatchAutomationPolicy(
+                "68160", build_failures="repair", review_comments="all",
+                trigger_mode="automatic",
+            ))
+            automation.set_global_automation(True, changed_by="test", reason="test")
+            app.RUN_CONTROLLER = SimpleNamespace(stop=lambda: None)
+            app.GERRIT_UPLOAD_CONTROLLER = SimpleNamespace(enabled=False)
+            self.assertIsNone(app._apply_standing_policy(patch_record))
+
     def test_global_automation_enable_get_is_display_only_then_post_mutates(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = app.initialize_automation_store(Path(temp_dir) / "automation.sqlite3")
@@ -318,7 +637,7 @@ class PatchWatcherTests(unittest.TestCase):
             base = f"http://127.0.0.1:{server.server_address[1]}"
             try:
                 body = urlopen(base + "/automation/global/confirm-enable").read().decode()
-                self.assertIn("Enable automatic Maloo retests?", body)
+                self.assertIn("Enable automatic patch actions?", body)
                 self.assertFalse(store.get_global_automation().enabled)
                 request = Request(
                     base + "/automation/global/enable",
@@ -395,7 +714,8 @@ class PatchWatcherTests(unittest.TestCase):
             policy = store.get_research_policy("68160")
         self.assertEqual(policy.mode, "disabled")
         self.assertEqual(policy.run_budget, 0)
-        self.assertIn("Research trigger policy", rendered)
+        self.assertIn("Standing automation", rendered)
+        self.assertIn("Trigger policy", rendered)
         self.assertIn("Unknown-failure investigation", rendered)
         self.assertIn("Read-only", rendered)
 
@@ -1067,7 +1387,7 @@ class PatchWatcherTests(unittest.TestCase):
                     base + prepared.exception.headers["Location"]
                 ).read().decode()
                 self.assertIn("no later upload confirmation", confirmation)
-                self.assertIn("never posted", confirmation)
+                self.assertIn("separate controller action", confirmation)
                 token = re.search(
                     r"name='confirmation_token' value='([^']+)'", confirmation
                 ).group(1)

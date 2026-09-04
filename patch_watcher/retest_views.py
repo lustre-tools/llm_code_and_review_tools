@@ -37,20 +37,20 @@ def render_global_retest_status(
         action = (
             "<form method='post' action='/automation/global/disable'>"
             f"<input type='hidden' name='csrf_token' value='{escape(csrf_token, quote=True)}'>"
-            "<button class='secondary' type='submit'>Disable automatic retests</button></form>"
+            "<button class='secondary' type='submit'>Disable automatic actions</button></form>"
         )
     else:
         action = (
             "<a class='button-link danger-link' href='/automation/global/confirm-enable'>"
-            "Review enabling automatic retests</a>"
+            "Review enabling automatic actions</a>"
         )
     summary = (
         f"<p class='detail'>{escape(recent_summary)}</p>" if recent_summary else ""
     )
     return (
         "<section class='card retest-global' aria-labelledby='retest-global-title'>"
-        "<div class='section-title'><div><h2 id='retest-global-title'>Automatic retesting</h2>"
-        "<p class='sub'>Deterministic Maloo handling; no Claude session is used.</p></div>"
+        "<div class='section-title'><div><h2 id='retest-global-title'>Automatic actions</h2>"
+        "<p class='sub'>Master gate for saved automatic test, build, and review policies.</p></div>"
         f"<span class='status-chip {tone}'>Global execution: {state}</span></div>"
         "<p>Patch policies may observe, advise, or prepare approval while this gate is off. "
         "Only explicitly approved actions can run; automatic actions require this global gate.</p>"
@@ -66,6 +66,7 @@ def render_retest_control(
     timeline: list[Any] | None = None,
     approval_action: Any = None,
     csrf_token: str,
+    show_policy_form: bool = True,
 ) -> str:
     """Render one revision-aware policy control and bounded decision history."""
     patch_data = _project(patch)
@@ -118,10 +119,7 @@ def render_retest_control(
         "approval": "Prepare an action and wait for explicit operator approval.",
         "automatic": "Request one eligible retest only when the global gate and all safety checks pass.",
     }[mode]
-    return (
-        "<details class='retest-control'><summary>Test failure handling: "
-        f"<strong>{escape(mode.title())}</strong></summary>"
-        f"<p class='detail'>{escape(explanation)}</p>"
+    policy_form = (
         "<form method='post' action='/automation/policy'>"
         f"<input type='hidden' name='csrf_token' value='{escape(csrf_token, quote=True)}'>"
         f"<input type='hidden' name='change_number' value='{escape(change, quote=True)}'>"
@@ -131,6 +129,13 @@ def render_retest_control(
         "<label>Per-revision action budget "
         f"<input name='max_actions' type='number' min='1' max='20' value='{max_actions}'></label>"
         f"<button class='secondary' type='submit'{disabled}>Save policy</button></form>"
+        if show_policy_form else ""
+    )
+    return (
+        "<details class='retest-control'><summary>Test failure handling: "
+        f"<strong>{escape(mode.title())}</strong></summary>"
+        f"<p class='detail'>{escape(explanation)}</p>"
+        f"{policy_form}"
         "<form method='post' action='/automation/dry-run'>"
         f"<input type='hidden' name='csrf_token' value='{escape(csrf_token, quote=True)}'>"
         f"<input type='hidden' name='change_number' value='{escape(change, quote=True)}'>"
@@ -158,13 +163,15 @@ def render_retest_timeline(entries: list[Any], *, limit: int = 8) -> str:
 
 def render_enable_confirmation(*, csrf_token: str) -> str:
     return (
-        "<main><h1>Enable automatic Maloo retests?</h1>"
-        "<p>This permits eligible patches whose policy is Automatic to request one "
-        "Maloo retest after revision, review, pending-retest, linked-bug, idempotency, "
-        "and budget checks pass. It does not grant Gerrit writes or start Claude.</p>"
+        "<main><h1>Enable automatic patch actions?</h1>"
+        "<p>This permits every watched patch whose standing trigger is Automatic to run "
+        "its selected test, build-repair, or review-comment handler after exact-revision, "
+        "idempotency, ownership, and budget checks pass. Build and review handlers start "
+        "Claude and may create LTVM guests. Separate kill switches still control Gerrit "
+        "uploads, Gerrit replies, and Jenkins retriggers.</p>"
         "<form method='post' action='/automation/global/enable'>"
         f"<input type='hidden' name='csrf_token' value='{escape(csrf_token, quote=True)}'>"
-        "<button class='danger' type='submit'>Enable automatic retests</button></form>"
+        "<button class='danger' type='submit'>Enable automatic actions</button></form>"
         "<p><a href='/'>Cancel and keep execution disabled</a></p></main>"
     )
 

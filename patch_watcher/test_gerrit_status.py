@@ -139,6 +139,27 @@ class ConfigTests(unittest.TestCase):
             self.assertTrue(config.upload_enabled)
             self.assertEqual(config.git_name, "Patch Watcher")
 
+    def test_external_write_kill_switches_are_independent_and_default_off(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config"
+            base = (
+                "GERRIT_URL=https://review.whamcloud.com\n"
+                "GERRIT_USER=test-user\nGERRIT_PASS=secret\n"
+            )
+            path.write_text(base, encoding="utf-8")
+            path.chmod(0o600)
+            config = status.GerritConfig.load(path)
+            self.assertFalse(config.reply_enabled)
+            self.assertFalse(config.jenkins_retrigger_enabled)
+            path.write_text(
+                base + "GERRIT_REPLY_ENABLED=true\n"
+                "JENKINS_RETRIGGER_ENABLED=yes\n",
+                encoding="utf-8",
+            )
+            config = status.GerritConfig.load(path)
+            self.assertTrue(config.reply_enabled)
+            self.assertTrue(config.jenkins_retrigger_enabled)
+
 
 class StatusTests(unittest.TestCase):
     def test_parses_supported_change_urls(self):
@@ -366,6 +387,47 @@ class StatusTests(unittest.TestCase):
         self.assertIn(f"/revisions/{revision}/ported_comments", calls[2])
         self.assertIn("ALL_REVISIONS", calls[0])
         self.assertIn("ALL_REVISIONS", calls[3])
+
+    def test_review_capture_can_target_a_historical_revision_explicitly(self):
+        change = sample_change()
+        current = "d" * 40
+        historical = "a" * 40
+        change.update(
+            status="NEW", branch="master", change_id="I" + "1" * 40,
+            current_revision=current, unresolved_comment_count=1,
+        )
+        change["revisions"] = {
+            historical: {"_number": 3}, current: {"_number": 4},
+        }
+        comment = {
+            "id": "c1", "patch_set": 3, "commit_id": historical,
+            "message": "Rename it", "updated": "now", "unresolved": True,
+        }
+        calls = []
+
+        def transport(request, _timeout):
+            calls.append(request.full_url)
+            if request.full_url.endswith("/comments"):
+                value = {"file.c": [comment]}
+            elif request.full_url.endswith("/ported_comments"):
+                value = {}
+            else:
+                value = change
+            return (")]}'\n" + json.dumps(value)).encode("utf-8")
+
+        client = status.GerritStatusClient(
+            status.GerritConfig(
+                "https://review.whamcloud.com", "reader", "private-password"
+            ), transport=transport,
+        )
+        snapshot = client.fetch_review_snapshot(
+            "https://review.whamcloud.com/c/61965",
+            expected_revision=historical, require_current=False,
+        )
+        self.assertTrue(snapshot["complete"])
+        self.assertEqual(snapshot["change"]["revision_sha"], historical)
+        self.assertEqual(snapshot["change"]["patchset"], 3)
+        self.assertIn(f"/revisions/{historical}/comments", calls[1])
 
     def test_refresh_preserves_last_known_status_on_error(self):
         patch_record = {
