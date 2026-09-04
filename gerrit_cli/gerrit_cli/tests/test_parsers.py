@@ -513,3 +513,30 @@ class TestConsolidatedParsers:
         assert args.staged_command == 'refresh'
         assert args.change_number == 12345
 
+
+
+class TestExtractedCommentsHint:
+    """An all-resolved change must not look like a change with no comments."""
+
+    def _make(self, threads, total):
+        from gerrit_cli.models import Author, ChangeInfo, ExtractedComments
+        ci = ChangeInfo(
+            change_id="I1", change_number=1, project="p",
+            branch="master", subject="s", status="NEW",
+            current_revision="r",
+            owner=Author(name="o", email="o@e", username="o"),
+            url="u",
+        )
+        return ExtractedComments(
+            change_info=ci, threads=threads,
+            unresolved_count=0, total_count=total,
+        )
+
+    def test_hint_when_all_filtered_out(self):
+        d = self._make([], 32).to_dict()
+        assert "hint" in d
+        assert "--all" in d["hint"]
+        assert "32" in d["hint"]
+
+    def test_no_hint_when_change_truly_has_no_comments(self):
+        assert "hint" not in self._make([], 0).to_dict()

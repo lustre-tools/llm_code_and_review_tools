@@ -187,13 +187,24 @@ class ExtractedComments:
     review_messages: list["ReviewMessage"] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "change_info": self.change_info.to_dict(),
             "threads": [t.to_dict() for t in self.threads],
             "unresolved_count": self.unresolved_count,
             "total_count": self.total_count,
             "review_messages": [m.to_dict() for m in self.review_messages],
         }
+        # An empty thread list next to a non-zero total reads as "this
+        # change has no comments", when it actually means every comment
+        # is resolved and the default filter dropped them.  Say so, so
+        # the caller reaches for --all rather than the REST API.
+        if not self.threads and self.total_count:
+            d["hint"] = (
+                "0 of %d comment threads shown: all are resolved and "
+                "only unresolved threads are listed by default. Use "
+                "--all to see them." % self.total_count
+            )
+        return d
 
     def get_unresolved_threads(self) -> list[CommentThread]:
         """Get only threads that have unresolved comments."""
