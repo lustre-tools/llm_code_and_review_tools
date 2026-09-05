@@ -138,6 +138,7 @@ class CommentExtractor:
 
         # Get all review messages (top-level comments)
         raw_messages = self.client.get_messages(change_number)
+        self._hidden_ci_count = 0
         review_messages = self._parse_messages(
             raw_messages,
             current_patchset=current_patchset,
@@ -154,12 +155,15 @@ class CommentExtractor:
         # Always keep patchset-level comments — they are top-level
         # review discussion and should not be silently filtered out
         # even when marked resolved.
+        hidden_resolved = 0
         if not include_resolved:
-            threads = [
+            kept = [
                 t for t in threads
                 if not t.is_resolved
                 or t.root_comment.file_path == "/PATCHSET_LEVEL"
             ]
+            hidden_resolved = len(threads) - len(kept)
+            threads = kept
 
         # Add code context if requested
         if include_code_context:
@@ -180,6 +184,8 @@ class CommentExtractor:
             unresolved_count=unresolved_count,
             total_count=total_count,
             review_messages=review_messages,
+            hidden_resolved_count=hidden_resolved,
+            hidden_ci_count=self._hidden_ci_count,
         )
 
     def _build_change_info(
@@ -272,6 +278,7 @@ class CommentExtractor:
             msg_patchset = raw_msg.get("_revision_number", 0)
 
             if exclude_ci_bots and author_name in CI_BOT_AUTHORS:
+                self._hidden_ci_count += 1
                 continue
             if exclude_lint_bots and author_name in LINT_BOT_AUTHORS:
                 continue

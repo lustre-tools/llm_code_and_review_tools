@@ -185,6 +185,8 @@ class ExtractedComments:
     unresolved_count: int
     total_count: int
     review_messages: list["ReviewMessage"] = field(default_factory=list)
+    hidden_resolved_count: int = 0
+    hidden_ci_count: int = 0
 
     def to_dict(self) -> dict:
         d = {
@@ -193,12 +195,33 @@ class ExtractedComments:
             "unresolved_count": self.unresolved_count,
             "total_count": self.total_count,
             "review_messages": [m.to_dict() for m in self.review_messages],
+            "hidden_resolved_count": self.hidden_resolved_count,
+            "hidden_ci_count": self.hidden_ci_count,
         }
         # An empty thread list next to a non-zero total reads as "this
         # change has no comments", when it actually means every comment
         # is resolved and the default filter dropped them.  Say so, so
         # the caller reaches for --all rather than the REST API.
-        if not self.threads and self.total_count:
+        if self.hidden_resolved_count and self.hidden_ci_count:
+            d["hint"] = (
+                "%d resolved thread(s) and %d CI/bot message(s) are not "
+                "listed. Use --all for resolved threads and --include-ci "
+                "for CI messages."
+                % (self.hidden_resolved_count, self.hidden_ci_count)
+            )
+        elif self.hidden_ci_count:
+            d["hint"] = (
+                "%d CI/bot message(s) are not listed; use --include-ci "
+                "(or --include-system) to see them."
+                % self.hidden_ci_count
+            )
+        elif self.hidden_resolved_count:
+            d["hint"] = (
+                "%d resolved thread(s) are not listed; only unresolved "
+                "threads are shown by default. Use --all to see them."
+                % self.hidden_resolved_count
+            )
+        elif not self.threads and self.total_count:
             d["hint"] = (
                 "0 of %d comment threads shown: all are resolved and "
                 "only unresolved threads are listed by default. Use "

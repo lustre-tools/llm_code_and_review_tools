@@ -98,6 +98,27 @@ def cmd_review(args):
                     "comments_posted": result.comments_posted,
                     "vote": result.vote,
                 }
+                # A change-level message answers reviewers but resolves
+                # nothing, so the change still reports open comments.
+                # Say so rather than letting it look finished.
+                if message and not comments:
+                    try:
+                        open_threads = cli.extract_comments(
+                            url=args.url,
+                            include_resolved=False,
+                            include_code_context=False,
+                        ).threads
+                    except Exception:
+                        open_threads = []
+                    if open_threads:
+                        data["unresolved_threads"] = len(open_threads)
+                        data["hint"] = (
+                            "Posted a change-level message, which leaves %d "
+                            "thread(s) unresolved. Reply in the threads to "
+                            "resolve them: gc reply <INDEX> \"<msg>\" -r, "
+                            "or gc batch <CHANGE> <file|->."
+                            % len(open_threads)
+                        )
                 output_success(data, command, pretty)
                 sys.exit(ExitCode.SUCCESS)
             else:

@@ -38,6 +38,15 @@ def cmd_extract(args):
                 "threads": filter_threads_by_fields(result.threads, fields),
                 "count": len(result.threads),
             }
+            # --fields builds its own payload, so carry over the note
+            # about threads the default filter dropped.
+            if result.hidden_resolved_count:
+                data["hidden_resolved_count"] = result.hidden_resolved_count
+                data["hint"] = (
+                    "%d resolved thread(s) are not listed; only unresolved "
+                    "threads are shown by default. Use --all to see them."
+                    % result.hidden_resolved_count
+                )
         else:
             data = result.to_dict()
             if summary_lines is not None:
