@@ -260,6 +260,28 @@ def cmd_ack(args):
         sys.exit(output_error(ErrorCode.API_ERROR, f"Error acknowledging comment: {e}", command, pretty))
 
 
+def _thread_index_by_location(threads, item):
+    """Resolve a thread by 'file' (and optional 'line') instead of index.
+
+    Returns the index, or None when nothing matches or the match is
+    ambiguous -- an ambiguous address is skipped rather than guessed at,
+    since posting a reply on the wrong thread is not undoable.
+    """
+    want_file = item.get('file')
+    if not want_file:
+        return None
+    want_line = item.get('line')
+    matches = []
+    for idx, thread in enumerate(threads):
+        comment = thread.root_comment
+        if comment.file_path != want_file:
+            continue
+        if want_line is not None and comment.line != want_line:
+            continue
+        matches.append(idx)
+    return matches[0] if len(matches) == 1 else None
+
+
 def cmd_batch_reply(args):
     """Reply to multiple comments from a JSON file."""
     import json as json_module
@@ -268,9 +290,12 @@ def cmd_batch_reply(args):
     pretty = getattr(args, 'pretty', False)
 
     try:
-        # Load replies from JSON file
-        with open(args.file) as f:
-            replies_data = json_module.load(f)
+        # Load replies from a JSON file, or from stdin when the path is "-"
+        if args.file == '-':
+            replies_data = json_module.load(sys.stdin)
+        else:
+            with open(args.file) as f:
+                replies_data = json_module.load(f)
 
         # Parse URL
         base_url, change_number = cli.GerritCommentsClient.parse_gerrit_url(args.url)
@@ -286,7 +311,16 @@ def cmd_batch_reply(args):
         replies = []
         skipped = []
         for item in replies_data:
-            thread_idx = item['thread_index']
+            # A thread is addressed either by its index in the 'comments'
+            # listing, or -- more stably, since indices shift as threads
+            # are resolved -- by file and optionally line.
+            if 'thread_index' in item:
+                thread_idx = item['thread_index']
+            else:
+                thread_idx = _thread_index_by_location(result.threads, item)
+                if thread_idx is None:
+                    skipped.append(item.get('file'))
+                    continue
             if thread_idx >= len(result.threads):
                 skipped.append(thread_idx)
                 continue

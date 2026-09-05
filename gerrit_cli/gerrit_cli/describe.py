@@ -71,7 +71,7 @@ def get_tool_description() -> ToolDescription:
                 usage="gc batch <URL> <FILE>",
                 arguments=[
                     Argument(name="url", description="Gerrit change URL or number", required=True),
-                    Argument(name="file", description="JSON file with replies [{thread_index, message, mark_resolved}]", required=True),
+                    Argument(name="file", description="JSON file with replies [{thread_index | file [+ line], message, mark_resolved}]; '-' reads the JSON from stdin", required=True),
                     Argument(name="--dry-run", description="Preview without posting", type="boolean", default=False),
                 ],
                 examples=["gc batch 12345 replies.json", "gc batch 12345 replies.json --dry-run"],

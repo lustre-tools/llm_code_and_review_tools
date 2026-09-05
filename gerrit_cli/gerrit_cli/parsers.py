@@ -126,7 +126,7 @@ def add_batch_parser(subparsers):
     parser.add_argument("url", help="Gerrit change URL or number")
     parser.add_argument(
         "file",
-        help="JSON file with replies [{thread_index, message, mark_resolved}]",
+        help="JSON file with replies [{thread_index | file [+ line], message, mark_resolved}]; '-' reads the JSON from stdin",
     )
     parser.add_argument(
         "--dry-run", "-n",
