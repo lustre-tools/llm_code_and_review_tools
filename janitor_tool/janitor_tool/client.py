@@ -215,6 +215,10 @@ class JanitorClient:
 
     # -- Build lookup --
 
+    #: Set by resolve_change() when the lookup could not be performed
+    #: at all, as opposed to completing and finding nothing.
+    change_lookup_error: str | None = None
+
     def resolve_change(self, change: int) -> int | None:
         """Find the latest Janitor build for a Gerrit change number.
 
@@ -229,13 +233,21 @@ class JanitorClient:
         # First, try to guess from the results page index.
         # The simplest heuristic: fetch the parent directory listing
         # and find builds that match.
+        # A failed lookup is not the same as "this change has no
+        # build": callers must be able to tell them apart, or an
+        # unreachable index silently turns into a wrong answer.
+        self.change_lookup_error = None
         try:
             resp = self.session.get(
                 f"{self.config.base_url}/",
                 timeout=15,
             )
             resp.raise_for_status()
-        except Exception:
+        except Exception as e:
+            self.change_lookup_error = (
+                "cannot read the Janitor build index at "
+                f"{self.config.base_url}/ ({type(e).__name__})"
+            )
             return None
 
         # Parse build numbers from directory listing
@@ -243,6 +255,12 @@ class JanitorClient:
             int(m.group(1))
             for m in re.finditer(r'href="(\d+)/"', resp.text)
         ]
+        if not builds:
+            self.change_lookup_error = (
+                "the Janitor build index at "
+                f"{self.config.base_url}/ listed no builds"
+            )
+            return None
         builds.sort(reverse=True)
 
         # Check last 200 builds for our change

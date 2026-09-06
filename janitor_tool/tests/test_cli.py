@@ -49,7 +49,10 @@ class TestResolveBuild:
 
     def test_resolve_as_build(self):
         client = MagicMock()
-        client.get_ref.return_value = {"ref": "refs/changes/40/64440/10"}
+        client.get_ref.return_value = {"ref": "refs/changes/40/64440/10",
+                                       "change": 64440, "patchset": 10}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
 
         result = _resolve_build(client, "61009", "test", False)
         assert result == 61009
@@ -58,27 +61,89 @@ class TestResolveBuild:
         client = MagicMock()
         client.get_ref.return_value = None
         client.resolve_change.return_value = 61009
+        client.change_lookup_error = None
 
         result = _resolve_build(client, "64440", "test", False)
         assert result == 61009
 
     def test_resolve_from_url(self):
         client = MagicMock()
-        client.get_ref.return_value = {"ref": "refs/changes/40/64440/10"}
+        client.get_ref.return_value = {"ref": "refs/changes/40/64440/10",
+                                       "change": 64440, "patchset": 10}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
 
+        client.resolve_change.return_value = 61009
         result = _resolve_build(
             client,
             "https://review.whamcloud.com/c/fs/lustre-release/+/64440",
             "test", False,
         )
-        # Should extract 64440 from URL and try it
-        assert result == 64440
-        client.get_ref.assert_called_with(64440)
+        # A URL names a Gerrit change, so 64440 is resolved as one --
+        # reading it as a build number would answer for another patch.
+        assert result == 61009
+        client.resolve_change.assert_called_with(64440)
+
+    def test_ambiguous_number_is_refused(self):
+        """A number that is both a build and a change must not be guessed."""
+        client = MagicMock()
+        client.get_ref.return_value = {"ref": "refs/changes/30/68030/7",
+                                       "change": 68030, "patchset": 7}
+        client.resolve_change.return_value = 69650
+        client.change_lookup_error = None
+
+        with pytest.raises(SystemExit):
+            _resolve_build(client, "68621", "test", False)
+
+    def test_as_build_skips_change_lookup(self):
+        client = MagicMock()
+        client.get_ref.return_value = {"ref": "x", "change": 68030}
+        client.resolve_change.return_value = 69650
+        client.change_lookup_error = None
+
+        assert _resolve_build(client, "68621", "test", False,
+                              as_build=True) == 68621
+        client.resolve_change.assert_not_called()
+
+    def test_as_change_skips_build_lookup(self):
+        client = MagicMock()
+        client.get_ref.return_value = {"ref": "x", "change": 68030}
+        client.resolve_change.return_value = 69650
+        client.change_lookup_error = None
+
+        assert _resolve_build(client, "68621", "test", False,
+                              as_change=True) == 69650
+        client.get_ref.assert_not_called()
+
+    def test_as_change_reports_lookup_failure(self):
+        client = MagicMock()
+        client.get_ref.return_value = None
+        client.resolve_change.return_value = None
+        client.change_lookup_error = "index unreachable"
+
+        with pytest.raises(SystemExit):
+            _resolve_build(client, "68621", "test", False, as_change=True)
+
+    def test_unverifiable_build_warns(self):
+        """Answering as a build without ruling out a change must say so."""
+        import janitor_tool.cli as cli_mod
+        cli_mod._RESOLVE_WARNING = None
+        client = MagicMock()
+        client.get_ref.return_value = {"ref": "refs/changes/30/68030/7",
+                                       "change": 68030, "patchset": 7}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = "index unreachable"
+
+        assert _resolve_build(client, "68621", "test", False) == 68621
+        assert cli_mod._RESOLVE_WARNING
+        assert "68030" in cli_mod._RESOLVE_WARNING
+        cli_mod._RESOLVE_WARNING = None
 
     def test_resolve_not_found_exits(self):
         client = MagicMock()
         client.get_ref.return_value = None
         client.resolve_change.return_value = None
+        client.change_lookup_error = None
 
         with pytest.raises(SystemExit):
             _resolve_build(client, "99999", "test", False)
@@ -91,7 +156,10 @@ class TestResultsCommand:
     def test_basic_results(self, mock_make):
         client = MagicMock()
         mock_make.return_value = client
-        client.get_ref.return_value = {"ref": "refs/changes/40/64440/10"}
+        client.get_ref.return_value = {"ref": "refs/changes/40/64440/10",
+                                       "change": 64440, "patchset": 10}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
         client.get_results.return_value = {
             "build": 61009,
             "change": 64440,
@@ -123,7 +191,10 @@ class TestResultsCommand:
     def test_results_failures_only(self, mock_make):
         client = MagicMock()
         mock_make.return_value = client
-        client.get_ref.return_value = {"ref": "refs/changes/40/64440/10"}
+        client.get_ref.return_value = {"ref": "refs/changes/40/64440/10",
+                                       "change": 64440, "patchset": 10}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
         client.get_results.return_value = {
             "build": 61009,
             "change": 64440,
@@ -159,6 +230,8 @@ class TestResultsCommand:
         client = MagicMock()
         mock_make.return_value = client
         client.get_ref.return_value = {"ref": "x"}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
         client.get_results.return_value = None
 
         runner = CliRunner()
@@ -175,6 +248,8 @@ class TestDetailCommand:
         client = MagicMock()
         mock_make.return_value = client
         client.get_ref.return_value = {"ref": "x"}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
         client.find_test_dir.return_value = "sanity-ldiskfs-rocky8"
         client.get_test_yaml.return_value = {
             "Tests": [
@@ -202,6 +277,8 @@ class TestDetailCommand:
         client = MagicMock()
         mock_make.return_value = client
         client.get_ref.return_value = {"ref": "x"}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
         client.find_test_dir.return_value = None
 
         runner = CliRunner()
@@ -218,6 +295,8 @@ class TestLogsCommand:
         client = MagicMock()
         mock_make.return_value = client
         client.get_ref.return_value = {"ref": "x"}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
         client.find_test_dir.return_value = "sanity-test"
         client.list_test_files.return_value = [
             {"name": "console.txt", "href": "console.txt", "size": "1.2M"},
@@ -241,6 +320,8 @@ class TestFetchCommand:
         client = MagicMock()
         mock_make.return_value = client
         client.get_ref.return_value = {"ref": "x"}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
         client.find_test_dir.return_value = "sanity-test"
         client.fetch_log.return_value = "line1\nline2\nline3\n"
 
@@ -256,6 +337,8 @@ class TestFetchCommand:
         client = MagicMock()
         mock_make.return_value = client
         client.get_ref.return_value = {"ref": "x"}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
         client.find_test_dir.return_value = "sanity-test"
         client.fetch_log.return_value = "ok line\nLBUG found\nanother ok\n"
 
@@ -275,6 +358,8 @@ class TestFetchCommand:
         client = MagicMock()
         mock_make.return_value = client
         client.get_ref.return_value = {"ref": "x"}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
         client.find_test_dir.return_value = "sanity-test"
         client.fetch_log.return_value = "line1\nline2\nline3\nline4\n"
 
@@ -297,6 +382,8 @@ class TestCrashCommand:
         client = MagicMock()
         mock_make.return_value = client
         client.get_ref.return_value = {"ref": "x"}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
         client.find_test_dir.return_value = "sanity-test"
         client.list_test_files.return_value = [
             {"name": "console.txt", "href": "console.txt", "size": "1M"},
@@ -316,6 +403,8 @@ class TestCrashCommand:
         client = MagicMock()
         mock_make.return_value = client
         client.get_ref.return_value = {"ref": "x"}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
         client.find_test_dir.return_value = "sanity-test"
         client.list_test_files.return_value = [
             {"name": "console.txt", "href": "console.txt", "size": "1M"},
@@ -335,6 +424,8 @@ class TestCrashCommand:
         client = MagicMock()
         mock_make.return_value = client
         client.get_ref.return_value = {"ref": "x"}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
         client.find_test_dir.return_value = None
 
         runner = CliRunner()
