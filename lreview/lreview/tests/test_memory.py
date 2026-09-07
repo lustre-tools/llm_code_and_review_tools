@@ -98,3 +98,20 @@ class TestPromptFile:
         text = MEMORY_PROMPT_PATH.read_text()
         assert "False positives eliminated" in text
         assert "complete replacement" in text
+
+
+class TestMemoryProtocolContract:
+    """Guard the load-bearing pieces of the bundled protocol text —
+    a future edit must not silently drop them."""
+
+    def test_protocol_mandates_checkpointing(self):
+        from lreview.memory import MEMORY_PROMPT_PATH
+        text = MEMORY_PROMPT_PATH.read_text()
+        # mid-run checkpoints with an explicit incomplete-run marker,
+        # so a run killed by a rate limit / timeout keeps its notes
+        assert "INCOMPLETE RUN" in text
+        assert "Checkpoint during the analysis" in text
+        # only a completed run may claim last-reviewed
+        assert "UNCHANGED" in text
+        # limited (light/partial) passes preserve unexamined content
+        assert "must not shrink the document" in text
