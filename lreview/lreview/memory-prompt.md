@@ -62,6 +62,11 @@ for the next run, not an append-only log. Keep the frontmatter block
 read this file too: plain Markdown, precise, no filler, no
 restating of the diff.
 
+A limited pass — a light-mode review, or a run that examined only
+part of the patch — must not shrink the document: entries and
+sections you did not re-examine this run are preserved as they are,
+and the History line records what this run actually covered.
+
 Use these sections:
 
 ```markdown

@@ -163,6 +163,27 @@ class TestBuildAgentCmd:
         assert "light regression review" in prompt
         assert "your review memory document" in prompt
 
+    def test_light_memory_local_composition(self, tmp_path):
+        """--mode light + -m + a local change compose: light driver,
+        memory instructions, and the commit-keyed doc all appear."""
+        from lreview.gerrit import LocalChange
+        from lreview.runner import review_prompt
+        config = _config(tmp_path, tmp_path, mode="light",
+                         memory_db=tmp_path / "db")
+        change = LocalChange(
+            ref_name="my-branch", sha="d" * 40,
+            subject="LU-1 lod: wip",
+            change_id="I" + "e" * 39)
+        prompt = review_prompt(config, change)
+        assert "light regression review" in prompt
+        assert "your review memory document" in prompt
+        # locals have no patchset — the delta anchor is the commit
+        assert f"reviewing commit {'d' * 12}" in prompt
+        # doc created, keyed by the commit's Change-Id
+        docs = list((tmp_path / "db").glob("I*.md"))
+        assert len(docs) == 1
+        assert change.change_id in docs[0].read_text()
+
     def test_unknown_mode_rejected(self, tmp_path):
         with pytest.raises(ValueError):
             _config(tmp_path, tmp_path, mode="medium")
