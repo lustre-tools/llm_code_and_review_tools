@@ -433,7 +433,7 @@ opencode's `--model` wants the `provider/model` form.
 | `--keep-worktrees` | off | Keep worktrees after review |
 | `--agent NAME` | `claude` (or `$LREVIEW_AGENT`) | Agent backend: claude, codex, gemini, opencode |
 | `--model NAME` | `opus` for claude (or `$LREVIEW_MODEL`); other agents use their own default | Model for the review runs |
-| `--effort LEVEL` | claude's default (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max (claude-only) |
+| `--effort LEVEL` | agent's default (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max — claude (`--effort`) or codex (`-c model_reasoning_effort=...`); ignored for gemini/opencode. Some models (e.g. glm-5.3) only accept a subset such as low/high/max |
 | `--memory, -m` | off | Read/update the per-change review memory document |
 | `--clear-memory, -c` | off | With `-m`: delete the change's memory document first |
 | `--db DIR` | `$LREVIEW_DB`, else `<repo>/lreview-db` | Memory database directory |

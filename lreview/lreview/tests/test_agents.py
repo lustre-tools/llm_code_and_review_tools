@@ -37,14 +37,29 @@ class TestBuildCmd:
         cmd = get_agent("claude").build_cmd("opus", "xhigh", [], PROMPT)
         assert cmd[-4:] == ["--model", "opus", "--effort", "xhigh"]
 
-    def test_codex_gets_prompt_text_and_ignores_effort(self):
+    def test_codex_effort_maps_to_config_override(self):
         cmd = get_agent("codex").build_cmd(None, "high", [], PROMPT)
-        assert cmd == ["codex", "exec",
-                       "--dangerously-bypass-approvals-and-sandbox",
-                       PROMPT]
+        assert cmd == [
+            "codex", "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "-c", 'model_reasoning_effort="high"',
+            PROMPT,
+        ]
         cmd = get_agent("codex").build_cmd("gpt-5", None, [], PROMPT)
         assert cmd[2:5] == ["--dangerously-bypass-approvals-and-sandbox",
                             "-m", "gpt-5"]
+        # --agent-arg after effort so a later -c can override
+        cmd = get_agent("codex").build_cmd(
+            "glm-5.3", "max", ["-c", 'model_reasoning_effort="low"'],
+            PROMPT)
+        assert cmd == [
+            "codex", "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "-m", "glm-5.3",
+            "-c", 'model_reasoning_effort="max"',
+            "-c", 'model_reasoning_effort="low"',
+            PROMPT,
+        ]
 
     def test_gemini_gets_prompt_text(self):
         cmd = get_agent("gemini").build_cmd(None, None, [], PROMPT)
@@ -74,6 +89,15 @@ class TestBuildInteractiveCmd:
         assert cmd == ["codex", PROMPT]
         assert get_agent("codex").build_interactive_cmd(
             "gpt-5", [], PROMPT)[:3] == ["codex", "-m", "gpt-5"]
+
+    def test_codex_interactive_effort(self):
+        cmd = get_agent("codex").build_interactive_cmd(
+            "glm-5.3", [], PROMPT, effort="low")
+        assert cmd == [
+            "codex", "-m", "glm-5.3",
+            "-c", 'model_reasoning_effort="low"',
+            PROMPT,
+        ]
 
     def test_gemini_uses_prompt_interactive_flag(self):
         cmd = get_agent("gemini").build_interactive_cmd(None, [], PROMPT)
