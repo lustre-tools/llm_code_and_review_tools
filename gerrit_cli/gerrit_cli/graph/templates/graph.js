@@ -2423,12 +2423,29 @@ G.nodes.forEach(n => { searchIndex[n.id] = getNodeSearchText(n); });
 
 let searchMatches = [];
 let searchIdx = -1;
+// Set when a change-number query found no node with that id and the
+// matches come from full-text (review comments mentioning the
+// number) — the info label says so, otherwise "search 58229 →
+// #65921 highlighted" reads as if 58229 were rendered on top of it.
+let searchNote = '';
 
 function searchNodes(query) {
+    searchNote = '';
     if (!query) { searchMatches = []; searchIdx = -1; return; }
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
     // Only match nodes currently rendered in the graph
     const rendered = new Set(nodesDS.getIds());
+    // A bare change number matches by id only when such a node is
+    // rendered; the full-text fallback below is flagged via searchNote.
+    const numMatch = /^#?(\d{4,})$/.exec(query.trim());
+    if (numMatch) {
+        const wanted = parseInt(numMatch[1], 10);
+        if (rendered.has(wanted)) {
+            searchMatches = [wanted];
+            searchIdx = 0;
+            return;
+        }
+    }
     searchMatches = G.nodes
         .filter(n => {
             if (!rendered.has(n.id)) return false;
@@ -2437,6 +2454,9 @@ function searchNodes(query) {
         })
         .map(n => n.id);
     searchIdx = searchMatches.length > 0 ? 0 : -1;
+    if (numMatch && searchMatches.length > 0) {
+        searchNote = 'no node #' + numMatch[1] + ' in graph — mentioned by';
+    }
 }
 
 function updateSearchHighlight() {
@@ -2452,7 +2472,8 @@ function updateSearchHighlight() {
         if (updates.length) nodesDS.update(updates);
         return;
     }
-    info.textContent = (searchIdx + 1) + ' / ' + searchMatches.length;
+    info.textContent = (searchNote ? searchNote + ' ' : '')
+        + (searchIdx + 1) + ' / ' + searchMatches.length;
 
     const matchSet = new Set(searchMatches);
     const updates = [];
