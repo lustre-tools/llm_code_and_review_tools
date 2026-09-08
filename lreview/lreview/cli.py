@@ -326,9 +326,9 @@ def cmd_run(args) -> int:
         memory_db=memory_db,
         agent_args=args.agent_arg or [],
     )
-    if args.effort and args.agent != "claude":
-        print(f"note: --effort is claude-only; ignored for "
-              f"'{args.agent}'")
+    if args.effort and args.agent not in ("claude", "codex"):
+        print(f"note: --effort is not supported for '{args.agent}'; "
+              "ignored (claude/codex only)")
     results = run_batch(config, changes, in_place=in_place)
 
     from .runner import format_tokens
@@ -447,9 +447,9 @@ def cmd_chat(args) -> int:
     if not get_agent(args.agent).verified:
         print(f"note: the '{args.agent}' backend is best-effort and "
               "not yet verified end-to-end; only claude is.")
-    if args.effort and args.agent != "claude":
-        print(f"note: --effort is claude-only; ignored for "
-              f"'{args.agent}'")
+    if args.effort and args.agent not in ("claude", "codex"):
+        print(f"note: --effort is not supported for '{args.agent}'; "
+              "ignored (claude/codex only)")
 
     if not args.local and not args.change:
         print("error: a change number/URL is required "
@@ -668,9 +668,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--effort", choices=["low", "medium", "high", "xhigh", "max"],
         default=os.environ.get("LREVIEW_EFFORT"),
-        help="Reasoning effort for the claude review runs "
-             "(default: $LREVIEW_EFFORT or claude's own default; "
-             "claude-only)")
+        help="Reasoning effort for claude (--effort) or codex "
+             "(-c model_reasoning_effort=...); default: "
+             "$LREVIEW_EFFORT or the agent's own default. "
+             "Ignored for gemini/opencode. Note: some models "
+             "(e.g. glm-5.3) only accept a subset such as "
+             "low/high/max")
     run_p.add_argument(
         "--memory", "-m", action="store_true",
         help="Use per-change review memory: read the change's notes "
@@ -750,8 +753,10 @@ def build_parser() -> argparse.ArgumentParser:
     chat_p.add_argument(
         "--effort", choices=["low", "medium", "high", "xhigh", "max"],
         default=os.environ.get("LREVIEW_EFFORT"),
-        help="Reasoning effort for the session (default: "
-             "$LREVIEW_EFFORT or claude's own default; claude-only)")
+        help="Reasoning effort for the session — claude "
+             "(--effort) or codex (-c model_reasoning_effort=...); "
+             "default: $LREVIEW_EFFORT or the agent's own default. "
+             "Ignored for gemini/opencode")
     chat_p.add_argument(
         "--keep-worktree", action="store_true",
         help="Keep the discussion worktree after the session ends")

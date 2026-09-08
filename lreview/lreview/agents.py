@@ -30,8 +30,10 @@ class AgentSpec:
         extra_args: list[str],
         prompt_text: str,
     ) -> list[str]:
-        # effort is claude-only; other backends ignore it (the CLI
-        # warns when it would be dropped)
+        # effort: claude gets --effort; codex gets a config override
+        # for model_reasoning_effort (Codex has no --effort flag).
+        # gemini/opencode ignore it (the CLI warns when dropped).
+        # extra_args come after so a later --agent-arg=-c can override.
         if self.name == "claude":
             cmd = ["claude", "-p", prompt_text,
                    "--dangerously-skip-permissions",
@@ -46,6 +48,8 @@ class AgentSpec:
                    "--dangerously-bypass-approvals-and-sandbox"]
             if model:
                 cmd += ["-m", model]
+            if effort:
+                cmd += ["-c", f'model_reasoning_effort="{effort}"']
             return cmd + extra_args + [prompt_text]
         if self.name == "gemini":
             cmd = ["gemini", "--yolo"]
@@ -79,7 +83,7 @@ class AgentSpec:
             cmd = ["claude"]
             if model:
                 cmd += ["--model", model]
-            if effort:  # claude-only, like in build_cmd
+            if effort:
                 cmd += ["--effort", effort]
             return cmd + extra_args + [prompt_text]
         if self.name == "codex":
@@ -89,6 +93,8 @@ class AgentSpec:
             cmd = ["codex"]
             if model:
                 cmd += ["-m", model]
+            if effort:
+                cmd += ["-c", f'model_reasoning_effort="{effort}"']
             return cmd + extra_args + [prompt_text]
         if self.name == "gemini":
             # -i/--prompt-interactive is the explicit interactive
