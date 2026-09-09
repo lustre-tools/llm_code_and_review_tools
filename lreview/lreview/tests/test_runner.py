@@ -142,6 +142,24 @@ class TestBuildAgentCmd:
         with pytest.raises(ValueError):
             _config(tmp_path, tmp_path, jobs=0)
 
+    def test_codex_model_and_effort(self, tmp_path):
+        config = _config(tmp_path, tmp_path, agent="codex",
+                         model="gpt-5.6-sol", effort="medium")
+        cmd = build_agent_cmd(config)
+        assert cmd[:4] == ["codex", "exec", "--json",
+                           "--dangerously-bypass-approvals-and-sandbox"]
+        assert cmd[4:8] == ["-m", "gpt-5.6-sol",
+                            "-c", 'model_reasoning_effort="medium"']
+
+    def test_impossible_effort_rejected_before_any_review(self, tmp_path):
+        # gpt-5.6-luna has no "ultra" rung; codex would only fail once
+        # the worktree was built and the agent was running.
+        with pytest.raises(ValueError, match="gpt-5.6-luna"):
+            _config(tmp_path, tmp_path, agent="codex",
+                    model="gpt-5.6-luna", effort="ultra")
+        _config(tmp_path, tmp_path, agent="codex",
+                model="gpt-5.6-sol", effort="ultra")
+
     def test_light_mode_prompt(self, tmp_path):
         from lreview.runner import LIGHT_PROMPT_PATH
         config = _config(tmp_path, tmp_path, mode="light",
@@ -318,6 +336,40 @@ class TestTokenParsing:
         tokens, cost = parse_final_usage(log)
         assert tokens == 1050
         assert cost == 4.2
+
+    def test_parse_final_usage_codex_turn_completed(self, tmp_path):
+        """codex reports usage once, at the end of the turn; its
+        input_tokens already include the cached ones, so the total is
+        input + output (13064 here, not 23048)."""
+        from lreview.runner import parse_final_usage
+        log = tmp_path / "x.log"
+        log.write_text(
+            "Reading additional input from stdin...\n"
+            '{"type":"thread.started","thread_id":"01a0"}\n'
+            '{"type":"turn.started"}\n'
+            '{"type":"item.completed","item":{"id":"item_0",'
+            '"type":"agent_message","text":"done"}}\n'
+            '{"type":"turn.completed","usage":{"input_tokens":12914,'
+            '"cached_input_tokens":9984,"cache_write_input_tokens":0,'
+            '"output_tokens":150,"reasoning_output_tokens":0}}\n')
+        tokens, cost = parse_final_usage(log)
+        assert tokens == 13064
+        # a ChatGPT-plan run has no dollar figure to report
+        assert cost is None
+
+    def test_live_token_count_falls_back_to_codex_usage(self, tmp_path):
+        """No per-message usage during a codex run — the total shows up
+        only once turn.completed lands."""
+        from lreview.runner import live_token_count
+        log = tmp_path / "x.log"
+        log.write_text('{"type":"item.completed","item":{"id":"item_0",'
+                       '"type":"command_execution"}}\n')
+        assert live_token_count(log) is None
+        with open(log, "a") as f:
+            f.write('{"type":"turn.completed","usage":'
+                    '{"input_tokens":900,"cached_input_tokens":800,'
+                    '"output_tokens":100}}\n')
+        assert live_token_count(log) == 1000
 
     def test_parse_final_usage_absent(self, tmp_path):
         from lreview.runner import parse_final_usage

@@ -105,7 +105,7 @@ class TestRunSetup:
                    return_value=(True, "ok")), \
              patch("lreview.doctor.sys.stdin") as stdin:
             stdin.isatty.return_value = False
-            run_setup("codex", None)
+            run_setup("gemini", None)
         out = capsys.readouterr().out
         assert "best-effort" in out
-        assert "npm install -g @openai/codex" in out
+        assert "npm install -g @google/gemini-cli" in out

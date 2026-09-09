@@ -8,6 +8,7 @@ Subcommands:
     check  - verify the review prompts / agent CLI / Gerrit creds
     run    - review a batch of Gerrit changes in parallel
     chat   - interactive session over an existing review
+    models - list the models and efforts each agent accepts
     render - regenerate Markdown reports from review JSONs
     post   - post previously collected results to Gerrit
 """
@@ -66,14 +67,36 @@ def resolve_model(agent: str, model: str = None) -> str:
     """Model to run reviews with.
 
     Explicit --model wins, then $LREVIEW_MODEL; claude defaults to
-    opus, other agents fall back to their own default model.
+    opus and codex to gpt-6-astra (each agent's most capable model),
+    gemini and opencode to whatever their own CLI defaults to.
+
+    codex aliases are expanded to the slug the CLI expects, so
+    `--model sol` runs — and is posted and recorded as —
+    gpt-5.6-sol. An unrecognized name is passed through untouched.
     """
-    if model:
-        return model
-    env = os.environ.get("LREVIEW_MODEL")
-    if env:
-        return env
-    return "opus" if agent == "claude" else None
+    from .models import DEFAULT_MODELS, canonical_model
+    if not model:
+        model = os.environ.get("LREVIEW_MODEL") or DEFAULT_MODELS.get(agent)
+    return canonical_model(agent, model)
+
+
+def check_selection(args) -> bool:
+    """Report an impossible model/effort pair before any review runs.
+
+    Returns False when the run should not start.
+    """
+    from .models import EFFORT_AGENTS, validate_selection
+    if args.effort and args.agent not in EFFORT_AGENTS:
+        print(f"note: --effort is not supported for '{args.agent}'; "
+              f"ignored ({'/'.join(EFFORT_AGENTS)} only)")
+        return True
+    try:
+        validate_selection(args.agent, resolve_model(args.agent, args.model),
+                           args.effort)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return False
+    return True
 
 
 def ensure_prompts(args):
@@ -176,8 +199,10 @@ def cmd_run(args) -> int:
     from .agents import get_agent
     if not get_agent(args.agent).verified:
         print(f"note: the '{args.agent}' backend is best-effort and not "
-              "yet verified end-to-end; only claude is. Use --agent-arg "
-              "to adjust flags if needed.")
+              "yet verified end-to-end; claude and codex are. Use "
+              "--agent-arg to adjust flags if needed.")
+    if not check_selection(args):
+        return 1
 
     results_dir = Path(args.results_dir).expanduser().resolve()
     worktrees_dir = (
@@ -326,9 +351,6 @@ def cmd_run(args) -> int:
         memory_db=memory_db,
         agent_args=args.agent_arg or [],
     )
-    if args.effort and args.agent not in ("claude", "codex"):
-        print(f"note: --effort is not supported for '{args.agent}'; "
-              "ignored (claude/codex only)")
     results = run_batch(config, changes, in_place=in_place)
 
     from .runner import format_tokens
@@ -446,10 +468,9 @@ def cmd_chat(args) -> int:
     from .agents import get_agent
     if not get_agent(args.agent).verified:
         print(f"note: the '{args.agent}' backend is best-effort and "
-              "not yet verified end-to-end; only claude is.")
-    if args.effort and args.agent not in ("claude", "codex"):
-        print(f"note: --effort is not supported for '{args.agent}'; "
-              "ignored (claude/codex only)")
+              "not yet verified end-to-end; claude and codex are.")
+    if not check_selection(args):
+        return 1
 
     if not args.local and not args.change:
         print("error: a change number/URL is required "
@@ -464,6 +485,29 @@ def cmd_chat(args) -> int:
         model=args.model, effort=args.effort,
         agent_args=args.agent_arg or [], local=args.local,
         keep_worktree=args.keep_worktree)
+
+
+def cmd_models(args) -> int:
+    """Print what each agent will accept for --model and --effort."""
+    from .models import (CLAUDE_EFFORTS, CLAUDE_DEFAULT_MODEL,
+                         codex_catalog_lines)
+    agents = [args.agent] if args.agent else ["claude", "codex"]
+    for agent in agents:
+        if agent == "claude":
+            print("claude")
+            print(f"  {CLAUDE_DEFAULT_MODEL} (default), sonnet, "
+                  "fable, haiku")
+            print(f"  effort: {', '.join(CLAUDE_EFFORTS)} "
+                  "(default: claude's own)")
+        elif agent == "codex":
+            print("codex")
+            print("\n".join(codex_catalog_lines()))
+        else:
+            print(f"{agent}\n  models are the CLI's own; --effort is "
+                  "not supported")
+        print()
+    print("Names not listed here are passed to the agent CLI unchanged.")
+    return 0
 
 
 def cmd_render(args) -> int:
@@ -546,7 +590,10 @@ def build_parser() -> argparse.ArgumentParser:
             "  --mode NAME      full (default) or light — one cheap\n"
             "                   focused pass instead of the deep dive\n"
             "  --agent NAME     claude (default), codex, gemini, opencode\n"
-            "  --model NAME     opus (default), sonnet, fable, ...\n"
+            "  --model NAME     claude: opus (default), sonnet, fable\n"
+            "                   codex: gpt-6-astra (default), sol, terra,\n"
+            "                   luna, ... — see 'lreview models'\n"
+            "  --effort LEVEL   low..max, ultra (codex, per model)\n"
             "  --post           post findings when the batch finishes\n"
             "  --prefix TEXT    posted-message prefix; <model> placeholder\n"
             "                   (default: '[AI review - <model>]')\n"
@@ -565,9 +612,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True,
-                                metavar="{setup,check,run,chat,render,post}")
+                                metavar="{setup,check,run,chat,models,render,post}")
 
     from .agents import AGENTS
+    from .models import EFFORT_LEVELS
     default_prefix = os.environ.get("LREVIEW_PREFIX")
     default_agent = os.environ.get("LREVIEW_AGENT", "claude")
     default_prompts = os.environ.get("REVIEW_PROMPTS_DIR") or None
@@ -658,22 +706,25 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--agent", choices=sorted(AGENTS), default=default_agent,
         help="Agent to run the reviews with (default: $LREVIEW_AGENT or "
-             "claude; claude is the verified backend, others are "
-             "best-effort)")
+             "claude; claude and codex are the verified backends, "
+             "gemini and opencode are best-effort)")
     run_p.add_argument(
         "--model", default=None,
-        help="Model for the review runs, e.g. opus, sonnet, fable "
-             "(default: $LREVIEW_MODEL, else opus for claude; other "
-             "agents use their own default)")
+        help="Model for the review runs — claude: opus (default), "
+             "sonnet, fable, haiku; codex: gpt-6-astra (default), "
+             "gpt-5.6-sol/-terra/-luna, gpt-5.5, gpt-5.3-codex-spark, "
+             "or their aliases (astra, sol, terra, luna, spark). "
+             "$LREVIEW_MODEL sets the default; 'lreview models' "
+             "prints the codex table")
     run_p.add_argument(
-        "--effort", choices=["low", "medium", "high", "xhigh", "max"],
+        "--effort", choices=list(EFFORT_LEVELS),
         default=os.environ.get("LREVIEW_EFFORT"),
         help="Reasoning effort for claude (--effort) or codex "
              "(-c model_reasoning_effort=...); default: "
-             "$LREVIEW_EFFORT or the agent's own default. "
-             "Ignored for gemini/opencode. Note: some models "
-             "(e.g. glm-5.3) only accept a subset such as "
-             "low/high/max")
+             "$LREVIEW_EFFORT or the agent's own default. Ignored for "
+             "gemini/opencode. The ladder is per model — 'ultra' is "
+             "codex-only, and gpt-5.5 / gpt-5.3-codex-spark stop at "
+             "xhigh; see 'lreview models'")
     run_p.add_argument(
         "--memory", "-m", action="store_true",
         help="Use per-change review memory: read the change's notes "
@@ -751,12 +802,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Model for the interactive session (default: the "
              "agent's own default)")
     chat_p.add_argument(
-        "--effort", choices=["low", "medium", "high", "xhigh", "max"],
+        "--effort", choices=list(EFFORT_LEVELS),
         default=os.environ.get("LREVIEW_EFFORT"),
         help="Reasoning effort for the session — claude "
              "(--effort) or codex (-c model_reasoning_effort=...); "
              "default: $LREVIEW_EFFORT or the agent's own default. "
-             "Ignored for gemini/opencode")
+             "Ignored for gemini/opencode; see 'lreview models' for "
+             "the per-model ladders")
     chat_p.add_argument(
         "--keep-worktree", action="store_true",
         help="Keep the discussion worktree after the session ends")
@@ -767,6 +819,14 @@ def build_parser() -> argparse.ArgumentParser:
              "(repeatable; use --agent-arg=--flag for arguments "
              "starting with a dash)")
     chat_p.set_defaults(func=cmd_chat)
+
+    models_p = sub.add_parser(
+        "models", help="List the models and reasoning efforts each "
+                       "agent accepts")
+    models_p.add_argument(
+        "--agent", choices=sorted(AGENTS), default=None,
+        help="Show just this agent (default: claude and codex)")
+    models_p.set_defaults(func=cmd_models)
 
     render_p = sub.add_parser(
         "render", help="Render existing review JSONs to Markdown reports")

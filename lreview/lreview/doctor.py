@@ -83,8 +83,8 @@ def run_setup(agent: str, prompts_dir: Optional[str]) -> int:
     interactive = sys.stdin.isatty()
     spec = get_agent(agent)
     print(f"lreview setup — agent: {agent}"
-          + ("" if spec.verified else " (best-effort backend; only "
-             "claude is verified)"))
+          + ("" if spec.verified else " (best-effort backend; claude "
+             "and codex are the verified ones)"))
     print()
 
     # 1. Agent CLI

@@ -56,10 +56,10 @@ and CI).
 
 ## Agents
 
-> **Disclaimer:** only the **claude** backend has been verified
-> end-to-end. codex, gemini, and opencode are untested best-effort
-> integrations — expect to tweak invocation flags (`--agent-arg`) and
-> please report what works.
+> **Disclaimer:** **claude** and **codex** are verified end-to-end.
+> gemini and opencode are untested best-effort integrations — expect
+> to tweak invocation flags (`--agent-arg`) and please report what
+> works.
 
 The review prompt is agent-agnostic — it mandates the
 `gerrit-review.json` / `review-metadata.json` output files, so
@@ -76,16 +76,57 @@ review-prompts README it gets better prompt compliance than calling
 it a review.) Select the backend with
 `--agent {claude,codex,gemini,opencode}` or `LREVIEW_AGENT`:
 
-- **claude** (default) — the verified backend, run with stream-json
-  output, which is what powers the live token counter, final
-  token/cost figures, and model detection.
-- **codex / gemini / opencode** — best-effort backends via
-  `codex exec`, `gemini --yolo -p`, or `opencode run`. Reviews, logs,
-  collection, and posting all work; live token/cost/model niceties
-  are claude-only (the status line falls back to log size, and the
-  posted prefix falls back to `--model` or the agent name). These
-  invocations have not been battle-tested — use `--agent-arg` to
-  adjust flags if your CLI version differs.
+- **claude** (default) — run with stream-json output, which is what
+  powers the live token counter, final token/cost figures, and model
+  detection.
+- **codex** — run with `codex exec --json`, whose JSONL event stream
+  gives the same log-as-liveness-signal and a real token total at the
+  end. codex reports usage only once, when the turn completes, so the
+  status line counts log size while a review is running and the token
+  figure appears on completion; a ChatGPT-plan run reports no dollar
+  cost, so cost stays blank. See "Codex models and effort" below.
+- **gemini / opencode** — best-effort backends via `gemini --yolo -p`
+  or `opencode run`. Reviews, logs, collection, and posting all work,
+  but there is no token/cost/model reporting and the invocations have
+  not been battle-tested — use `--agent-arg` to adjust flags if your
+  CLI version differs.
+
+### Codex models and effort
+
+`--agent codex` reaches the GPT-6 and GPT-5.6 families. Reviews
+default to **gpt-6-astra**, the most capable one, as claude reviews
+default to opus; `--model` (or `$LREVIEW_MODEL`) picks another, by
+slug or by the short alias in brackets:
+
+| Model | Alias | Effort ladder |
+|---|---|---|
+| `gpt-6-astra` (default) | `astra`, `gpt-6` | low … max, **ultra** |
+| `gpt-5.6-sol` | `sol` | low … max, **ultra** |
+| `gpt-5.6-terra` | `terra`, `gpt-5.6` | low … max, **ultra** |
+| `gpt-5.6-luna` | `luna` | low … max |
+| `gpt-5.5` | — | low … xhigh |
+| `gpt-5.3-codex-spark` | `spark` | low … xhigh |
+
+`--effort` maps to codex's `-c model_reasoning_effort=...`. The ladder
+is **per model** — `ultra` is codex-only and not every model has it,
+and the two older models stop at `xhigh` — so lreview checks the
+model/effort pair up front rather than letting codex fail a few
+seconds into a run that has already fetched the change and built a
+worktree:
+
+```bash
+lreview models                        # the table above, plus claude's
+lreview run --agent codex --model sol --effort medium 64086
+lreview run --agent codex --model luna --effort ultra 64086
+# error: codex model gpt-5.6-luna does not support --effort ultra
+#        (accepts: low, medium, high, xhigh, max)
+```
+
+Aliases are expanded before the review runs, so `--model sol` is
+recorded and posted as `[AI review - gpt-5.6-sol]`. A model name
+lreview does not know is passed to the CLI untouched and not
+effort-checked, so a model released after this table was written
+still works.
 
 ## Quick start
 
@@ -125,7 +166,8 @@ to read, e.g. `jq -r '.result // empty' kreview-*.log` for the final
 review text.
 
 Reviews run on **opus** by default (`--model sonnet` / `--model fable`
-or `LREVIEW_MODEL` to change). Posted messages are prefixed
+or `LREVIEW_MODEL` to change; `--agent codex` defaults to
+**gpt-6-astra**). Posted messages are prefixed
 `[AI review - <model>]`, stamped with the model that actually ran the
 review and rendered as a bold standalone first line with a blank line
 before the message body:
@@ -374,6 +416,7 @@ lreview render [file.json...]    # (re)generate Markdown reports from
                                  # existing review JSONs (--results-dir)
 lreview chat <change|url>        # interactive session over an existing
                                  # review (findings, how the patch works)
+lreview models                   # models and efforts each agent accepts
 lreview post [<change|url>...] [options]
 ```
 
@@ -431,9 +474,9 @@ opencode's `--model` wants the `provider/model` form.
 | `--results-dir DIR` | `$LREVIEW_RESULTS_DIR`, else `lreview-results/` in the llm tools checkout (cwd-relative without a checkout) | Logs, JSONs, summary.json |
 | `--worktrees-dir DIR` | auto | Where worktrees are created |
 | `--keep-worktrees` | off | Keep worktrees after review |
-| `--agent NAME` | `claude` (or `$LREVIEW_AGENT`) | Agent backend: claude, codex, gemini, opencode |
-| `--model NAME` | `opus` for claude (or `$LREVIEW_MODEL`); other agents use their own default | Model for the review runs |
-| `--effort LEVEL` | agent's default (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max — claude (`--effort`) or codex (`-c model_reasoning_effort=...`); ignored for gemini/opencode. Some models (e.g. glm-5.3) only accept a subset such as low/high/max |
+| `--agent NAME` | `claude` (or `$LREVIEW_AGENT`) | Agent backend: claude, codex (verified), gemini, opencode |
+| `--model NAME` | `opus` for claude, `gpt-6-astra` for codex (or `$LREVIEW_MODEL`); gemini/opencode use their own default | Model for the review runs; see `lreview models` |
+| `--effort LEVEL` | agent's default (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max, plus `ultra` on the codex models that have it — claude (`--effort`) or codex (`-c model_reasoning_effort=...`); ignored for gemini/opencode. The ladder is per model and checked before the run |
 | `--memory, -m` | off | Read/update the per-change review memory document |
 | `--clear-memory, -c` | off | With `-m`: delete the change's memory document first |
 | `--db DIR` | `$LREVIEW_DB`, else `<repo>/lreview-db` | Memory database directory |
@@ -461,7 +504,8 @@ already-posted review.
 | Variable | Effect |
 |---|---|
 | `LREVIEW_AGENT` | Default for `--agent` (else `claude`) |
-| `LREVIEW_MODEL` | Default for `--model` (else `opus` for claude) |
+| `LREVIEW_MODEL` | Default for `--model` (else `opus` for claude, `gpt-6-astra` for codex) |
+| `LREVIEW_EFFORT` | Default for `--effort` (else the agent's own) |
 | `LREVIEW_DB` | Default for `--db` (memory database directory) |
 | `LREVIEW_RESULTS_DIR` | Default for `--results-dir` |
 | `LREVIEW_PREFIX` | Default for `--prefix`; `<model>` substituted |
@@ -472,8 +516,8 @@ already-posted review.
 ## Notes
 
 - The agent processes run in their CLI's unattended mode (claude:
-  `--dangerously-skip-permissions`, codex:
-  `--dangerously-bypass-approvals-and-sandbox`, gemini: `--yolo`) —
+  `--dangerously-skip-permissions`, codex: `--json
+  --dangerously-bypass-approvals-and-sandbox`, gemini: `--yolo`) —
   they must read the tree, run git/grep, and write one JSON file; each
   runs confined to its own disposable worktree.
 - Reviews are expensive (a deep analysis of a non-trivial patch can run

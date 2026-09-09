@@ -12,9 +12,10 @@ class TestRegistry:
 
     def test_supported_agents(self):
         assert set(AGENTS) == {"claude", "codex", "gemini", "opencode"}
-        assert AGENTS["claude"].stream_json is True
-        assert AGENTS["claude"].verified is True
-        for name in ("codex", "gemini", "opencode"):
+        for name in ("claude", "codex"):
+            assert AGENTS[name].stream_json is True
+            assert AGENTS[name].verified is True
+        for name in ("gemini", "opencode"):
             assert AGENTS[name].stream_json is False
             assert AGENTS[name].verified is False
 
@@ -37,26 +38,36 @@ class TestBuildCmd:
         cmd = get_agent("claude").build_cmd("opus", "xhigh", [], PROMPT)
         assert cmd[-4:] == ["--model", "opus", "--effort", "xhigh"]
 
+    def test_codex_streams_json_events(self):
+        # --json makes exec emit the JSONL event stream the runner
+        # parses for the token total, instead of prose.
+        cmd = get_agent("codex").build_cmd(None, None, [], PROMPT)
+        assert cmd == [
+            "codex", "exec", "--json",
+            "--dangerously-bypass-approvals-and-sandbox",
+            PROMPT,
+        ]
+
     def test_codex_effort_maps_to_config_override(self):
         cmd = get_agent("codex").build_cmd(None, "high", [], PROMPT)
         assert cmd == [
-            "codex", "exec",
+            "codex", "exec", "--json",
             "--dangerously-bypass-approvals-and-sandbox",
             "-c", 'model_reasoning_effort="high"',
             PROMPT,
         ]
-        cmd = get_agent("codex").build_cmd("gpt-5", None, [], PROMPT)
-        assert cmd[2:5] == ["--dangerously-bypass-approvals-and-sandbox",
-                            "-m", "gpt-5"]
+        cmd = get_agent("codex").build_cmd("gpt-5.6-sol", None, [], PROMPT)
+        assert cmd[3:6] == ["--dangerously-bypass-approvals-and-sandbox",
+                            "-m", "gpt-5.6-sol"]
         # --agent-arg after effort so a later -c can override
         cmd = get_agent("codex").build_cmd(
-            "glm-5.3", "max", ["-c", 'model_reasoning_effort="low"'],
+            "gpt-6-astra", "ultra", ["-c", 'model_reasoning_effort="low"'],
             PROMPT)
         assert cmd == [
-            "codex", "exec",
+            "codex", "exec", "--json",
             "--dangerously-bypass-approvals-and-sandbox",
-            "-m", "glm-5.3",
-            "-c", 'model_reasoning_effort="max"',
+            "-m", "gpt-6-astra",
+            "-c", 'model_reasoning_effort="ultra"',
             "-c", 'model_reasoning_effort="low"',
             PROMPT,
         ]
@@ -88,14 +99,15 @@ class TestBuildInteractiveCmd:
         cmd = get_agent("codex").build_interactive_cmd(None, [], PROMPT)
         assert cmd == ["codex", PROMPT]
         assert get_agent("codex").build_interactive_cmd(
-            "gpt-5", [], PROMPT)[:3] == ["codex", "-m", "gpt-5"]
+            "gpt-6-astra", [], PROMPT)[:3] == ["codex", "-m",
+                                               "gpt-6-astra"]
 
     def test_codex_interactive_effort(self):
         cmd = get_agent("codex").build_interactive_cmd(
-            "glm-5.3", [], PROMPT, effort="low")
+            "gpt-5.6-sol", [], PROMPT, effort="medium")
         assert cmd == [
-            "codex", "-m", "glm-5.3",
-            "-c", 'model_reasoning_effort="low"',
+            "codex", "-m", "gpt-5.6-sol",
+            "-c", 'model_reasoning_effort="medium"',
             PROMPT,
         ]
 

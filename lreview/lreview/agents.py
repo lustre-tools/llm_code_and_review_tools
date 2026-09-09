@@ -5,9 +5,11 @@ review-core.md directly (the review-prompts README quick-start form),
 so every backend receives the same instruction text — only the
 headless CLI invocation differs per agent.
 
-Claude is the verified backend (and the only one whose stream-json
-output gives live token counts, final usage/cost, and model
-detection). The other backends are best-effort command templates.
+Claude and codex are the verified backends. Both are run with a JSONL
+event stream (claude's --output-format stream-json, codex's --json)
+that lreview parses for token usage; only claude's carries a dollar
+cost and the model name. gemini and opencode are best-effort command
+templates.
 """
 
 from dataclasses import dataclass
@@ -18,8 +20,9 @@ from typing import Optional
 class AgentSpec:
     """One supported agent backend."""
     name: str
-    # Only claude emits the stream-json events lreview parses for
-    # live tokens, final usage, and the model name.
+    # Emits a JSONL event stream lreview parses for token usage (and,
+    # for claude, cost and the model name). It is also what makes the
+    # log grow during a run, so it doubles as the liveness signal.
     stream_json: bool = False
     verified: bool = True
 
@@ -44,7 +47,10 @@ class AgentSpec:
                 cmd += ["--effort", effort]
             return cmd + extra_args
         if self.name == "codex":
-            cmd = ["codex", "exec",
+            # --json makes exec stream JSONL events (thread/turn/item)
+            # instead of prose, ending in the turn.completed usage the
+            # runner reads for the token total.
+            cmd = ["codex", "exec", "--json",
                    "--dangerously-bypass-approvals-and-sandbox"]
             if model:
                 cmd += ["-m", model]
@@ -118,7 +124,7 @@ class AgentSpec:
 
 AGENTS = {
     "claude": AgentSpec(name="claude", stream_json=True),
-    "codex": AgentSpec(name="codex", verified=False),
+    "codex": AgentSpec(name="codex", stream_json=True),
     "gemini": AgentSpec(name="gemini", verified=False),
     "opencode": AgentSpec(name="opencode", verified=False),
 }

@@ -64,6 +64,8 @@ class TestParser:
         assert args.effort == "high"
         args = build_parser().parse_args(["run", "1", "--effort", "max"])
         assert args.effort == "max"
+        args = build_parser().parse_args(["run", "1", "--effort", "ultra"])
+        assert args.effort == "ultra"
         with pytest.raises(SystemExit):
             build_parser().parse_args(["run", "1", "--effort", "turbo"])
 
@@ -71,11 +73,42 @@ class TestParser:
         from lreview.cli import resolve_model
         monkeypatch.delenv("LREVIEW_MODEL", raising=False)
         assert resolve_model("claude") == "opus"
-        assert resolve_model("codex") is None
+        assert resolve_model("codex") == "gpt-6-astra"
+        assert resolve_model("gemini") is None
         assert resolve_model("claude", "fable") == "fable"
         monkeypatch.setenv("LREVIEW_MODEL", "sonnet")
         assert resolve_model("claude") == "sonnet"
         assert resolve_model("claude", "fable") == "fable"
+
+    def test_resolve_model_expands_codex_aliases(self, monkeypatch):
+        from lreview.cli import resolve_model
+        monkeypatch.delenv("LREVIEW_MODEL", raising=False)
+        assert resolve_model("codex", "sol") == "gpt-5.6-sol"
+        assert resolve_model("codex", "gpt-6") == "gpt-6-astra"
+        # unknown names reach the CLI untouched
+        assert resolve_model("codex", "gpt-7-nova") == "gpt-7-nova"
+        monkeypatch.setenv("LREVIEW_MODEL", "luna")
+        assert resolve_model("codex") == "gpt-5.6-luna"
+
+    def test_check_selection_rejects_an_impossible_pair(self, capsys):
+        from lreview.cli import check_selection
+        args = build_parser().parse_args(
+            ["run", "1", "--agent", "codex", "--model", "luna",
+             "--effort", "ultra"])
+        assert check_selection(args) is False
+        assert "gpt-5.6-luna" in capsys.readouterr().out
+
+        args = build_parser().parse_args(
+            ["run", "1", "--agent", "codex", "--model", "sol",
+             "--effort", "ultra"])
+        assert check_selection(args) is True
+
+    def test_check_selection_notes_agents_without_effort(self, capsys):
+        from lreview.cli import check_selection
+        args = build_parser().parse_args(
+            ["run", "1", "--agent", "gemini", "--effort", "high"])
+        assert check_selection(args) is True
+        assert "not supported for 'gemini'" in capsys.readouterr().out
 
     def test_run_options(self):
         args = build_parser().parse_args([

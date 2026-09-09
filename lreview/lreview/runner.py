@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from .agents import get_agent
+from .models import validate_selection
 from .gerrit import ResolvedChange
 from .artifacts import REVIEW_RESULT_NAME, validate_review_result
 from .manifest import SUMMARY_NAME, locked_summary  # noqa: F401 (re-export)
@@ -88,9 +89,13 @@ def live_token_count(log_path: Path) -> Optional[int]:
     messages seen so far, deduplicated by message id (the same
     message can be logged more than once; the last one wins). This
     tracks the final result-event total to ~1% — only the
-    per-message output_tokens are partial. Falls back to the legacy
-    estimated_tokens event when the log carries no usage (other
-    agents, older claude versions).
+    per-message output_tokens are partial.
+
+    codex reports usage once, in the final turn.completed event, so
+    this stays None until its run ends (the status line falls back to
+    log size, which is the liveness signal that matters) and then
+    reports the real total. Last resort is the legacy estimated_tokens
+    event of older claude versions.
     """
     usage_by_id: dict = {}
     try:
@@ -116,23 +121,40 @@ def live_token_count(log_path: Path) -> Optional[int]:
             for usage in usage_by_id.values()
             for key in ("input_tokens", "cache_creation_input_tokens",
                         "cache_read_input_tokens", "output_tokens"))
+    tokens, _ = parse_final_usage(log_path)
+    if tokens is not None:
+        return tokens
     matches = _ESTIMATED_TOKENS_RE.findall(_read_tail(log_path, 16384))
     return int(matches[-1]) if matches else None
 
 
 def parse_final_usage(log_path: Path):
-    """Total tokens and cost from the stream-json result event.
+    """Total tokens and cost from the agent's final usage event.
+
+    claude's stream-json result event carries both. codex's
+    turn.completed event carries usage only — a ChatGPT-plan run has
+    no dollar figure to report — and its input_tokens already include
+    the cached ones (cached_input_tokens is a subset, and
+    reasoning_output_tokens a subset of output_tokens), so the total
+    is input + output and nothing else.
 
     Returns (tokens, cost_usd), either possibly None.
     """
     tail = _read_tail(log_path, 262144)
     for line in reversed(tail.splitlines()):
-        if '"type":"result"' not in line.replace(" ", ""):
+        squashed = line.replace(" ", "")
+        if ('"type":"result"' not in squashed
+                and '"type":"turn.completed"' not in squashed):
             continue
         try:
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if obj.get("type") == "turn.completed":
+            usage = obj.get("usage") or {}
+            tokens = (usage.get("input_tokens", 0)
+                      + usage.get("output_tokens", 0))
+            return (tokens or None), None
         if obj.get("type") != "result":
             continue
         usage = obj.get("usage") or {}
@@ -163,6 +185,7 @@ class ReviewResult:
     severity: Optional[str] = None
     model: Optional[str] = None
     agent: str = "claude"
+    effort: Optional[str] = None
     tokens: Optional[int] = None
     cost_usd: Optional[float] = None
     duration: float = 0.0
@@ -200,6 +223,10 @@ class BatchConfig:
         self.worktrees_dir = Path(self.worktrees_dir).expanduser().resolve()
         self.prompts_dir = Path(self.prompts_dir).expanduser().resolve()
         get_agent(self.agent)  # fail fast on unknown agents
+        # A model that cannot do the requested effort only fails once
+        # codex is running, after the worktree is built — check here,
+        # before anything expensive happens.
+        validate_selection(self.agent, self.model, self.effort)
         if self.mode not in REVIEW_MODES:
             raise ValueError(
                 f"mode must be one of {REVIEW_MODES}, got {self.mode!r}")
@@ -421,17 +448,18 @@ class ProgressTracker:
         console.clear_status()
 
 
-def _run_claude(cmd: list[str], cwd: Path, log_path: Path,
-                timeout: int) -> int:
-    """Run claude in its own process group; kill the whole group on
+def _run_agent(cmd: list[str], cwd: Path, log_path: Path,
+               timeout: int) -> int:
+    """Run the agent in its own process group; kill the whole group on
     timeout so MCP servers / hook children don't outlive the review.
 
     Raises subprocess.TimeoutExpired after the group is killed.
     """
     with open(log_path, "w") as log_file:
         env = os.environ.copy()
-        # The reviewer needs Claude OAuth only. GitHub credentials belong to
-        # the parent poster and must never reach an agent or its shell tools.
+        # The reviewer needs its own agent credentials only. GitHub
+        # credentials belong to the parent poster and must never reach
+        # an agent or its shell tools.
         env.pop("GH_TOKEN", None); env.pop("GITHUB_TOKEN", None)
         if os.environ.get("CI"):
             env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
@@ -516,7 +544,8 @@ def run_review(
     _log(f"[{change.slug}] {console.color('cyan', 'review started')}: "
          f"{change.subject[:60]}")
     try:
-        returncode = _run_claude(cmd, worktree_dir, log_path, config.timeout)
+        returncode = _run_agent(cmd, worktree_dir, log_path,
+                                config.timeout)
     except subprocess.TimeoutExpired:
         duration = time.monotonic() - start
         _log(f"[{change.slug}] {console.color('red', 'TIMEOUT')} "
@@ -574,7 +603,8 @@ def run_review(
             return ReviewResult(
                 change, STATUS_FAILED, mode=config.mode, duration=duration,
                 log_path=log_path, model=model, tokens=tokens,
-                cost_usd=cost_usd, error=f"claude exited {returncode}")
+                cost_usd=cost_usd,
+                error=f"{config.agent} exited {returncode}")
         if not metadata_json.is_file():
             _log(f"[{change.slug}] {console.color('red', 'FAILED')} — "
                  f"review did not complete (no {METADATA_JSON_NAME}), "
@@ -706,6 +736,7 @@ def _review_and_cleanup(
             wt.remove_worktree(config.repo, worktree_dir)
 
     result.agent = config.agent
+    result.effort = config.effort
     if memory_path is not None:
         result.memory_path = memory_path
         try:
@@ -775,7 +806,8 @@ def run_batch(
             _log(f"[{change.slug}] worktree setup failed: {exc}")
             results.append(ReviewResult(
                 change, STATUS_FAILED, mode=config.mode,
-                agent=config.agent, error=str(exc)))
+                agent=config.agent, effort=config.effort,
+                error=str(exc)))
 
     interrupted = False
     try:
@@ -860,6 +892,7 @@ def update_summary(results_dir: Path, results: list[ReviewResult],
                 "severity": result.severity,
                 "model": result.model,
                 "agent": result.agent,
+                "effort": result.effort,
                 "tokens": result.tokens,
                 "cost_usd": result.cost_usd,
                 "duration_s": round(result.duration),
