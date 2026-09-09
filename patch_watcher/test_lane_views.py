@@ -1,18 +1,19 @@
+import inspect
 import re
 import unittest
 from dataclasses import dataclass
 
-import lane_views
+from patch_watcher import lane_views
 
 
 class LaneViewTests(unittest.TestCase):
     def test_missing_summary_state_is_visibly_inert(self):
         html = lane_views.render_autonomous_lane_summary()
-        self.assertIn("Global kill switch: Unknown (treated as disabled)", html)
-        self.assertIn("Configured lane: <strong>unknown</strong>", html)
-        self.assertIn("Budgets are unknown; no autonomous action is permitted", html)
-        self.assertIn("does not grant credentials or broader worker authority", html)
-        self.assertNotIn("Global kill switch: Enabled", html)
+        self.assertIn("Unattended actions: Unknown (treated as disabled)", html)
+        self.assertIn("One rule is configured: <strong>unknown</strong>", html)
+        self.assertIn("Budgets are unknown; no unattended action is permitted", html)
+        self.assertIn("grants no credentials and no broader authority", html)
+        self.assertNotIn("Unattended actions: Enabled", html)
 
     def test_summary_has_post_only_global_project_and_replay_controls(self):
         html = lane_views.render_autonomous_lane_summary({
@@ -25,7 +26,7 @@ class LaneViewTests(unittest.TestCase):
             }],
             "replay": {"state": "complete", "summary": "12 observations evaluated"},
         }, csrf_token="token<&'\"")
-        self.assertIn("Global kill switch: Enabled", html)
+        self.assertIn("Unattended actions: Enabled", html)
         self.assertIn("safe-retest", html)
         self.assertIn("version 3", html)
         self.assertIn("fs/lustre-release", html)
@@ -74,9 +75,13 @@ class LaneViewTests(unittest.TestCase):
             csrf_token="csrf",
         )
         self.assertIn("Replay: Dry run · Would reject", html)
-        self.assertIn("name='change_number' value='91'", html)
-        self.assertIn("name='patchset' value='4'", html)
+        # The revision is what scopes the replay, and it is the only field
+        # this form needs: change_number, patchset and a `mode` of `dry_run`
+        # were all posted and ignored, and a hidden field nothing reads is how
+        # a form comes to disagree with its handler.
         self.assertIn(f"name='revision_sha' value='{revision}'", html)
+        self.assertNotIn("name='change_number'", html.split("/autonomous-lanes/replay")[-1])
+        self.assertNotIn("value='dry_run'", html)
         self.assertEqual(html.count("name='csrf_token'"), html.count("<form"))
 
     def test_stale_eligible_decision_cannot_look_current(self):
@@ -181,3 +186,44 @@ class LaneViewTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SwitchBadgePolarityTests(unittest.TestCase):
+    """A safety badge must never be labelled as the inverse of its value.
+
+    The global badge read "Global kill switch: Enabled", in green, precisely
+    when lanes were live and permitted to make remote Maloo writes. An operator
+    scanning for "is automation stopped" would read that as yes.
+    """
+
+    def test_enabled_means_the_named_thing_is_on(self):
+        self.assertIn("Unattended actions: Enabled", lane_views._switch_badge(
+            "Unattended actions", True))
+        self.assertIn("tone-good", lane_views._switch_badge("Unattended actions", True))
+
+    def test_no_badge_label_reads_inverted_against_its_value(self):
+        # Only the _switch_badge CALL SITES matter -- "kill switch" is a fine
+        # word elsewhere (the Disable dropdown option, prose about bypassing
+        # one). What must never happen is a badge whose label names the
+        # opposite of the boolean it renders.
+        import ast
+
+        tree = ast.parse(inspect.getsource(lane_views))
+        labels = [
+            node.args[0].value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", "") == "_switch_badge"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+        ]
+        self.assertTrue(labels, "no _switch_badge call sites found")
+        for label in labels:
+            with self.subTest(label=label):
+                self.assertNotIn("kill", label.casefold())
+                self.assertNotIn("disable", label.casefold())
+
+    def test_unknown_fails_closed_and_says_so(self):
+        badge = lane_views._switch_badge("Unattended actions", None)
+        self.assertIn("Unknown (treated as disabled)", badge)
+        self.assertIn("tone-neutral", badge)

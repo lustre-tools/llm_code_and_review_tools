@@ -6,7 +6,34 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import gerrit_status as status
+from patch_watcher import gerrit_status as status
+from patch_watcher import reporting
+
+_ERROR_LOG_SANDBOX = {}
+
+
+def setUpModule():
+    """Keep refresh-failure logging out of the operator's real error log.
+
+    `refresh_patch` records every failed refresh through
+    `reporting.log_structured_error`, and these tests drive that path
+    deliberately -- more of them since malformed Gerrit payloads started
+    landing there as typed failures instead of escaping. Without this the
+    suite appends to ~/.local/state/patch-watcher/errors.jsonl.
+    """
+
+    sandbox = tempfile.TemporaryDirectory()
+    _ERROR_LOG_SANDBOX["directory"] = sandbox
+    _ERROR_LOG_SANDBOX["previous"] = reporting.DEFAULT_ERROR_LOG
+    reporting.DEFAULT_ERROR_LOG = Path(sandbox.name) / "errors.jsonl"
+
+
+def tearDownModule():
+    if "previous" in _ERROR_LOG_SANDBOX:
+        reporting.DEFAULT_ERROR_LOG = _ERROR_LOG_SANDBOX.pop("previous")
+    sandbox = _ERROR_LOG_SANDBOX.pop("directory", None)
+    if sandbox is not None:
+        sandbox.cleanup()
 
 
 def sample_change(*, raw_status="NEW", backport=False):
@@ -116,49 +143,7 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(status.GerritConfigError, "GERRIT_USER"):
                 status.GerritConfig.load(path)
 
-    def test_upload_kill_switch_defaults_off_and_requires_git_identity(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            path = Path(temp_dir) / "config"
-            base = (
-                "GERRIT_URL=https://review.whamcloud.com\n"
-                "GERRIT_USER=test-user\nGERRIT_PASS=secret\n"
-            )
-            path.write_text(base, encoding="utf-8")
-            path.chmod(0o600)
-            self.assertFalse(status.GerritConfig.load(path).upload_enabled)
-            path.write_text(base + "GERRIT_UPLOAD_ENABLED=true\n", encoding="utf-8")
-            with self.assertRaisesRegex(status.GerritConfigError, "GERRIT_GIT_NAME"):
-                status.GerritConfig.load(path)
-            path.write_text(
-                base + "GERRIT_UPLOAD_ENABLED=true\n"
-                "GERRIT_GIT_NAME=Patch Watcher\n"
-                "GERRIT_GIT_EMAIL=patch-watcher@example.test\n",
-                encoding="utf-8",
-            )
-            config = status.GerritConfig.load(path)
-            self.assertTrue(config.upload_enabled)
-            self.assertEqual(config.git_name, "Patch Watcher")
 
-    def test_external_write_kill_switches_are_independent_and_default_off(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            path = Path(temp_dir) / "config"
-            base = (
-                "GERRIT_URL=https://review.whamcloud.com\n"
-                "GERRIT_USER=test-user\nGERRIT_PASS=secret\n"
-            )
-            path.write_text(base, encoding="utf-8")
-            path.chmod(0o600)
-            config = status.GerritConfig.load(path)
-            self.assertFalse(config.reply_enabled)
-            self.assertFalse(config.jenkins_retrigger_enabled)
-            path.write_text(
-                base + "GERRIT_REPLY_ENABLED=true\n"
-                "JENKINS_RETRIGGER_ENABLED=yes\n",
-                encoding="utf-8",
-            )
-            config = status.GerritConfig.load(path)
-            self.assertTrue(config.reply_enabled)
-            self.assertTrue(config.jenkins_retrigger_enabled)
 
 
 class StatusTests(unittest.TestCase):
@@ -220,6 +205,59 @@ class StatusTests(unittest.TestCase):
         self.assertFalse(result["complete"])
         self.assertTrue(any("missing parent" in item for item in result["incompleteness_reasons"]))
         self.assertTrue(any("does not match" in item for item in result["incompleteness_reasons"]))
+
+    def test_a_comment_without_an_unresolved_flag_is_treated_as_resolved(self):
+        """Gerrit omits `unresolved` on resolved comments, and that must stay resolved.
+
+        Every snapshot test sent the flag explicitly, so the default for a
+        payload that leaves it out was never exercised.  That default decides
+        whether a comment opens an unresolved thread, and the snapshot then
+        cross-checks its own thread count against Gerrit's -- so defaulting the
+        wrong way both invents review blockers and makes the snapshot report
+        itself incomplete, which is what gates whole-review work from starting.
+        """
+        revision = "d" * 40
+        identity = {
+            "change_number": 61965, "project": "fs/lustre-release",
+            "branch": "master", "change_id": "I" + "a" * 40,
+            "status": "NEW", "revision_sha": revision, "patchset": 4,
+            "revision_numbers": {revision: 4}, "updated": "now",
+            "unresolved_comment_count": 0,
+        }
+        comment = {
+            "id": "abc", "patch_set": 4, "commit_id": revision,
+            "author": {"_account_id": 7, "name": "Reviewer"},
+            "message": "Looks good to me", "updated": "2026-01-01",
+        }
+
+        result = status.normalize_review_snapshot(
+            identity, {"file.c": [comment]}, {}
+        )
+
+        self.assertEqual(result["threads"], [])
+        self.assertEqual(result["reported_unresolved_count"], 0)
+        self.assertEqual(result["incompleteness_reasons"], [])
+        self.assertTrue(result["complete"])
+
+    def test_a_change_without_an_unresolved_count_is_not_treated_as_blocked(self):
+        """A ChangeInfo that omits the count must read as zero, not as blocked.
+
+        Gerrit leaves `unresolved_comment_count` out when there is nothing
+        unresolved, and every fixture in this suite supplied it, so the default
+        was never exercised.  It feeds the watch classification directly: a
+        non-zero default turns every such change into `needs-attention` and
+        suppresses review runs that should start, while the count itself is
+        what an operator reads to decide there is feedback to answer.
+        """
+        change = sample_change()
+        del change["unresolved_comment_count"]
+
+        result = status.summarize_change(change)
+
+        self.assertEqual(result["unresolved"], 0)
+        self.assertEqual(result["review"], "Ready")
+        self.assertEqual(result["watch_state"], "ready")
+        self.assertEqual(result["recommendation"], "Ready for maintainer action")
 
     def test_ready_requires_both_ci_and_two_non_owner_reviews(self):
         result = status.summarize_change(sample_change())
@@ -439,7 +477,7 @@ class StatusTests(unittest.TestCase):
             def fetch(self, _url):
                 raise status.GerritRequestError("temporary failure")
 
-        with patch("reporting.log_structured_error"):
+        with patch("patch_watcher.reporting.log_structured_error"):
             error = status.refresh_patch(patch_record, FailingClient())
         self.assertEqual(error, "temporary failure")
         self.assertEqual(patch_record["review"], "Ready")
@@ -468,3 +506,188 @@ class StatusTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+CHANGE_URL = "https://review.whamcloud.com/c/fs/lustre-release/+/61965"
+
+
+def _client(change, *, transport=None):
+    config = status.GerritConfig("https://review.whamcloud.com", "user", "pass")
+    if transport is None:
+        body = b")]}'\n" + json.dumps(change).encode()
+
+        def transport(_request, _timeout):
+            return body
+
+    return status.GerritStatusClient(config, transport=transport)
+
+
+class ExternalDataTests(unittest.TestCase):
+    """Gerrit answers are untrusted data, not a description of the request."""
+
+    def test_fetch_rejects_a_body_about_a_different_change(self):
+        other = sample_change()
+        other["_number"] = 101
+        other["project"] = "other/project"
+        other["subject"] = "someone else's patch"
+        with self.assertRaises(status.GerritRequestError) as caught:
+            _client(other).fetch(CHANGE_URL)
+        self.assertIn("different change", str(caught.exception))
+
+    def test_fetch_identity_rejects_a_body_about_a_different_change(self):
+        other = sample_change()
+        other["_number"] = 101
+        with self.assertRaises(status.GerritRequestError) as caught:
+            _client(other).fetch_identity(CHANGE_URL)
+        self.assertIn("different change", str(caught.exception))
+
+    def test_fetch_identity_is_pinned_to_the_requested_change(self):
+        identity = _client(sample_change()).fetch_identity(CHANGE_URL)
+        self.assertEqual(identity["change_number"], 61965)
+
+    def test_summarize_change_checks_the_change_it_was_asked_about(self):
+        change = sample_change()
+        self.assertEqual(
+            status.summarize_change(change, expected_change_number=61965)["change_number"],
+            61965,
+        )
+        with self.assertRaises(status.GerritRequestError):
+            status.summarize_change(change, expected_change_number=68160)
+
+    def test_missing_change_number_is_a_typed_failure(self):
+        change = sample_change()
+        change.pop("_number")
+        with self.assertRaises(status.GerritRequestError):
+            _client(change).fetch(CHANGE_URL)
+
+    def wrong_typed_changes(self):
+        revision = "d" * 40
+        shapes = {
+            "revisions_list": {"revisions": [{"_number": 4}]},
+            "labels_list": {"labels": [{"Verified": 1}]},
+            "labels_verified_str": {"labels": {"Verified": "nope"}},
+            "labels_all_str": {"labels": {"Verified": {"all": "nope"}}},
+            "labels_vote_str": {"labels": {"Verified": {"all": ["jenkins"]}}},
+            "messages_dict": {"messages": {"a": 1}},
+            "message_str": {"messages": ["a message"]},
+            "message_author_str": {"messages": [
+                {"_revision_number": 4, "date": "2026-08-29", "author": "bob"}
+            ]},
+            "owner_list": {"owner": [{"name": "x"}]},
+            "commit_object_list": None,
+            "commit_message_int": None,
+            "uploader_str": None,
+            "current_revision_object": {"current_revision": {"sha": revision}},
+            "status_int": {"status": 7},
+            "unresolved_list": {"unresolved_comment_count": [1, 2]},
+        }
+        for name, overlay in shapes.items():
+            change = sample_change()
+            if name == "commit_object_list":
+                change["revisions"][revision]["commit"] = [{"message": "x"}]
+            elif name == "commit_message_int":
+                change["revisions"][revision]["commit"]["message"] = 5
+            elif name == "uploader_str":
+                change["revisions"][revision]["uploader"] = "someone"
+            else:
+                change.update(overlay)
+            yield name, change
+
+    def test_wrong_typed_fields_raise_the_error_callers_already_handle(self):
+        for name, change in self.wrong_typed_changes():
+            with self.subTest(shape=name):
+                with self.assertRaises(status.GerritRequestError):
+                    _client(change).fetch(CHANGE_URL)
+
+    def test_wrong_typed_fields_reach_refresh_patch_bookkeeping(self):
+        # A malformed shape used to escape as AttributeError/TypeError past
+        # refresh_patch's handler: no status_error, no last_checked stamp, a
+        # frozen row, and a health banner claiming success.
+        for name, change in self.wrong_typed_changes():
+            with self.subTest(shape=name):
+                patch = {
+                    "url": CHANGE_URL,
+                    "title": "previous title",
+                    "last_checked": "stale",
+                    "status_error": "",
+                }
+                message = status.refresh_patch(patch, _client(change))
+                self.assertTrue(message)
+                self.assertTrue(patch["status_error"])
+                self.assertNotEqual(patch["last_checked"], "stale")
+                self.assertEqual(patch["title"], "previous title")
+
+    def test_mixed_type_message_dates_do_not_break_the_comparison(self):
+        # ``max`` over mixed str/int dates used to raise TypeError.
+        change = sample_change()
+        change["messages"] = [
+            {"_revision_number": 4, "date": 5, "author": {"name": "a"}, "message": "x"},
+            {"_revision_number": "4", "date": "2026-08-29 13:00:00.000000000",
+             "author": {"name": "b"}, "message": "y"},
+        ]
+        result = _client(change).fetch(CHANGE_URL)
+        # Both dates are normalized to text, so the newest is chosen by a
+        # string comparison that cannot raise, and the string-typed
+        # ``_revision_number`` still resolves to patchset 4.
+        self.assertIn("posted on patchset 4", result["change_summary"])
+
+    def test_lone_surrogate_text_can_always_be_encoded(self):
+        change = sample_change()
+        change["subject"] = "LU-1 \ud800 broken subject"
+        change["project"] = "fs/\ud800"
+        result = _client(change).fetch(CHANGE_URL)
+        for value in (result["title"], result["project"], result["change_summary"]):
+            value.encode("utf-8")
+        self.assertNotIn("\ud800", result["title"])
+
+    def test_multi_line_subject_is_flattened_and_bounded(self):
+        change = sample_change()
+        change["subject"] = "first line\nsecond line" + "z" * 900
+        result = _client(change).fetch(CHANGE_URL)
+        self.assertNotIn("\n", result["title"])
+        self.assertLessEqual(len(result["title"]), 500)
+
+    def test_oversized_gerrit_response_is_rejected(self):
+        oversized = b"x" * (status.MAX_RESPONSE_BYTES + 1)
+        with self.assertRaises(status.GerritRequestError) as caught:
+            _client(None, transport=lambda _r, _t: oversized).fetch(CHANGE_URL)
+        self.assertIn("more than", str(caught.exception))
+
+    def test_default_transport_reads_with_a_bound(self):
+        reads = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, size=None):
+                reads.append(size)
+                return b"{}"
+
+        with patch("patch_watcher.gerrit_status.urlopen", lambda *a, **k: FakeResponse()):
+            status._default_transport(object(), 1.0)
+        self.assertEqual(reads, [status.MAX_RESPONSE_BYTES + 1])
+
+    def test_non_bytes_transport_result_is_a_typed_failure(self):
+        with self.assertRaises(status.GerritRequestError):
+            _client(None, transport=lambda _r, _t: "not bytes").fetch(CHANGE_URL)
+
+    def test_a_surrogate_in_a_review_comment_does_not_break_the_snapshot(self):
+        # The byte-length measurement inside _bounded_comment_text encodes,
+        # so an unsanitised surrogate raised UnicodeEncodeError there too.
+        text = status._bounded_comment_text("hi \ud800 there", limit=100)
+        text.encode("utf-8")
+        self.assertNotIn("\ud800", text)
+
+    def test_an_unforeseen_shape_still_becomes_a_typed_failure(self):
+        # Defence in depth for a thirteenth malformed shape: whatever raises,
+        # the caller sees the error its handler already understands.
+        def explode(_labels):
+            raise TypeError("unforeseen Gerrit shape")
+
+        with patch("patch_watcher.gerrit_status._parse_labels", explode):
+            with self.assertRaises(status.GerritRequestError):
+                status.summarize_change(sample_change())

@@ -2,8 +2,7 @@ import re
 import unittest
 from dataclasses import dataclass, field
 
-import resource_views
-
+from patch_watcher import resource_views
 
 MIB = 1024 ** 2
 GIB = 1024 ** 3
@@ -36,6 +35,34 @@ class Session:
     messages: list = field(default_factory=list)
 
 
+def metric_values(rendered):
+    """Map each metric label in a rendered <dl> to the value shown for it.
+
+    The tests care that "4 GiB" is what the guest-memory row displays, not
+    that the row happens to be a <dt>/<dd> pair, so the markup is parsed once
+    here.  A trailing explanatory <small> note is a separate concern and is
+    dropped; keeping it inline is what made the old assertions prefix matches
+    that would have accepted "200" for "20".
+    """
+    return {
+        label: re.sub(r"<small>.*?</small>", "", value).strip()
+        for label, value in re.findall(r"<dt>(.*?)</dt><dd>(.*?)</dd>", rendered)
+    }
+
+
+def owned_vms_by_session(rendered):
+    """Map each rendered session to the list of VMs it is shown as owning.
+
+    Structural markers only, so display copy can change freely.
+    """
+    owned = {}
+    for block in re.findall(r"<details id='session-detail-\d+'>(.*?)</details>", rendered):
+        session = re.search(r"<strong>Session:</strong> (.*?) ·", block).group(1)
+        section = re.search(r"<section class='owned-vms'.*?</section>", block).group(0)
+        owned[session] = re.findall(r"<th scope='row'>(.*?)</th>", section)
+    return owned
+
+
 class ResourceViewTests(unittest.TestCase):
     def test_format_bytes_is_iec_and_does_not_coerce_unknowns(self):
         self.assertEqual(resource_views.format_bytes(0), "0 B")
@@ -61,8 +88,16 @@ class ResourceViewTests(unittest.TestCase):
         self.assertIn("Worker host memory", rendered)
         self.assertIn("worker&lt;script&gt;", rendered)
         self.assertNotIn("worker<script>", rendered)
-        self.assertIn("16 GiB", rendered)
-        self.assertIn("Used physical memory</dt><dd>unknown", rendered)
+        self.assertEqual(metric_values(rendered), {
+            "Total physical memory": "16 GiB",
+            "Used physical memory": "unknown",
+            "Available physical memory": "5 GiB",
+            "Swap": "unknown",
+            "Cache / reclaimable": "unknown",
+            "Managed-session process-tree RSS": "unknown",
+            "LTVM process RSS": "unknown",
+            "Configured LTVM guest memory": "unknown",
+        })
         self.assertIn("Stale sample · 1m 31s old", rendered)
         self.assertIn("warning &amp; rising", rendered)
         self.assertIn("estimated", rendered)
@@ -87,12 +122,16 @@ class ResourceViewTests(unittest.TestCase):
             },
         }
         rendered = resource_views.render_resource_dashboard(snapshot)
-        self.assertIn("16 GiB", rendered)
-        self.assertIn("10 GiB", rendered)
-        self.assertIn("6 GiB", rendered)
-        self.assertIn("512 MiB used / 2 GiB total", rendered)
-        self.assertIn("Configured LTVM guest memory</dt><dd>4 GiB", rendered)
-        self.assertIn("LTVM process RSS</dt><dd>750 MiB", rendered)
+        self.assertEqual(metric_values(rendered), {
+            "Total physical memory": "16 GiB",
+            "Used physical memory": "10 GiB",
+            "Available physical memory": "6 GiB",
+            "Swap": "512 MiB used / 2 GiB total",
+            "Cache / reclaimable": "unknown",
+            "Managed-session process-tree RSS": "unknown",
+            "LTVM process RSS": "750 MiB",
+            "Configured LTVM guest memory": "4 GiB",
+        })
         self.assertIn(">snapshot-vm<", rendered)
 
     def test_snapshot_object_mapping_projection_is_supported(self):
@@ -107,8 +146,9 @@ class ResourceViewTests(unittest.TestCase):
                 }
 
         rendered = resource_views.render_resource_dashboard(Snapshot())
-        self.assertIn("Total physical memory</dt><dd>8 GiB", rendered)
-        self.assertIn("Configured LTVM guest memory</dt><dd>2 GiB", rendered)
+        values = metric_values(rendered)
+        self.assertEqual(values["Total physical memory"], "8 GiB")
+        self.assertEqual(values["Configured LTVM guest memory"], "2 GiB")
         self.assertIn(">projected-vm<", rendered)
 
     def test_dataclass_session_row_is_labelled_and_all_dynamic_text_is_escaped(self):
@@ -206,16 +246,11 @@ class ResourceViewTests(unittest.TestCase):
             {"name": "similar-but-external", "owner_id": "prefix-patch-watcher:s1"},
         ]
         rendered = resource_views.render_resource_dashboard({}, sessions, vms)
-        first_detail = rendered.split("Session details · 1 owned VM(s)", 1)[1].split(
-            "</details>", 1
-        )[0]
-        second_detail = rendered.split("Session details · 1 owned VM(s)", 2)[2].split(
-            "</details>", 1
-        )[0]
+        self.assertEqual(
+            owned_vms_by_session(rendered),
+            {"s1": ["owned-one"], "s2": ["owned-two"]},
+        )
         other = rendered.split("<section class='other-vms", 1)[1]
-        self.assertIn("owned-one", first_detail)
-        self.assertNotIn("owned-two", first_detail)
-        self.assertIn("owned-two", second_detail)
         self.assertIn("legacy", other)
         self.assertIn("similar-but-external", other)
         for name in ("owned-one", "owned-two", "legacy", "similar-but-external"):
@@ -232,7 +267,9 @@ class ResourceViewTests(unittest.TestCase):
         self.assertEqual(rendered.count(">ambiguous<"), 1)
         other = rendered.split("<section class='other-vms", 1)[1]
         self.assertIn(">ambiguous<", other)
-        self.assertEqual(rendered.count("Session details · 0 owned VM(s)"), 2)
+        # Neither candidate adopts the VM: both sessions are rendered, and
+        # neither one owns anything.
+        self.assertEqual(owned_vms_by_session(rendered), {"s1": [], "s2": []})
 
     def test_guest_capacity_and_actual_host_rss_are_separate(self):
         vm = {
@@ -258,33 +295,56 @@ class ResourceViewTests(unittest.TestCase):
         self.assertNotIn("16 GiB", rendered)
         self.assertNotIn("4.7 GiB", rendered)
 
-    def test_session_controls_are_labelled_confirmed_post_forms_not_get_links(self):
-        rendered = resource_views.render_resource_dashboard(
-            {},
-            [{"id": "s1", "state": "running"}],
-            [],
-            guidance_action="/ops/guidance?next=<unsafe>",
-            kill_action="/ops/kill",
-            csrf_token="token<&'\"",
-        )
-        self.assertIn("method='post' action='/ops/guidance?next=&lt;unsafe&gt;'", rendered)
-        self.assertIn("method='post' action='/ops/kill'", rendered)
-        self.assertIn("Send guidance to this session", rendered)
-        self.assertRegex(rendered, r"name='guidance' required")
-        self.assertIn("name='confirm' value='yes' required", rendered)
-        self.assertIn("I confirm this session should be killed.", rendered)
-        self.assertIn("name='csrf_token'", rendered)
-        self.assertNotRegex(rendered, r"(?i)<a[^>]+(?:kill|guidance)")
-        self.assertNotRegex(rendered, r"(?i)method=['\"]get['\"]")
-        self.assertNotIn("token<&", rendered)
 
-    def test_unknown_session_identifier_disables_mutating_controls(self):
-        rendered = resource_views.render_resource_dashboard(
-            {}, [{"state": "running"}], []
-        )
-        self.assertIn("Session controls unavailable", rendered)
-        self.assertNotIn("action='/sessions/kill'", rendered)
-        self.assertNotIn("action='/sessions/guidance'", rendered)
+
+    def test_vm_table_renders_only_fields_the_sampler_produces(self):
+        """Every column must be able to carry a value for a real guest.
+
+        This is one guest exactly as ``LTVMVMStatus.to_dict()`` emits it.
+        `ltvm list --json` reports no topology, role, age, CPU share or
+        cleanup state, so columns for those printed "unknown" for every VM
+        that has ever been rendered.
+        """
+        vm = {
+            "name": "co1-diotests",
+            "state": "running",
+            "owner_id": "pid:2520851",
+            "patch_watcher_session_id": None,
+            "configured_guest_memory_bytes": 4 * GIB,
+            "host_rss_bytes": 2604929024,
+            "process_id": 2520875,
+            "vcpus": 2,
+            "ip": "192.168.100.204",
+            "host_memory_source": "/proc/2520875/status VmRSS",
+            "quality": "good",
+            "errors": [],
+        }
+        rendered = resource_views.render_other_vms([vm])
+        body = rendered.split("<tbody>", 1)[1]
+        for expected in (
+            ">co1-diotests<", "State: Running", ">2<", ">192.168.100.204<",
+            ">4 GiB<", "2.4 GiB", "/proc/2520875/status VmRSS", ">2520875<",
+            ">pid:2520851<",
+        ):
+            self.assertIn(expected, body)
+        self.assertNotIn("unknown", body)
+        for dead_column in (
+            "Topology / role", "<th scope='col'>Age</th>",
+            "<th scope='col'>CPU</th>", "<th scope='col'>Cleanup</th>",
+        ):
+            self.assertNotIn(dead_column, rendered)
+
+    def test_stopped_guest_reports_absence_rather_than_a_fabricated_sample(self):
+        """A stopped guest has no QEMU RSS; say so without inventing an age."""
+        vm = {
+            "name": "co1-perf1", "state": "stopped", "owner_id": None,
+            "configured_guest_memory_bytes": 3 * GIB, "host_rss_bytes": None,
+            "process_id": 47338, "vcpus": 2, "ip": "192.168.100.32",
+            "host_memory_source": None, "quality": "good", "errors": [],
+        }
+        rendered = resource_views.render_other_vms([vm])
+        self.assertIn("Sample quality: good", rendered)
+        self.assertNotIn("Sample age unknown", rendered)
 
     def test_default_empty_dashboard_has_explicit_unknowns_and_empty_states(self):
         rendered = resource_views.render_resource_dashboard(None)

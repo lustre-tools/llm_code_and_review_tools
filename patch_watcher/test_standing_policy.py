@@ -1,10 +1,15 @@
 import dataclasses
+import errno
+import fcntl
 import json
+import os
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
-from standing_policy import (
+from patch_watcher import standing_policy
+from patch_watcher.standing_policy import (
     ActivePatchRun,
     PatchAutomationPolicy,
     RevisionIdentity,
@@ -13,9 +18,9 @@ from standing_policy import (
     StandingPolicyStore,
     TriggerObservation,
     decide_trigger,
+    is_standing_trigger_key,
     trigger_coalescing_key,
 )
-
 
 REVISION = "a" * 40
 NEXT_REVISION = "b" * 40
@@ -152,6 +157,20 @@ class TriggerDecisionTests(unittest.TestCase):
             trigger_coalescing_key(investigate, observation(), source="manual"),
         )
 
+    def test_coalescing_key_is_recognisable_as_an_automatic_trigger(self):
+        """The key doubles as the run's request identity.
+
+        That is the only durable mark separating a run the standing policy
+        caused from one an operator started by hand, so a controller bounding
+        automation can read it instead of trusting a second, forgeable flag.
+        """
+
+        policy = PatchAutomationPolicy("68541", build_failures="repair")
+        key = trigger_coalescing_key(policy, observation(), source="automatic")
+        self.assertTrue(is_standing_trigger_key(key))
+        self.assertFalse(is_standing_trigger_key("f47ac10b-58cc-4372-a567-0e02b2c3d479"))
+        self.assertFalse(is_standing_trigger_key(None))
+
     def test_different_patch_active_run_does_not_suppress(self):
         policy = PatchAutomationPolicy("68541", build_failures="repair")
         decision = decide_trigger(
@@ -229,6 +248,82 @@ class PolicyStoreTests(unittest.TestCase):
                 store.remove("68541", expected_version=0)
             self.assertTrue(store.remove("68541", expected_version=saved.version))
             self.assertFalse(store.remove("68541"))
+
+
+class LockDescriptorTests(unittest.TestCase):
+    """A failed lock acquire must not cost a file descriptor.
+
+    ``_Lock.__enter__`` opened the lock file and then did two things that can
+    fail -- a chmod and the flock itself.  An exception out of ``__enter__``
+    means ``__exit__``, which holds the close, never runs, so each failure
+    burned one descriptor.  Every dashboard render and every policy POST takes
+    this lock, so the store is the wrong place to lose descriptors one at a
+    time.
+    """
+
+    class FailingFcntl:
+        """Real ``fcntl`` for everything except the call under test."""
+
+        def __getattr__(self, name):
+            return getattr(fcntl, name)
+
+        def flock(self, _descriptor, _operation):
+            raise OSError(errno.ENOLCK, "no locks available")
+
+    def test_a_failed_acquire_leaks_no_descriptor(self):
+        if not Path("/proc/self/fd").is_dir():
+            self.skipTest("descriptor accounting needs /proc")
+        attempts = 200
+        with tempfile.TemporaryDirectory() as directory:
+            store = StandingPolicyStore(Path(directory) / "policies.json")
+            store.list()  # create the lock file so only the flock can fail
+            # Count descriptors naming this store's lock file rather than the
+            # whole table: the rest of the suite opens and closes files while
+            # this runs, and a total is noise around the number we care about.
+            self.assertEqual(_open_count(store.lock_path), 0)
+            with unittest.mock.patch.object(
+                standing_policy, "fcntl", self.FailingFcntl()
+            ):
+                for _ in range(attempts):
+                    with self.assertRaises(OSError):
+                        store.list()
+            leaked = _open_count(store.lock_path)
+            self.assertEqual(
+                leaked, 0, f"leaked {leaked / attempts:.2f} descriptors per failed acquire"
+            )
+
+    def test_a_successful_acquire_still_locks_and_releases(self):
+        # The fix must not simply stop taking the lock: the descriptor has to
+        # survive __enter__ and be released by __exit__.
+        with tempfile.TemporaryDirectory() as directory:
+            store = StandingPolicyStore(Path(directory) / "policies.json")
+            with store._locked(exclusive=True) as lock:
+                self.assertGreaterEqual(lock.fd, 0)
+                probe = os.open(store.lock_path, os.O_RDWR)
+                try:
+                    with self.assertRaises(OSError):
+                        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(probe)
+            probe = os.open(store.lock_path, os.O_RDWR)
+            try:
+                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(probe, fcntl.LOCK_UN)
+            finally:
+                os.close(probe)
+
+
+def _open_count(path):
+    """How many of this process's descriptors currently name ``path``."""
+    total = 0
+    for entry in Path("/proc/self/fd").iterdir():
+        try:
+            target = os.readlink(entry)
+        except OSError:
+            continue  # the descriptor closed while we were walking
+        if target == str(path) or target == f"{path} (deleted)":
+            total += 1
+    return total
 
 
 if __name__ == "__main__":

@@ -1,7 +1,28 @@
+import re
 import unittest
 from dataclasses import dataclass
 
-import run_views
+from patch_watcher import run_views
+
+# The complete write surface of the run detail page, per run state.  A newly
+# added form -- a retest, a Gerrit vote, an upload -- has to be listed here
+# deliberately, because an unlisted POST route fails the test below.
+WRITE_ROUTES = {
+    "queued": {"/runs/run-123/guidance", "/runs/run-123/pause"},
+    "preparing": {"/runs/run-123/guidance", "/runs/run-123/interrupt",
+                  "/runs/run-123/pause"},
+    "running": {"/runs/run-123/guidance", "/runs/run-123/interrupt",
+                "/runs/run-123/pause"},
+    "waiting_external": {"/runs/run-123/guidance", "/runs/run-123/pause",
+                         "/runs/run-123/resume"},
+    "blocked": {"/runs/run-123/guidance", "/runs/run-123/pause",
+                "/runs/run-123/resume"},
+    "paused": {"/runs/run-123/guidance", "/runs/run-123/resume"},
+    "waiting_human": {"/runs/run-123/guidance"},
+    "failed": {"/runs/run-123/follow-up"},
+    "succeeded": {"/runs/run-123/follow-up"},
+    "cancelled": {"/runs/run-123/follow-up"},
+}
 
 
 class RunViewTests(unittest.TestCase):
@@ -24,6 +45,94 @@ class RunViewTests(unittest.TestCase):
                  "execution_profile": "triage", "model": "claude"}
         value.update(changes)
         return value
+
+    def test_boundary_statement_follows_capability_not_session_profile(self):
+        """The safety text describes what the agent may do, nothing else.
+
+        `request_investigation` mints a read-only run whose SESSION profile is
+        still "engineering"; the controller then starts it with
+        capability_profile="read_only" -- Read/Glob/Grep, --safe-mode
+        --restricted, service credentials scrubbed. Reading the session
+        profile made that page promise a host shell, real credentials, and its
+        own Gerrit and CI writes.
+        """
+        read_only = run_views.render_run_detail(self.sample_run(
+            execution_profile="engineering", profile="engineering",
+            capability_profile="read_only",
+        ))
+        self.assertIn("Read-only investigation", read_only)
+        self.assertIn("Read-only run:", read_only)
+        self.assertNotIn("Engineering boundary", read_only)
+        self.assertNotIn("real service credentials", read_only)
+
+        engineering = run_views.render_run_detail(self.sample_run(
+            execution_profile="engineering", profile="engineering",
+            capability_profile="full",
+        ))
+        self.assertIn("Engineering boundary", engineering)
+        self.assertIn("real service credentials", engineering)
+
+        # `source_edit` and `source_edit_ltvm` were removed from the runner
+        # with the MCP server the second required, so no run can carry them.
+        # An unknown profile must fall to read-only rather than be treated as
+        # a grant.
+        for retired in ("source_edit", "source_edit_ltvm"):
+            rendered = run_views.render_run_detail(self.sample_run(
+                execution_profile="engineering", profile="engineering",
+                capability_profile=retired,
+            ))
+            self.assertIn("Read-only investigation", rendered)
+            self.assertNotIn("real service credentials", rendered)
+
+    def test_run_with_no_projected_capability_makes_no_write_claim(self):
+        """An unstated capability must not be read as a granted one."""
+        rendered = run_views.render_run_detail(self.sample_run(
+            execution_profile="engineering", profile="engineering",
+        ))
+        self.assertIn("Read-only run:", rendered)
+        self.assertNotIn("Engineering boundary", rendered)
+
+    def test_no_controller_event_type_renders_a_mangled_initialism(self):
+        """Every event the controller can emit gets a readable timeline label.
+
+        `.capitalize()` lowercases everything after the first letter, so a new
+        `ltvm_*` event type renders as "Ltvm ..." until HUMAN_LABELS learns it.
+        The controller's own `*_EVENT` constants are the authoritative list, so
+        this fails the moment one is added without a label.
+        """
+        from patch_watcher import run_controller
+
+        event_types = sorted({
+            value for name, value in vars(run_controller).items()
+            if name.endswith("_EVENT") and isinstance(value, str)
+        })
+        self.assertIn("ltvm_prefix_baseline_unprovable", event_types)
+        for event_type in event_types:
+            rendered = run_views.render_run_detail(
+                self.sample_run(),
+                events=[{"event_type": event_type,
+                         "created_at": "2026-09-08T12:00:00Z",
+                         "summary": "detail"}],
+            )
+            label = re.search(r"<strong>([^<]*)</strong>: detail", rendered)
+            self.assertIsNotNone(label, event_type)
+            self.assertNotIn("Ltvm", label.group(1), event_type)
+            if event_type.startswith("ltvm_"):
+                self.assertTrue(
+                    label.group(1).startswith("LTVM "), event_type
+                )
+
+    def write_routes(self, html):
+        """Return every route the page can POST to, proving each form is a POST."""
+        forms = re.findall(r"<form[^>]*>", html)
+        self.assertTrue(forms, "the page rendered no form at all")
+        routes = set()
+        for form in forms:
+            self.assertIn("method='post'", form)
+            match = re.search(r"action='([^']*)'", form)
+            self.assertIsNotNone(match, f"form without an action: {form}")
+            routes.add(match.group(1))
+        return routes
 
     def test_investigate_is_post_read_only_and_revision_pinned(self):
         html = run_views.render_investigate_control(
@@ -70,16 +179,10 @@ class RunViewTests(unittest.TestCase):
         self.assertIn("aria-labelledby='agent-run-run-two'", second)
         self.assertNotIn("id='agent-run-run-one'", second)
 
-    def test_detail_shows_exact_revision_and_truthful_boundaries(self):
-        admission = {"status": "ready", "profile_id": "host-unsandboxed-mac-v1",
-                     "profile_hash": "sha256:profile", "instruction_hash": "sha256:instructions",
-                     "environment_instance_id": "mac-1", "isolation_profile": "host_unsandboxed",
-                     "network_profile": "host_ambient"}
-        html = run_views.render_run_detail(self.sample_run(), admission=admission)
-        for expected in ("Exact pinned revision", "b" * 40, "Unsandboxed host worker",
-                         "General network access", "sha256:profile", "sha256:instructions"):
+    def test_detail_shows_exact_pinned_revision(self):
+        html = run_views.render_run_detail(self.sample_run())
+        for expected in ("Exact pinned revision", "b" * 40):
             self.assertIn(expected, html)
-        self.assertNotIn("Sandboxed worker", html)
 
     def test_waiting_human_question_precedes_conversation_and_targets_answer(self):
         question = {"question_id": "q-42", "question": "Which baseline?",
@@ -149,8 +252,60 @@ class RunViewTests(unittest.TestCase):
     def test_terminal_run_offers_post_follow_up_not_resume(self):
         html = run_views.render_run_detail(self.sample_run(state="failed"))
         self.assertIn("method='post' action='/runs/run-123/follow-up'", html)
-        self.assertIn("Start follow-up run", html)
+        self.assertIn("Start follow-up investigation", html)
         self.assertNotIn("action='/runs/run-123/resume'", html)
+
+    def test_terminal_follow_up_controls_are_distinct_and_honest(self):
+        """Both follow-up controls said "Start follow-up run" and behaved
+        differently: one requires a message, the other does not.  Neither
+        started a run of the original kind."""
+
+        html = run_views.render_run_detail(
+            self.sample_run(state="failed", run_kind="review comment")
+        )
+        self.assertIn(
+            "Start follow-up investigation with this message", html
+        )
+        self.assertIn(
+            "Start follow-up investigation without a message", html
+        )
+        self.assertNotIn(">Start follow-up run<", html)
+        self.assertIn("new read-only investigation", html)
+        self.assertIn("does not start another review comment run", html)
+
+    def test_failed_run_shows_the_recorded_failure_code_and_summary(self):
+        """Both are stored on the session and were rendered by no view."""
+
+        run = self.sample_run(
+            state="failed",
+            failure_code="checkout_unavailable",
+            failure_summary=(
+                "no checkout available for this run: no free checkout in the pool"
+            ),
+        )
+        detail = run_views.render_run_detail(run)
+        self.assertIn("Why this run ended", detail)
+        self.assertIn("no free checkout in the pool", detail)
+        self.assertIn("checkout_unavailable", detail)
+        card = run_views.render_run_summary(run)
+        self.assertIn("no free checkout in the pool", card)
+        self.assertIn("checkout_unavailable", card)
+
+    def test_successful_run_renders_no_empty_failure_section(self):
+        html = run_views.render_run_detail(self.sample_run(state="succeeded"))
+        self.assertNotIn("Why this run ended", html)
+        self.assertNotIn("run-failure", html)
+
+    def test_event_type_initialisms_are_not_mangled(self):
+        """The same class of bug as the "Ci Failed" one fixed in app.py."""
+
+        html = run_views.render_run_detail(
+            self.sample_run(),
+            events=[{"event_type": "ltvm_cleanup_abandoned",
+                     "summary": "gave up after 3 attempts"}],
+        )
+        self.assertIn("LTVM cleanup abandoned", html)
+        self.assertNotIn("Ltvm cleanup abandoned", html)
 
     def test_dynamic_content_and_attributes_are_escaped(self):
         run = self.sample_run(run_id="../x y/?", subject="<img src=x>", revision_sha="<&>")
@@ -176,11 +331,11 @@ class RunViewTests(unittest.TestCase):
                          "aria-describedby='guidance-help'", "aria-labelledby='run-controls-title'"):
             self.assertIn(expected, html)
 
-    def test_no_external_write_controls(self):
-        lower = run_views.render_run_detail(self.sample_run()).casefold()
-        for label in ("retest", "vote gerrit", "upload patch", "post comment",
-                      "trigger jenkins", "rebuild", "maloo write"):
-            self.assertNotIn(label, lower)
+    def test_detail_offers_exactly_the_listed_write_routes_and_no_others(self):
+        for state, expected in WRITE_ROUTES.items():
+            with self.subTest(state=state):
+                html = run_views.render_run_detail(self.sample_run(state=state))
+                self.assertEqual(self.write_routes(html), expected)
 
 
 if __name__ == "__main__":

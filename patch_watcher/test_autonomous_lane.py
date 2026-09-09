@@ -1,12 +1,11 @@
 import dataclasses
 import json
-import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-from autonomous_lane import (
+from patch_watcher.autonomous_lane import (
     BUILTIN_LANES,
     DETERMINISTIC_RETEST_LANE,
     DETERMINISTIC_RETEST_VERSION,
@@ -24,7 +23,6 @@ from autonomous_lane import (
     decide_lane,
     dry_run,
 )
-
 
 REVISION = "a" * 40
 NEXT_REVISION = "b" * 40
@@ -281,7 +279,7 @@ class DecisionAuditTests(unittest.TestCase):
                 item,
                 controls,
                 decision,
-                recorded_at=datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc),
+                recorded_at=datetime(2026, 9, 4, 12, 0, tzinfo=UTC),
             )
             self.assertTrue(record.record_id.startswith("lane-audit:"))
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
@@ -325,6 +323,45 @@ class DecisionAuditTests(unittest.TestCase):
             path.write_text(json.dumps(document) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(AutonomousLaneError, "does not replay"):
                 LaneDecisionHistory(path).list()
+
+    def test_replay_can_be_scoped_to_one_exact_revision(self):
+        """The per-patch control promises one revision, so replay must scope.
+
+        Without a filter the handler replayed the whole recorded history and
+        reported a count about a different question than the operator asked.
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            history = LaneDecisionHistory(Path(directory) / "history.jsonl")
+            controls = enabled_controls()
+            for revision in (REVISION, NEXT_REVISION):
+                for index in range(2):
+                    item = observation(
+                        identity=identity(revision=revision),
+                        current_identity=identity(revision=revision),
+                        evidence_id=f"maloo-{revision[:4]}-{index}",
+                    )
+                    history.append(item, controls, decide_lane(item, controls))
+
+            everything = history.replay()
+            first = history.replay(revision=REVISION)
+            second = history.replay(revision=NEXT_REVISION)
+            absent = history.replay(revision="f" * 40)
+            # Inside the fixture on purpose: once the directory is gone the
+            # history reads empty and every count is 0, so an assertion made
+            # out here would pass whatever the filter did.
+            upper = history.replay(revision=REVISION.upper())
+
+        self.assertEqual(len(everything), 4)
+        self.assertEqual(len(first), 2)
+        self.assertEqual(len(second), 2)
+        self.assertEqual(absent, ())
+        self.assertTrue(all(item.matched for item in everything))
+        self.assertEqual(
+            {item.recorded.identity.revision for item in first}, {REVISION}
+        )
+        # A revision pasted in upper case is the same revision.
+        self.assertEqual(len(upper), 2)
 
     def test_dry_run_is_deterministic_and_never_creates_history(self):
         with tempfile.TemporaryDirectory() as directory:

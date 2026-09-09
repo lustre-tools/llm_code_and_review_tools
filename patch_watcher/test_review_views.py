@@ -1,6 +1,6 @@
 import unittest
 
-from review_views import (
+from patch_watcher.review_views import (
     render_review_result,
     render_review_start_confirmation,
     render_review_start_control,
@@ -25,24 +25,26 @@ class ReviewViewsTests(unittest.TestCase):
             "threads": [{"thread_id": "one"}, {"thread_id": "two"}],
         }
 
-    def test_start_control_is_truthful_about_auto_upload_and_draft_replies(self):
+    def test_start_control_offers_both_modes_when_eligible(self):
         html = render_review_start_control(
             self.patch(), csrf_token="csrf", idempotency_token="request",
-            upload_enabled=True,
         )
         self.assertIn("Handle simple comments", html)
         self.assertIn("Handle all comments", html)
-        self.assertIn("upload one new patchset automatically", html)
-        self.assertIn("separate controller action", html)
         self.assertNotIn(" disabled", html)
 
-    def test_control_fails_closed_when_upload_is_disabled(self):
-        html = render_review_start_control(
-            self.patch(), csrf_token="csrf", idempotency_token="request",
-            upload_enabled=False,
-        )
-        self.assertIn("disabled", html)
-        self.assertIn("kill switch", html)
+    def test_control_fails_closed_without_unresolved_comments_or_an_owner(self):
+        for updates, reason in (
+            ({"unresolved": 0}, "no unresolved review comments"),
+            ({"active_run_id": "pw-review-active"}, "already owns this patch"),
+        ):
+            with self.subTest(reason=reason):
+                html = render_review_start_control(
+                    self.patch(**updates), csrf_token="csrf",
+                    idempotency_token="request",
+                )
+                self.assertIn(" disabled", html)
+                self.assertIn(reason, html)
 
     def test_confirmation_binds_snapshot_and_has_no_later_approval(self):
         html = render_review_start_confirmation(
@@ -52,7 +54,8 @@ class ReviewViewsTests(unittest.TestCase):
         )
         self.assertIn("a" * 64, html)
         self.assertIn("There is no later upload confirmation", html)
-        self.assertIn("separate controller action", html)
+        self.assertIn("uploads the new patchset itself with the gerrit CLI", html)
+        self.assertIn("The controller does not upload on its behalf", html)
 
     def test_result_escapes_untrusted_reply_and_has_no_post_control(self):
         html = render_review_result(
@@ -68,6 +71,7 @@ class ReviewViewsTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;", html)
         self.assertNotIn("<script>", html)
         self.assertNotIn("Post reply", html)
+        self.assertIn("the controller posts nothing", html)
 
 
 if __name__ == "__main__":

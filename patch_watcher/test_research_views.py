@@ -1,8 +1,8 @@
+import re
 import unittest
 from dataclasses import dataclass
 
-import research_views
-
+from patch_watcher import research_views
 
 REVISION = "a" * 40
 SESSION = "11111111-2222-3333-4444-555555555555"
@@ -296,13 +296,24 @@ class ResearchViewTests(unittest.TestCase):
         self.assertIn("aria-labelledby='approval-card-title-dc-1'", html)
         self.assertIn("Review exact action", html)
 
-    def test_views_never_offer_other_external_writes(self):
-        html = (research_views.render_action_approval_card(self.action())
-                + research_views.render_action_approval_card(self.action("request_retest")))
-        lower = html.casefold()
-        for forbidden in ("vote gerrit", "upload patch", "trigger jenkins",
-                          "create jira", "post review"):
-            self.assertNotIn(forbidden, lower)
+    def test_approval_card_offers_only_the_exact_confirmation_link(self):
+        # The card itself must never mutate anything: its whole outbound
+        # surface is one link to the confirmation page for this exact action.
+        # A newly added write control -- a Gerrit vote, an upload, a direct
+        # retest -- shows up here as an extra target and fails the test.
+        for kind in ("associate_bug", "request_retest"):
+            with self.subTest(kind=kind):
+                html = research_views.render_action_approval_card(self.action(kind))
+                targets = set(re.findall(r"href='([^']*)'", html))
+                self.assertEqual(targets, {"/approvals/action-1/confirm"})
+                self.assertNotIn("<form", html)
+
+    def test_a_blocked_action_card_offers_no_outbound_target_at_all(self):
+        html = research_views.render_action_approval_card(
+            self.action(action_budget_remaining=0))
+        self.assertEqual(re.findall(r"href='([^']*)'", html), [])
+        self.assertNotIn("<form", html)
+        self.assertIn("disabled aria-disabled='true'", html)
 
 
 if __name__ == "__main__":

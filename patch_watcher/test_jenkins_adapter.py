@@ -2,13 +2,14 @@ import copy
 import json
 import unittest
 
-from jenkins_adapter import (
+from patch_watcher.jenkins_adapter import (
     MAX_CONSOLE_BYTES,
     MAX_CONSOLE_LINES,
+    MAX_EPOCH_MS,
     JenkinsSnapshotClient,
     JenkinsSnapshotError,
+    _nonnegative_int,
 )
-
 
 REVISION = "d" * 40
 BUILD_URL = "https://build.whamcloud.com/job/lustre-reviews/123/"
@@ -199,16 +200,30 @@ class JenkinsAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(JenkinsSnapshotError, "duplicate"):
             self.fetch(FakeTransport(raw))
 
-    def test_non_allowlisted_parameters_never_enter_snapshot(self):
+    def test_only_allowlisted_gerrit_parameters_enter_the_snapshot(self):
         raw = build_value()
         raw["actions"][0]["parameters"].extend([
             {"name": "GERRIT_CHANGE_SUBJECT", "value": "private-subject-marker"},
             {"name": "PASSWORD", "value": "private-password-marker"},
         ])
         snapshot = self.fetch(FakeTransport(raw))
+        # The allowlisted identity parameters have to survive, or a snapshot
+        # carrying nothing at all would satisfy the exclusions below.  The
+        # caller never supplies a branch, so "master" can only have come from
+        # the allowlisted GERRIT_BRANCH parameter.
+        self.assertEqual(snapshot["change"], {
+            "change_number": 68541,
+            "patchset": 3,
+            "revision_sha": REVISION,
+            "revision_ref": "refs/changes/41/68541/3",
+            "project": "fs/lustre-release",
+            "branch": "master",
+        })
         encoded = json.dumps(snapshot)
-        self.assertNotIn("private-subject-marker", encoded)
-        self.assertNotIn("private-password-marker", encoded)
+        for excluded in ("private-subject-marker", "private-password-marker",
+                         "GERRIT_CHANGE_SUBJECT", "PASSWORD", "must-not-persist"):
+            with self.subTest(excluded=excluded):
+                self.assertNotIn(excluded, encoded)
 
     def test_every_failed_child_log_is_fetched_and_sorted(self):
         runs = []
@@ -280,3 +295,52 @@ class JenkinsAdapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JenkinsTimingBoundsTests(unittest.TestCase):
+    """Jenkins numbers are untrusted; arithmetic on them must stay labelled."""
+
+    def fetch(self, transport=None):
+        return JenkinsSnapshotClient(
+            transport=transport or FakeTransport()
+        ).fetch_failure_snapshot(
+            BUILD_URL,
+            change_number=68541,
+            patchset=3,
+            revision_sha=REVISION,
+            revision_ref="refs/changes/41/68541/3",
+            project="fs/lustre-release",
+        )
+
+    def test_out_of_range_timestamp_is_a_labelled_failure(self):
+        # datetime.fromtimestamp raises OverflowError, an ArithmeticError, and
+        # no caller catches one -- the operator saw an opaque 500.
+        with self.assertRaises(JenkinsSnapshotError) as caught:
+            self.fetch(transport=FakeTransport(build_value(timestamp=10 ** 30)))
+        self.assertIn("timestamp", str(caught.exception))
+
+    def test_out_of_range_duration_is_a_labelled_failure(self):
+        with self.assertRaises(JenkinsSnapshotError):
+            self.fetch(transport=FakeTransport(build_value(duration=10 ** 30)))
+
+    def test_in_range_timestamp_whose_end_overflows_is_labelled(self):
+        build = build_value(timestamp=MAX_EPOCH_MS, duration=MAX_EPOCH_MS)
+        with self.assertRaises(JenkinsSnapshotError) as caught:
+            self.fetch(transport=FakeTransport(build))
+        self.assertIn("timing", str(caught.exception))
+
+    def test_out_of_range_matrix_run_duration_is_labelled(self):
+        build = build_value()
+        build["runs"][0]["duration"] = 10 ** 30
+        with self.assertRaises(JenkinsSnapshotError):
+            self.fetch(transport=FakeTransport(build))
+
+    def test_nonnegative_int_bounds_the_value(self):
+        self.assertEqual(_nonnegative_int(MAX_EPOCH_MS, "timestamp"), MAX_EPOCH_MS)
+        with self.assertRaises(JenkinsSnapshotError):
+            _nonnegative_int(MAX_EPOCH_MS + 1, "timestamp")
+
+    def test_ordinary_timing_is_unchanged(self):
+        snapshot = self.fetch()
+        self.assertEqual(snapshot["build"]["started_at"], "2023-11-14T22:13:20+00:00")
+        self.assertEqual(snapshot["build"]["duration_ms"], 4000)

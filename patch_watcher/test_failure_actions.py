@@ -1,18 +1,19 @@
-import threading
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from automation_state import AutomationStateStore
-from failure_actions import (
+from patch_watcher.automation_state import AutomationStateStore
+from patch_watcher.failure_actions import (
+    LINK_ACTION,
+    RETEST_ACTION,
     FailureActionController,
     FailureActionError,
     FailurePatchRevision,
-    LINK_ACTION,
-    RETEST_ACTION,
+    _canonical_digest,
 )
-from maloo_adapter import (
+from patch_watcher.maloo_adapter import (
     MalooAdapterError,
     MalooBugLink,
     MalooBugLinks,
@@ -21,7 +22,6 @@ from maloo_adapter import (
     MalooRetestReconciliation,
     MalooRetestResult,
 )
-
 
 PATCH_ID = "68160"
 REVISION = "7b77eeb0190d6d93880951533c2e1d1145780375"
@@ -34,6 +34,13 @@ TICKET = "LU-19487"
 class FakeMaloo:
     def __init__(self):
         self.link_state = "absent"
+        # The real adapter returns ``linked=False`` when Maloo answers but
+        # declines the association (it reads the envelope's ``success`` field),
+        # so the fake has to be able to say that too.
+        self.link_accepted = True
+        # Likewise, ``request_retest`` returns ``requested=False`` when Maloo
+        # answers but refuses the retest outright.
+        self.retest_accepted = True
         self.retest_observed = False
         self.link_calls = []
         self.retest_calls = []
@@ -90,7 +97,12 @@ class FakeMaloo:
         if self.link_error is not None:
             raise self.link_error
         return MalooLinkBugResult(
-            suite_id, jira_ticket, buggable_class, state, True, "OK"
+            suite_id,
+            jira_ticket,
+            buggable_class,
+            state,
+            self.link_accepted,
+            "OK" if self.link_accepted else "refused",
         )
 
     def reconcile_remote_retest(self, **request):
@@ -110,7 +122,13 @@ class FakeMaloo:
             self.retest_release.wait(2)
         if self.retest_error is not None:
             raise self.retest_error
-        return MalooRetestResult(session_id, jira_ticket, option, True, "queued")
+        return MalooRetestResult(
+            session_id,
+            jira_ticket,
+            option,
+            self.retest_accepted,
+            "queued" if self.retest_accepted else "refused",
+        )
 
 
 class FailureActionControllerTests(unittest.TestCase):
@@ -251,6 +269,32 @@ class FailureActionControllerTests(unittest.TestCase):
         result = self.controller.advance(plan.run.run_id)
         self.assertEqual(result.stage, "waiting_approval")
         self.assertEqual(self.maloo.link_calls, [])
+        self.assertEqual(self.maloo.retest_calls, [])
+
+    def test_maloo_declining_the_link_fails_the_run_rather_than_waiting(self):
+        """A declined link must settle as failed, not sit in waiting_external.
+
+        `link_bug` returns `linked=False` when Maloo answers but refuses the
+        association -- the adapter reads that straight off the envelope's
+        `success` field.  Nothing further will ever arrive for that action, so
+        recording it as `waiting_external` parks the whole two-write workflow
+        for good: the failure is never bugged, the retest that depends on an
+        accepted association is never planned, and no failure is reported to
+        anyone.  The retest path already refuses a declined write this way.
+        """
+        self.maloo.link_accepted = False
+        plan = self.plan()
+        self.approve(plan.link_action.action_id)
+
+        result = self.controller.advance(plan.run.run_id)
+
+        self.assertEqual(len(self.maloo.link_calls), 1)
+        self.assertEqual(result.stage, "failed")
+        self.assertEqual(result.run_status, "failed")
+        action = self.store.get_action(plan.link_action.action_id)
+        self.assertEqual(action.status, "failed")
+        self.assertEqual(action.failure_code, "link_rejected")
+        self.assertEqual(self.store.get_run(plan.run.run_id).status, "failed")
         self.assertEqual(self.maloo.retest_calls, [])
 
     def test_pending_link_is_observed_without_duplicate_write(self):
@@ -396,6 +440,32 @@ class FailureActionControllerTests(unittest.TestCase):
         self.assertEqual(result.run_status, "ambiguous")
         self.assertEqual(self.maloo.retest_calls, [])
 
+    def test_maloo_declining_the_retest_fails_the_run_rather_than_waiting(self):
+        """A declined retest must settle as failed, not sit in waiting_external.
+
+        `request_retest` returns `requested=False` when Maloo answers but
+        refuses the request.  This is the second write of the two-write
+        workflow, so parking it in `waiting_external` is the worst place to
+        stall: the bug link has already been written remotely, the operator has
+        already spent both approvals, and nothing will ever arrive to move the
+        run on.  `RetestController` has always refused a declined retest this
+        way; this path silently did not.
+        """
+        self.maloo.retest_accepted = False
+        plan = self.plan()
+        retest = self.accept_link_and_get_retest(plan)
+        self.approve(retest.action_id)
+
+        result = self.controller.advance(plan.run.run_id)
+
+        self.assertEqual(len(self.maloo.retest_calls), 1)
+        self.assertEqual(result.stage, "failed")
+        self.assertEqual(result.run_status, "failed")
+        action = self.store.get_action(retest.action_id)
+        self.assertEqual(action.status, "failed")
+        self.assertEqual(action.failure_code, "retest_rejected")
+        self.assertEqual(self.store.get_run(plan.run.run_id).status, "failed")
+
     def test_retest_is_suppressed_if_association_is_no_longer_accepted(self):
         plan = self.plan()
         retest = self.accept_link_and_get_retest(plan)
@@ -483,6 +553,56 @@ class FailureActionControllerTests(unittest.TestCase):
         self.assertEqual(self.store.list_runs(patch_id=PATCH_ID), [])
         self.assertEqual(self.maloo.link_calls, [])
         self.assertEqual(self.maloo.retest_calls, [])
+
+
+class WorkflowFingerprintTests(unittest.TestCase):
+    """The fingerprint that keys a run and an idempotency key must be stable."""
+
+    def payload(self):
+        return {
+            "patch_id": PATCH_ID,
+            "change_number": 68160,
+            "revision_sha": REVISION,
+            "patchset": 13,
+            "session_id": SESSION,
+            "test_group": "review-dne-part-1",
+            "suite_id": SUITE,
+            "suite_name": SUITE_NAME,
+            "jira_ticket": TICKET,
+        }
+
+    def test_fingerprint_is_independent_of_payload_key_order(self):
+        """The same association must fingerprint identically however it is built.
+
+        This digest is both the deterministic run key and the
+        `maloo-link-bug:` idempotency key, so it is the only thing stopping a
+        replanned action from re-issuing a remote write that already happened.
+        It survives reordering today only because the payload literal happens
+        to be written in one fixed order; the moment somebody reorders those
+        keys -- an entirely content-preserving edit -- the same logical action
+        mints a new fingerprint, plans a second run, and writes the bug link to
+        Maloo twice.
+        """
+        forward = self.payload()
+        backward = dict(reversed(list(forward.items())))
+        self.assertNotEqual(list(forward), list(backward))
+        self.assertEqual(forward, backward)
+
+        self.assertEqual(
+            _canonical_digest("failure-write/v1", forward),
+            _canonical_digest("failure-write/v1", backward),
+        )
+
+    def test_fingerprint_still_separates_different_content(self):
+        """Order independence must not come from ignoring the payload."""
+        base = self.payload()
+        other_suite = {**base, "suite_id": "99999999-8888-7777-6666-555555555555"}
+        digests = {
+            _canonical_digest("failure-write/v1", base),
+            _canonical_digest("failure-write/v1", other_suite),
+            _canonical_digest("failure-write/v2", base),
+        }
+        self.assertEqual(len(digests), 3)
 
 
 if __name__ == "__main__":

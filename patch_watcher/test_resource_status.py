@@ -1,12 +1,14 @@
 import json
+import shlex
 import subprocess
+import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from pathlib import Path
 
-import resource_status as resources
+from patch_watcher import resource_status as resources
 
-
-NOW = datetime(2026, 8, 30, 17, 12, 13, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 30, 17, 12, 13, tzinfo=UTC)
 
 
 def completed(command, stdout="", stderr="", returncode=0):
@@ -633,3 +635,95 @@ class SnapshotProjectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExternalDataTests(unittest.TestCase):
+    """ltvm and ps output is untrusted bytes, and startup depends on it."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+
+    def real_runner(self, body):
+        """Route every command to a real executable emitting ``body``."""
+        payload = Path(self.temp.name) / "payload"
+        payload.write_bytes(body)
+        script = Path(self.temp.name) / "tool"
+        script.write_text(
+            "#!/bin/sh\nexec cat " + shlex.quote(str(payload)) + "\n",
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+
+        def runner(_command, *, check=False, **kwargs):
+            return subprocess.run([str(script)], check=check, **kwargs)
+
+        return runner
+
+    def test_non_utf8_ltvm_output_is_collected_not_raised(self):
+        runner = self.real_runner(
+            b'{"vms": [{"name": "co1-caf\xe9", "status": "stopped", "mem": 2048}]}'
+        )
+        inventory = resources.collect_ltvm_inventory(
+            system="Linux", runner=runner, clock=lambda: NOW
+        )
+        self.assertEqual(len(inventory.vms), 1)
+        inventory.vms[0].name.encode("utf-8")
+
+    def test_non_utf8_ps_output_is_collected_not_raised(self):
+        runner = self.real_runner(b"    1     0   1000 /sbin/init caf\xe9\n")
+        result = resources.collect_process_tree_rss(
+            1, expected_command="/sbin/init", runner=runner, clock=lambda: NOW
+        )
+        self.assertEqual(result.root_pid, 1)
+        result.root_command.encode("utf-8")
+
+    def test_undecodable_runner_output_is_a_collection_error(self):
+        broken = UnicodeDecodeError("utf-8", b"\xe9", 0, 1, "invalid start byte")
+
+        def runner(_command, **_kwargs):
+            raise broken
+
+        inventory = resources.collect_ltvm_inventory(
+            system="Linux", runner=runner, clock=lambda: NOW
+        )
+        self.assertEqual(inventory.quality, "unavailable")
+        self.assertEqual(inventory.errors[0].code, "ltvm_list_failed")
+        self.assertIn("undecodable", inventory.errors[0].message)
+
+    def test_run_asks_for_replacement_decoding(self):
+        runner = FakeRunner({("ltvm", "list", "--json"): completed([], "{\"vms\": []}")})
+        resources.collect_ltvm_inventory(
+            system="Linux", runner=runner, clock=lambda: NOW
+        )
+        self.assertEqual(runner.calls[0][1].get("errors"), "replace")
+
+    def test_deeply_nested_ltvm_envelope_is_a_bounded_error(self):
+        for depth in (2000, 5000):
+            with self.subTest(depth=depth):
+                document = (
+                    b'{"data": ' * depth + b'{"vms": []}' + b"}" * depth
+                )
+                inventory = resources.collect_ltvm_inventory(
+                    system="Linux",
+                    runner=self.real_runner(document),
+                    clock=lambda: NOW,
+                )
+                self.assertEqual(inventory.quality, "unavailable")
+                self.assertEqual(inventory.errors[0].code, "invalid_payload")
+
+    def test_ordinary_envelope_nesting_still_unwraps(self):
+        document = b'{"ok": true, "data": {"result": {"vms": [{"name": "co1-a", "status": "stopped", "mem": 1024}]}}}'
+        inventory = resources.collect_ltvm_inventory(
+            system="Linux", runner=self.real_runner(document), clock=lambda: NOW
+        )
+        self.assertEqual([vm.name for vm in inventory.vms], ["co1-a"])
+
+    def test_lone_surrogate_vm_name_can_always_be_encoded(self):
+        document = b'{"vms": [{"name": "co1-\\ud800", "status": "stopped", "mem": 1024}]}'
+        inventory = resources.collect_ltvm_inventory(
+            system="Linux", runner=self.real_runner(document), clock=lambda: NOW
+        )
+        name = inventory.vms[0].name
+        self.assertNotIn("\ud800", name)
+        ("<td>" + name + "</td>").encode("utf-8")

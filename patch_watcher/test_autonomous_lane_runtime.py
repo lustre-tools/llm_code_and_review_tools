@@ -3,15 +3,15 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from autonomous_lane import (
+from patch_watcher.autonomous_lane import (
     BUILTIN_LANES,
     DETERMINISTIC_RETEST_LANE,
     LaneControlStore,
     LaneDecisionHistory,
     LaneRef,
 )
-from autonomous_lane_runtime import AutonomousLaneRuntime
-from retest_policy import (
+from patch_watcher.autonomous_lane_runtime import AutonomousLaneRuntime
+from patch_watcher.retest_policy import (
     JiraBugLink,
     MalooFailure,
     RetestBudget,
@@ -19,7 +19,6 @@ from retest_policy import (
     RevisionSnapshot,
     evaluate_retests,
 )
-
 
 REVISION = "a" * 40
 

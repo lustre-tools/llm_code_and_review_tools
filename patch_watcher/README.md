@@ -3,12 +3,16 @@
 Patch Watcher watches Gerrit changes over time and provides a deliberately
 bounded engineering-control surface. It presents current review and CI state,
 persists decisions and action history, and recommends the next human action.
-It now supports deterministic Maloo retests, bounded research, controlled
-engineering/review/build-repair runs, and exact controller-owned patchset,
-review-reply, and Jenkins-retrigger writes. Workers never receive Gerrit or
-Jenkins credentials. Every patch starts with all standing actions off,
-automatic triggering starts off, and every remote-write kill switch starts
-off.
+It supports deterministic Maloo retests, bounded research, and
+engineering/review/build-repair agent sessions. Every patch starts with all
+standing actions off and automatic triggering off.
+
+> **Status: mid-redesign.** The agent is no longer treated as an untrusted
+> credential-free worker; it runs in the same environment a developer does and
+> performs its own Gerrit, Maloo, and Jenkins writes. The worker-admission and
+> controller-owned-write layers have been removed. See
+> `~/lustre_design_docs/plans/agent-orchestration/PLAN.md` for the target
+> architecture and remaining phases.
 
 The status rules intentionally follow Marc Vef's Gerrit graph implementation:
 
@@ -28,53 +32,79 @@ inspired by Patch Shepherd. Guarded actions are exposed separately from status,
 with exact-state bindings, durable history, bounded authority, and explicit
 kill switches.
 
-## Private configuration
+## Install and set up a host
 
-Patch Watcher reads only this private user file; it does not read credentials
-from environment variables or repository files:
+Patch Watcher runs agents in the same environment a developer has on this box:
+a host shell, the installed LLM tools, `ltvm`, and a Lustre checkout. Setting a
+host up is therefore ordinary installation, not sandbox attestation.
+
+```bash
+cd ~/llm_code_and_review_tools
+./install.sh --with-ltvm     # tools + ltvm from lustre-test-vms-v2
+./install.sh --configure     # interactive credential setup
+./install.sh --doctor        # can this host run agents?
+```
+
+`--configure` walks the five private credential files the tools already read
+and prompts only for what is missing (`--reconfigure` prompts for everything).
+Secrets are never echoed, unrelated keys in each file are preserved, and every
+file is created mode `0600`:
 
 ```text
+~/.config/gerrit-cli/.env
+~/.config/jira-tool/.env
+~/.config/jenkins-tool/.env
+~/.config/maloo-tool/.env
 ~/.config/patch-watcher/config
 ```
 
-The file must have mode `0600` and contain:
+Two things it cannot do for you:
 
-```ini
-GERRIT_URL=https://review.whamcloud.com
-GERRIT_USER=your-gerrit-user
-GERRIT_PASS=your-gerrit-http-password
+1. **Accept the background-agent disclaimer.** An unattended agent cannot
+   answer a permission prompt, so runs use `bypassPermissions`, and the CLI
+   refuses that in background mode until a human accepts once:
+   ```bash
+   claude --dangerously-skip-permissions    # once, interactively
+   ```
+2. **Declare the checkout pool.** Agents reuse numbered Lustre checkouts rather
+   than cloning per run, and the checkout index becomes the run's VM name
+   prefix (`co<N>-<role>`), which is how VMs are attributed and cleaned up.
 
-# Optional; defaults shown
-REFRESH_INTERVAL_SECONDS=300
-EMAIL_ENABLED=false
-EMAIL_TO=paf@mulberrytree.us
-SENDMAIL_PATH=/usr/sbin/sendmail
-GERRIT_UPLOAD_ENABLED=false
-GERRIT_REPLY_ENABLED=false
-JENKINS_RETRIGGER_ENABLED=false
-# Required only when the separate upload kill switch is enabled:
-GERRIT_GIT_NAME=Your Name
-GERRIT_GIT_EMAIL=you@example.com
-```
+   ```text
+   ~/.config/patch-watcher/checkout-pool.json
+   {"root": "/home/you/lustre_checkouts/master_checkouts", "checkouts": [1, 2, 3]}
+   ```
 
-Generate the HTTP password in Gerrit under **Settings → HTTP Credentials**.
-Never add the private configuration to this repository. Email remains a dry
-run until `EMAIL_ENABLED=true` is explicitly configured.
+   **Do not list a checkout you work in yourself.** An agent resets and cleans
+   its checkout before every run. An undeclared pool is not fatal -- runs fall
+   back to a private per-run clone and get no reserved VM prefix -- so the
+   default is empty rather than "every directory that looks like a checkout".
 
-Gerrit patchset upload and reply posting reuse the Gerrit credentials above,
-but have independent kill switches. Jenkins retrigger uses the existing
-`jenkins_tool` private configuration at `~/.config/jenkins-tool/.env` and is
-available only when `JENKINS_RETRIGGER_ENABLED=true`. Enabling one write type
-does not enable another.
+`pw-doctor` reports blocking problems separately from advisory ones and exits
+non-zero only for the blocking kind.
 
 ## Run locally
 
 ```bash
-cd ~/llm_code_and_review_tools/patch_watcher
-python3 app.py
+patch-watcher
 ```
 
-Open <http://127.0.0.1:8080>. The server binds only to localhost. Adding a
+`patch-watcher` is installed by `./install.sh`. Without installing, run it as
+a module from the directory that *contains* the package -- this directory, not
+the `llm_code_and_review_tools` root, where `python3 -m patch_watcher.app`
+reports `No module named patch_watcher.app`:
+
+```bash
+cd ~/llm_code_and_review_tools/patch_watcher
+python3 -m patch_watcher.app
+```
+
+(`python3 patch_watcher/app.py` does not work either -- the modules import each
+other through the `patch_watcher` package.)
+
+Open <http://127.0.0.1:8080>. The server answers only to `127.0.0.1` and
+`localhost` by name, so a page that rebinds DNS to the loopback address cannot
+read the dashboard. The server binds only to localhost. Adding a
 patch requires only its Gerrit URL; the title comes from Gerrit, with the
 change number as a temporary fallback. Adding performs a read-only refresh.
 **Refresh all** updates the full list, and the heading shows the overall
@@ -103,40 +133,14 @@ sessions and shows other VMs separately. Guidance, waiting-human answers,
 pause, interrupt, resume, follow-up, cancel, and kill operations are delivered
 through the managed runner and recorded as durable, exactly-once actions.
 
-The next dashboard card is **Worker admission and provenance**. It shows the
-selected worker profile and hash, whether its execution boundaries are merely
-declared or have been attested, the resolved tool inventory, warnings, and the
-exact redacted reason for a blocked preflight. The checked-in compatibility
-profile is deliberately labeled **Unsandboxed host worker**; it grants only
-manual, read-only investigation capabilities and does not grant LTVM creation
-or external writes.
-
-Worker inputs are strict versioned JSON contracts. The controller first
-creates a private per-run directory and revision-pinned run envelope, then
-runs the dependency-free doctor before starting Claude:
-
-```bash
-cd ~/llm_code_and_review_tools/patch_watcher
-python3 pw_worker.py doctor \
-  --profile host-unsandboxed-mac-v1 \
-  --run-envelope /private/run/path/run-envelope.json \
-  --json
-```
-
-Exit status `0` means the environment is admitted as `ready` or `degraded`;
-exit status `1` means it is `blocked`. The JSON result is suitable for the
-private session database only after audit redaction.
-
-Phase 0C adds a manual **Investigate** action to each current patch revision.
-It checks out the exact Gerrit revision into a private run directory, admits
-the declared worker environment, and starts a reconnectable Claude process
-with only local source/evidence read tools. The run page exposes its durable
+Each current patch revision has a manual **Investigate** action. It checks out
+the exact Gerrit revision into a private run directory and starts a
+reconnectable Claude session against it. The run page exposes its durable
 timeline, recent output, waiting-human question, and operator guidance and
 stop controls. Destructive controls require a one-time POST confirmation;
-links and GET requests cannot mutate a run. Phase 0C grants no Gerrit, CI,
-Jira, LTVM, source-editing, shell, or upload capability.
+links and GET requests cannot mutate a run.
 
-Phase 1 adds deterministic Maloo test-error handling without a Claude
+Deterministic Maloo test-error handling without a Claude
 session. The compact standing-policy form persists four independent
 per-patch choices: trigger mode (`manual` or `automatic`), test failures
 (`off`, `deterministic`, or `investigate`), build failures (`off` or `repair`),
@@ -160,7 +164,7 @@ mutation is never blindly retried; later polls only reconcile remote state.
 Outcomes and errors appear in the bounded timeline, daily report, and optional
 immediate sendmail notices.
 
-Phase 2 adds bounded Claude research for enforced Maloo failures that do not
+Bounded Claude research for enforced Maloo failures that do not
 have accepted Jira evidence. Its policy is independent from retest authority:
 Disabled, Manual, or Automatic, with a maximum of 20 runs per exact revision.
 Automatic starts also require the global execution switch. Every run receives
@@ -190,9 +194,7 @@ The automation ledger is private WAL-backed SQLite state:
 ```
 
 Standing policy is stored atomically with mode `0600` in
-`~/.config/patch-watcher/standing-policies.json`. Gerrit reply and Jenkins
-retrigger claims have separate private SQLite ledgers so restarts cannot erase
-or duplicate a claimed external write.
+`~/.config/patch-watcher/standing-policies.json`.
 
 Automatic policy changes and the global execution switch each use a separate
 confirmation page. GET requests never enable or approve an external action.
@@ -213,7 +215,7 @@ lifecycle into watch state: merged patches display **Merged** and abandoned
 patches display **Abandoned** rather than occupying a separate column. Jenkins
 and Maloo chips appear inside **Watch state / CI**. Patchset appears as compact
 `PS N` metadata under the patch title; only actual work-in-progress changes
-show a WIP badge, so there is no ambiguous “Active” label.
+show a WIP badge, so there is no ambiguous "Active" label.
 
 Each patch has one compact **Actions** disclosure. It groups build failures,
 test failures, and review comments; only implemented controls are interactive.
@@ -228,82 +230,64 @@ the separate upload capability must be enabled for publication.
 
 For a completed failed Jenkins build attached to the exact current Gerrit
 revision, **Handle build failure** captures an immutable job, build, revision,
-and bounded log snapshot. One confirmation starts a dedicated full checkout
-and also preauthorizes one controller-owned patchset upload if, and only if,
-the worker reports `patch_caused_fixed`, produces a nonempty diff, and supplies
-successful explicitly tagged build and test evidence. There is no second
-upload confirmation.
+and bounded log snapshot, then starts a dedicated full checkout and an agent
+session against it. The agent investigates and, if it produces a fix, pushes
+the patchset itself using the installed `gerrit` CLI.
 
-The worker has no Gerrit or Jenkins credentials. Its command capability is
-open-ended only inside LTVM guests carrying that exact run's owner ID. Stale or
-changed inputs, infrastructure/transient/unrelated/ambiguous diagnoses,
-no-diff or validation failures, resource exhaustion, and publication trouble
-all stop for a human. Upload preparation and dispatch use the durable,
-controller-owned writer with one idempotency binding over the run, change,
-patchset, revision, diff, and validation evidence. A claimed or ambiguous push
-is reconciled against Gerrit, including during periodic restart recovery, and
-is never blindly repeated. A successful upload is refreshed as a new patchset,
-making the completed run stale. The separate **Retrigger Jenkins** action can
-retrigger the exact failed build when its independent kill switch is enabled;
-it does not grant the repair worker Jenkins credentials. The exact failed
-build is a terminal one-use action identity: after dispatch is claimed, a
-failed or ambiguous response permits reconciliation only, never another blind
-dispatch. A genuinely new failed build is a new identity. Abort,
-configuration, and other Jenkins writes remain future work.
 
-## Review handling and replies
+## Review handling
 
 **Handle simple comments** and **Handle all comments** capture one immutable
-unresolved-comment snapshot and start an exact-revision engineering run. The
-single run-start confirmation preauthorizes exactly one qualifying patchset
-upload after a nonempty diff and successful LTVM test evidence; it does not
-ask for a second upload approval. Standing automatic starts require their own
-explicit policy confirmation and the global automatic-execution gate.
+unresolved-comment snapshot and start an exact-revision agent session. The
+agent addresses the comments, and posts replies and any new patchset itself
+using the installed `gerrit` CLI.
 
-Reply posting is a separate Phase 5B controller write, independently disabled
-by default. A reply intentionally targets the original revision and exact
-comment/location from the run snapshot, even when the handler has since
-uploaded a newer patchset. Immediately before posting, the controller verifies
-that historical revision, comment identity, file/line/range, and unresolved
-state rather than incorrectly rebinding the reply to the new current revision.
-The immutable reply plan is one-use and reconciliation-only after an uncertain
-dispatch. Claude never receives Gerrit credentials.
 
-## Controlled engineering runs (Phases 3A–3C)
+## Engineering runs
 
-An exact, refreshed patch revision can be prepared and then explicitly
-confirmed for a controlled engineering run. Phase 3A creates a dedicated full
-clone (not a Git worktree), lets Claude edit source files with no host shell or
-service credentials, and independently captures the actual Git diff/status.
+An exact, refreshed patch revision can be prepared and then confirmed for an
+engineering run. The controller creates a dedicated full clone, pins it to the
+revision, and starts a reconnectable Claude session in it. The agent has the
+same environment a developer has on this host: `ltvm`, the LLM tools, and a
+Lustre checkout. It may create VMs, build, and test.
 
-Phase 3B grants that confirmed run an open-ended command capability **inside
-only its exactly owner-matched LTVM guests**. Claude may create an appropriate
-VM or cluster, copy the pinned checkout into it, and run arbitrary diagnostic,
-build, and test commands there. The broker revalidates ownership before every
-guest command, bounds execution and captured output, and writes immutable
-command/result audit records. This is one run-level capability grant, not a
-per-command approval or an argv allowlist. It does not grant a host shell,
-access to another run's VMs, or Gerrit writes.
+The dashboard shows checkout ownership, session messages, guest command
+results, resource state, cleanup, artifacts, and LTVM inventory.
 
-The dashboard shows checkout ownership, session messages, capability and
-attempt state, guest command results, resource exhaustion/cooldown state,
-cleanup, artifacts, and exactly owner-matched LTVM inventory.
+### Model and reasoning effort
 
-Phase 3C is a separate controller-owned Gerrit upload path. It is disabled by
-default. A successful engineering run becomes eligible only when it has one
-nonempty immutable diff and successful guest validation explicitly tagged as
-test evidence. Preparing an upload rebuilds the exact pinned revision in a
-fresh private staging checkout, verifies the diff, preserves the Gerrit
-Change-Id, and records the proposed commit SHA. A second page shows the exact
-old patchset/revision, diff digest, test-evidence digest, and proposed commit;
-only its one-use POST can push. Review-handling and build-repair runs instead
-use their already confirmed run-start grant for exactly one qualifying upload,
-with no second approval. The controller rechecks Gerrit immediately
-before dispatch and reconciles the proposed commit against all Gerrit
-revisions after either success or an uncertain result. It never blindly
-retries an ambiguous push. Claude never receives Gerrit credentials.
+The start controls carry a model field and a reasoning-effort selector, both
+optional; blank means "whatever this Patch Watcher is configured with". The
+choice is covered by the start confirmation's signature, so the page that
+shows you a model cannot start a run with a different one, and it is stored on
+the run -- the run page reports what that run actually used, not what the
+current default happens to be.
 
-## Autonomous lanes (Phases 6A–6B)
+Process-wide defaults come from `--model` and `--effort`:
+
+```bash
+patch-watcher --model claude-opus-5 --effort high
+```
+
+Effort accepts `low`, `medium`, `high`, `xhigh` and `max`. A model name is
+validated against a conservative pattern rather than escaped, because it
+becomes an argument to the `claude` process.
+
+### What the agent knows about this host
+
+The run prompt carries the task, the paths, the prohibitions, the time budget
+and the report contract -- it does **not** carry `ltvm` syntax, build
+recipes, or the `co<N>-<role>` naming convention. All of that reaches the
+agent the same way it reaches you: Claude Code discovers `CLAUDE.md` by
+walking up from its working directory, which is the checkout.
+
+That means the pool checkouts must sit under a directory that has a
+`CLAUDE.md` above them. If `$CO` points somewhere else, agents still run and
+still have credentials -- they just no longer know how to build or test
+anything here. `pw-doctor` reports this as `pool:agent-instructions`.
+
+
+## Autonomous lanes
 
 The dashboard now exposes a code-defined, versioned autonomous-lane framework
 with separate global, project, and patch kill switches. Every switch starts
@@ -334,11 +318,15 @@ Replay does not create observations, triggers, runs, actions, or remote writes.
   durable state machines, native Claude runner, human messaging,
   LTVM/resource lifecycle, isolation roadmap, dashboard, recovery behavior,
   and phased acceptance criteria.
-- `WORKER_ENVIRONMENT_CONTRACT.md` defines what lives in the portable AI
-  engineer environment, what the controller injects, how a worker is admitted,
-  and how the current Mac evolves into reproducible and isolated workers.
+- `~/lustre_design_docs/plans/agent-orchestration/PLAN.md` defines the
+  in-progress redesign: what the tool is becoming, what is being deleted, and
+  the phase order.
 
-Use another local port with `python3 app.py --port 8090`, or select isolated
+`AGENT_ORCHESTRATION_DESIGN.md` and `DESIGN_ACTION_FLOW.md` still describe the
+credential-free-worker architecture in places and are superseded by `PLAN.md`
+where they disagree.
+
+Use another local port with `patch-watcher --port 8090`, or select isolated
 databases with `--session-database /private/path/sessions.sqlite3` and
 `--automation-database /private/path/automation.sqlite3`.
 
@@ -355,7 +343,7 @@ https://review.whamcloud.com/c/fs/lustre-release/+/61966	Optional temporary titl
 ```
 
 Gerrit replaces temporary titles during refresh. Select another file with
-`python3 app.py --seed-file /path/to/patches.txt`.
+`patch-watcher --seed-file /path/to/patches.txt`.
 
 ## Daily email summary
 
@@ -369,8 +357,7 @@ sendmail binary using `sendmail -t -oi`; it never invokes a shell.
 For an external daily scheduler, run:
 
 ```bash
-cd ~/llm_code_and_review_tools/patch_watcher
-python3 app.py --daily-summary
+patch-watcher --daily-summary
 ```
 
 This loads and refreshes the seed list before composing the summary. Schedule
@@ -379,9 +366,38 @@ scheduling logic inside the web process.
 
 ## Tests
 
-All Gerrit and sendmail behavior is mocked; the test suite performs no network
-requests and sends no email:
+The unit suite is hermetic: no network, no credentials, no email, no browser.
+Run it from this directory -- discovery from the repository root finds nothing:
 
 ```bash
+cd ~/llm_code_and_review_tools/patch_watcher
 python3 -m unittest discover -s . -v
 ```
+
+Two further checks are opt-in because they need credentials and network. Both
+are read-only against Gerrit -- they watch deliberately dormant changes and
+never post, vote, upload, or start an agent:
+
+```bash
+cd ~/llm_code_and_review_tools/patch_watcher
+
+# End-to-end: fetch real changes, render the dashboard.
+PATCH_WATCHER_TEST_CONFIG=~/.config/patch-watcher/config \
+    python3 integration_check.py
+
+# The same, driven in Chrome: rendering, controls, accessibility, and the
+# GET-never-mutates and CSRF invariants.
+PATCH_WATCHER_TEST_CONFIG=~/.config/patch-watcher/config make browser
+```
+
+`make browser` runs `browser_check.py` with `~/llm_code_and_review_tools/.venv`
+if that venv exists -- playwright usually lives there rather than in the system
+Python -- and with `python3` otherwise. That venv is not guaranteed: install.sh
+creates it only on PEP 668 hosts or with `--venv`, and `--venv PATH` puts it
+elsewhere. To pick the interpreter yourself:
+`VENV_PYTHON=/path/to/python make browser`.
+
+The browser check needs `playwright` (`pip install playwright`) and uses the
+system Chrome. It exists because unit tests could not catch what it caught: a
+missing CSRF check on the watch-list routes, a state label rendered as
+"Ci Failed", and a console error on every page load.

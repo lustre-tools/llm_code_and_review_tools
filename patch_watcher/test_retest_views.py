@@ -1,6 +1,6 @@
 import unittest
 
-from retest_views import (
+from patch_watcher.retest_views import (
     render_action_confirmation,
     render_enable_confirmation,
     render_global_retest_status,
@@ -15,7 +15,7 @@ class RetestViewTests(unittest.TestCase):
             execution_enabled=False, csrf_token="csrf<&"
         )
         self.assertIn("Global execution: Disabled", off)
-        self.assertIn("Automatic actions", off)
+        self.assertIn("Saved patch policies", off)
         self.assertIn("href='/automation/global/confirm-enable'", off)
         self.assertNotIn("method='get'", off.casefold())
         on = render_global_retest_status(

@@ -2,8 +2,7 @@ import re
 import unittest
 from dataclasses import dataclass
 
-import engineering_views
-
+from patch_watcher import engineering_views
 
 MIB = 1024 ** 2
 GIB = 1024 ** 3
@@ -66,19 +65,30 @@ class EngineeringViewTests(unittest.TestCase):
         return value
 
     def vm(self, **changes):
+        """One guest exactly as ``LTVMVMStatus.to_dict()`` produces it.
+
+        This is the whole record the sampler can supply: `ltvm list --json`
+        has no topology, role, age, CPU share, or cleanup field, and stamps no
+        patch-watcher owner id.
+        """
         value = {
             "name": "eng-123-co1-mds",
             "owner_id": "patch-watcher:session-123",
+            "patch_watcher_session_id": "session-123",
             "state": "running",
-            "topology": "single / mds",
             "configured_guest_memory_bytes": 4 * GIB,
             "host_rss_bytes": 750 * MIB,
-            "cleanup_state": "active",
+            "process_id": 4242,
+            "vcpus": 2,
+            "ip": "192.168.100.11",
+            "host_memory_source": "/proc/4242/status VmRSS",
+            "quality": "good",
+            "errors": [],
         }
         value.update(changes)
         return value
 
-    def validation_proposal(self, **changes):
+    def validation_record(self, **changes):
         value = {
             "manifest": {
                 "schema_version": 1,
@@ -111,28 +121,58 @@ class EngineeringViewTests(unittest.TestCase):
             "Source editing:</strong> active inside the isolated checkout",
             "Guest build/test execution:</strong> not verified active",
             "not approval of each individual command",
-            "Host command execution:</strong> disabled",
-            "Gerrit upload:</strong> disabled for this subphase",
+            "Host command execution:</strong> available; the run has a host shell",
+            "Gerrit upload:</strong> available with real credentials",
         ):
             self.assertIn(expected, rendered)
         self.assertNotIn("user:secret", rendered)
         self.assertNotIn("token=bad", rendered)
 
+    def test_a_read_only_run_claims_no_host_shell_and_no_credentials(self):
+        """The run card sat on its own page and could say what it liked.  It
+        now renders under `render_run_detail`'s boundary statement, which
+        follows the capability profile, so an unconditional "host shell, real
+        credentials" made one page contradict itself."""
+
+        restricted = engineering_views.render_engineering_run(
+            self.sample_run(capability_profile="read_only")
+        )
+        self.assertIn("Host command execution:</strong> restricted", restricted)
+        self.assertIn("Gerrit upload:</strong> unavailable", restricted)
+        self.assertNotIn("available with real credentials", restricted)
+
+        full = engineering_views.render_engineering_run(
+            self.sample_run(capability_profile="full")
+        )
+        self.assertIn(
+            "Host command execution:</strong> available; the run has a host shell",
+            full,
+        )
+        self.assertIn("Gerrit upload:</strong> available with real credentials", full)
+
     def test_capability_banner_distinguishes_declared_active_and_expired(self):
-        declared = engineering_views.render_engineering_dashboard([])
+        declared = engineering_views.render_capability_status()
         self.assertIn(
             "declared; activated only after exact revision and owner binding are verified",
             declared,
         )
+        # A confirmation page states plainly what is about to be authorised.
+        self.assertIn("available with real credentials", declared)
+        # The index card lists runs rather than authorising one, so there the
+        # same capabilities are declarations, not a grant that is live now.
+        standing = engineering_views.render_capability_status(standing=True)
+        self.assertNotIn("available with real credentials", standing)
+        self.assertNotIn("available; the run has a host shell", standing)
+        self.assertIn("an engineering run carries real service credentials", standing)
         active_run = self.sample_run(validation={
-            **self.validation_proposal(),
+            **self.validation_record(),
             "state": "running",
             "approval_state": "approved",
             "validation_id": "attempt-active",
         })
         active = engineering_views.render_engineering_run(active_run)
         self.assertIn(
-            "active as one open-ended audited capability, restricted to exact-owner",
+            "active as one open-ended capability, recorded for exact-owner",
             active,
         )
         expired = engineering_views.render_engineering_run(
@@ -150,100 +190,9 @@ class EngineeringViewTests(unittest.TestCase):
             self.assertNotIn(secret, rendered)
         self.assertIn("Raw commands, arguments, environment values, and secrets", rendered)
 
-    def test_validation_proposal_is_exact_inert_and_not_a_per_command_allowlist(self):
-        rendered = engineering_views.render_validation_proposal(
-            self.sample_run(),
-            self.validation_proposal(),
-            base_url="/runs",
-            csrf_token="csrf<&",
-            idempotency_token="proposal-once",
-        )
-        for expected in (
-            "Proposed session-owned LTVM validation",
-            "No build or test has started",
-            "manifest-eng-123",
-            "f" * 64,
-            "a" * 40,
-            "patch-watcher:session-123",
-            "rocky9-x86_64",
-            "Build and smoke test",
-            "Planned exec argv",
-            "NAME=&lt;unsafe&gt;",
-            "not constrain the approved session to only these commands",
-            "Host execution and Gerrit upload remain disabled",
-            "method='post' action='/runs/eng-123/validation/prepare'",
-            "Review validation capability",
-        ):
-            self.assertIn(expected, rendered)
-        self.assertNotIn("secret-must-not-render", rendered)
-        self.assertNotIn("/validation/execute'", rendered)
-        self.assertNotRegex(rendered, r"(?i)method=['\"]get")
-        self.assertNotIn("csrf<&", rendered)
-
-    def test_validation_proposal_fails_closed_on_revision_owner_or_target_gap(self):
-        cases = (
-            self.validation_proposal(
-                manifest={
-                    **self.validation_proposal()["manifest"],
-                    "revision_sha": "b" * 40,
-                }
-            ),
-            self.validation_proposal(owner_id="patch-watcher:other"),
-            self.validation_proposal(target=""),
-            self.validation_proposal(validation_eligible=False, disabled_reason="policy denied"),
-        )
-        for proposal in cases:
-            with self.subTest(proposal=proposal):
-                rendered = engineering_views.render_validation_proposal(
-                    self.sample_run(), proposal
-                )
-                self.assertIn("disabled aria-disabled='true'", rendered)
-                self.assertIn("Validation approval unavailable", rendered)
-
-    def test_validation_confirmation_repeats_boundary_and_only_final_post_executes(self):
-        rendered = engineering_views.render_validation_confirmation(
-            self.sample_run(),
-            self.validation_proposal(),
-            confirmation_token="signed<&",
-            confirmation_expires_at="1788300000",
-            csrf_token="csrf",
-            idempotency_token="validation-once",
-            base_url="/runs",
-        )
-        for expected in (
-            "Confirm session-owned LTVM validation",
-            "open-ended, brokered guest-command capability",
-            "Immutable proposal being approved",
-            "manifest-eng-123",
-            "patch-watcher:session-123",
-            "rocky9-x86_64",
-            "Not granted:",
-            "Gerrit upload remain disabled",
-            "method='post' action='/runs/eng-123/validation/execute'",
-            "name='confirmation_expires_at' value='1788300000'",
-            "name='idempotency_token' value='validation-once'",
-            "Approve validation capability",
-        ):
-            self.assertIn(expected, rendered)
-        self.assertNotIn("signed<&", rendered)
-        self.assertNotRegex(rendered, r"(?i)method=['\"]get")
-
-        retry = engineering_views.render_validation_confirmation(
-            self.sample_run(), self.validation_proposal(),
-            intent="retry", confirmation_token="retry-token", base_url="/runs",
-        )
-        self.assertIn("Confirm a new validation attempt", retry)
-        self.assertIn("does not resume or rewrite", retry)
-        self.assertIn("action='/runs/eng-123/validation/retry'", retry)
-        with self.assertRaises(ValueError):
-            engineering_views.render_validation_confirmation(
-                self.sample_run(), self.validation_proposal(),
-                confirmation_token="", base_url="/runs",
-            )
-
-    def test_validation_status_shows_guest_audit_results_capacity_and_cleanup(self):
+    def test_validation_status_shows_identity_artifacts_capacity_and_cleanup(self):
         validation = {
-            **self.validation_proposal(),
+            **self.validation_record(),
             "validation_id": "validation-attempt-7",
             "state": "resource_exhausted",
             "approval_state": "approved",
@@ -302,12 +251,6 @@ class EngineeringViewTests(unittest.TestCase):
             "manifest-eng-123",
             "patch-watcher:session-123",
             "rocky9-x86_64",
-            "Guest command audit",
-            "eng-123-co1-mds",
-            "./configure",
-            "--with-name=&lt;unsafe&gt;",
-            "smoke",
-            "/runs/eng-123/artifacts/smoke-log",
             "/runs/eng-123/artifacts/console%2Flog",
             "ltvm_resource_exhausted",
             "2026-09-01T16:00:00Z",
@@ -318,16 +261,16 @@ class EngineeringViewTests(unittest.TestCase):
             "Quarantined",
             "Use the engineering run controls to review and confirm a new isolated run",
             "cannot silently retry itself",
-            "Host execution and Gerrit upload are disabled",
+            "The run's host shell and service credentials are unaffected by that",
         ):
             self.assertIn(expected, rendered)
         self.assertNotIn("do-not-render", rendered)
         self.assertNotIn("javascript:", rendered)
         self.assertNotRegex(rendered, r"(?i)<form[^>]+method=['\"]get")
 
-    def test_validation_status_fails_closed_on_identity_or_audit_owner_mismatch(self):
+    def test_validation_status_fails_closed_on_identity_mismatch(self):
         validation = {
-            **self.validation_proposal(owner_id="patch-watcher:wrong"),
+            **self.validation_record(owner_id="patch-watcher:wrong"),
             "revision_sha": "b" * 40,
             "state": "running",
             "approval_state": "approved",
@@ -348,22 +291,17 @@ class EngineeringViewTests(unittest.TestCase):
         self.assertIn("owner matching the engineering session", rendered)
         self.assertIn("Reported approval state", rendered)
         self.assertIn("Effective guest capability</dt><dd>inactive", rendered)
-        self.assertIn("audit record is unverified", rendered)
-        self.assertNotIn("one open-ended guest-command capability is brokered", rendered)
+        self.assertNotIn("one open-ended guest-command capability is recorded", rendered)
 
-    def test_run_embeds_only_explicit_validation_proposal_or_status(self):
-        proposal_run = self.sample_run(
-            validation_proposal=self.validation_proposal()
-        )
-        proposal_html = engineering_views.render_engineering_run(
-            proposal_run, base_url="/runs", csrf_token="csrf",
+    def test_run_embeds_validation_status_only_when_the_run_carries_one(self):
+        without = engineering_views.render_engineering_run(
+            self.sample_run(), base_url="/runs", csrf_token="csrf",
             idempotency_token="once",
         )
-        self.assertIn("Proposed session-owned LTVM validation", proposal_html)
-        self.assertIn("/runs/eng-123/validation/prepare", proposal_html)
+        self.assertNotIn("Session-owned LTVM validation", without)
 
         status_run = self.sample_run(validation_execution={
-            **self.validation_proposal(),
+            **self.validation_record(),
             "validation_id": "attempt-1",
             "state": "running",
         })
@@ -372,7 +310,6 @@ class EngineeringViewTests(unittest.TestCase):
         )
         self.assertIn("Session-owned LTVM validation", status_html)
         self.assertIn("attempt-1", status_html)
-        self.assertNotIn("Review validation capability", status_html)
 
     def test_artifact_hrefs_are_internal_routes_derived_from_encoded_ids(self):
         rendered = engineering_views.render_engineering_run(self.sample_run())
@@ -400,6 +337,34 @@ class EngineeringViewTests(unittest.TestCase):
         self.assertIn("750 MiB", rendered)
         self.assertNotIn("4.7 GiB", rendered)
 
+    def test_the_run_page_claims_no_isolation_it_does_not_have(self):
+        """Two hardcoded constants asserted a mediation layer that was removed.
+
+        The manifest panel rendered "Isolation profile: session-owned-ltvm"
+        and "Network profile: controller-mediated" from string literals in the
+        projection, not from anything measured. An engineering run has neither:
+        it runs on this host under bypassPermissions with the ambient
+        environment and the operator's real credentials. A label the operator
+        reads as a boundary has to correspond to one.
+        """
+
+        run = self.sample_run(
+            manifest={
+                "schema_version": "safe-execution-manifest/v1",
+                "digest": "sha256:" + "a" * 64,
+                "build_steps": [],
+                "test_steps": [],
+            },
+        )
+        rendered = engineering_views.render_engineering_run(run)
+
+        self.assertIn("Manifest digest", rendered)
+        for claim in (
+            "Isolation profile", "Network profile",
+            "session-owned-ltvm", "controller-mediated",
+        ):
+            self.assertNotIn(claim, rendered)
+
     def test_resource_exhaustion_cooldown_and_no_retry_loop_are_visible(self):
         run = self.sample_run(
             state="resource_exhausted",
@@ -422,42 +387,145 @@ class EngineeringViewTests(unittest.TestCase):
             "2026-09-01T14:00:00Z", "59m 59s",
             "Automatic VM-backed runs suppressed</dt><dd>yes",
             "Retry now as a new run",
+            # A deadline and a countdown read as though there were a control
+            # to shorten them. There is not -- the retry-grant machinery that
+            # would have overridden a cooldown had no issuer -- so the panel
+            # says so rather than leaving the operator hunting for it.
+            "There is no override",
+            "free VM slots, disk, or memory",
         ):
             self.assertIn(expected, rendered)
         self.assertNotIn("<unsafe>", rendered)
 
     def test_cleanup_quarantine_and_orphan_warnings_are_prominent_and_escaped(self):
+        """Warn on the states the producers can actually reach.
+
+        ``pw_checkout_allocation.state`` is constrained to planned, allocated,
+        active, cleanup_pending, released and quarantined, and a guest's
+        cleanup state lives on its ``pw_owned_resource`` row, never on the
+        LTVM sample.
+        """
         run = self.sample_run(
             checkout={
                 "revision_sha": "a" * 40,
-                "cleanup_state": "cleanup_failed",
+                "cleanup_state": "quarantined",
             },
+            vm_prefix="co3-",
+            owned_resources=[{
+                "resource_type": "ltvm_vm",
+                "external_id": "co3-vm<&",
+                "state": "cleanup_failed",
+                "cleanup_failure": "ltvm destroy <timed out>",
+            }],
             quarantine={"state": "quarantined", "reason": "bad <artifact>"},
             warnings=["operator <check>"],
         )
-        vm = self.vm(cleanup_state="orphaned", name="vm<&")
+        vm = self.vm(name="co3-vm<&", owner_id=None)
         rendered = engineering_views.render_engineering_run(run, vms=[vm])
         for expected in (
             "Cleanup, quarantine, or orphan warning",
-            "Checkout cleanup requires operator attention",
+            "Checkout is quarantined",
             "Quarantined run resource: bad &lt;artifact&gt;",
-            "vm&lt;&amp; is orphaned", "operator &lt;check&gt;",
+            "co3-vm&lt;&amp; is still in the LTVM inventory",
+            "operator &lt;check&gt;",
         ):
             self.assertIn(expected, rendered)
+        self.assertNotIn("vm<&", rendered)
 
-    def test_dashboard_keeps_unmatched_vms_outside_runs(self):
-        rendered = engineering_views.render_engineering_dashboard(
-            [self.sample_run()],
-            vms=[self.vm(), self.vm(name="legacy", owner_id=None),
-                 self.vm(name="orphan", owner_id="patch-watcher:gone")],
+    def test_guests_are_nested_by_the_checkouts_reserved_name_prefix(self):
+        """A run's guests carry no patch-watcher owner id; the prefix finds them.
+
+        ``ltvm list --json`` has no owner field for Patch Watcher to stamp, so
+        every sampled guest arrives with ``owner_id`` of None (or LTVM's own
+        ``pid:<n>``). Matching on the run's owner id therefore nested nothing
+        and flagged the run's own guest as an orphan.
+        """
+        run = self.sample_run(checkout_index=3)
+        mine = self.vm(name="co3-sanity", owner_id=None)
+        ltvm_owned = self.vm(name="co3-build", owner_id="pid:2520851")
+        neighbour = self.vm(name="co31-sanity", owner_id=None)
+        elsewhere = self.vm(name="co4-sanity", owner_id=None)
+        stray = self.vm(name="co5-stray", owner_id="patch-watcher:gone")
+        vms = [mine, ltvm_owned, neighbour, elsewhere, stray]
+        card = engineering_views.render_engineering_run(run, vms=vms)
+        orphans = engineering_views.render_unmatched_resources([run], vms)
+        self.assertIn("Session-owned LTVM guests (1)", card)
+        self.assertIn(">co3-sanity<", card)
+        # A trailing dash is the whole point: co31 belongs to checkout 31.
+        self.assertNotIn(">co31-sanity<", card)
+        self.assertNotIn(">co4-sanity<", card)
+        # A guest declaring some other owner is never claimed by name alone.
+        self.assertNotIn(">co3-build<", card)
+        self.assertNotIn("co3-sanity", orphans)
+        # Only a guest claiming a Patch Watcher owner is our orphan. The rest
+        # belong to whoever made them and are listed, calmly, by the resource
+        # card; alerting on them here just duplicated that list in red.
+        self.assertIn("co5-stray", orphans)
+        for stranger in ("co3-build", "co31-sanity", "co4-sanity"):
+            self.assertNotIn(stranger, orphans)
+
+    def test_run_without_a_pool_checkout_claims_no_guest(self):
+        """No checkout means no reserved prefix, so the run owns nothing."""
+        run = self.sample_run(owner_id="")
+        rendered = engineering_views.render_engineering_run(
+            run, vms=[self.vm(name="co3-sanity", owner_id=None)]
         )
-        card = rendered.split("<article class='engineering-run'", 1)[1]
+        self.assertIn("Session-owned LTVM guests (0)", rendered)
+        self.assertIn("reserves no guest name prefix", rendered)
+
+    def test_guest_table_renders_only_fields_the_sampler_produces(self):
+        """No column may be structurally incapable of carrying a value."""
+        run = self.sample_run(
+            checkout_index=3,
+            owned_resources=[{
+                "resource_type": "ltvm_vm",
+                "external_id": "co3-sanity",
+                "state": "cleanup_pending",
+            }],
+        )
+        rendered = engineering_views._render_vms(
+            run, supplied_vms=[self.vm(name="co3-sanity", owner_id=None)],
+            suffix="s",
+        )
+        body = rendered.split("<tbody>", 1)[1]
+        for expected in (
+            ">2<", ">192.168.100.11<", "4 GiB", "750 MiB",
+            "/proc/4242/status VmRSS", ">Cleanup pending<",
+        ):
+            self.assertIn(expected, body)
+        self.assertNotIn("Topology / role", rendered)
+        self.assertNotIn(">unknown<", body)
+        self.assertNotIn(">Unknown<", body)
+
+    def test_quarantined_checkout_is_the_state_that_warns(self):
+        """quarantined is the only allocation state needing an operator."""
+        warned = engineering_views.render_engineering_run(
+            self.sample_run(checkout={"cleanup_state": "quarantined"})
+        )
+        self.assertIn("Checkout is quarantined", warned)
+        self.assertIn("needs operator review", warned)
+        for benign in ("planned", "allocated", "active", "cleanup_pending",
+                       "released"):
+            quiet = engineering_views.render_engineering_run(
+                self.sample_run(checkout={"cleanup_state": benign})
+            )
+            self.assertIn(
+                "Cleanup, quarantine, and orphan warnings: none reported", quiet
+            )
+
+    def test_unmatched_vms_are_reported_outside_the_run_card(self):
+        run = self.sample_run()
+        vms = [self.vm(), self.vm(name="legacy", owner_id=None),
+               self.vm(name="orphan", owner_id="patch-watcher:gone")]
+        card = engineering_views.render_engineering_run(run, vms=vms)
+        orphan_section = engineering_views.render_unmatched_resources([run], vms)
         self.assertIn("eng-123-co1-mds", card)
         self.assertNotIn(">legacy<", card)
         self.assertNotIn(">orphan<", card)
-        orphan_section = rendered.split("<section class='orphan-vms'", 1)[1].split("</section>", 1)[0]
-        self.assertIn("legacy", orphan_section)
+        # "orphan" declares a Patch Watcher owner with no live run, so it is
+        # ours to chase; "legacy" declares no owner at all and is not.
         self.assertIn("orphan", orphan_section)
+        self.assertNotIn("legacy", orphan_section)
         self.assertIn("not adopted or made mutable", orphan_section)
 
     def test_operator_message_and_prod_are_explicit_post_buttons(self):
@@ -470,6 +538,74 @@ class EngineeringViewTests(unittest.TestCase):
         self.assertIn("value='interrupt_and_send'>Prod now", rendered)
         self.assertIn("next safe turn boundary", rendered)
         self.assertNotIn("csrf<&", rendered)
+
+    def test_terminal_run_offers_no_message_or_prod_control(self):
+        """Clicking either on a terminal run only produced a controller error
+        page saying "cannot guide terminal session"."""
+
+        rendered = engineering_views.render_engineering_run(
+            self.sample_run(state="failed"), csrf_token="csrf",
+        )
+        self.assertNotIn(">Send message<", rendered)
+        self.assertNotIn(">Prod now<", rendered)
+        self.assertNotIn("action='/engineering-runs/eng-123/guidance'", rendered)
+        self.assertIn("no live worker to message or prod", rendered)
+
+    def test_recorded_resource_cleanup_failure_is_warned_with_its_reason(self):
+        """Warnings were derived only from the live LTVM inventory, so a
+        resource row marked cleanup_failed reported "none reported"."""
+
+        rendered = engineering_views.render_engineering_run(self.sample_run(
+            state="failed",
+            owned_resources=[{
+                "resource_id": "resource-1",
+                "resource_type": "ltvm_vm",
+                "external_id": "eng-123-co1-oss",
+                "owner_id": "patch-watcher:session-123",
+                "state": "cleanup_failed",
+                "cleanup_failure": "ltvm destroy timed out after 3 attempts",
+            }],
+        ))
+        self.assertNotIn(
+            "Cleanup, quarantine, and orphan warnings: none reported", rendered
+        )
+        self.assertIn("Cleanup, quarantine, or orphan warning", rendered)
+        self.assertIn("eng-123-co1-oss", rendered)
+        self.assertIn("ltvm destroy timed out after 3 attempts", rendered)
+
+    def test_clean_recorded_resources_still_report_no_warning(self):
+        rendered = engineering_views.render_engineering_run(self.sample_run(
+            owned_resources=[{
+                "resource_id": "resource-1",
+                "resource_type": "ltvm_vm",
+                "external_id": "eng-123-co1-mds",
+                "state": "cleaned",
+            }],
+        ))
+        self.assertIn(
+            "Cleanup, quarantine, and orphan warnings: none reported", rendered
+        )
+
+    def test_abandoned_resource_absent_from_inventory_is_still_an_orphan(self):
+        """`ltvm list` only knows about guests that still exist, so an
+        abandoned cleanup vanished from the orphan list entirely."""
+
+        orphan_section = engineering_views.render_unmatched_resources(
+            [self.sample_run(owned_resources=[{
+                "resource_id": "resource-9",
+                "resource_type": "ltvm_cluster",
+                "external_id": "eng-123-cluster",
+                "owner_id": "patch-watcher:session-123",
+                "state": "cleanup_failed",
+                "cleanup_failure": "cleanup abandoned; ltvm never returned",
+            }])],
+            [self.vm()],
+        )
+        self.assertNotIn(
+            "Unmatched or orphan LTVM resources: none reported", orphan_section
+        )
+        self.assertIn("eng-123-cluster", orphan_section)
+        self.assertIn("cleanup abandoned; ltvm never returned", orphan_section)
 
     def test_cancel_kill_and_retry_detail_controls_only_open_confirmation(self):
         active = engineering_views.render_engineering_run(self.sample_run())
@@ -521,7 +657,7 @@ class EngineeringViewTests(unittest.TestCase):
         self.assertIn("method='post' action='/engineering-runs/start'", confirmation)
         self.assertIn("name='confirmation_token' value='signed-start'", confirmation)
         self.assertIn("name='revision_sha' value='" + "b" * 40, confirmation)
-        self.assertIn("Gerrit upload:</strong> disabled for this subphase", confirmation)
+        self.assertIn("Gerrit upload:</strong> available with real credentials", confirmation)
         self.assertNotIn("method='get'", confirmation.casefold())
 
     def test_start_controls_disable_without_eligibility_or_exact_revision(self):
@@ -551,37 +687,6 @@ class EngineeringViewTests(unittest.TestCase):
         self.assertIn("name='revision_sha'", rendered)
         self.assertIn("Engineering run", rendered)
         self.assertNotIn("Capability status", rendered)
-
-    def test_upload_capability_is_separate_disabled_and_post_only(self):
-        run = self.sample_run(state="succeeded", gerrit_upload_enabled=False)
-        rendered = engineering_views.render_engineering_run(run, csrf_token="csrf")
-        self.assertIn("New Gerrit patchset", rendered)
-        self.assertIn("Disabled", rendered)
-        self.assertNotIn("/upload/prepare", rendered)
-
-        run["gerrit_upload_enabled"] = True
-        rendered = engineering_views.render_engineering_run(
-            run, csrf_token="csrf", idempotency_token="prepare-once",
-        )
-        self.assertIn("method='post' action='/runs/eng-123/upload/prepare'", rendered)
-        self.assertIn("Prepare new patchset", rendered)
-
-    def test_upload_confirmation_binds_diff_test_and_revision(self):
-        upload = {
-            "upload_id": "upload-1", "change_number": 68541, "patchset": 3,
-            "revision_sha": "a" * 40, "diff_sha256": "b" * 64,
-            "evidence_sha256": "c" * 64, "binding_digest": "d" * 64,
-            "local_commit_sha": "e" * 40,
-        }
-        rendered = engineering_views.render_gerrit_upload_confirmation(
-            upload, confirmation_token="signed", confirmation_expires_at="123",
-            csrf_token="csrf", idempotency_token="once",
-        )
-        self.assertIn("method='post' action='/uploads/upload-1/execute'", rendered)
-        for value in ("a" * 40, "b" * 64, "c" * 64, "d" * 64, "e" * 40):
-            self.assertIn(value, rendered)
-        self.assertIn("Claude does not receive credentials", rendered)
-        self.assertNotIn("method='get'", rendered.casefold())
 
     def test_dataclass_input_dynamic_text_and_route_segments_are_safe(self):
         @dataclass

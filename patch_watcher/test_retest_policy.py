@@ -3,18 +3,17 @@ import json
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
-from retest_policy import (
+from patch_watcher.retest_policy import (
     JiraBugLink,
     MalooFailure,
     PendingRetest,
     RetestBudget,
     RetestPolicy,
-    RevisionSnapshot,
     ReviewVote,
+    RevisionSnapshot,
     evaluate_retests,
     failure_fingerprint,
 )
-
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
 
@@ -280,6 +279,68 @@ class RetestPolicyTests(unittest.TestCase):
         self.assertIn("LU-44", encoded)
         self.assertNotIn("LU-12345", encoded)
         self.assertEqual(result.decisions[0].reason_code, "investigate_phase_2")
+
+
+class OrdinaryMalooShapeTests(unittest.TestCase):
+    """Shapes the Maloo adapter really emits must not escape as ValueError.
+
+    A MalooAdapterError on the same read produces an incomplete-snapshot
+    observation and a notification; these used to produce nothing at all --
+    no observation, no dashboard signal, only a line in errors.jsonl.
+    """
+
+    bug = RetestPolicyTests.bug
+    failure = RetestPolicyTests.failure
+    snapshot = RetestPolicyTests.snapshot
+    policy = RetestPolicyTests.policy
+    budget = RetestPolicyTests.budget
+    evaluate = RetestPolicyTests.evaluate
+
+    def test_empty_test_group_is_tolerated_like_the_adapter_tolerates_it(self):
+        failure = self.failure(test_group="")
+        self.assertEqual(failure.test_group, "")
+        self.assertTrue(failure.details_complete)
+        evaluation = self.evaluate(
+            self.snapshot(maloo_failures=(failure,))
+        )
+        self.assertEqual(evaluation.decisions[0].test_groups, ("",))
+
+    def test_a_long_subtest_name_is_bounded_not_rejected(self):
+        failure = self.failure(failing_subtests=("s" * 600,))
+        self.assertEqual(len(failure.failing_subtests[0]), 512)
+        # Truncating a name keeps the failure identifiable, so the details are
+        # still complete and an otherwise-clean session stays actionable.
+        self.assertTrue(failure.details_complete)
+
+    def test_a_catastrophic_failure_count_is_capped_and_marked_incomplete(self):
+        names = tuple(f"test_{index:04d}" for index in range(600))
+        failure = self.failure(failing_subtests=names)
+        self.assertEqual(len(failure.failing_subtests), 500)
+        self.assertEqual(failure.failing_subtests[0], "test_0000")
+        self.assertFalse(failure.details_complete)
+
+    def test_a_capped_failure_is_preserved_for_research_not_retested(self):
+        names = tuple(f"test_{index:04d}" for index in range(600))
+        evaluation = self.evaluate(
+            self.snapshot(maloo_failures=(self.failure(failing_subtests=names),))
+        )
+        self.assertEqual(evaluation.decisions[0].outcome, "investigate")
+        self.assertEqual(evaluation.decisions[0].reason_code, "investigate_phase_2")
+
+    def test_blank_and_duplicate_subtest_names_are_normalized(self):
+        failure = self.failure(failing_subtests=("b", "  ", "a", "a", ""))
+        self.assertEqual(failure.failing_subtests, ("a", "b"))
+
+    def test_non_string_subtest_names_are_still_rejected(self):
+        with self.assertRaises(ValueError):
+            self.failure(failing_subtests=(5,))
+
+    def test_capped_failures_still_fingerprint_deterministically(self):
+        names = tuple(f"test_{index:04d}" for index in range(600))
+        snapshot = self.snapshot()
+        first = failure_fingerprint(snapshot, self.failure(failing_subtests=names))
+        second = failure_fingerprint(snapshot, self.failure(failing_subtests=names))
+        self.assertEqual(first, second)
 
 
 if __name__ == "__main__":

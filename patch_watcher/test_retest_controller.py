@@ -6,8 +6,15 @@ import threading
 import unittest
 from pathlib import Path
 
-from automation_state import AutomationStateStore
-from maloo_adapter import (
+from patch_watcher.automation_state import AutomationStateStore
+from patch_watcher.autonomous_lane import (
+    DETERMINISTIC_RETEST_LANE,
+    LaneControlStore,
+    LaneDecisionHistory,
+    LaneRef,
+)
+from patch_watcher.autonomous_lane_runtime import AutonomousLaneRuntime
+from patch_watcher.maloo_adapter import (
     MalooAdapterError,
     MalooBugLink,
     MalooBugLinks,
@@ -22,16 +29,8 @@ from maloo_adapter import (
     MalooSession,
     MalooSuiteBugEvidence,
 )
-from retest_controller import PatchRevision, RetestController
-from retest_policy import ReviewVote
-from autonomous_lane import (
-    DETERMINISTIC_RETEST_LANE,
-    LaneControlStore,
-    LaneDecisionHistory,
-    LaneRef,
-)
-from autonomous_lane_runtime import AutonomousLaneRuntime
-
+from patch_watcher.retest_controller import PatchRevision, RetestController
+from patch_watcher.retest_policy import ReviewVote
 
 SHA = "a" * 40
 
@@ -90,6 +89,11 @@ class FakeMaloo:
         )
         self.requests = []
         self.request_error = None
+        # The real adapter returns ``requested=False`` when Maloo declines the
+        # retest outright (maloo_adapter builds it from the envelope's
+        # ``success`` field), so the fake has to be able to say that too.
+        self.request_accepted = True
+        self.request_response = "queued"
         self.reconcile_barrier = None
         self.reconcile_hook = None
         self.reads = 0
@@ -116,7 +120,13 @@ class FakeMaloo:
         self.requests.append((session_ref, jira_ticket, option))
         if self.request_error is not None:
             raise self.request_error
-        return MalooRetestResult(session_ref, jira_ticket, option, True, "queued")
+        return MalooRetestResult(
+            session_ref,
+            jira_ticket,
+            option,
+            self.request_accepted,
+            self.request_response,
+        )
 
 
 def configured_store(tmp_path, *, mode="automatic", global_enabled=False):
@@ -178,6 +188,52 @@ def all_actions(store):
         for run in store.list_runs(patch_id=patch().patch_id)
         for action in store.list_actions(run.run_id)
     ]
+
+
+def test_a_maloo_ticket_that_is_not_a_jira_key_is_dropped_not_fatal(tmp_path):
+    """Maloo accepts any non-empty ticket; JiraBugLink requires a real key.
+
+    A link like `BUG123` used to raise ValueError straight out of tick_patch,
+    losing the whole patch's observation cycle to one odd ticket -- no
+    observation recorded, no notification, only a line in errors.jsonl.
+
+    The validation is what makes a retest justification trustworthy, so the
+    link is dropped rather than the check weakened, and the evidence is marked
+    incomplete. That matters: incomplete bug evidence must not read as
+    "complete and accepted", which is the state an automatic retest is allowed
+    from. It routes to research instead.
+    """
+
+    store = configured_store(tmp_path)
+    maloo = FakeMaloo()
+    group = accepted_group()
+    bugs = MalooBugLinks(
+        "suite-7",
+        (
+            MalooBugLink("BUG123", "accepted", "suite-7"),
+            MalooBugLink("LU-12345", "accepted", "suite-7"),
+        ),
+    )
+    maloo.groups = (
+        MalooEnforcedSessionFailure(
+            group.session,
+            group.failures,
+            (MalooSuiteBugEvidence("suite-7", "sanity", bugs),),
+        ),
+    )
+
+    result = controller(store, maloo).tick_patch(patch())
+
+    observations = store.list_observations(patch().patch_id)
+    assert len(observations) == 1, "the observation cycle was lost to one bad ticket"
+    decision = observations[0].payload["evaluation"]["decisions"][0]
+    # The valid link survives; the malformed one is gone.
+    assert decision["linked_bug_keys"] == ["LU-12345"]
+    # And the incomplete evidence blocks the retest rather than authorising it.
+    assert decision["outcome"] == "investigate"
+    assert decision["reason_code"] == "investigate_phase_2"
+    assert maloo.requests == [], "a retest was issued on incomplete bug evidence"
+    assert result.evaluation is not None
 
 
 def test_automatic_global_off_is_preview_only(tmp_path):
@@ -457,6 +513,93 @@ def test_non_maloo_minus_one_skips_the_test_flow_entirely(tmp_path):
     assert maloo.requests == []
 
 
+def patch_mapping(votes):
+    """The dict shape Patch Watcher actually receives from `gerrit_status`."""
+
+    return {
+        "patch_id": "review-101",
+        "url": patch().gerrit_url,
+        "change_number": 101,
+        "patchset": 3,
+        "revision_sha": SHA,
+        "lifecycle": "Open",
+        "review_votes": list(votes),
+    }
+
+
+def test_dict_shaped_human_minus_one_vetoes_the_retest_flow(tmp_path):
+    """A human -1 must veto even though real votes arrive as plain dicts.
+
+    `gerrit_status` builds Code-Review votes as `{"name": ..., "value": ...}`
+    and the app hands those straight to `tick_patch`, so every production veto
+    goes through the mapping branch of `_coerce_patch` rather than through a
+    ready-made `ReviewVote`.  That branch decides three things -- that the item
+    is a mapping worth reading at all, the numeric `value`, and whether the
+    `source` is `human` or `maloo` -- and each of them can silently disable the
+    "a human voted -1, do not auto-retest" rule.  When it does, Patch Watcher
+    issues a remote Maloo retest against a patch a reviewer has explicitly
+    vetoed, which is exactly the write the veto exists to prevent.
+    """
+
+    store = configured_store(tmp_path, global_enabled=True)
+    maloo = FakeMaloo()
+
+    result = controller(store, maloo).tick_patch(
+        patch_mapping([{"name": "Reviewer A", "value": -1}])
+    )
+
+    assert result.evaluation.reason_code == "non_maloo_review_veto"
+    assert maloo.reads == 0
+    assert maloo.requests == []
+    assert all_actions(store) == []
+
+
+def test_dict_shaped_maloo_minus_one_is_not_a_review_veto(tmp_path):
+    """Maloo's own -1 is a CI signal, so the dict coercion must keep it apart.
+
+    The veto rule keys on the vote's `source`, which the mapping branch infers
+    from the reviewer name.  If that inference collapses to a single value the
+    rule either never fires or always fires; this pins the non-vetoing half so
+    a fix for one direction cannot quietly break the other.
+    """
+
+    store = configured_store(tmp_path, global_enabled=True)
+    maloo = FakeMaloo()
+
+    result = controller(store, maloo).tick_patch(
+        patch_mapping([{"name": "Maloo", "value": -1}])
+    )
+
+    assert result.evaluation.reason_code != "non_maloo_review_veto"
+    assert maloo.requests == [("session-1", "LU-12345", "single")]
+
+
+def test_maloo_declining_the_retest_fails_the_run_rather_than_waiting(tmp_path):
+    """A declined retest must settle as failed, not sit in waiting_external.
+
+    `request_retest` returns `requested=False` when Maloo answers but refuses
+    the request -- the adapter reads that straight off the envelope's `success`
+    field.  Nothing else will ever arrive for that action, so recording it as
+    `waiting_external` parks the run forever: no retest happens, no failure is
+    reported, and the patch silently stops being watched for progress.
+    """
+
+    store = configured_store(tmp_path, global_enabled=True)
+    maloo = FakeMaloo()
+    maloo.request_accepted = False
+    maloo.request_response = "session is not eligible for retest"
+
+    controller(store, maloo).tick_patch(patch())
+
+    assert len(maloo.requests) == 1
+    action = all_actions(store)[0]
+    run = store.get_run(action.run_id)
+    assert action.status == "failed"
+    assert action.failure_code == "retest_rejected"
+    assert run.status == "failed"
+    assert run.failure_code == "retest_rejected"
+
+
 def test_mapping_dry_run_records_evidence_but_no_trigger_or_action(tmp_path):
     store = configured_store(tmp_path, global_enabled=True)
     maloo = FakeMaloo()
@@ -517,6 +660,9 @@ class RetestControllerUnittestTests(unittest.TestCase):
     def test_automatic_global_off(self):
         self.run_case(test_automatic_global_off_is_preview_only)
 
+    def test_a_malformed_maloo_ticket_is_dropped_not_fatal(self):
+        self.run_case(test_a_maloo_ticket_that_is_not_a_jira_key_is_dropped_not_fatal)
+
     def test_research_evidence_with_retest_disabled(self):
         self.run_case(
             test_research_evidence_can_be_collected_while_retest_policy_is_disabled
@@ -555,5 +701,56 @@ class RetestControllerUnittestTests(unittest.TestCase):
     def test_mapping_dry_run(self):
         self.run_case(test_mapping_dry_run_records_evidence_but_no_trigger_or_action)
 
+    def test_dict_shaped_human_veto(self):
+        self.run_case(test_dict_shaped_human_minus_one_vetoes_the_retest_flow)
+
+    def test_dict_shaped_maloo_minus_one(self):
+        self.run_case(test_dict_shaped_maloo_minus_one_is_not_a_review_veto)
+
+    def test_declined_retest_fails(self):
+        self.run_case(test_maloo_declining_the_retest_fails_the_run_rather_than_waiting)
+
     def test_startup_reconciliation(self):
         self.run_case(test_startup_reconciles_executing_action_without_resubmission)
+
+    # These three cover autonomous-lane gating -- the kill-switch recheck at the
+    # remote-write boundary and per-revision budget scoping. They existed as
+    # module-level functions with no wrapper, so `unittest discover` (the
+    # documented runner) never collected them and they had never once executed.
+    def test_lane_gates_existing_executor(self):
+        self.run_case(test_enrolled_lane_gates_and_annotates_existing_retest_executor)
+
+    def test_budget_scoped_to_exact_revision(self):
+        self.run_case(test_action_budget_usage_is_scoped_to_the_exact_revision)
+
+    def test_lane_kill_switch_rechecked_after_reconciliation(self):
+        self.run_case(test_lane_kill_switch_is_rechecked_after_remote_reconciliation)
+
+
+class TestCollectionTests(unittest.TestCase):
+    """Every module-level test case must be reachable from the unittest runner.
+
+    This file mixes pytest-style module functions with a unittest adapter. Three
+    cases were silently uncollected for exactly that reason; nothing failed,
+    they simply never ran.
+    """
+
+    def test_every_module_level_case_has_a_wrapper(self):
+        import ast
+
+        tree = ast.parse(Path(__file__).read_text())
+        defined = {
+            node.name for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+        }
+        wrapped = {
+            node.args[0].id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "attr", "") == "run_case"
+            and node.args and isinstance(node.args[0], ast.Name)
+        }
+        self.assertEqual(
+            defined - wrapped, set(),
+            "these module-level tests are never executed by `unittest discover`",
+        )

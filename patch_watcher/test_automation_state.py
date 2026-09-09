@@ -3,18 +3,17 @@ import sqlite3
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from automation_state import (
+from patch_watcher.automation_state import (
     AutomationConflict,
     AutomationStateStore,
     BudgetExhausted,
     GlobalAutomationDisabled,
 )
 
-
-START = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+START = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
 
 
 class AutomationStateStoreTests(unittest.TestCase):
@@ -209,14 +208,14 @@ class AutomationStateStoreTests(unittest.TestCase):
             "68160", mode="manual", run_budget=1, updated_by="patrick",
             at=START + timedelta(minutes=3),
         )
-        options = dict(
-            revision="revision-1",
-            patchset=1,
-            expected_policy_version=policy.version,
-            mode="manual",
-            attempt_id="attempt-1",
-            evidence_fingerprint="sha256:evidence",
-        )
+        options = {
+            "revision": "revision-1",
+            "patchset": 1,
+            "expected_policy_version": policy.version,
+            "mode": "manual",
+            "attempt_id": "attempt-1",
+            "evidence_fingerprint": "sha256:evidence",
+        }
         admission, created = self.store.claim_research_admission(
             "68160", **options
         )
@@ -259,14 +258,14 @@ class AutomationStateStoreTests(unittest.TestCase):
             "68160", mode="automatic", run_budget=2, updated_by="patrick",
             at=START + timedelta(minutes=3),
         )
-        options = dict(
-            revision="revision-1",
-            patchset=1,
-            expected_policy_version=policy.version,
-            mode="automatic",
-            attempt_id="attempt-1",
-            evidence_fingerprint="sha256:evidence",
-        )
+        options = {
+            "revision": "revision-1",
+            "patchset": 1,
+            "expected_policy_version": policy.version,
+            "mode": "automatic",
+            "attempt_id": "attempt-1",
+            "evidence_fingerprint": "sha256:evidence",
+        }
         with self.assertRaises(GlobalAutomationDisabled):
             self.store.claim_research_admission("68160", **options)
         self.store.set_global_automation(
@@ -331,35 +330,6 @@ class AutomationStateStoreTests(unittest.TestCase):
                 payload={"failure": "same"},
             ),
             trigger,
-        )
-
-    def test_trigger_claim_is_atomic_and_restart_reuses_consumer_identity(self):
-        trigger = self.trigger("claim")
-        barrier = threading.Barrier(2)
-        claims = []
-
-        def claim(worker):
-            barrier.wait()
-            claims.append(
-                AutomationStateStore(self.database).claim_next_trigger(worker)
-            )
-
-        threads = [
-            threading.Thread(target=claim, args=(f"consumer-{index}",))
-            for index in range(2)
-        ]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        claimed = [item for item in claims if item is not None]
-        self.assertEqual(len(claimed), 1)
-        self.assertEqual(claimed[0].trigger_id, trigger.trigger_id)
-        self.assertEqual(
-            AutomationStateStore(self.database)
-            .claim_next_trigger(claimed[0].claimed_by)
-            .trigger_id,
-            trigger.trigger_id,
         )
 
     def test_global_execution_defaults_off_is_audited_and_gates_only_automatic(self):
@@ -637,7 +607,15 @@ class AutomationStateStoreTests(unittest.TestCase):
         )
         self.assertEqual(self.store.get_run(run.run_id).status, "stale")
         self.assertEqual(self.store.get_action(action.action_id).status, "ambiguous")
-        self.assertEqual(self.store.get_trigger(old_unclaimed.trigger_id).state, "stale")
+        self.assertEqual(
+            [
+                item.trigger_id
+                for item in self.store.list_triggers(
+                    patch_id="68160", state="stale"
+                )
+            ],
+            [old_unclaimed.trigger_id],
+        )
         stale_trigger = self.store.create_trigger(
             "68160",
             revision="revision-1",
@@ -646,33 +624,6 @@ class AutomationStateStoreTests(unittest.TestCase):
             payload={},
         )
         self.assertEqual(stale_trigger.state, "stale")
-
-    def test_crash_recovery_marks_executing_run_and_action_ambiguous(self):
-        self.policy(mode="automatic")
-        self.store.set_global_automation(True, changed_by="patrick", reason="test")
-        trigger = self.trigger()
-        run = self.store.create_run(
-            trigger.trigger_id, deterministic_key="recovery-run", run_id="recovery-run"
-        )
-        self.store.claim_run(run.run_id, "controller", at=START + timedelta(minutes=1))
-        action = self.store.plan_action(
-            run.run_id,
-            action_type="retest",
-            request={},
-            idempotency_key="recovery-action",
-        )
-        self.store.claim_next_action(
-            run.run_id, "executor", at=START + timedelta(minutes=2)
-        )
-        reopened = AutomationStateStore(self.database)
-        run_ids, action_ids = reopened.recover_executing_as_ambiguous(
-            before=START + timedelta(minutes=3),
-            at=START + timedelta(minutes=4),
-        )
-        self.assertEqual(run_ids, [run.run_id])
-        self.assertEqual(action_ids, [action.action_id])
-        self.assertEqual(reopened.get_run(run.run_id).status, "ambiguous")
-        self.assertEqual(reopened.get_action(action.action_id).status, "ambiguous")
 
     def test_timeline_is_append_only_and_idempotent(self):
         run = self.make_run(mode="advise")

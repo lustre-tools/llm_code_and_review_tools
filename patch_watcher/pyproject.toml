@@ -1,0 +1,113 @@
+[build-system]
+# setuptools>=77 for the SPDX `license` string below; the TOML-table form it
+# replaces is deprecated and stops building after 2027-Feb-18.
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "patch-watcher"
+version = "0.1.0"
+description = "A session console for long-running Lustre agents, with Gerrit as the work queue"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    {name = "LLM Code Tools Team"}
+]
+# Deliberately dependency-free: Patch Watcher uses only the standard library
+# and shells out to the already-installed CLIs (claude, ltvm, gerrit, maloo,
+# jenkins, jira). Adding a dependency here means adding one to every host that
+# runs agents.
+dependencies = []
+
+[project.optional-dependencies]
+# The browser check is opt-in and not needed to run the tool.
+browser = ["playwright>=1.40"]
+
+[project.scripts]
+patch-watcher = "patch_watcher.app:main"
+pw-doctor = "patch_watcher.pw_doctor:main"
+pw-configure = "patch_watcher.pw_configure:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["patch_watcher*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # import sorting
+    "B",         # bugbear: likely bugs and bad practice
+    "C4",        # comprehension clarity
+    "UP",        # py311+ idioms
+    "SIM",       # simplifiable code
+    "RET",       # return-path clarity
+    "PIE",       # misc lints
+    "PL",        # pylint subset
+    "RUF",       # ruff's own
+]
+ignore = [
+    "E501",     # line length: enforced by the formatter, not worth churn here
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915",  # too many returns/branches/args/statements
+    "PLR2004",  # magic values: too noisy in view and HTTP-status code
+    "SIM108",   # ternary-instead-of-if is often less readable here
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may shadow, repeat, and over-specify freely. SIM117 (combine nested
+# `with`) hurts readability when the outer context is a fixture and the inner
+# one is the assertion under test.
+"test_*.py" = ["PLR0915", "PLC0415", "B011", "SIM117"]
+
+# app.py holds the service singletons (stores, controllers) as module globals
+# assigned by initialize_*() functions. That is the current architecture, not
+# an oversight; collapsing it is planned work (see the agent-orchestration
+# PLAN.md), and silencing it per-statement would just add noise until then.
+"patch_watcher/app.py" = ["PLW0603"]
+
+# Deliberate late imports: optional dependencies (playwright) so a missing
+# install reports cleanly instead of failing at import, and `app` imported
+# only AFTER the config monkeypatch so it never touches real credentials.
+"browser_check.py" = ["PLC0415"]
+"integration_check.py" = ["PLC0415"]
+"patch_watcher/pw_doctor.py" = ["PLC0415"]
+"patch_watcher/pw_configure.py" = ["PLC0415"]
+"patch_watcher/gerrit_status.py" = ["PLC0415"]
+# sqlite3.Row.__contains__ tests values, not keys, so SIM118's
+# `x in row.keys()` -> `x in row` rewrite is a silent data-loss bug here.
+"patch_watcher/session_state.py" = ["SIM118"]
+
+[tool.pytest.ini_options]
+# `make test` runs unittest, but pytest is what most people reach for, and
+# without this block pytest walks up past this project for its config and
+# lands on the parent repo's pyproject.toml. Its rootdir then becomes
+# ~/llm_code_and_review_tools, which makes the OUTER patch_watcher/ directory
+# -- the one with no __init__.py -- shadow the real package as a namespace
+# package, and every test module fails to import. The block's mere presence
+# anchors rootdir here; the settings below just mirror what `make test` does.
+testpaths = ["."]
+python_files = ["test_*.py"]
+addopts = "--import-mode=prepend"
+
+[tool.coverage.run]
+branch = true
+omit = [
+    # Opt-in checks that need credentials, network, or a browser; they are run
+    # by `make integration` / `make browser`, not by the unit suite.
+    "*/integration_check.py",
+    "*/browser_check.py",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]

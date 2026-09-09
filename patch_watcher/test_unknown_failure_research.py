@@ -1,11 +1,11 @@
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from claude_runner import (
+from patch_watcher.claude_runner import (
     ProcessIdentity,
     RunnerEvent,
     RunnerHandle,
@@ -13,15 +13,13 @@ from claude_runner import (
     build_read_only_claude_command,
     validate_unknown_failure_report,
 )
-from run_controller import (
-    READ_ONLY_CAPABILITIES,
+from patch_watcher.run_controller import (
+    UNKNOWN_FAILURE_EVIDENCE_SCHEMA,
     RunController,
     RunControllerError,
-    UNKNOWN_FAILURE_EVIDENCE_SCHEMA,
 )
-from session_state import SessionAlreadyExists, SessionStateStore
-from worker_contract import load_profile
-
+from patch_watcher.session_state import SessionAlreadyExists, SessionStateStore
+from patch_watcher.workspace import hash_text
 
 REVISION = "c" * 40
 
@@ -131,30 +129,18 @@ class FakeRunner:
         return SimpleNamespace(state="queued", duplicate=False)
 
 
-def ready_doctor(_profile, _envelope, **_kwargs):
-    return {
-        "status": "ready",
-        "failure_codes": [],
-        "worker_host": {"host_id": "research-test"},
-        "isolation_mode": "host_unsandboxed",
-        "network_mode": "host_ambient",
-    }
-
-
 class UnknownFailureResearchTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.store = SessionStateStore(self.root / "sessions.sqlite3")
         self.runner = FakeRunner()
-        self.now = datetime(2026, 8, 30, 16, 0, tzinfo=timezone.utc)
+        self.now = datetime(2026, 8, 30, 16, 0, tzinfo=UTC)
         self.controller = RunController(
             self.store,
-            load_profile("host-unsandboxed-mac-v1"),
             runs_directory=self.root / "runs",
             runner=self.runner,
             checkout=lambda destination, _revision: destination,
-            doctor_fn=ready_doctor,
             clock=lambda: self.now,
         )
 
@@ -178,20 +164,25 @@ class UnknownFailureResearchTests(unittest.TestCase):
         self.assertEqual(len(self.runner.starts), 1)
         spec = self.runner.starts[0]
         self.assertEqual(spec.report_kind, "unknown_failure_research")
-        self.assertEqual(set(READ_ONLY_CAPABILITIES), {
-            "read_evidence", "read_source", "report_status",
-        })
+        self.assertEqual(spec.capability_profile, "read_only")
         command = build_read_only_claude_command(spec)
         self.assertEqual(command[command.index("--tools") + 1], "Read,Glob,Grep")
         self.assertNotIn("Bash", command)
-        envelope = next(
-            (self.root / "runs" / session.run_id).rglob("run-envelope.json")
-        ).read_text(encoding="utf-8")
-        for forbidden in (
-            "request_retest", "comment_gerrit", "upload_patchset", "start_ltvm",
-            "write_source",
-        ):
-            self.assertNotIn(forbidden, envelope)
+        instructions_path = (
+            self.root / "runs" / session.run_id / "work" / "input" / "INSTRUCTIONS.md"
+        )
+        instructions = instructions_path.read_text(encoding="utf-8")
+        self.assertEqual(instructions_path.stat().st_mode & 0o777, 0o400)
+        self.assertIn(
+            "shell, network, VM, source-edit, file-write, retest, and comment "
+            "capabilities are not granted",
+            instructions,
+        )
+        recorded = next(
+            event for event in self.store.list_events(session.session_id)
+            if event.event_type == "run_instructions"
+        )
+        self.assertEqual(recorded.payload["instructions_hash"], hash_text(instructions))
 
     def test_prompt_injection_is_captured_as_untrusted_data_not_instructions(self):
         injected = evidence()

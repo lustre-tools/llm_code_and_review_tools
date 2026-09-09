@@ -1,21 +1,45 @@
 # Patch Watcher Action Flow
 
+> **Status, corrected 2026-09-08.** The product policy in this document -- the
+> per-patch controls, the defaults, the review `-1` gate, the test-error
+> decision tree, and the phase-by-phase roadmap -- is current and was re-read
+> against the code on this date.
+>
+> Its statements about *how* that policy is executed were corrected for the
+> carve-down of 2026-09-07/08, which deleted the worker-sandboxing and
+> controller-owned-write subsystem, including `gerrit_reply.py`,
+> `gerrit_upload.py`, `jenkins_retrigger.py`, the LTVM guest broker, and
+> `WORKER_ENVIRONMENT_CONTRACT.md`. Every sentence that promised a
+> credential-free worker or a controller-performed write has been replaced with
+> what the code does now: an engineering run holds the operator's own
+> credentials and performs its own Gerrit writes, and what it will not do is
+> asked for in its prompt rather than enforced. Where that is the answer, the
+> text says so. See `~/lustre_design_docs/plans/agent-orchestration/PLAN.md`
+> for the target architecture.
+
 This document describes the product flow toward Patch Shepherd-style patch
 handling. Phase 1's deterministic Maloo retest and Phase 2's read-only
 unknown-failure research are implemented. Existing-Jira association followed
 by a retest is available only as a two-step, operator-approved workflow;
-manual review-comment handling and exact Jenkins build-failure repair are also
-implemented as isolated engineering runs. The first Phase 5B controller
-writes—exact Gerrit review replies and exact Jenkins retriggers—are implemented
-as manual, independently gated actions. Broader autonomous external writes
-remain future work.
+review-comment handling and exact Jenkins build-failure repair are implemented
+as engineering runs, startable manually or from a confirmed standing automatic
+policy. The Phase 5B controller writes -- exact Gerrit review replies and exact
+Jenkins retriggers -- were implemented and then removed: reply posting moved
+into the engineering run itself, and Jenkins retrigger no longer exists in any
+form. Broader autonomous external writes remain future work.
 
 The implementation-grade state, persistence, native Claude runner, human
 messaging, LTVM, security, recovery, and phased-delivery contracts are in
 `AGENT_ORCHESTRATION_DESIGN.md`. This document remains the product-policy flow;
-the orchestration design explains how the flow can be executed safely and made
-visible on the dashboard. `WORKER_ENVIRONMENT_CONTRACT.md` separately defines
-the admitted execution environment in which an agent may perform that flow.
+the orchestration design explains how the flow is executed and made visible on
+the dashboard.
+
+There is no separate environment contract. `WORKER_ENVIRONMENT_CONTRACT.md`
+defined an admitted execution environment that had to be attested before an
+agent started; it and its enforcement were deleted in the carve-down. An agent
+now runs in the environment the operator has on this host, described by
+`CLAUDE.md`. `pw-configure` sets that host up and `pw-doctor` reports whether it
+is still fit, but neither gates a run.
 
 ## Per-patch controls
 
@@ -45,7 +69,14 @@ Newly added patches use safe defaults:
 - Tests, builds, and reviews: **Off**
 - Per-revision external-action budget: zero until an operator saves a policy
 - Global automatic-execution gate: **Disabled**
-- Gerrit upload/reply and Jenkins-retrigger capabilities: **Disabled**
+
+There is no longer a separate Gerrit upload/reply or Jenkins-retrigger
+capability to leave disabled. Those switches were deleted in the 2026-09-07/08
+carve-down: reply posting and patchset upload are performed by the engineering
+run itself, and Jenkins retrigger no longer exists. Saving a build or review
+policy is therefore the whole decision -- there is no second switch standing
+between the run and a real Gerrit write -- and the confirmation page says so
+rather than listing capabilities that stay off.
 
 Defaults should be configurable later, but changing them must never silently
 enable an automated action for existing patches.
@@ -62,7 +93,9 @@ enable an automated action for existing patches.
    observe its outcome without blind retries.
 
 This phase can request only a Maloo retest. It cannot post comments, alter
-Gerrit state, change source, upload a patchset, or grant an agent authority.
+Gerrit state, change source, upload a patchset, or start an agent. That remains
+exactly true: the deterministic path never launches Claude, and its only remote
+write is one idempotent `maloo retest` through the durable outbox.
 
 ## Test-error workflow (modeled on Patch Shepherd)
 
@@ -100,36 +133,57 @@ authority to the change, patchset, revision SHA, Gerrit ref, Jenkins job and
 build number, and a digest of the captured build and bounded console-log
 snapshot.
 
-After that single confirmation, Patch Watcher creates a dedicated full
-checkout. Claude may edit it and run open-ended diagnostic, build, and test
-commands only inside LTVM guests carrying the exact run-owner ID. It receives
-neither Gerrit nor Jenkins credentials and has no host-command capability.
+After that single confirmation, Patch Watcher gives the run a checkout of the
+pinned revision -- normally a numbered checkout claimed from the pool, whose
+index becomes the run's `co<N>-` VM name prefix -- and starts an agent in it.
+
+**That agent runs in the operator's own environment.** It has a host shell,
+passwordless sudo, the installed LLM tools, `ltvm`, and every service
+credential the operator has, because it is launched with
+`capability_profile="full"`: `--permission-mode bypassPermissions`, no tool
+allowlist, and the ambient environment inherited unchanged. It edits the
+checkout, creates and drives its own guests, and builds and tests there. It
+receives Gerrit and Jenkins credentials, and it does have host-command
+capability. This is the deliberate current design, not an oversight; the
+earlier promise of a credential-free worker with no host commands ended with
+the 2026-09-07/08 carve-down.
+
 The immutable result classifies the failure as `patch_caused_fixed`,
-infrastructure, transient, unrelated, or ambiguous and records the diagnosis,
-actual diff, and explicit guest build and test evidence.
+infrastructure, transient, unrelated, ambiguous, or needs_human, and records
+the diagnosis, the actual diff, and the build and test evidence.
 
-Only `patch_caused_fixed` may publish, and only when the diff is nonempty and
-both an explicitly tagged build step and an explicitly tagged test step
-succeeded. The run-start confirmation preauthorizes exactly one
-controller-owned patchset upload, so there is no second upload confirmation.
-Immediately before publication the controller recaptures the exact Jenkins
-failure, rechecks the Gerrit revision, reconstructs and validates the proposed
-commit in private staging, and uses the durable upload ledger's idempotency
-binding over the run, change, patchset, revision, diff, and validation evidence.
+Only `patch_caused_fixed` may reach `complete`, and the controller enforces
+that: a `complete` report with any other classification is rejected, as is one
+whose Jenkins snapshot digest or build ID does not match the captured failure,
+and the diff is re-derived from the checkout rather than taken from the report.
+A run with no pool checkout -- and therefore no guest capacity -- is told it
+cannot classify `patch_caused_fixed` at all and must not upload.
 
-A stale revision or build snapshot, infrastructure/transient/unrelated/
-ambiguous classification, missing diff, failed or incomplete validation,
-resource exhaustion, or preparation/upload problem escalates to a human.
-After a claimed or ambiguous push, normal completion and periodic restart
-reconciliation inspect Gerrit for the proposed commit; they never blindly
-repeat the push. Success refreshes the watched change so the uploaded patchset
-is observed as a new revision and the completed run's old authority cannot be
-reused. Jenkins retriggers, aborts, configuration changes, and other wider
-Jenkins writes are outside this phase. Exact Jenkins retrigger is implemented
-separately in Phase 5B and disabled by default; aborts, configuration changes,
-and other wider writes remain future work. The same exact failed build is a
-terminal one-use dispatch identity: failure or ambiguity after a claim permits
-reconciliation only, not another blind submission.
+**The upload itself is the agent's.** For a `patch_caused_fixed` result with a
+nonempty diff and successful build and test evidence, the prompt tells it to
+push the new patchset with the `gerrit` CLI: commit and push, then
+`git reset --soft` back to the pinned revision so the tree still carries the
+change as an uncommitted diff, and report after that -- because the controller
+derives its own diff from the checkout only once the report arrives. The
+controller-owned upload path is gone: there is no private staging checkout, no
+pre-publication recapture of the Jenkins failure, no idempotency binding over
+the plan, and no kill switch. Whether the evidence justifies publishing is the
+agent's judgement, made under the rules in its prompt.
+
+A stale revision or build snapshot, an infrastructure/transient/unrelated/
+ambiguous classification, a missing diff, failed validation, or resource
+exhaustion escalates to a human. A settled negative verdict is recorded as
+`failed` carrying its classification and diagnosis rather than discarded --
+correctly concluding "this was not the patch" is the run succeeding at what it
+was asked. A successful push is observed on the next refresh as a new revision,
+which stales the run that made it.
+
+Because the push is no longer a claimed controller action, there is nothing to
+reconcile after an ambiguous one. An agent that pushes and then dies leaves the
+next refresh to discover the new patchset. Jenkins retriggers, aborts, and
+configuration changes are outside this flow entirely: the prompt forbids every
+Jenkins write, and the controller has no retrigger of its own since Phase 5B
+was removed.
 
 ## Handle reviews (Phase 4A)
 
@@ -137,48 +191,86 @@ The page offers two exact-revision review-handling choices. Either may be
 started manually or by a standing automatic policy, but automatic use requires
 an explicit confirmation of that policy plus the independent global execution
 gate. Starting either mode binds the immutable unresolved-comment snapshot and
-authorizes an isolated Claude Code run. The worker has no Gerrit credentials.
+starts a Claude Code run against it.
 
-- **Handle simple comments:** shell out to Claude Code with a narrowly scoped
-  prompt. It may fix clearly trivial review comments, but must leave harder or
-  ambiguous comments unresolved, report them, and escalate to a human (for
-  example by email).
-- **Handle all comments:** shell out to Claude Code with permission to attempt
-  every review comment. If it cannot resolve a comment safely, or determines
-  that human judgment is needed, it leaves the comment unresolved and
-  escalates to a human.
+**That run holds the operator's Gerrit credentials.** Like build repair, it is
+an engineering run with a host shell and no tool allowlist. The earlier
+statement that "the worker has no Gerrit credentials" ended with the
+2026-09-07/08 carve-down, which deleted the controller-owned reply and upload
+writers.
 
-In both modes the controller preserves the full exact-revision review
-snapshot, records one disposition per target comment, captures the proposed
-diff and reply drafts, and requires successful LTVM test evidence. A qualifying
-run uploads one new patchset automatically under the run-start authorization;
-there is no second upload confirmation. The controller rechecks both the
-revision and comment-snapshot digest immediately before upload and reconciles
-an ambiguous push without blindly retrying. Review replies remain drafts
-during this engineering flow. If the separate reply capability is enabled, an
-operator may later confirm posting the exact immutable drafts. Any ambiguity
-or incomplete result fails to the human instead of widening authority.
+- **Handle simple comments:** a narrowly scoped prompt. It may fix clearly
+  trivial review comments, but must leave harder or ambiguous ones unattempted
+  and return one precise human question instead.
+- **Handle all comments:** permission to attempt every review comment. If it
+  cannot resolve one safely, or judges that human judgment is needed, it leaves
+  the comment unresolved and returns a question.
 
-## Phase 5B controller writes
+In both modes the controller preserves the full exact-revision review snapshot
+and holds the run to it. Each thread in the snapshot is one target, and the
+target comment is the **last** entry of that thread's `comments` array -- the
+newest comment, usually a follow-up rather than the one that opened the thread.
+The report must carry exactly one disposition per target comment ID, that set
+and no other, in every report including a question; the controller compares the
+sets and fails the run on any difference. A `complete` report may not contain a
+deferred comment, and in `simple` mode may not contain a comment assessed
+`nontrivial` or `ambiguous`. The reported review mode and snapshot digest must
+match the run's own. The diff is re-derived by the controller from the checkout
+and cross-checked against the reported changed files.
 
-Exact Jenkins retrigger and immutable Gerrit review-reply posting are
-implemented as two independent controller capabilities. Both default to off,
-have separate kill switches and durable claims, and never expose credentials
-to a worker. Enabling patchset upload enables neither action.
+**The replies and the patchset are the agent's own writes.** A complete run
+must have successful test evidence and a nonempty diff, and the prompt then
+tells it to post each reply on that thread's target comment and upload the new
+patchset itself with the `gerrit` CLI. There is no draft stage, no separate
+reply confirmation, and no controller preflight on the reply's revision and
+location. A run with no guest capacity is told it cannot build or test, cannot
+reach a complete result, and must post nothing and upload nothing -- that is
+now the only case in which replies stay unposted.
 
-A Jenkins retrigger is bound to one completed failed parent build and its exact
-change, patchset, revision, ref, project/branch, and failure-snapshot digest.
-Its dispatch identity is terminal and one-use: success is complete, while a
-failed or ambiguous dispatch is reconciliation-only and cannot be blindly
-retried as the same action.
+Any ambiguity or incomplete result fails to the human instead of widening
+authority. What has changed is the shape of that guarantee: it is enforced on
+what the controller can check for itself -- the snapshot digest, the target
+comment set, the assessment rules, the diff -- and asked for in the prompt
+everywhere else.
 
-A review reply is bound to the immutable comment ID and file/line/range on the
-revision where the comment was originally made. That original revision may be
-historical after the review handler uploads a new patchset. The preflight must
-therefore verify the original revision and exact unresolved comment/location;
-it must not rewrite the target to the newly current revision. Posting remains
-a separately confirmed action and uses a deterministic tag plus a one-use,
+## Phase 5B controller writes (built, then removed)
+
+**Both actions were implemented and then deleted in the 2026-09-07/08
+carve-down.** They were exact Jenkins retrigger and immutable Gerrit
+review-reply posting: two independent controller capabilities, both defaulting
+to off, with separate kill switches and durable claims, never exposing
+credentials to a worker, and neither implied by enabling patchset upload.
+
+A Jenkins retrigger was bound to one completed failed parent build and its
+exact change, patchset, revision, ref, project/branch, and failure-snapshot
+digest, with a terminal one-use dispatch identity: success completed it, and a
+failed or ambiguous dispatch was reconciliation-only rather than blindly
+retryable.
+
+A review reply was bound to the immutable comment ID and file/line/range on the
+revision where the comment was originally made -- which may be historical once
+the review handler has uploaded a new patchset -- and the preflight verified
+that original revision and exact unresolved comment and location rather than
+rewriting the target to the newly current revision. Posting was a separately
+confirmed action using a deterministic Gerrit tag and a one-use,
 reconciliation-only claim.
+
+Where each went:
+
+- **Reply posting moved into the review-handling run**, which now posts each
+  reply itself as described above. The historical-revision binding, the
+  location preflight, the deterministic tag, the one-use claim, and the
+  independent kill switch went with the writer. The prompt tells the agent
+  which comment each reply belongs on; nothing verifies that it landed there.
+- **Jenkins retrigger was removed and not replaced.** No controller action
+  performs one, and the agent's prompt forbids every Jenkins write -- no build,
+  retrigger, or cancel. Jenkins access is read-only, through the
+  failure-snapshot client.
+
+This is the section a reader is most likely to remember wrongly. There are no
+longer any separate external-write capabilities, kill switches, or durable
+write claims. Confirming a build or review policy starts an engineering run,
+and that run's own credentials are the authority for everything it does.
 
 ## Agent orchestration roadmap
 
@@ -186,6 +278,12 @@ Patch Watcher will grow from an observer into a controlled engineering-agent
 orchestrator. The design must remain incremental: a capability is unavailable
 until its policy, trigger, execution boundary, reporting, and recovery path
 are all implemented.
+
+"Execution boundary" no longer means a capability grant. For an engineering
+run it means the checkout the run is given, the VM name prefix it owns, the
+launch-time refusal of a revision that rewrites the agent's own instructions,
+and the rules its prompt states. Isolation -- a container, restricted egress,
+withheld credentials -- is the intended boundary and is not built.
 
 ### Common control model
 
@@ -209,11 +307,14 @@ does not start a second agent. A newer patchset invalidates stale work and is
 shown clearly; it never silently applies an old run's result to the new
 patchset.
 
-All agent actions have an explicit capability grant. The agent receives only
-the tools needed for its enabled capability, and every external action is
-logged with the patchset, reason, and result. Human escalation moves the run
-to **waiting for human** and sends the configured notification; it does not
-retry indefinitely.
+Read-only runs receive only the tools their work needs: `Read`, `Glob`, `Grep`,
+with the hardening flags on and service credentials scrubbed from the
+environment. Engineering runs receive everything the operator has, and their
+run page says so. Every *controller* action is logged with the patchset,
+reason, and result; an agent's own writes are visible only through its report,
+its captured diff, and the Gerrit state a later refresh observes. Human
+escalation moves the run to **waiting for human** and sends the configured
+notification; it does not retry indefinitely.
 
 ### Phase 1: automatic retest
 
@@ -230,9 +331,9 @@ Patch Shepherd.
 5. Record each request and its outcome in the run history, then include it in
    the daily report.
 
-Initial permissions are limited to read-only Gerrit/Maloo inspection and a
-single Maloo retest request. No Gerrit write, code change, or patch upload is
-part of this phase.
+Permissions are limited to read-only Gerrit/Maloo inspection and a single
+idempotent Maloo retest request. No Gerrit write, code change, patch upload, or
+Claude session is part of this phase, and that is still exactly true.
 
 ### Phase 2: investigation agents
 
@@ -255,10 +356,19 @@ not implemented.
 
 ### Phase 3: controlled patch work
 
-An agent receives an isolated full checkout for a pinned patchset,
-build, run prescribed tests, and prepare a proposed patch revision. Any
-change remains an artifact for review; uploading a Gerrit patchset requires a
-separate, explicit capability and policy.
+**Implemented, but not as scoped here.** An agent receives a checkout pinned to
+a patchset -- normally a numbered pool checkout, whose index is its VM name
+prefix -- and may build, test in the guests it creates, and change the source.
+
+The original scoping said the change "remains an artifact for review" and that
+uploading required "a separate, explicit capability and policy". Neither holds.
+The separate upload capability was deleted in the 2026-09-07/08 carve-down, and
+the review and build-repair flows now instruct the agent to push the patchset
+itself. A plain engineering run started from the **Investigate**/engineering
+action is the exception the original rule survives in: its prompt says the
+session produces a diff and evidence for human review and tells it not to
+upload a patchset unless the operator asked for one -- an instruction, not a
+withheld capability.
 
 ### Phase 6: autonomous lanes
 
@@ -284,8 +394,14 @@ writes. The dashboard displays the definition, switches, decision reasons,
 outcomes, budget, and replay result. Patches not enrolled in a lane retain the
 pre-existing approval/standing-policy behavior.
 
-The detailed plan deliberately adds durable-observer and manual read-only-agent
-foundation phases before automatic actions. It also records a later
-containerization track, including restricted-egress and offline-tool profiles.
-Initial read-only workers may run unsandboxed, visibly labeled as such, but
-isolation is required before broad code execution or autonomous operation.
+The detailed plan deliberately added durable-observer and manual
+read-only-agent foundation phases before automatic actions, and both were
+built. It also records a later containerization track, including
+restricted-egress and offline-tool profiles.
+
+That track has not been started, and the sequencing it assumed did not hold.
+Read-only workers do run unsandboxed and are visibly labeled as such; but broad
+code execution arrived before isolation rather than after it, so an engineering
+run today builds and tests patch code on the host with the operator's own
+credentials. The isolation requirement stands for autonomous operation, which
+is why the only autonomous lane is one that starts no agent at all.

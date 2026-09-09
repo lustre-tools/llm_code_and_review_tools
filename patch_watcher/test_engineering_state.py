@@ -2,18 +2,17 @@ import sqlite3
 import tempfile
 import unittest
 from dataclasses import FrozenInstanceError
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from engineering_state import (
+from patch_watcher.engineering_state import (
     ArtifactMetadata,
     EngineeringConflict,
     EngineeringStateStore,
     ExecutionManifest,
     SafeCommand,
-    ValidationCommandAudit,
+    resolve_confined_path,
 )
-
 
 REVISION = "d" * 40
 
@@ -238,15 +237,14 @@ class EngineeringStateTests(unittest.TestCase):
             with self.subTest(factory=factory), self.assertRaises(ValueError):
                 factory()
 
-    def test_command_cwd_resolution_rejects_symlink_escape(self):
+    def test_confined_path_resolution_rejects_symlink_escape(self):
         checkout = self.checkouts / "run-1"
         checkout.mkdir()
         outside = self.root / "outside"
         outside.mkdir()
         (checkout / "escape").symlink_to(outside, target_is_directory=True)
-        command = SafeCommand("test", ["pytest"], cwd="escape")
         with self.assertRaisesRegex(ValueError, "escapes"):
-            command.resolve_cwd(checkout)
+            resolve_confined_path(checkout, "escape")
 
     def test_manifest_is_revision_bound_durable_and_immutable(self):
         allocation = self.plan()
@@ -300,24 +298,6 @@ class EngineeringStateTests(unittest.TestCase):
         stale = ArtifactMetadata(**{**base, "artifact_id": "artifact-2", "revision_sha": "e" * 40})
         with self.assertRaisesRegex(EngineeringConflict, "does not match"):
             self.store.register_artifact(allocation.allocation_id, stale)
-
-    def test_quarantine_is_terminal_for_automatic_release(self):
-        allocation = self.plan()
-        quarantined = self.store.quarantine_checkout(
-            allocation.allocation_id,
-            run_id=allocation.run_id,
-            owner_id=allocation.owner_id,
-            revision_sha=REVISION,
-            reason="cleanup verification failed",
-        )
-        self.assertEqual(quarantined.state, "quarantined")
-        with self.assertRaises(EngineeringConflict):
-            self.store.release_checkout(
-                allocation.allocation_id,
-                run_id=allocation.run_id,
-                owner_id=allocation.owner_id,
-                revision_sha=REVISION,
-            )
 
     def test_read_projections_are_bounded_and_filterable(self):
         first = self.plan("1")
@@ -403,144 +383,86 @@ class EngineeringStateTests(unittest.TestCase):
                 expected_owner_id=disabled_allocation.owner_id,
             )
 
-    def test_validation_command_audit_persists_explicit_evidence_role(self):
-        command = ValidationCommandAudit(
-            "guest-test", argv=("make", "test"), evidence_role="test"
-        )
-        restored = ValidationCommandAudit.from_command(command.to_dict())
-        self.assertEqual(restored.evidence_role, "test")
-        self.assertEqual(restored.digest, command.digest)
+    def test_attempt_succeeds_on_report_evidence_without_step_results(self):
+        """A run's evidence is its report and diff, not per-command rows.
 
-        historical = ValidationCommandAudit("historical", argv=("true",))
-        self.assertNotIn("evidence_role", historical.to_dict())
-        self.assertEqual(
-            ValidationCommandAudit.from_command(historical.to_dict()).evidence_role,
-            "other",
-        )
+        The broker that recorded one row per guest command is gone, so an
+        attempt that demanded such rows could never succeed by any path.
+        """
 
-    def test_guest_command_audit_is_open_ended_immutable_and_artifact_bound(self):
-        allocation, manifest, execution, attempt = self.approve_and_claim()
+        allocation, _, execution, attempt = self.approve_and_claim()
         running = self.store.mark_validation_attempt_running(
             attempt.attempt_id, worker_id=attempt.worker_id
         )
         self.assertEqual(
-            self.store.get_active_validation_capability(
-                session_id=allocation.session_id,
-                run_id=allocation.run_id,
-                revision_sha=allocation.revision_sha,
+            self.store.get_validation_execution_by_run(
+                allocation.run_id
             ).execution_id,
             execution.execution_id,
         )
-        self.assertIsNone(
-            self.store.get_active_validation_capability(
-                session_id=allocation.session_id,
-                run_id=allocation.run_id,
-                revision_sha="e" * 40,
-            )
+        self.assertEqual(
+            self.store.get_validation_execution(execution.execution_id).state,
+            "running",
         )
-        artifact = ArtifactMetadata(
-            artifact_id="guest-output-1",
-            run_id=allocation.run_id,
-            revision_sha=allocation.revision_sha,
-            kind="test-output",
-            relative_path="validation/output.txt",
-            sha256="f" * 64,
-            size_bytes=42,
-            media_type="text/plain",
+        self.assertEqual(
+            [
+                (item.state, item.revision_sha)
+                for item in self.store.list_validation_attempts(
+                    execution.execution_id
+                )
+            ],
+            [("running", allocation.revision_sha)],
         )
-        self.store.register_artifact(allocation.allocation_id, artifact)
-        started = datetime(2026, 9, 1, tzinfo=timezone.utc)
-        command = ValidationCommandAudit(
-            "ad-hoc-shell",
-            text='for t in tests/*; do custom-runner "$t"; done',
-            cwd="/work/source",
-            env={"CUSTOM_FLAG": "anything"},
-        )
-        self.assertNotEqual(command.command_id, manifest.commands[0].step_id)
-        claim = self.store.claim_validation_command(
-            running.attempt_id,
-            worker_id=running.worker_id,
-            command=command,
-            now=started,
-        )
-        self.assertTrue(claim.should_dispatch)
-        result = self.store.record_validation_step_result(
-            running.attempt_id,
-            worker_id=running.worker_id,
-            command=command,
-            state="succeeded",
-            summary="guest command passed",
-            artifact_ids=(artifact.artifact_id,),
-            exit_code=0,
-            started_at=started,
-            finished_at=started + timedelta(seconds=3),
-        )
-        self.assertEqual(result.command.text, command.text)
-        self.assertEqual(result.command_sha256, command.digest)
-        self.assertEqual(result.artifact_ids, (artifact.artifact_id,))
-        foreign_allocation = self.make_active("2")
-        foreign_artifact = ArtifactMetadata(
-            artifact_id="foreign-output",
-            run_id=foreign_allocation.run_id,
-            revision_sha=foreign_allocation.revision_sha,
-            kind="test-output",
-            relative_path="foreign.txt",
-            sha256="a" * 64,
-            size_bytes=1,
-            media_type="text/plain",
-        )
-        self.store.register_artifact(foreign_allocation.allocation_id, foreign_artifact)
-        foreign_command = ValidationCommandAudit("foreign", argv=("true",))
-        self.store.claim_validation_command(
-            running.attempt_id,
-            worker_id=running.worker_id,
-            command=foreign_command,
-            now=started,
-        )
-        with self.assertRaisesRegex(EngineeringConflict, "attempt revision"):
-            self.store.record_validation_step_result(
-                running.attempt_id,
-                worker_id=running.worker_id,
-                command=foreign_command,
-                state="succeeded",
-                summary="invalid foreign evidence",
-                artifact_ids=(foreign_artifact.artifact_id,),
-                exit_code=0,
-                started_at=started,
-                finished_at=started + timedelta(seconds=1),
-            )
         finished = self.store.finish_validation_attempt(
             running.attempt_id,
             worker_id=running.worker_id,
             state="succeeded",
-            summary="validation passed",
-            now=started + timedelta(seconds=4),
+            summary="sanity passed in co3-sanity",
         )
         self.assertEqual(finished.state, "succeeded")
-        self.assertIsNone(
-            self.store.get_active_validation_capability(
-                session_id=allocation.session_id,
-                run_id=allocation.run_id,
-                revision_sha=allocation.revision_sha,
-            )
+        self.assertIsNone(finished.failure_code)
+        self.assertEqual(
+            self.store.get_validation_execution(execution.execution_id).state,
+            "succeeded",
         )
-        replay = self.store.record_validation_step_result(
+        self.assertEqual(
+            [
+                item.state
+                for item in self.store.list_validation_attempts(
+                    execution.execution_id
+                )
+            ],
+            ["succeeded"],
+        )
+
+    def test_finished_attempt_result_is_immutable_and_durable(self):
+        _, _, _, attempt = self.approve_and_claim()
+        running = self.store.mark_validation_attempt_running(
+            attempt.attempt_id, worker_id=attempt.worker_id
+        )
+        self.store.finish_validation_attempt(
             running.attempt_id,
             worker_id=running.worker_id,
-            command=command,
-            state="succeeded",
-            summary="guest command passed",
-            artifact_ids=(artifact.artifact_id,),
-            exit_code=0,
-            started_at=started,
-            finished_at=started + timedelta(seconds=3),
+            state="failed",
+            summary="the reported guest validation failed",
+            failure_code="guest_validation_failed",
         )
-        self.assertEqual(replay, result)
+        replay = self.store.finish_validation_attempt(
+            running.attempt_id,
+            worker_id=running.worker_id,
+            state="failed",
+            summary="the reported guest validation failed",
+            failure_code="guest_validation_failed",
+        )
+        self.assertEqual(replay.state, "failed")
+        with self.assertRaisesRegex(EngineeringConflict, "immutable"):
+            self.store.finish_validation_attempt(
+                running.attempt_id,
+                worker_id=running.worker_id,
+                state="succeeded",
+                summary="rewriting history",
+            )
         with sqlite3.connect(self.database) as connection:
-            with self.assertRaisesRegex(sqlite3.IntegrityError, "immutable"):
-                connection.execute(
-                    "UPDATE pw_validation_step_result SET summary = 'changed'"
-                )
             with self.assertRaisesRegex(sqlite3.IntegrityError, "durable"):
                 connection.execute(
                     "DELETE FROM pw_validation_attempt WHERE attempt_id = ?",
@@ -617,28 +539,14 @@ class EngineeringStateTests(unittest.TestCase):
         )
         self.assertEqual([item.attempt_id for item in repeated], [third.attempt_id])
 
-    def test_capacity_exhaustion_cooldown_and_single_use_retry_are_durable(self):
-        started = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    def test_capacity_exhaustion_cooldown_is_durable_and_blocks_reclaim(self):
+        started = datetime(2026, 9, 1, tzinfo=UTC)
         allocation, _, execution, attempt = self.approve_and_claim("1", now=started)
         attempt = self.store.mark_validation_attempt_running(
             attempt.attempt_id, worker_id=attempt.worker_id, now=started
         )
-        exhausted = ValidationCommandAudit("capacity", argv=("make", "-j128"))
-        self.store.claim_validation_command(
-            attempt.attempt_id,
-            worker_id=attempt.worker_id,
-            command=exhausted,
-            now=started,
-        )
-        self.store.record_validation_step_result(
-            attempt.attempt_id,
-            worker_id=attempt.worker_id,
-            command=exhausted,
-            state="resource_exhausted",
-            summary="guest memory exhausted",
-            started_at=started,
-            finished_at=started + timedelta(seconds=1),
-        )
+        # The exhaustion is reported by the run itself; the cooldown it writes
+        # was unreachable while a matching step row was required.
         self.store.finish_validation_attempt(
             attempt.attempt_id,
             worker_id=attempt.worker_id,
@@ -655,46 +563,10 @@ class EngineeringStateTests(unittest.TestCase):
             self.store.claim_validation_attempt(
                 execution.execution_id,
                 worker_id="worker-retry",
-                idempotency_key="retry-without-grant",
+                idempotency_key="reclaim-during-cooldown",
                 expected_revision=allocation.revision_sha,
                 expected_owner_id=allocation.owner_id,
                 now=started + timedelta(seconds=2),
-            )
-        grant = self.store.authorize_capacity_retry(
-            execution.execution_id,
-            expected_revision=allocation.revision_sha,
-            approved_by="operator",
-            idempotency_key="capacity-override-1",
-            now=started + timedelta(seconds=2),
-        )
-        retry = self.store.claim_validation_attempt(
-            execution.execution_id,
-            worker_id="worker-retry",
-            idempotency_key="retry-with-grant",
-            expected_revision=allocation.revision_sha,
-            expected_owner_id=allocation.owner_id,
-            retry_grant_id=grant.grant_id,
-            now=started + timedelta(seconds=2),
-        )
-        consumed = self.store.get_validation_retry_grant(grant.grant_id)
-        self.assertEqual(consumed.consumed_by_attempt_id, retry.attempt_id)
-        replayed_grant = self.store.authorize_capacity_retry(
-            execution.execution_id,
-            expected_revision=allocation.revision_sha,
-            approved_by="operator",
-            idempotency_key="capacity-override-1",
-            now=started + timedelta(seconds=3),
-        )
-        self.assertEqual(replayed_grant, consumed)
-        with self.assertRaises(EngineeringConflict):
-            self.store.claim_validation_attempt(
-                execution.execution_id,
-                worker_id="another-worker",
-                idempotency_key="reuse-capacity-grant",
-                expected_revision=allocation.revision_sha,
-                expected_owner_id=allocation.owner_id,
-                retry_grant_id=grant.grant_id,
-                now=started + timedelta(seconds=3),
             )
 
     def test_validation_reads_are_bounded_and_schema_is_current(self):
@@ -715,9 +587,6 @@ class EngineeringStateTests(unittest.TestCase):
     def test_version_one_database_migrates_validation_schema_on_restart(self):
         with sqlite3.connect(self.database) as connection:
             for table in (
-                "pw_validation_command_claim",
-                "pw_validation_retry_grant",
-                "pw_validation_step_result",
                 "pw_validation_attempt",
                 "pw_validation_capacity_cooldown",
                 "pw_validation_execution",
@@ -736,81 +605,208 @@ class EngineeringStateTests(unittest.TestCase):
                     "SELECT name FROM sqlite_master WHERE type = 'table'"
                 )
             }
-        self.assertEqual(restarted.SCHEMA_VERSION, 3)
+        self.assertEqual(restarted.SCHEMA_VERSION, 4)
         self.assertIn("pw_validation_execution", tables)
-        self.assertIn("pw_validation_step_result", tables)
-        self.assertIn("pw_validation_command_claim", tables)
+        self.assertIn("pw_validation_attempt", tables)
+        self.assertIn("pw_validation_capacity_cooldown", tables)
+        # The retired per-command ledger is not recreated for a fresh or
+        # migrated database, and the version-3 step is a no-op that still
+        # stamps the current schema version.
+        self.assertNotIn("pw_validation_step_result", tables)
+        self.assertNotIn("pw_validation_command_claim", tables)
+        self.assertNotIn("pw_validation_retry_grant", tables)
+        with sqlite3.connect(self.database) as connection:
+            version = connection.execute(
+                "SELECT version FROM pw_engineering_schema WHERE singleton = 1"
+            ).fetchone()[0]
+        self.assertEqual(version, 4)
 
-    def test_command_claim_is_durable_pre_dispatch_and_never_auto_replays(self):
-        started = datetime(2026, 9, 1, tzinfo=timezone.utc)
-        _, _, _, attempt = self.approve_and_claim("1", now=started)
-        attempt = self.store.mark_validation_attempt_running(
-            attempt.attempt_id, worker_id=attempt.worker_id, now=started
-        )
-        command = ValidationCommandAudit(
-            "non-idempotent", text="touch marker && trigger-side-effect"
-        )
-        first = self.store.claim_validation_command(
-            attempt.attempt_id,
-            worker_id=attempt.worker_id,
-            command=command,
-            now=started,
-        )
-        self.assertEqual(first.disposition, "dispatch")
-        restarted = EngineeringStateStore(
-            self.database, checkout_root=self.checkouts
-        )
-        uncertain = restarted.claim_validation_command(
-            attempt.attempt_id,
-            worker_id=attempt.worker_id,
-            command=command,
-            now=started + timedelta(seconds=1),
-        )
-        self.assertEqual(uncertain.disposition, "already_reserved")
-        self.assertFalse(uncertain.should_dispatch)
-        with self.assertRaisesRegex(EngineeringConflict, "different immutable"):
-            restarted.claim_validation_command(
-                attempt.attempt_id,
-                worker_id=attempt.worker_id,
-                command=ValidationCommandAudit(
-                    "non-idempotent", text="different-side-effect"
-                ),
-                now=started + timedelta(seconds=1),
+    def test_database_carrying_the_retired_ledger_tables_still_opens(self):
+        """Retiring the tables must not break a database that already has them."""
+
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                """
+                CREATE TABLE pw_validation_step_result (
+                    attempt_id TEXT NOT NULL, step_id TEXT NOT NULL,
+                    PRIMARY KEY (attempt_id, step_id)
+                )
+                """
             )
-        restarted.record_validation_step_result(
-            attempt.attempt_id,
-            worker_id=attempt.worker_id,
-            command=command,
-            state="succeeded",
-            summary="completed once",
-            exit_code=0,
-            started_at=started,
-            finished_at=started + timedelta(seconds=2),
-        )
-        completed = restarted.claim_validation_command(
-            attempt.attempt_id,
-            worker_id=attempt.worker_id,
-            command=command,
-            now=started + timedelta(seconds=3),
-        )
-        self.assertEqual(completed.disposition, "completed")
-        self.assertFalse(completed.should_dispatch)
-        self.assertEqual(
-            restarted.list_validation_command_claims(attempt.attempt_id)[0],
-            completed,
-        )
-        with self.assertRaisesRegex(EngineeringConflict, "not exactly reserved"):
-            restarted.record_validation_step_result(
-                attempt.attempt_id,
-                worker_id=attempt.worker_id,
-                command=ValidationCommandAudit("unreserved", argv=("true",)),
-                state="succeeded",
-                summary="must not be accepted",
-                exit_code=0,
-                started_at=started,
-                finished_at=started,
+            connection.execute(
+                "INSERT INTO pw_validation_step_result VALUES ('attempt-1', 'step-1')"
+            )
+        reopened = EngineeringStateStore(self.database, checkout_root=self.checkouts)
+        self.assertEqual(reopened.SCHEMA_VERSION, 4)
+        with sqlite3.connect(self.database) as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM pw_validation_step_result"
+                ).fetchone()[0],
+                1,
             )
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PooledCheckoutReuseTests(unittest.TestCase):
+    """A pool checkout must be allocatable again after its run finishes.
+
+    The original schema declared `checkout_path TEXT NOT NULL UNIQUE`, which is
+    right for a per-run clone and fatal for a shared pool tree: the second run
+    handed $CO/N could never allocate, terminalized as a controller error,
+    released the index, and the next run failed identically -- a permanent loop
+    that survived restarts.
+    """
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        base = Path(self.temporary.name)
+        self.clone_root = base / "engineering-checkouts"
+        self.clone_root.mkdir()
+        self.pool_root = base / "co"
+        (self.pool_root / "1" / ".git").mkdir(parents=True)
+        self.store = EngineeringStateStore(
+            base / "eng.sqlite3",
+            checkout_root=self.clone_root,
+            pool_root=self.pool_root,
+        )
+
+    def allocate(self, run_id, owner):
+        return self.store.plan_checkout(
+            run_id=run_id, session_id=f"sess-{run_id}", patch_id="68160",
+            patchset=4, revision_sha="a" * 40,
+            repository_url="https://review.whamcloud.com/fs/lustre-release",
+            base_branch="refs/changes/60/68160/4",
+            checkout_path=self.pool_root / "1", owner_id=owner,
+        )
+
+    def finish(self, allocation, run_id, owner):
+        self.store.mark_allocated(
+            allocation.allocation_id, run_id=run_id, owner_id=owner,
+            revision_sha="a" * 40,
+        )
+        self.store.activate_checkout(
+            allocation.allocation_id, run_id=run_id, owner_id=owner,
+            revision_sha="a" * 40, observed_revision="a" * 40, initial_dirty=False,
+        )
+        self.store.request_cleanup(
+            allocation.allocation_id, run_id=run_id, owner_id=owner,
+            revision_sha="a" * 40, reason="run finished",
+        )
+        return self.store.release_checkout(
+            allocation.allocation_id, run_id=run_id, owner_id=owner,
+            revision_sha="a" * 40,
+        )
+
+    def test_a_released_pool_checkout_can_be_allocated_again(self):
+        first = self.allocate("run-1", "owner-1")
+        released = self.finish(first, "run-1", "owner-1")
+        self.assertEqual(released.state, "released")
+        # The whole point: a second run gets the same tree.
+        second = self.allocate("run-2", "owner-2")
+        self.assertEqual(second.checkout_path, self.pool_root / "1")
+
+    def test_two_live_allocations_cannot_share_one_checkout(self):
+        self.allocate("run-1", "owner-1")
+        with self.assertRaises(EngineeringConflict):
+            self.allocate("run-2", "owner-2")
+
+    def test_releasing_a_pool_tree_does_not_require_it_to_be_deleted(self):
+        # A per-run clone is deleted on cleanup; a pool tree is reset in place
+        # and must still exist afterwards.
+        first = self.allocate("run-1", "owner-1")
+        self.finish(first, "run-1", "owner-1")
+        self.assertTrue((self.pool_root / "1").is_dir())
+
+
+class PopulatedMigrationTests(unittest.TestCase):
+    """Migration 4 must survive a database that has real data in it.
+
+    It rebuilds `pw_checkout_allocation` via create/copy/drop/rename with
+    `PRAGMA foreign_keys = ON`. DROP TABLE does an implicit DELETE, and four
+    tables reference that allocation id -- and every `plan_checkout()` writes a
+    `pw_checkout_event` child row. So ANY database that had ever planned one
+    checkout could not be opened: the store raised, the controller raised, and
+    the dashboard would not start. A fresh database has no rows, which is
+    exactly why the suite could not see it.
+    """
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name)
+        self.root = self.base / "co"
+        (self.root / "1").mkdir(parents=True)
+        self.database = self.base / "engineering.sqlite3"
+
+    def store(self):
+        return EngineeringStateStore(self.database, checkout_root=self.root)
+
+    def populate(self):
+        return self.store().plan_checkout(
+            run_id="run-1", session_id="s1", patch_id="68160", patchset=4,
+            revision_sha="a" * 40,
+            repository_url="https://review.whamcloud.com/fs/lustre-release",
+            base_branch="refs/changes/60/68160/4",
+            checkout_path=self.root / "1", owner_id="owner-1",
+        )
+
+    def rewind_to(self, version):
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                "UPDATE pw_engineering_schema SET version = ?", (version,)
+            )
+
+    def test_a_populated_database_migrates_without_losing_rows(self):
+        allocation = self.populate()
+        with sqlite3.connect(self.database) as connection:
+            children = connection.execute(
+                "SELECT COUNT(*) FROM pw_checkout_event"
+            ).fetchone()[0]
+        self.assertGreater(children, 0, "the fixture must have a referencing row")
+
+        self.rewind_to(3)
+        reopened = self.store()  # must not raise
+
+        self.assertEqual(reopened.get_checkout(allocation.allocation_id).run_id, "run-1")
+        with sqlite3.connect(self.database) as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM pw_checkout_event"
+                ).fetchone()[0],
+                children,
+                "the rebuild dropped referencing rows",
+            )
+            self.assertEqual(
+                connection.execute("PRAGMA foreign_key_check").fetchall(), []
+            )
+            self.assertEqual(
+                connection.execute("PRAGMA integrity_check").fetchone()[0], "ok"
+            )
+
+    def test_foreign_keys_are_enforced_again_after_the_rebuild(self):
+        self.populate()
+        self.rewind_to(3)
+        store = self.store()
+        with store._connection() as connection:
+            self.assertEqual(
+                connection.execute("PRAGMA foreign_keys").fetchone()[0], 1,
+                "FK enforcement must be restored after the rebuild",
+            )
+
+    def test_the_partial_uniqueness_index_survives_the_rebuild(self):
+        self.populate()
+        self.rewind_to(3)
+        self.store()
+        with sqlite3.connect(self.database) as connection:
+            names = [
+                row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index' "
+                    "AND tbl_name='pw_checkout_allocation'"
+                )
+            ]
+        self.assertIn("pw_checkout_active_path", names)
