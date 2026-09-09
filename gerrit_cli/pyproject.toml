@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gerrit-cli"
-version = "0.2.10"
+version = "0.2.11"
 description = "Gerrit CLI for code review, comment management, and patch workflows"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -58,7 +58,12 @@ gerrit_cli = ["graph/templates/*.html", "graph/templates/*.css", "graph/template
 
 [tool.pytest.ini_options]
 testpaths = ["gerrit_cli/tests"]
-addopts = "--strict-markers"
+# Integration tests talk to the real Gerrit over the network. The test module
+# already declares pytest.mark.integration and documents skipping them, but
+# nothing honoured it, so a plain `pytest` run made live HTTP calls and failed
+# whenever a referenced change was deleted or the host was offline. Opt in with
+# `pytest -m integration`.
+addopts = "--strict-markers -m 'not integration'"
 markers = [
     "integration: marks tests that require network access to real Gerrit",
     "unit: marks tests as unit tests",

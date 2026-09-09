@@ -105,54 +105,10 @@ class TestParserHandlerContracts:
         subparsers = parser.add_subparsers(dest="command")
 
         # Map command names to handler functions (same as main())
-        handlers = {
-            'comments': cli.cmd_extract,
-            'reply': cli.cmd_reply,
-            'batch': cli.cmd_batch_reply,
-            'review': cli.cmd_review,
-            'series_comments': cli.cmd_series_comments,
-            'series': cli.cmd_series,
-            'series_status': cli.cmd_series_status,
-            'interactive': cli.cmd_interactive,
-            'work_on_patch': cli.cmd_work_on_patch,
-            'next_patch': cli.cmd_next_patch,
-            'finish_patch': cli.cmd_finish_patch,
-            'abort': cli.cmd_abort,
-            'status': cli.cmd_status,
-            'stage': cli.cmd_stage,
-            'push': cli.cmd_push,
-            'staged_list': cli.cmd_staged_list,
-            'staged_show': cli.cmd_staged_show,
-            'staged_remove': cli.cmd_staged_remove,
-            'staged_clear': cli.cmd_staged_clear,
-            'staged_refresh': cli.cmd_staged_refresh,
-            'continue_reintegration': cli.cmd_continue_reintegration,
-            'skip_reintegration': cli.cmd_skip_reintegration,
-            'reviewers': cli.cmd_reviewers,
-            'add_reviewer': cli.cmd_add_reviewer,
-            'remove_reviewer': cli.cmd_remove_reviewer,
-            'find_user': cli.cmd_find_user,
-            'abandon': cli.cmd_abandon,
-            'checkout': cli.cmd_checkout,
-            'maloo': cli.cmd_maloo,
-            'info': cli.cmd_info,
-            'series_info': cli.cmd_series_info,
-            'watch': cli.cmd_watch,
-            'set_topic': cli.cmd_set_topic,
-            'hashtag': cli.cmd_hashtag,
-            'related': cli.cmd_related,
-            'restore': cli.cmd_restore,
-            'rebase': cli.cmd_rebase,
-            'vote': cli.cmd_vote,
-            'diff': cli.cmd_diff,
-            'message': cli.cmd_message,
-            'search': cli.cmd_search,
-            'explain': cli.cmd_explain,
-            'examples': cli.cmd_examples,
-            'done': cli.cmd_done,
-            'ack': cli.cmd_ack,
-            'describe': cli.cmd_describe,
-        }
+        # The real mapping, not a copy of it. This test's whole point is that
+        # every registered command has a handler, and a hand-maintained copy
+        # went stale the moment `graph` and `sashiko_review` were added.
+        handlers = cli.build_handlers()
 
         setup_parsers(subparsers, handlers)
 
@@ -364,54 +320,10 @@ class TestStagedParserHandlerContract:
         subparsers = parser.add_subparsers(dest="command")
 
         # Map command names to handler functions (same as main())
-        handlers = {
-            'comments': cli.cmd_extract,
-            'reply': cli.cmd_reply,
-            'batch': cli.cmd_batch_reply,
-            'review': cli.cmd_review,
-            'series_comments': cli.cmd_series_comments,
-            'series': cli.cmd_series,
-            'series_status': cli.cmd_series_status,
-            'interactive': cli.cmd_interactive,
-            'work_on_patch': cli.cmd_work_on_patch,
-            'next_patch': cli.cmd_next_patch,
-            'finish_patch': cli.cmd_finish_patch,
-            'abort': cli.cmd_abort,
-            'status': cli.cmd_status,
-            'stage': cli.cmd_stage,
-            'push': cli.cmd_push,
-            'staged_list': cli.cmd_staged_list,
-            'staged_show': cli.cmd_staged_show,
-            'staged_remove': cli.cmd_staged_remove,
-            'staged_clear': cli.cmd_staged_clear,
-            'staged_refresh': cli.cmd_staged_refresh,
-            'continue_reintegration': cli.cmd_continue_reintegration,
-            'skip_reintegration': cli.cmd_skip_reintegration,
-            'reviewers': cli.cmd_reviewers,
-            'add_reviewer': cli.cmd_add_reviewer,
-            'remove_reviewer': cli.cmd_remove_reviewer,
-            'find_user': cli.cmd_find_user,
-            'abandon': cli.cmd_abandon,
-            'checkout': cli.cmd_checkout,
-            'maloo': cli.cmd_maloo,
-            'info': cli.cmd_info,
-            'series_info': cli.cmd_series_info,
-            'watch': cli.cmd_watch,
-            'set_topic': cli.cmd_set_topic,
-            'hashtag': cli.cmd_hashtag,
-            'related': cli.cmd_related,
-            'restore': cli.cmd_restore,
-            'rebase': cli.cmd_rebase,
-            'vote': cli.cmd_vote,
-            'diff': cli.cmd_diff,
-            'message': cli.cmd_message,
-            'search': cli.cmd_search,
-            'explain': cli.cmd_explain,
-            'examples': cli.cmd_examples,
-            'done': cli.cmd_done,
-            'ack': cli.cmd_ack,
-            'describe': cli.cmd_describe,
-        }
+        # The real mapping, not a copy of it. This test's whole point is that
+        # every registered command has a handler, and a hand-maintained copy
+        # went stale the moment `graph` and `sashiko_review` were added.
+        handlers = cli.build_handlers()
 
         setup_parsers(subparsers, handlers)
         return parser

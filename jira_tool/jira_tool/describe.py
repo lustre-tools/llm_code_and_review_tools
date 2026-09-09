@@ -26,11 +26,11 @@ def get_tool_description() -> ToolDescription:
                     Argument(name="key", description="Issue key (e.g., PROJ-123) or JIRA URL", required=True),
                     Argument(name="--fields", description="Comma-separated list of fields to return"),
                     Argument(name="--output", description="Output only this field as plain text (no JSON envelope)"),
-                    Argument(name="--comments", description="Include first 5 comments inline", type="boolean", default=False),
+                    Argument(name="--comments", description="Include N most recent comments inline", type="integer"),
                 ],
                 examples=[
                     "jira get PROJ-123",
-                    "jira get PROJ-123 --comments",
+                    "jira get PROJ-123 --comments 5",
                     "jira get https://jira.example.com/browse/PROJ-123",
                     "jira get PROJ-123 --output status",
                 ],

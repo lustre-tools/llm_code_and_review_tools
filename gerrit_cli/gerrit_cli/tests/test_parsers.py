@@ -69,60 +69,16 @@ class TestParserHandlerIntegration:
 
     def test_setup_parsers_creates_all_commands(self):
         """Test that setup_parsers creates all expected commands."""
+        from gerrit_cli import cli as cli_module
         from gerrit_cli.parsers import setup_parsers
 
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest='command')
 
         # Create mock handlers for all commands
-        handlers = {
-            'comments': MagicMock(),
-            'reply': MagicMock(),
-            'batch': MagicMock(),
-            'review': MagicMock(),
-            'series_comments': MagicMock(),
-            'series': MagicMock(),
-            'series_status': MagicMock(),
-            'interactive': MagicMock(),
-            'work_on_patch': MagicMock(),
-            'next_patch': MagicMock(),
-            'finish_patch': MagicMock(),
-            'abort': MagicMock(),
-            'status': MagicMock(),
-            'stage': MagicMock(),
-            'push': MagicMock(),
-            'staged_list': MagicMock(),
-            'staged_show': MagicMock(),
-            'staged_remove': MagicMock(),
-            'staged_clear': MagicMock(),
-            'staged_refresh': MagicMock(),
-            'continue_reintegration': MagicMock(),
-            'skip_reintegration': MagicMock(),
-            'reviewers': MagicMock(),
-            'add_reviewer': MagicMock(),
-            'remove_reviewer': MagicMock(),
-            'find_user': MagicMock(),
-            'abandon': MagicMock(),
-            'checkout': MagicMock(),
-            'maloo': MagicMock(),
-            'info': MagicMock(),
-            'series_info': MagicMock(),
-            'watch': MagicMock(),
-            'set_topic': MagicMock(),
-            'hashtag': MagicMock(),
-            'related': MagicMock(),
-            'restore': MagicMock(),
-            'rebase': MagicMock(),
-            'vote': MagicMock(),
-            'diff': MagicMock(),
-            'message': MagicMock(),
-            'search': MagicMock(),
-            'explain': MagicMock(),
-            'examples': MagicMock(),
-            'done': MagicMock(),
-            'ack': MagicMock(),
-            'describe': MagicMock(),
-        }
+        # Derived from the real command list so this fixture cannot go stale;
+        # the assertions below are about the parsers, not the handlers.
+        handlers = {name: MagicMock() for name in cli_module.build_handlers()}
 
         setup_parsers(subparsers, handlers)
 

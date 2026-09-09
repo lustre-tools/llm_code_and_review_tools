@@ -1020,13 +1020,25 @@ class RebaseManager:
 
             # Auto-push amended commit to Gerrit
             if amended_commit != session.target_commit:
+                # `branch` is named by the failure message below, so it needs a
+                # value before anything that can fail: it used to be assigned
+                # only after get_change_detail returned, and the handler that
+                # reads it raised UnboundLocalError instead of printing the
+                # command to run.
+                branch = "master"
                 try:
                     push_target = self._get_gerrit_push_url()
                     branch_info = self.client.get_change_detail(session.target_change)
                     branch = branch_info.get("branch", "master")
                     self._run_git(["push", push_target, f"HEAD:refs/for/{branch}"])
                     lines.append(f"\U0001f4e4 Pushed to Gerrit ({push_target} \u2192 refs/for/{branch})")
-                except subprocess.CalledProcessError as push_err:
+                # Deliberately broad. By this point the rebase and every
+                # cherry-pick have already succeeded; the auto-push is a
+                # convenience on top. Catching only CalledProcessError let a
+                # Gerrit HTTP error from get_change_detail escape and abort
+                # finish_rebase outright, so a transient outage swallowed the
+                # summary of work that had in fact completed.
+                except Exception as push_err:
                     lines.append(f"\u26a0 Auto-push failed: {push_err}")
                     lines.append(f"  Run manually: git push origin HEAD:refs/for/{branch}")
                 lines.append("")

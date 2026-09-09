@@ -107,8 +107,11 @@ class TestInteractiveActionHandlers:
         result_type, msg = self.session._action_edit(self.context)
 
         assert result_type == 'exit'
+        # _action_edit passes through whatever URL the change carries, and this
+        # fixture's change_info.url is example.com (set in setUp). Asserting a
+        # whamcloud URL contradicted the fixture rather than the behaviour.
         mock_work.assert_called_once_with(
-            "https://review.whamcloud.com/12345", 12345
+            self.mock_extracted.change_info.url, 12345
         )
 
     @patch('gerrit_cli.interactive.work_on_patch')

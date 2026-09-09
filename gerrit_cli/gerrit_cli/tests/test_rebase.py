@@ -500,10 +500,15 @@ class TestFinishRebaseWithDescendants:
             started_at="2025-01-01T00:00:00",
         )
 
+        # `manager.client` must be mocked too: finish_rebase asks Gerrit for
+        # the target branch before auto-pushing, so without this the test made
+        # a real HTTP request to review.whamcloud.com and failed on its 404.
         with patch.object(manager, "load_session") as mock_load, \
              patch.object(manager, "get_current_commit") as mock_commit, \
              patch.object(manager, "_run_git") as mock_git, \
+             patch.object(manager, "client") as mock_client, \
              patch.object(manager, "save_session"):
+            mock_client.get_change_detail.return_value = {"branch": "master"}
             mock_load.return_value = session
             # Return amended commit first, then new commits after cherry-picks
             # Called: once for amended, once after each cherry-pick, once at end
@@ -545,7 +550,9 @@ class TestFinishRebaseWithDescendants:
              patch.object(manager, "_run_git") as mock_git, \
              patch.object(manager, "_is_cherry_pick_in_progress") as mock_cherry, \
              patch.object(manager, "_has_unmerged_files") as mock_unmerged, \
+             patch.object(manager, "client") as mock_client, \
              patch.object(manager, "save_session"):
+            mock_client.get_change_detail.return_value = {"branch": "master"}
             mock_load.return_value = session
             mock_commit.return_value = "amended_a"
             mock_cherry.return_value = False
@@ -586,7 +593,9 @@ class TestFinishRebaseWithDescendants:
              patch.object(manager, "_run_git") as mock_git, \
              patch.object(manager, "_is_cherry_pick_in_progress") as mock_cherry, \
              patch.object(manager, "_has_unmerged_files") as mock_unmerged, \
+             patch.object(manager, "client") as mock_client, \
              patch.object(manager, "save_session", side_effect=capture_save):
+            mock_client.get_change_detail.return_value = {"branch": "master"}
             mock_load.return_value = session
             mock_commit.return_value = "amended_a"
             mock_cherry.return_value = False
@@ -629,7 +638,9 @@ class TestFinishRebaseWithDescendants:
              patch.object(manager, "get_current_commit") as mock_commit, \
              patch.object(manager, "_run_git") as mock_git, \
              patch.object(manager, "_is_cherry_pick_in_progress") as mock_cherry, \
+             patch.object(manager, "client") as mock_client, \
              patch.object(manager, "save_session", side_effect=capture_save):
+            mock_client.get_change_detail.return_value = {"branch": "master"}
             mock_load.return_value = session
             # No cherry-pick in progress = user ran --skip
             mock_cherry.return_value = False
@@ -672,7 +683,9 @@ class TestFinishRebaseWithDescendants:
              patch.object(manager, "get_current_commit") as mock_commit, \
              patch.object(manager, "_run_git") as mock_git, \
              patch.object(manager, "_is_cherry_pick_in_progress") as mock_cherry, \
+             patch.object(manager, "client") as mock_client, \
              patch.object(manager, "save_session"):
+            mock_client.get_change_detail.return_value = {"branch": "master"}
             mock_load.return_value = session
             mock_cherry.return_value = False
             mock_commit.side_effect = ["amended_a", "new_c", "new_c"]
@@ -767,7 +780,9 @@ class TestFinishRebaseWithDescendants:
              patch.object(manager, "_run_git") as mock_git, \
              patch.object(manager, "_is_cherry_pick_in_progress") as mock_cherry, \
              patch.object(manager, "_has_unmerged_files") as mock_unmerged, \
+             patch.object(manager, "client") as mock_client, \
              patch.object(manager, "save_session"):
+            mock_client.get_change_detail.return_value = {"branch": "master"}
             mock_load.return_value = session
             # Cherry-pick in progress, conflicts resolved
             mock_cherry.side_effect = [True, False]  # In progress first, then done

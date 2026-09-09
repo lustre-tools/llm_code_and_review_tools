@@ -75,27 +75,6 @@ class TestRealGerritExtraction:
 
         assert result.change_info.change_number == 61965
 
-    def test_extract_from_change_62796(self):
-        """Test extracting from change 62796 (for reply testing)."""
-        extractor = CommentExtractor()
-        result = extractor.extract_from_change(
-            62796,
-            include_resolved=False,
-            include_code_context=True,
-        )
-
-        print(f"Change: {result.change_info.subject}")
-        print(f"Unresolved threads: {result.unresolved_count}")
-
-        for i, thread in enumerate(result.threads):
-            print(f"\nThread {i}:")
-            print(f"  File: {thread.root_comment.file_path}")
-            print(f"  Line: {thread.root_comment.line}")
-            print(f"  Author: {thread.root_comment.author.name}")
-            print(f"  Message: {thread.root_comment.message[:80]}...")
-            if thread.root_comment.code_context:
-                print(f"  Context:\n{thread.root_comment.code_context.format()}")
-
     def test_to_dict_serialization(self):
         """Test that extraction result can be serialized."""
         import json

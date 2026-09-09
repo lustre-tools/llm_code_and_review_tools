@@ -56,11 +56,17 @@ def register(main):
             # Build response data
             comments_data = _normalize_comments(raw_comments, summary_only=summary_only)
             comments_data["issue_key"] = key
+            # --all paginates until the issue is exhausted, so echoing --limit
+            # here reported "limit: 10" alongside all 340 comments. There is no
+            # cap to report: `limit` is null because none was applied, and
+            # `fetched_all` says so outright rather than leaving a reader to
+            # infer it from returned == total.
             comments_data["pagination"] = {
-                "offset": offset,
-                "limit": limit,
+                "offset": 0 if fetch_all else offset,
+                "limit": None if fetch_all else limit,
                 "returned": len(comments_data.get("comments", [])),
                 "total": raw_comments.get("total", 0),
+                "fetched_all": fetch_all,
             }
 
             envelope = success_response(

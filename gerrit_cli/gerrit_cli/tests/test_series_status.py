@@ -148,7 +148,11 @@ class TestSeriesStatus:
 
         mock_staged1 = Mock()
         mock_staged1.operations = [Mock()]  # 1 operation
-        mock_staging_mgr.load_staged_operations.side_effect = [
+        # StagingManager's method is load_staged; mocking a name it does not
+        # have left the real call returning an auto-Mock, whose .operations
+        # made len() raise TypeError -- which series_status catches and turns
+        # into a staged_count of 0, so this read as "0 != 1" rather than an error.
+        mock_staging_mgr.load_staged.side_effect = [
             mock_staged1,  # First patch
             None,  # Second patch - no staged operations
         ]
@@ -207,7 +211,7 @@ class TestSeriesStatus:
         # Mock staging manager
         mock_staging_mgr = Mock()
         mock_staging_mgr_cls.return_value = mock_staging_mgr
-        mock_staging_mgr.load_staged_operations.return_value = None
+        mock_staging_mgr.load_staged.return_value = None
 
         # Execute
         checker = SeriesStatus()

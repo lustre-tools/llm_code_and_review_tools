@@ -277,40 +277,16 @@ class _JsonErrorParser(argparse.ArgumentParser):
         sys.exit(ExitCode.INVALID_INPUT)
 
 
-def main():
-    """Main entry point."""
-    from .parsers import setup_parsers
+def build_handlers():
+    """Map every command name to the function that runs it.
 
-    from importlib.metadata import version as _pkg_version
-    try:
-        _ver = _pkg_version("gerrit-cli")
-    except Exception:
-        _ver = "unknown"
-
-    parser = argparse.ArgumentParser(
-        description="Extract and reply to Gerrit review comments. "
-                    "Run 'gc describe' for machine-readable API documentation.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {_ver}",
-    )
-    parser.add_argument(
-        "--envelope",
-        action="store_true",
-        help="Include full response envelope (ok/data/meta wrapper)",
-    )
-    # Use _JsonErrorParser for subparsers so argument errors from
-    # subcommands also produce JSON output. The top-level parser is
-    # left as standard ArgumentParser so tests that mock it still work.
-    subparsers = parser.add_subparsers(
-        dest="command", help="Command to run",
-        parser_class=_JsonErrorParser,
-    )
-
-    # Map command names to handler functions
-    handlers = {
+    Lifted out of ``main`` because the test suite had copied this dict by hand
+    with the comment "same as main()", and the copy went stale: `graph` and
+    `sashiko_review` were added here but not there, so five tests failed with
+    KeyError while the CLI itself was correct.  One definition, so a command
+    added here cannot be missed by the tests that check this contract.
+    """
+    return {
         'comments': cmd_extract,
         'reply': cmd_reply,
         'batch': cmd_batch_reply,
@@ -360,6 +336,42 @@ def main():
         'describe': cmd_describe,
         'sashiko_review': cmd_sashiko_review,
     }
+
+
+def main():
+    """Main entry point."""
+    from .parsers import setup_parsers
+
+    from importlib.metadata import version as _pkg_version
+    try:
+        _ver = _pkg_version("gerrit-cli")
+    except Exception:
+        _ver = "unknown"
+
+    parser = argparse.ArgumentParser(
+        description="Extract and reply to Gerrit review comments. "
+                    "Run 'gc describe' for machine-readable API documentation.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {_ver}",
+    )
+    parser.add_argument(
+        "--envelope",
+        action="store_true",
+        help="Include full response envelope (ok/data/meta wrapper)",
+    )
+    # Use _JsonErrorParser for subparsers so argument errors from
+    # subcommands also produce JSON output. The top-level parser is
+    # left as standard ArgumentParser so tests that mock it still work.
+    subparsers = parser.add_subparsers(
+        dest="command", help="Command to run",
+        parser_class=_JsonErrorParser,
+    )
+
+    # Map command names to handler functions
+    handlers = build_handlers()
 
     setup_parsers(subparsers, handlers)
 

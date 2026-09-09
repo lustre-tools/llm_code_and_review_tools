@@ -416,7 +416,10 @@ class TestCLIIssueGetWithComments:
             status=200,
         )
 
-        result = runner.invoke(main, ["--envelope", "get", "PROJ-123", "--comments"])
+        # --comments takes a count (--comments 5), not a bare flag; invoking it
+        # as one exits INVALID_INPUT with "Option '--comments' requires an
+        # argument". `jira describe` advertised the boolean form and was wrong.
+        result = runner.invoke(main, ["--envelope", "get", "PROJ-123", "--comments", "5"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["ok"] is True
@@ -1403,8 +1406,15 @@ class TestCLICommentsAllFlag:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["ok"] is True
-        # With --all, limit should be set to 1000
-        assert data["data"]["pagination"]["limit"] == 1000
+        # --all paginates until the issue is exhausted, so no limit is applied.
+        # This used to assert limit == 1000, a cap get_all_comments never had,
+        # while the code echoed the unused --limit default of 10 instead.
+        pagination = data["data"]["pagination"]
+        assert pagination["limit"] is None
+        assert pagination["fetched_all"] is True
+        assert pagination["offset"] == 0
+        assert pagination["returned"] == 1
+        assert pagination["total"] == 1
 
 
 class TestCLIConfigError:
