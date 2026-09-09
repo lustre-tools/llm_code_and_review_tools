@@ -7,11 +7,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
+from llm_tool_common.config import load_env_files
 
 from .errors import ConfigError
 
 DEFAULT_CONFIG_PATH = Path.home() / ".jira-tool.json"
+# The .env pointer above only covers JIRA_SERVER/JIRA_TOKEN. This tool's real
+# credential store is the JSON file, which supports named instances, so it gets
+# the same treatment: one variable that redirects the whole config.
+CONFIG_PATH_VARIABLE = "JIRA_TOOL_CONFIG"
 
 # Valid auth types
 AUTH_TYPE_BEARER = "bearer"
@@ -19,35 +23,21 @@ AUTH_TYPE_BASIC = "basic"
 VALID_AUTH_TYPES = {AUTH_TYPE_BEARER, AUTH_TYPE_BASIC}
 
 
-# Load .env file from standard locations (in priority order)
+# Credential loading is shared with gerrit-cli, maloo-tool and jenkins-tool so
+# all of them resolve configuration by the same rules: a variable already set
+# in the environment always wins, then JIRA_TOOL_ENV_FILE if it names a file,
+# then ~/.config/jira-tool/.env.
+load_env_files("jira-tool")
+
+
 def _load_env_file() -> None:
-    """Load environment variables from .env file in standard locations.
+    """Re-read this tool's .env files.
 
-    Priority order:
-    1. User config directory (~/.config/jira-tool/.env)
-    2. System config directory (/etc/jira-tool/.env)
-    3. Current directory (.env) - for development
+    Kept as a named entry point after the loading itself moved to
+    `llm_tool_common`, so callers and tests have something to invoke; the
+    module-level call above is what runs on import.
     """
-    env_locations = [
-        Path.home() / ".config" / "jira-tool" / ".env",
-        Path("/etc/jira-tool/.env"),
-        Path("/shared/support_files/.env"),
-        Path(".env"),
-    ]
-
-    for env_path in env_locations:
-        try:
-            if env_path.exists():
-                load_dotenv(env_path)
-                return
-        except OSError:
-            continue  # host down, NFS stale, etc.
-
-    # No .env file found, will use environment variables or JSON config
-
-
-# Load .env file when module is imported
-_load_env_file()
+    load_env_files("jira-tool")
 
 
 @dataclass
@@ -219,7 +209,18 @@ def load_config(
 
     # Load from config file if it exists
     if config_path is None:
-        config_path = DEFAULT_CONFIG_PATH
+        pointer = os.environ.get(CONFIG_PATH_VARIABLE)
+        if pointer:
+            config_path = Path(pointer)
+            if not config_path.is_file():
+                raise ConfigError(
+                    f"{CONFIG_PATH_VARIABLE} points at {pointer}, which is not "
+                    "a readable file. Refusing to fall back to the default "
+                    "configuration.",
+                    details={"path": pointer},
+                )
+        else:
+            config_path = DEFAULT_CONFIG_PATH
 
     config_path = Path(config_path)
 

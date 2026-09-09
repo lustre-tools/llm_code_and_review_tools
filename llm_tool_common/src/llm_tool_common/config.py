@@ -33,22 +33,60 @@ def _parse_env_file(path: Path) -> None:
                 os.environ[key] = value
 
 
+def env_file_variable(tool_name: str) -> str:
+    """Name the variable that points a tool at an explicit .env file.
+
+    ``"maloo-tool"`` -> ``"MALOO_TOOL_ENV_FILE"``, ``"gerrit-cli"`` ->
+    ``"GERRIT_CLI_ENV_FILE"``.
+    """
+    return tool_name.replace("-", "_").upper() + "_ENV_FILE"
+
+
 def load_env_files(tool_name: str) -> None:
     """Load environment variables from .env files in standard locations.
 
-    Checks the following paths in order, loading the FIRST one found:
-      1. ~/.config/{tool_name}/.env
-      2. /shared/support_files/.env
-      3. ./.env
+    Precedence, highest first:
+      1. Variables already set in the real environment. Never overridden, so a
+         caller can always decide what a tool it spawns will use.
+      2. The file named by ``<TOOL>_ENV_FILE`` (see :func:`env_file_variable`),
+         if that variable is set. This lets one process give a child tool a
+         different identity than the one the developer uses interactively,
+         without touching HOME or the developer's own config.
+      3. ~/.config/{tool_name}/.env
+      4. /etc/{tool_name}/.env
+      5. /shared/support_files/.env
+      6. ./.env
 
-    Uses stdlib parsing only (no python-dotenv dependency).
-    Does not override variables already set in the environment.
+    The /etc location is included because gerrit-cli and jira-tool both had it
+    before they shared this loader; dropping it while unifying them would have
+    silently unconfigured any host that used it.
+
+    Only the FIRST file found is loaded. Uses stdlib parsing only.
 
     Args:
         tool_name: Hyphenated tool name, e.g. "jenkins-tool", "maloo-tool".
+
+    Raises:
+        FileNotFoundError: if ``<TOOL>_ENV_FILE`` names a file that does not
+            exist. Falling back would silently run with whatever credentials
+            happened to be lying around, which is the exact failure this
+            pointer exists to prevent, so it fails loudly instead.
     """
+    override = os.environ.get(env_file_variable(tool_name))
+    if override:
+        override_path = Path(override)
+        if not override_path.is_file():
+            raise FileNotFoundError(
+                f"{env_file_variable(tool_name)} points at {override}, "
+                "which is not a readable file. Refusing to fall back to the "
+                "default configuration."
+            )
+        _parse_env_file(override_path)
+        return
+
     env_locations = [
         Path.home() / ".config" / tool_name / ".env",
+        Path(f"/etc/{tool_name}/.env"),
         Path("/shared/support_files/.env"),
         Path(".env"),
     ]

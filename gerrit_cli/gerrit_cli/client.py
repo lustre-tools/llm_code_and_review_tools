@@ -6,41 +6,20 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
 
-from dotenv import load_dotenv
+from llm_tool_common.config import load_env_files
 from pygerrit2 import GerritRestAPI, HTTPBasicAuth  # type: ignore[import-untyped]
 
 
-# Load .env file from standard locations (in priority order)
-def _load_env_file():
-    """Load environment variables from .env file in standard locations.
-
-    Priority order (highest to lowest):
-    1. Current directory (.env) - allows project-specific overrides
-    2. User config directory (~/.config/gerrit-cli/.env)
-    3. System config directory (/etc/gerrit-cli/.env)
-    4. Shared support files (/shared/support_files/.env)
-
-    All matching files are loaded. Higher-priority files override
-    values set by lower-priority ones.
-    """
-    env_locations = [
-        Path("/shared/support_files/.env"),
-        Path("/etc/gerrit-cli/.env"),
-        Path.home() / ".config" / "gerrit-cli" / ".env",
-        Path.cwd() / ".env",
-    ]
-
-    # Load in priority order (lowest first); each overrides the previous
-    for env_path in env_locations:
-        try:
-            if env_path.exists():
-                load_dotenv(env_path, override=True)
-        except OSError:
-            continue  # host down, NFS stale, etc.
-
-
-# Load .env file when module is imported
-_load_env_file()
+# Credential loading is shared with jira-tool, maloo-tool and jenkins-tool so
+# all of them resolve configuration by the same rules: a variable already set
+# in the environment always wins, then GERRIT_CLI_ENV_FILE if it names a file,
+# then ~/.config/gerrit-cli/.env.
+#
+# This used to be a private loader calling load_dotenv(override=True) over
+# every location, which meant the .env file BEAT the real environment -- so a
+# parent process could not choose the identity of a gerrit it spawned, and
+# exporting GERRIT_USER by hand silently did nothing.
+load_env_files("gerrit-cli")
 
 
 # Config file location for error messages

@@ -27,7 +27,7 @@ from .describe import (
     Command,
     ToolDescription,
 )
-from .config import load_env_files
+from .config import env_file_variable, load_env_files
 from .decorators import handle_errors
 
 __all__ = [
@@ -50,6 +50,7 @@ __all__ = [
     "Command",
     "ToolDescription",
     # Config
+    "env_file_variable",
     "load_env_files",
     # Decorators
     "handle_errors",
