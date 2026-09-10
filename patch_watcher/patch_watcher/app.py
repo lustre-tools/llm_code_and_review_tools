@@ -2986,6 +2986,13 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         f"<form class='quick-action' method='post' action='/remove'><input type='hidden' name='csrf_token' value='{CSRF_TOKEN}'>"
         f"<input type='hidden' name='url' value='{escape(patch['url'], quote=True)}'>"
         "<button class='danger' type='submit'>Remove…</button></form></div>"
+        # Both are one-off runs on the exact pinned revision, independent of the
+        # level chosen below; the difference is what the agent may touch.
+        "<p class='detail'><strong>Investigate</strong> reads the pinned source and "
+        "reports, with file references; it cannot change files, run commands, or "
+        "reach Gerrit or CI. <strong>Engineering run</strong> gets a writable checkout, "
+        "a shell and VMs, builds and tests, and leaves a diff for your review without "
+        "uploading it. Both are one-off and ignore the level below.</p>"
         f"{standing_policy_html}"
         "<div class='action-policy-grid'>"
         "<section class='action-policy-item available' aria-label='Build failure handling'>"
