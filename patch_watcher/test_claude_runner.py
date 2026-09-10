@@ -108,11 +108,15 @@ class ClaudeArgvTests(unittest.TestCase):
     def spec(self, **overrides):
         from patch_watcher.claude_runner import ReadOnlyRunSpec
 
-        values = dict(
-            run_id="pw-engineer-1", session_id="00000000-0000-0000-0000-000000000001",
-            cwd="/tmp", runtime_dir="/tmp/rt", prompt="x",
-            capability_profile="full", report_kind="engineering",
-        )
+        values = {
+            "run_id": "pw-engineer-1",
+            "session_id": "00000000-0000-0000-0000-000000000001",
+            "cwd": "/tmp",
+            "runtime_dir": "/tmp/rt",
+            "prompt": "x",
+            "capability_profile": "full",
+            "report_kind": "engineering",
+        }
         values.update(overrides)
         return ReadOnlyRunSpec(**values)
 
