@@ -177,6 +177,15 @@ def cmd_maloo(args):
         sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
 
 
+def _has_negative_vote(approvals):
+    """True if any label carries a negative vote.
+
+    Gerrit reports approvals as strings -- " 0", "+1", "-1", "-2" -- so a
+    vote is negative exactly when its stripped form starts with "-".
+    """
+    return any(str(value).strip().startswith("-") for value in approvals.values())
+
+
 def _info_for_change(client, change_number, show_bots=False):
     """Get info data for a single change. Returns a dict.
 
@@ -204,7 +213,12 @@ def _info_for_change(client, change_number, show_bots=False):
     current_revision = change.get("current_revision", "")
     current_patchset = revisions.get(current_revision, {}).get("_number", 0)
 
-    # Get reviewers with approvals, filtering bots by default
+    # Get reviewers with approvals, filtering bots by default -- but never a
+    # bot's NEGATIVE vote.  Hiding "Looks good to me" chatter is the point of
+    # the filter; hiding wc-checkpatch's standing -1 ("cannot be cherry-picked
+    # to master, please rebase") reported a vetoed change as clean, and the
+    # only way to see the veto was a flag nobody following the documented
+    # workflow would think to pass.
     reviewers_raw = client.get_reviewers(change_number)
     reviewers = []
     for r in reviewers_raw:
@@ -212,7 +226,11 @@ def _info_for_change(client, change_number, show_bots=False):
         approvals = r.get("approvals", {})
         if not approvals:
             continue
-        if not show_bots and name in BOT_REVIEWER_NAMES:
+        if (
+            not show_bots
+            and name in BOT_REVIEWER_NAMES
+            and not _has_negative_vote(approvals)
+        ):
             continue
         reviewers.append({
             "name": name,
