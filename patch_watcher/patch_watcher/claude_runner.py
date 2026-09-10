@@ -562,6 +562,19 @@ def _safe_environment(
     return environment
 
 
+def _cli_json_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """The report schema as the CLI's validator will accept it.
+
+    Our schemas declare draft 2020-12.  The CLI validates --json-schema with a
+    validator that has only draft-07 registered, so it refused the schema
+    outright -- "no schema with key or ref https://json-schema.org/draft/
+    2020-12/schema" -- and exited 1 before reading a message.  The keywords we
+    use are draft-07 compatible; only the declaration was not, so it is
+    dropped here rather than weakening the schema we validate reports against.
+    """
+    return {key: value for key, value in schema.items() if key != "$schema"}
+
+
 def build_read_only_claude_command(spec: ReadOnlyRunSpec) -> list[str]:
     """Return a shell-free command with the profile's exact bounded tools."""
 
@@ -579,6 +592,10 @@ def build_read_only_claude_command(spec: ReadOnlyRunSpec) -> list[str]:
         "stream-json",
         "--output-format",
         "stream-json",
+        # Required with --print and stream-json output; without it the CLI
+        # exits 1 before reading a single message, which read downstream as
+        # "the control socket became unreachable".
+        "--verbose",
         "--replay-user-messages",
         "--session-id",
         spec.session_id,
@@ -586,7 +603,7 @@ def build_read_only_claude_command(spec: ReadOnlyRunSpec) -> list[str]:
         "--permission-mode",
         "bypassPermissions" if spec.capability_profile == "full" else "dontAsk",
         "--json-schema",
-        json.dumps(report_schema, sort_keys=True, separators=(",", ":")),
+        json.dumps(_cli_json_schema(report_schema), sort_keys=True, separators=(",", ":")),
     ]
     if spec.capability_profile != "full":
         # Bounded profiles keep the tool allowlist and the hardening flags.

@@ -101,6 +101,48 @@ def wait_for(predicate, timeout=2):
     raise AssertionError("condition did not become true")
 
 
+class ClaudeArgvTests(unittest.TestCase):
+    """Two flags the CLI requires, each of which killed claude at startup and
+    surfaced only as "the control socket became unreachable"."""
+
+    def spec(self, **overrides):
+        from patch_watcher.claude_runner import ReadOnlyRunSpec
+
+        values = dict(
+            run_id="pw-engineer-1", session_id="00000000-0000-0000-0000-000000000001",
+            cwd="/tmp", runtime_dir="/tmp/rt", prompt="x",
+            capability_profile="full", report_kind="engineering",
+        )
+        values.update(overrides)
+        return ReadOnlyRunSpec(**values)
+
+    def test_stream_json_output_carries_verbose(self):
+        from patch_watcher.claude_runner import build_read_only_claude_command
+
+        command = build_read_only_claude_command(self.spec())
+        self.assertIn("--verbose", command)
+        self.assertEqual(
+            command[command.index("--output-format") + 1], "stream-json",
+            "--verbose is required only because the output format is stream-json",
+        )
+
+    def test_the_cli_schema_drops_a_draft_the_validator_lacks(self):
+        from patch_watcher.claude_runner import (
+            ENGINEERING_REPORT_SCHEMA,
+            build_read_only_claude_command,
+        )
+
+        # The schema we validate reports against still declares its draft.
+        self.assertIn("$schema", ENGINEERING_REPORT_SCHEMA)
+        for profile, kind in (("full", "engineering"), ("read_only", "read_only")):
+            command = build_read_only_claude_command(
+                self.spec(capability_profile=profile, report_kind=kind)
+            )
+            passed = json.loads(command[command.index("--json-schema") + 1])
+            self.assertNotIn("$schema", passed, profile)
+            self.assertIn("properties", passed, profile)
+
+
 class ControlSocketPathTests(unittest.TestCase):
     """The socket used to live under the run's runtime directory, where a real
     engineering run id made it 108 characters -- one over the AF_UNIX limit --

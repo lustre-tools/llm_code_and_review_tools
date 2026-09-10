@@ -3101,7 +3101,7 @@ class RunController:
                 session,
                 "failed",
                 failure_code="runner_lost",
-                failure_summary=probe.reason,
+                failure_summary=self._with_host_stderr(session, probe.reason),
                 finished_at=self.clock(),
             )
             self._send_alert_once(session, "runner_lost")
@@ -4119,6 +4119,7 @@ class RunController:
         if handle is not None and self.runner.probe(handle).alive:
             self._escalate_runner_stop(session, handle)
             return
+        self._preserve_host_stderr(session)
         # The pool release below is this session's only one, and it is reached
         # only by falling out of this loop. Anything that escapes the loop
         # therefore does not delay the release, it cancels it forever: the
@@ -4139,6 +4140,64 @@ class RunController:
             # O(all sessions ever created), paying list_events +
             # list_owned_resources + probe for each one, forever.
             self._settled_sessions.add(session.session_id)
+
+    def _with_host_stderr(self, session: ManagedSession, reason: str) -> str:
+        """Append what the host said to a bare failure reason.
+
+        "host_process_missing" names the symptom; the host's last words name
+        the cause, and they are three directories away in a tree cleanup is
+        about to delete.
+        """
+        try:
+            source = self._run_root(session) / "work" / "scratch" / "claude" / "host.stderr"
+            text = source.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            return reason
+        if not text:
+            return reason
+        tail = "\n".join(text.splitlines()[-12:])
+        return f"{reason}: {tail}"[:2000]
+
+    def _preserve_host_stderr(self, session: ManagedSession) -> None:
+        """Keep what a dead host said, before its run tree is deleted.
+
+        A failure whose whole explanation was in the host's stderr -- the
+        socket that could not bind, the exception that killed it after it did
+        -- lost that explanation to cleanup on the next tick.  Like the
+        salvaged diff, it is copied OUTSIDE the run root, and the reason lands
+        on the failure the operator reads if it is not already there.
+        """
+        if session.state != "failed":
+            return
+        try:
+            source = self._run_root(session) / "work" / "scratch" / "claude" / "host.stderr"
+            if not source.is_file():
+                return
+            text = source.read_text(encoding="utf-8", errors="replace").strip()
+            if not text:
+                return
+            target_root = self.runs_directory / "engineering-artifacts" / session.run_id
+            target_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            target = target_root / "host.stderr"
+            target.write_text(text + "\n", encoding="utf-8")
+            os.chmod(target, 0o600)
+            terminal = self.store.get_terminal_result(session.session_id)
+            existing = (terminal.failure_summary or "") if terminal is not None else ""
+            tail = "\n".join(text.splitlines()[-12:])
+            if tail and tail[-200:] not in existing:
+                self.store.append_event(
+                    session.session_id,
+                    "host_stderr_preserved",
+                    {
+                        "summary": "The host wrote: " + " ".join(tail.split())[:400],
+                        "path": str(target),
+                    },
+                    idempotency_key="host-stderr:" + session.run_id,
+                    at=self.clock(),
+                )
+        except Exception:
+            # Preserving evidence must never be what breaks cleanup.
+            return
 
     def _cleanup_owned_resources(self, session: ManagedSession) -> None:
         for resource in self.store.list_owned_resources(session_id=session.session_id):

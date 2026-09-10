@@ -779,7 +779,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 sessions.finish_session(
                     f"session-{run_id}", "failed", failure_code="controller_error",
                     failure_summary="Claude host exited before its control socket was ready",
-                )
+                )  # no agent message was ever recorded: this run did nothing
 
             with patch("patch_watcher.app.refresh_resource_status",
                        return_value={"ltvm": {"vms": []}}):
@@ -800,7 +800,11 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 self.assertIsNone(app._apply_standing_policy(patch_record))
                 fourth = app._apply_standing_policy(patch_record, attended=True)
                 self.assertEqual(fourth.run_id, "pw-engineer-35302-ps4-try4")
-                # A run that failed AFTER starting keeps the event consumed.
+                # A run whose agent DID speak keeps the event consumed, whatever
+                # killed it afterwards.
+                sessions.record_message(
+                    f"session-{fourth.run_id}", "agent-report", "I looked at the conflict.",
+                )
                 sessions.finish_session(
                     f"session-{fourth.run_id}", "failed", failure_code="worker_report_invalid",
                     failure_summary="bad report",
@@ -819,6 +823,10 @@ class PatchWatcherTests(AppGlobalsIsolated):
             self.assertEqual(len(set(triggered)), 1, "all four retried one event")
             self.assertEqual(len(set(runs.requests)), 4, "each attempt asked distinctly")
             self.assertTrue(all(r.startswith(triggered[0]) for r in runs.requests))
+            # host_process_missing is not a "start failed" code, but a host gone
+            # the instant it attached did nothing either -- so it releases too.
+            lost = runs.started[0]
+            self.assertTrue(app._run_did_nothing(sessions.get_session(f"session-{lost}")))
 
     def test_a_run_waiting_on_you_is_labelled_counted_and_explained(self):
         """The in-console channel: a paused run shows on the patch row, links

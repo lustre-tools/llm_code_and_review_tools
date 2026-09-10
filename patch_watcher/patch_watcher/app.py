@@ -691,13 +691,22 @@ def _record_standing_decision(patch, decision, *, outcome=""):
     )
 
 
-# Failure codes that mean the agent never ran at all: the host died before
-# its socket was ready, or was never launched.  A run that ended this way did
-# no work on the patch, so the event it was started for is still there to
-# handle.
-NEVER_STARTED_FAILURE_CODES = frozenset({
-    "controller_error", "runner_start_failed", "runner_start_interrupted",
-})
+def _run_did_nothing(session):
+    """True when a failed run produced no agent output at all.
+
+    Not a list of failure codes: the same code covers a host that died before
+    its socket bound and one that died after real work, and `runner_lost` --
+    "host_process_missing", the host gone the instant it attached -- is not in
+    any such list yet means exactly this.  A run whose agent never said a word
+    did nothing to the patch, whatever killed it.
+    """
+    if SESSION_STORE is None or session.state != "failed":
+        return False
+    if SESSION_STORE.recent_messages(session.session_id, limit=1):
+        return False
+    terminal = SESSION_STORE.get_terminal_result(session.session_id)
+    result = getattr(terminal, "result", None) if terminal is not None else None
+    return not result
 # How many never-started runs an unattended trigger may burn on one exact
 # event before it stops and leaves the event to a human.  Without a bound, a
 # host that cannot launch agents would start one every poll, forever.
@@ -751,8 +760,7 @@ def _consumed_standing_keys(patch, *, attended=False):
                 # Unknown or still going: the event is spoken for.
                 consumed.add(key)
                 break
-            failure_code, _summary = _run_failure(session)
-            if session.state == "failed" and failure_code in NEVER_STARTED_FAILURE_CODES:
+            if _run_did_nothing(session):
                 dead += 1
                 continue
             # Finished and did something (or failed after starting): consumed.
@@ -807,10 +815,7 @@ def _dead_standing_attempts(patch, coalescing_key):
     dead = 0
     for run_id in run_ids:
         session = sessions.get(run_id)
-        if session is None or session.state != "failed":
-            continue
-        failure_code, _summary = _run_failure(session)
-        if failure_code in NEVER_STARTED_FAILURE_CODES:
+        if session is not None and _run_did_nothing(session):
             dead += 1
     return dead
 
