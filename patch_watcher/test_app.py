@@ -822,6 +822,10 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertLess(rendered.index("No run</strong> on this patch"),
                         rendered.index("name='preset'"))
         self.assertLess(rendered.index("name='preset'"), rendered.index("Start a run by hand"))
+        # Every rung is described where it is chosen, not only once saved.
+        for level in app.PRESET_LEVELS:
+            self.assertIn(app.PRESET_SUMMARIES[level][:40], rendered, level)
+        self.assertIn("<li class='current'><strong>Watch only</strong>", rendered)
         self.assertNotIn("class='availability'>Available", rendered)
         self.assertNotIn("Commands are open-ended", rendered)
 
