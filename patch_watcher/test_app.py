@@ -595,6 +595,8 @@ class PatchWatcherTests(AppGlobalsIsolated):
             standing.save(app.PatchAutomationPolicy.for_preset("35302", "retest"))
             gated = app._patch_now_html(patch_record)
             self.assertIn("Level <strong>Known retests</strong>, but the global kill switch is off", gated)
+            self.assertIn("href='/automation/global/confirm-enable'", gated)
+            self.assertIn("press Run now", gated)
             automation.set_global_automation(True, changed_by="test", reason="test")
             live = app._patch_now_html(patch_record)
             self.assertIn("Level <strong>Known retests</strong>: acts unattended", live)
@@ -622,6 +624,101 @@ class PatchWatcherTests(AppGlobalsIsolated):
             waiting = app._patch_now_html(patch_record)
             self.assertIn("A run is waiting human", waiting)
             self.assertIn("<strong>It is waiting for you.</strong>", waiting)
+
+    def test_run_now_applies_the_level_once_kill_switch_or_not(self):
+        """The unattended gate is for what happens without anyone asking.  A
+        button press is someone asking, so Run now works with the switch off,
+        redirects to the run it started, refuses at Watch only, and says so
+        plainly when there is nothing on the revision to act on."""
+
+        import urllib.request
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *args, **kwargs):
+                return None
+
+        opener = urllib.request.build_opener(NoRedirect)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            automation = app.initialize_automation_store(root / "automation.sqlite3")
+            standing = app.initialize_standing_policy_store(root / "standing.json")
+            self.assertFalse(automation.get_global_automation().enabled)
+            patch_record, _ = app.add_patch("https://review.whamcloud.com/c/35302")
+            patch_record.update(
+                change_number=35302, patchset=4, revision_sha="d" * 40,
+                revision_ref="refs/changes/02/35302/4",
+                project="fs/lustre-release", lifecycle="Open", unresolved=0,
+                jenkins="PASS", rebase_needed=True,
+                review_blockers=[{"name": "wc-checkpatch", "value": -1, "patchset": 4,
+                                  "message": "This change cannot be cherry-picked to master."}],
+            )
+            app.sync_automation_patch(patch_record)
+
+            class FakeSessions:
+                def list_sessions(self, include_terminal=True):
+                    return []
+
+                def append_event(self, *args, **kwargs):
+                    return None
+
+            class FakeRuns:
+                def __init__(self):
+                    self.engineering = []
+
+                def stop(self):
+                    return None
+
+                def request_engineering(self, patch, **kwargs):
+                    self.engineering.append(kwargs)
+                    return SimpleNamespace(session_id="rebase-session", run_id="pw-engineer-35302-ps4-rb")
+
+            runs = FakeRuns()
+            app.SESSION_STORE = FakeSessions()
+            app.RUN_CONTROLLER = runs
+            server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            identity = {"csrf_token": app.CSRF_TOKEN, "change_number": "35302",
+                        "patchset": "4", "revision_sha": "d" * 40}
+
+            def run_now():
+                return opener.open(Request(
+                    base + "/standing-policy/run-now", data=urlencode(identity).encode(),
+                    method="POST",
+                ))
+
+            try:
+                with self.assertRaises(HTTPError) as watch:
+                    run_now()
+                self.assertEqual(watch.exception.code, 409)
+                self.assertEqual(runs.engineering, [])
+
+                standing.save(app.PatchAutomationPolicy.for_preset("35302", "bots"))
+                with patch("patch_watcher.app.refresh_resource_status",
+                           return_value={"ltvm": {"vms": []}}):
+                    with self.assertRaises(HTTPError) as started:
+                        run_now()
+                self.assertEqual(started.exception.code, 303)
+                self.assertEqual(started.exception.headers["Location"],
+                                 "/runs/pw-engineer-35302-ps4-rb")
+                self.assertEqual(runs.engineering[0]["task"], "rebase")
+                self.assertFalse(automation.get_global_automation().enabled)
+
+                # Nothing left to act on: a page, with the reason, not a run.
+                patch_record.update(rebase_needed=False, review_blockers=[])
+                with patch("patch_watcher.app.refresh_resource_status",
+                           return_value={"ltvm": {"vms": []}}):
+                    response = run_now()
+                body = response.read().decode()
+                self.assertEqual(response.status, 200)
+                self.assertIn("Run now: nothing to do for Handle bot feedback", body)
+                self.assertEqual(len(runs.engineering), 1)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
 
     def test_a_run_waiting_on_you_is_labelled_counted_and_explained(self):
         """The in-console channel: a paused run shows on the patch row, links
@@ -828,6 +925,8 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertIn("<li class='current'><strong>Watch only</strong>", rendered)
         self.assertNotIn("class='availability'>Available", rendered)
         self.assertNotIn("Commands are open-ended", rendered)
+        self.assertIn("action='/standing-policy/run-now'", rendered)
+        self.assertIn("Watch only has nothing to run", rendered)
 
     def test_retest_automation_defaults_globally_and_per_patch_disabled(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -888,7 +987,11 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertEqual(policy.review_comments, "simple")
         self.assertEqual(policy.trigger_mode, "manual")
 
-    def test_standing_automatic_policy_requires_exact_one_use_confirmation(self):
+    def test_saving_a_level_saves_it_at_once_and_stale_saves_are_refused(self):
+        """No interstitial: the level list says what each rung does and the
+        global kill switch is the gate.  The version check still protects a
+        save made from a stale page."""
+
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             app.initialize_automation_store(root / "automation.sqlite3")
@@ -908,41 +1011,28 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 "csrf_token": app.CSRF_TOKEN,
                 "change_number": "68160", "patchset": "4",
                 "revision_sha": "d" * 40, "expected_version": "0",
-                "trigger_mode": "automatic", "test_failures": "investigate",
-                "build_failures": "repair", "review_comments": "simple",
+                "preset": "all",
             }
             try:
-                proposal = Request(
-                    base + "/standing-policy", data=urlencode(values).encode(),
-                    method="POST",
-                )
-                confirmation = urlopen(proposal).read().decode()
-                self.assertIn("Confirm automatic patch handlers", confirmation)
-                self.assertEqual(store.get("68160").trigger_mode, "manual")
-                token = re.search(
-                    r"name='confirmation_token' value='([^']+)'", confirmation
-                ).group(1)
-                expires = re.search(
-                    r"name='confirmation_expires_at' value='([^']+)'", confirmation
-                ).group(1)
-                final_values = {
-                    **values,
-                    "confirmation_token": token,
-                    "confirmation_expires_at": expires,
-                }
-                final = Request(
-                    base + "/standing-policy/confirm",
-                    data=urlencode(final_values).encode(), method="POST",
-                )
-                urlopen(final).read()
-                self.assertEqual(store.get("68160").trigger_mode, "automatic")
-                replay = Request(
-                    base + "/standing-policy/confirm",
-                    data=urlencode(final_values).encode(), method="POST",
-                )
+                response = urlopen(Request(
+                    base + "/standing-policy", data=urlencode(values).encode(), method="POST",
+                ))
+                self.assertEqual(response.status, 200)
+                self.assertNotIn("Confirm", response.read().decode()[:400])
+                saved = store.get("68160")
+                self.assertEqual(saved.preset, "all")
+                self.assertEqual(saved.trigger_mode, "automatic")
                 with self.assertRaises(HTTPError) as caught:
-                    urlopen(replay)
-                self.assertIn(caught.exception.code, {403, 409})
+                    urlopen(Request(
+                        base + "/standing-policy", data=urlencode(values).encode(), method="POST",
+                    ))
+                self.assertEqual(caught.exception.code, 409)
+                with self.assertRaises(HTTPError) as gone:
+                    urlopen(Request(
+                        base + "/standing-policy/confirm", data=urlencode(values).encode(),
+                        method="POST",
+                    ))
+                self.assertEqual(gone.exception.code, 404)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -4726,7 +4816,8 @@ class EngineeringProjectionOwnershipTests(AppGlobalsIsolated):
 
 
 class OperatorConsentTextTests(AppGlobalsIsolated):
-    """The automation consent page must describe the writes it authorises."""
+    """The level box must describe the writes a level authorises, since the
+    confirmation page that used to is gone."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -4746,40 +4837,24 @@ class OperatorConsentTextTests(AppGlobalsIsolated):
         )
         app.sync_automation_patch(record)
 
-    def confirmation_page(self):
-        server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            request = Request(
-                f"http://127.0.0.1:{server.server_address[1]}/standing-policy",
-                data=urlencode({
-                    "csrf_token": app.CSRF_TOKEN, "change_number": "68160",
-                    "patchset": "4", "revision_sha": "d" * 40,
-                    "expected_version": "0", "trigger_mode": "automatic",
-                    "test_failures": "deterministic",
-                    "build_failures": "repair", "review_comments": "simple",
-                }).encode(), method="POST",
-            )
-            return urlopen(request).read().decode()
-        finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=2)
+    def panel(self):
+        with patch("patch_watcher.app.refresh_resource_status",
+                   return_value={"ltvm": {"vms": []}}):
+            return app.page()
 
     def test_consent_states_the_agent_publishes_its_own_gerrit_writes(self):
-        body = self.confirmation_page()
+        body = self.panel()
         for expected in (
             "your own service credentials",
             "posts its own Gerrit replies",
-            "uploads its own patchset",
-            "Maloo retests",
+            "uploads its own patchsets",
+            "never votes, abandons",
         ):
             self.assertIn(expected, body)
 
     def test_consent_claims_no_switch_that_holds_writes_back(self):
         """gerrit_reply.py and jenkins_retrigger.py no longer exist."""
-        body = self.confirmation_page()
+        body = self.panel()
         self.assertNotIn("controller switches", body)
         self.assertNotIn("remain independently disabled", body)
 
