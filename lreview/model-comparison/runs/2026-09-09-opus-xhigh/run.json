@@ -1,0 +1,136 @@
+{
+  "run_id": "2026-09-09-opus-xhigh",
+  "agent": "claude",
+  "model": "opus",
+  "effort": "xhigh",
+  "note": "claude opus, --effort xhigh, jobs 4",
+  "review_count": 4,
+  "totals": {
+    "findings": 10,
+    "duration_s": 3867,
+    "tokens": 23750767,
+    "cost_usd": 26.41
+  },
+  "reviews": [
+    {
+      "case": "67980_ps2",
+      "sha": "f3b4f4d37635a9297f65906b682369860e2179b9",
+      "subject": "LU-20582 llite: fix statahead SFNAME pattern detection",
+      "status": "findings",
+      "finding_count": 5,
+      "severity": "medium",
+      "duration_s": 1017,
+      "tokens": 4921435,
+      "cost_usd": 6.310755999999999,
+      "tool_calls": 52,
+      "shell_commands": 51,
+      "findings": [
+        {
+          "path": "/COMMIT_MSG",
+          "line": 37,
+          "kind": "minor",
+          "message": "(minor) The body only describes the new shared-fname cache, but the diff also reworks the non-shared detectors.\n\nsa_pattern_list_detect() and sa_pattern_fname_detect() change from bool to enum sa_pattern_detect_rc, a negative return from either now aborts the whole sa_pattern_detect() chain instead of falling through to the next detector, and sa_pattern_fname_detect() gained an ll_sa_reset_locked() call on the !lli_sa_enabled path that the old code did not have. test_123k also switches from enable_statahead_fname to the new knob.\n\nCould the body say why each of those is needed, so a later reader doesn't have to guess which of them are intentional?"
+        },
+        {
+          "path": "/COMMIT_MSG",
+          "line": 39,
+          "kind": "defect",
+          "message": "(defect) This points at the commit that added the three validation checks, not at the one that bypasses them.\n\nIn e10bf68d7c, sa_pattern_fname_detect() had no multi-pid handling at all: it enforced the trailing-digit test, the num == index + 1 consecutiveness test and lli_sa_match_count > LSA_FN_MATCH_HIT.\n\nThe shortcut this patch removes -- `if (lli->lli_sa_pattern & LSA_PATTERN_FN_SHARED) return true;` and the lli_stat_pid != current->pid block that sets FN_SHARED and returns a match -- came in later, so should this read:\n\n    Fixes: 629b0534e141 (\"LU-14361 statahead: add support for mdtest shared dir workload\")"
+        },
+        {
+          "path": "lustre/llite/llite_internal.h",
+          "line": 132,
+          "kind": "typo",
+          "message": "(typo) SEE looks like it should be SSE, to match struct ll_sa_sfname_entry and its sse_ field prefix."
+        },
+        {
+          "path": "lustre/llite/statahead.c",
+          "line": 2330,
+          "kind": "defect",
+          "message": "(defect) reset: does `*pid = 0` plus the memset, and both goto reset paths run before the `*pid != current->pid` test further down. So a task clears the slot even when the slot belongs to a different task.\n\nWith the shared cache installed, sa_pattern_sfname_detect() reaches here for every name, not only numeric ones -- its own !isdigit() precheck is skipped once lli_sa_sfname_cache is non-NULL. One stat of $dir/README by a task with a colliding pid % LSA_MAX_SEE_ENT therefore wipes another task's accumulated sfi_match_count and sfi_last, and that task has to start counting again.\n\nThe kstrtol() failure below has the same effect, and base 0 rejects zero-padded names containing 8 or 9 (f.000009), which is a naming style start_statahead_thread() explicitly supports via sai_fname_zeroed_len.\n\nShould the ownership test move above the two goto reset paths, so a foreign entry is left untouched?"
+        },
+        {
+          "path": "lustre/llite/statahead.c",
+          "line": 2393,
+          "kind": "defect",
+          "message": "(defect) The `!lli->lli_sa_sfname_cache &&` qualifier makes this precheck one-shot. The cache is only memset by ll_sax_put()/ll_sa_reset_locked() and only freed in ll_inode_destroy_callback(), so after the first shared round it is never NULL again and the digit test is skipped on every later pass.\n\nFrom then on a second pid stat'ing any name falls through to `lli->lli_sa_pattern |= LSA_PATTERN_FN_SHARED` below. sa_pattern_fname_detect() bails out on `pattern & LSA_PATTERN_FN_SHARED` for the rest of the round, so a single stat($dir/README) by an unrelated process demotes a single-process mdtest-style scan out of the FNAME detector and drops the lli_sa_fname progress it had built up (sa_alloc_sfname_cache() only migrates that state when it allocates the cache).\n\nDropping the `!lli->lli_sa_sfname_cache &&` part keeps the guard working on every pass."
+        }
+      ]
+    },
+    {
+      "case": "68339_ps2",
+      "sha": "f240b09615b29a8f79389617bd53b9746ae6bea0",
+      "subject": "LU-12669 ec: serialize concurrent EC recovery readers",
+      "status": "findings",
+      "finding_count": 1,
+      "severity": "medium",
+      "duration_s": 1135,
+      "tokens": 6118369,
+      "cost_usd": 7.179094500000001,
+      "tool_calls": 60,
+      "shell_commands": 60,
+      "findings": [
+        {
+          "path": "lustre/llite/vvp_io.c",
+          "line": 1579,
+          "kind": "defect",
+          "message": "(defect) Is clearing PageUptodate on its own enough to force the next read back through ll_readpage()? cp_defer_uptodate is left set on these pages.\n\nA readahead page whose read succeeded is deliberately left !PageUptodate with cp_defer_uptodate == 1 in vvp_page_complete_read(), and nothing clears that flag afterwards. lov_ec_read_stripe_pages() classifies purely on PageUptodate(), so such a page on an LSS_READ_ERR stripe becomes EC_DPG_ERROR and lands on ec_page_list; cl_page_find() returns the pre-existing cl_page, so the flag survives reconstruction and this clear.\n\nThe next read then short-circuits in ll_io_read_page():\n\n    uptodate = page->cp_defer_uptodate;\n    if (uptodate) {\n        SetPageUptodate(page->cp_vmpage);\n        cl_page_disown(env, io, page);\n    }\n\nand the fast-read path in ll_readpage() (io == NULL) re-sets it without entering the io stack at all. Either way the reconstructed contents are served again with no RPC and no fresh DLM lock, which is the coherency the clear is meant to restore.\n\nsanity-ec test_74a deactivates the OST while readers are running, so pages sitting in the readahead window in exactly that state are the common case rather than a corner. Should cp_defer_uptodate be cleared alongside PageUptodate here?"
+        }
+      ]
+    },
+    {
+      "case": "68468_ps1",
+      "sha": "a8acdb84d3addb1dd0c27029cca60e708e36e7e0",
+      "subject": "LU-19921 ptlrpc: do not unpack req in gssiam_extract_h_exp",
+      "status": "findings",
+      "finding_count": 1,
+      "severity": "medium",
+      "duration_s": 690,
+      "tokens": 5059367,
+      "cost_usd": 5.374968999999999,
+      "tool_calls": 61,
+      "shell_commands": 60,
+      "findings": [
+        {
+          "path": "lustre/ptlrpc/gss/sec_gssiam_srv.c",
+          "line": 407,
+          "kind": "defect",
+          "message": "(defect) Should the cookie be swabbed at all? Connection handles are opaque 8-byte cookies that round-trip byte-for-byte, so nothing in ptlrpc swabs them: lustre_swab_ptlrpc_body() deliberately starts at pb_type and never touches pb_handle, and lustre_swab_ldlm_request() spells the same rule out with \"lock_handle[] opaque\". On the client side ptlrpc_connect_interpret() copies the cookie raw out of the reply into imp_remote_handle and ptl_send_rpc()->lustre_msg_set_handle() writes it back raw.\n\nSo for the same request the core path resolves the un-swabbed value:\n\n    req->rq_export = class_conn2export(lustre_msg_get_handle(req->rq_reqmsg));\n\nwhile this one resolves a byte-reversed one.\n\nFor an opposite-endian client - the case this change is about - class_conn2export() then misses, h_exp stays NULL, and gssiam_handle_init() falls back to req->rq_export, which is still NULL this early in sptlrpc_svc_unwrap_request(). tgt_gssiam_verify() takes its no-export branch and gssiam_ctx_install_nodemap() is skipped, so the refreshed identity never gets bound to the live export.\n\nThe swab came over from the old req_capsule_req_need_swab() branch, but since the point of the change is endianness correctness it looks like it should be dropped."
+        }
+      ]
+    },
+    {
+      "case": "68627_ps1",
+      "sha": "c756d1ed0844fccf0f5260f0472036060f4209d8",
+      "subject": "LU-20689 utils: Support decimal (SI) size units",
+      "status": "findings",
+      "finding_count": 3,
+      "severity": "low",
+      "duration_s": 1025,
+      "tokens": 7651596,
+      "cost_usd": 7.5493739999999985,
+      "tool_calls": 70,
+      "shell_commands": 70,
+      "findings": [
+        {
+          "path": "Documentation/man1/lfs-setstripe.1",
+          "line": 329,
+          "kind": "minor",
+          "message": "(minor) \"a decimal unit is refused here as well\" is broader than what the code does. The check is `lsa.lsa_comp_end & (LOV_MIN_STRIPE_SIZE - 1)`, and 1024MB is 1024 * 10^6 = 2^16 * 15625, so `-E 1024MB` is 64KiB-aligned and accepted (so are 2048MB, 1024GB, ...). Only decimal values that happen not to be 64KiB multiples are refused.\n\nThe -S wording above has the same shape, though it is at least tied to the 1MB example. Maybe say a decimal unit is unlikely to land on a 64KiB boundary, rather than that it is refused?"
+        },
+        {
+          "path": "Documentation/man1/lfs-find.1",
+          "line": 806,
+          "kind": "minor",
+          "message": "(minor) On this page a bare B is not a decimal marker. `lfs find --size 1B` still takes the `case 'b'` branch in llapi_parse_size(), which sets `*size_units = 1 << 9`, so it means 512 bytes, not 1 - and this is the one page where that suffix is documented behavior for find(1) compatibility.\n\nWorth saying the trailing B applies after a K/M/G/T/P/E letter, so a reader doesn't try `--size 1000B` and get 512000."
+        },
+        {
+          "path": "lustre/utils/liblustreapi.c",
+          "line": 291,
+          "kind": "minor",
+          "message": "(minor) `argbuf` is now just an alias for `optarg` - the old `argbuf = end + 1` reassignment is gone, so this is the only use left. `strtoull(optarg, &end, 0)` takes a `const char *` directly, so the variable and its cast can go.\n\nSame line below: `end` cannot be NULL after strtoull() stored through `&end`, so the `end != NULL &&` half of the next test is dead."
+        }
+      ]
+    }
+  ]
+}

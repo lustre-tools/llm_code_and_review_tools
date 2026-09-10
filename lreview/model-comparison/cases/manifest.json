@@ -1,0 +1,80 @@
+{
+  "description": "Lustre patchsets used to compare AI review backends. Each case is pinned to the revision SHA of one Gerrit patchset, so every run reviews byte-identical code.",
+  "project": "fs/lustre-release",
+  "selected_because": "open changes that the Gerrit 'aireview' bot had already commented on at that patchset, spread across subsystems and diff sizes",
+  "cases": [
+    {
+      "change": 68339,
+      "patchset": 2,
+      "sha": "f240b09615b29a8f79389617bd53b9746ae6bea0",
+      "url": "https://review.whamcloud.com/c/fs/lustre-release/+/68339/2",
+      "subject": "LU-12669 ec: fix reader deadlock, stale cache, EAGAIN leak",
+      "diffstat": "6 files changed, 158 insertions(+), 37 deletions(-)",
+      "files_touched": [
+        "lustre/include/cl_object.h",
+        "lustre/llite/file.c",
+        "lustre/llite/vvp_io.c",
+        "lustre/lov/lov_io.c",
+        "lustre/obdclass/cl_io.c",
+        "lustre/tests/sanity-ec.sh"
+      ],
+      "lreview_arg": "https://review.whamcloud.com/c/fs/lustre-release/+/68339/2"
+    },
+    {
+      "change": 67980,
+      "patchset": 2,
+      "sha": "f3b4f4d37635a9297f65906b682369860e2179b9",
+      "url": "https://review.whamcloud.com/c/fs/lustre-release/+/67980/2",
+      "subject": "LU-20582 llite: fix statahead SFNAME pattern detection",
+      "diffstat": "6 files changed, 361 insertions(+), 86 deletions(-)",
+      "files_touched": [
+        "lustre/llite/llite_internal.h",
+        "lustre/llite/llite_lib.c",
+        "lustre/llite/lproc_llite.c",
+        "lustre/llite/statahead.c",
+        "lustre/llite/super25.c",
+        "lustre/tests/sanity.sh"
+      ],
+      "lreview_arg": "https://review.whamcloud.com/c/fs/lustre-release/+/67980/2"
+    },
+    {
+      "change": 68627,
+      "patchset": 1,
+      "sha": "c756d1ed0844fccf0f5260f0472036060f4209d8",
+      "url": "https://review.whamcloud.com/c/fs/lustre-release/+/68627/1",
+      "subject": "LU-20689 utils: Support decimal (SI) size units",
+      "diffstat": "16 files changed, 388 insertions(+), 77 deletions(-)",
+      "files_touched": [
+        "Documentation/man1/lfs-find.1",
+        "Documentation/man1/lfs-getstripe.1",
+        "Documentation/man1/lfs-ladvise.1",
+        "Documentation/man1/lfs-migrate.1",
+        "Documentation/man1/lfs-mirror-create.1",
+        "Documentation/man1/lfs-mirror-extend.1",
+        "Documentation/man1/lfs-mirror-resync.1",
+        "Documentation/man1/lfs-setquota.1",
+        "Documentation/man1/lfs-setstripe.1",
+        "Documentation/man1/lfs_migrate.1",
+        "Documentation/man8/llsom_sync.8",
+        "lustre/tests/replay-single.sh",
+        "lustre/tests/sanity-hsm.sh",
+        "lustre/tests/sanity.sh",
+        "lustre/utils/lhsmtool_posix.c",
+        "lustre/utils/liblustreapi.c"
+      ],
+      "lreview_arg": "https://review.whamcloud.com/c/fs/lustre-release/+/68627/1"
+    },
+    {
+      "change": 68468,
+      "patchset": 1,
+      "sha": "a8acdb84d3addb1dd0c27029cca60e708e36e7e0",
+      "url": "https://review.whamcloud.com/c/fs/lustre-release/+/68468/1",
+      "subject": "LU-19921 ptlrpc: do not unpack req in gssiam_extract_h_exp",
+      "diffstat": "1 file changed, 98 insertions(+), 33 deletions(-)",
+      "files_touched": [
+        "lustre/ptlrpc/gss/sec_gssiam_srv.c"
+      ],
+      "lreview_arg": "https://review.whamcloud.com/c/fs/lustre-release/+/68468/1"
+    }
+  ]
+}

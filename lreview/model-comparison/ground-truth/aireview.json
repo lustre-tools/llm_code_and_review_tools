@@ -1,0 +1,237 @@
+{
+  "description": "Findings the Gerrit 'aireview' bot posted on each case's patchset, scraped from Gerrit. Treated as the reference set: a human-reviewed, already-actioned review from a more expensive model. Not ground truth in the strict sense -- it is neither complete nor guaranteed correct.",
+  "source": "gerrit comments, author username 'aireview'",
+  "scraped": "2026-09-09",
+  "cases": {
+    "68339_ps2": {
+      "change": 68339,
+      "patchset": 2,
+      "subject": "LU-12669 ec: serialize concurrent EC recovery readers",
+      "finding_count": 6,
+      "findings": [
+        {
+          "id": "68339_ps2-A1",
+          "path": "/COMMIT_MSG",
+          "line": 12,
+          "kind": "minor",
+          "message": "(minor) Only the -EAGAIN half of this leads to a restart. ll_file_io_generic() gates the restart on\n\n    (!rc || rc == -ENODATA || rc == -ENOLCK || rc == -EIOCBQUEUED) && bytes > 0 && io->ci_need_restart\n\nand -EINTR is not in that set, nor is it converted anywhere in cl_io_loop(). So the -EINTR path returns EINTR to userspace (or the short count if bytes were already transferred); it does not restart. Could the wording separate the two?",
+          "resolved": true,
+          "author_replies": []
+        },
+        {
+          "id": "68339_ps2-A2",
+          "path": "/COMMIT_MSG",
+          "line": 23,
+          "kind": "minor",
+          "message": "(minor) \"instead of discarding them\" doesn't match the code being replaced. The pre-image of vvp_io_ec_rd_end() only did cl_page_list_fini() on ec_page_list, which drops the cl_page refs; it never called cl_page_discard()/cl_page_list_discard(). The change is adding a ClearPageUptodate(), not replacing a discard.",
+          "resolved": true,
+          "author_replies": []
+        },
+        {
+          "id": "68339_ps2-A3",
+          "path": "/COMMIT_MSG",
+          "line": 30,
+          "kind": "minor",
+          "message": "(minor) This describes a hazard that can't happen, so the hunk it refers to has no functional effect - see the note on lustre/llite/file.c. Worth either dropping the sentence or rewording it as a deliberate decoupling from vvp_env_new_io() rather than a fix.",
+          "resolved": true,
+          "author_replies": []
+        },
+        {
+          "id": "68339_ps2-A4",
+          "path": "lustre/include/cl_object.h",
+          "line": 805,
+          "kind": "minor",
+          "message": "(minor) Placing cp_flags here costs more than the 8 bytes it needs. It lands between the bitfield group and the cp_kmem_index union, so on x86_64 struct cl_page goes 80 -> 96 bytes: 4 bytes of padding before cp_flags plus 4 more after the short union. Moving the field to the end of the struct (after cp_sync_io) gives 88 bytes instead.\n\ncl_page is allocated one per cached page out of the cl_page_kmem-<bufsize> slab, so the extra 8 bytes scale with the client page cache.",
+          "resolved": true,
+          "author_replies": []
+        },
+        {
+          "id": "68339_ps2-A5",
+          "path": "lustre/llite/file.c",
+          "line": 2145,
+          "kind": "minor",
+          "message": "(minor) vvp_env_new_io() returns &vvp_env_info(env)->vti_io unconditionally, so `io` at the top of restart: is already that same object - the old `io->ci_switch_ec_io` read happened before the memset, on exactly the storage the local now caches. cl_io_fini() at out: doesn't clear the bit either. So this hunk plus the one at the restart goto is a no-op today.\n\nNo objection to keeping it as insulation against vvp_env_new_io() changing, but then the comment shouldn't read as if it is fixing a live bug.",
+          "resolved": true,
+          "author_replies": []
+        },
+        {
+          "id": "68339_ps2-A6",
+          "path": "lustre/lov/lov_io.c",
+          "line": 2032,
+          "kind": "minor",
+          "message": "(minor) This -EAGAIN feeds the caller's generic failure arm in lov_io_ec_rd_start():\n\n    if (rc) {\n        CWARN(\"...fail to read stripe %d: rc = %d\\n\", ...);\n        io->u.ci_ec.ec_recovery_failed = true;\n        GOTO(rg_cleanup, rc);\n    }\n\nSo losing the race with another reader is logged unconditionally on the console and recorded as an unrecoverable recovery failure, which also makes vvp_io_ec_rd_end() throw away the reconstruction already done for earlier recovery groups in this iteration.\n\nBy the reasoning in the comment above the retry loop, that is the expected outcome rather than a rare one: the owner can take up to obd_timeout coming back from a dead OST while the budget here caps out at 2s, so a second reader will normally exhaust it and restart. With four concurrent readers (sanity-ec test_74a) that is a steady stream of console warnings for a benign condition. Would it be worth distinguishing the contention -EAGAIN from a real stripe failure at the caller?",
+          "resolved": true,
+          "author_replies": []
+        }
+      ]
+    },
+    "67980_ps2": {
+      "change": 67980,
+      "patchset": 2,
+      "subject": "LU-20582 llite: fix statahead SFNAME pattern detection",
+      "finding_count": 7,
+      "findings": [
+        {
+          "id": "67980_ps2-A1",
+          "path": "/COMMIT_MSG",
+          "line": 18,
+          "kind": "typo",
+          "message": "(typo) The field added is `lli_sa_sfname_cache`, not `lli_sa_fname_cache`. Worth matching the code so `git log -S` finds this later. Also \"with 5 slot\" -> \"slots\".",
+          "resolved": false,
+          "author_replies": []
+        },
+        {
+          "id": "67980_ps2-A2",
+          "path": "/COMMIT_MSG",
+          "line": 29,
+          "kind": "typo",
+          "message": "(typo) This bullet looks truncated: \"If the entry is valid, a new.\" It also repeats the start of the bullet above it.",
+          "resolved": false,
+          "author_replies": []
+        },
+        {
+          "id": "67980_ps2-A3",
+          "path": "lustre/llite/lproc_llite.c",
+          "line": 1099,
+          "kind": "suggestion",
+          "message": "(suggestion) Writing `enable_statahead_sfname=1` silently switches `enable_statahead_fname` back on, and the fname store does the reverse. That is surprising for an admin who deliberately turned fname off, and it isn't mentioned in the commit message.\n\nThe coupling looks like it only exists because `sa_pattern_detect()` stops on the `-EACCES` that `sa_pattern_fname_detect()` returns when fname is disabled. Letting that case fall through to `sa_pattern_sfname_detect()` would keep the two knobs independent.\n\nThe guard is also redundant - `sbi->ll_enable_statahead_fname = val;` alone has the same effect.",
+          "resolved": false,
+          "author_replies": []
+        },
+        {
+          "id": "67980_ps2-A4",
+          "path": "lustre/llite/statahead.c",
+          "line": 2242,
+          "kind": "minor",
+          "message": "(minor) `SA_DETECT_HIT` is never returned - `sa_sfi_detect()` yields 0, `SA_DETECT_MATCH` or a negative errno, and neither list nor sfname detect uses it. Is a caller meant to distinguish it, or can it go?",
+          "resolved": false,
+          "author_replies": []
+        },
+        {
+          "id": "67980_ps2-A5",
+          "path": "lustre/llite/statahead.c",
+          "line": 2279,
+          "kind": "defect",
+          "message": "(defect) When this second precheck fails, `rc` still holds the `is_first_dirent()` result instead of `SA_DETECT_NONE`, and those values overlap the new enum: `LS_FIRST_DE` is 1 (`SA_DETECT_HIT`) and `LS_FIRST_DOT_DE` is 2 (`SA_DETECT_MATCH`).\n\nFor the dot case `sa_pattern_detect()` then reports a match even though no pattern bit was set, so `start_statahead_thread()` allocates the sai, installs the ctx and creates the kthread before hitting the \"unsupported statahead pattern\" CERROR at the `pattern & (LSA_PATTERN_SFNAME | LSA_PATTERN_LIST)` test. For `LS_FIRST_DE` it returns 0 but also skips the fname/sfname detectors, which the old `||` chain did not.\n\nThe window is `is_first_dirent()` itself, which does a readdir RPC. Two `ls -l` on the same directory is enough: only the first gets `lli_opendir_key`, the second still passes `dentry_may_statahead()`, and when the first closes its dirfd `ll_deauthorize_statahead()->ll_sa_reset_locked()` clears `lli_sa_enabled` under the second one.\n\nAn `else rc = SA_DETECT_NONE;` here would restore the old bool behaviour.",
+          "resolved": false,
+          "author_replies": []
+        },
+        {
+          "id": "67980_ps2-A6",
+          "path": "lustre/llite/statahead.c",
+          "line": 2352,
+          "kind": "defect",
+          "message": "(defect) The match path falls into `reset:`, which does `*pid = 0`. `sa_pattern_fname_detect()` passes `&lli->lli_stat_pid` as `pid`, so a successful non-shared FNAME match now zeroes the directory statahead owner token; the old code left it at `current->pid`.\n\nThat disables the throttle at the end of `start_statahead_thread()`:\n\n    if (lli->lli_stat_pid == current->pid)\n            lli->lli_sa_enabled = 0;\n\nWith `lli_stat_pid == 0` it never fires, so an `-EMFILE` from the `ll_sa_running_max` check (or an `-ENOMEM` on the sai) no longer disables statahead for the dir. `lli_sa_pattern` keeps `LSA_PATTERN_FNAME`, `dentry_may_statahead()` keeps returning true, and the client re-attempts the failed thread creation every `statahead_fname_match_hit` stats instead of backing off once.\n\n`sa_pattern_list_precheck()` also reads `lli_stat_pid == 0` as \"no owner\". Should the pid only be cleared for the shared-cache caller?",
+          "resolved": false,
+          "author_replies": []
+        },
+        {
+          "id": "67980_ps2-A7",
+          "path": "lustre/tests/sanity.sh",
+          "line": 17059,
+          "kind": "minor",
+          "message": "(minor) `inst` is assigned but never read - the body uses `$instance` from the caller's scope, so this helper only works when called from `test_123m()`. Passing it in and using `$inst` would be safer.\n\nTwo more nits nearby: `running_max` is missing from the `local` list, so it leaks into later subtests, and the error text on the `{1..20}` stat still says `{1..10}`.",
+          "resolved": false,
+          "author_replies": []
+        }
+      ]
+    },
+    "68627_ps1": {
+      "change": 68627,
+      "patchset": 1,
+      "subject": "LU-20689 utils: Support decimal (SI) size units",
+      "finding_count": 5,
+      "findings": [
+        {
+          "id": "68627_ps1-A1",
+          "path": "/COMMIT_MSG",
+          "line": 12,
+          "kind": "minor",
+          "message": "(minor) Was \"1Gjunk\" really accepted before? The old code did `char next = tolower(*(end + 1));` and then `if (next != '\\0' && next != 'i' && next != 'b') return -EINVAL;`, so 'j' made it fail. The forms that were silently swallowed are the ones whose first trailing character is 'i' or 'b' - \"1Gi\", \"1Gb\", \"1Gigabyte\". Using one of those as the example would also make the point that \"1Gi\" is now a hard error, which is a user-visible change of its own.",
+          "resolved": true,
+          "author_replies": []
+        },
+        {
+          "id": "68627_ps1-A2",
+          "path": "/COMMIT_MSG",
+          "line": 19,
+          "kind": "minor",
+          "message": "(minor) The shortfall looks off by a factor of 10^9. With `frac = 999999999999999999`, `frac_d = 10^18` and `size_units = 2^60`, `frac * size_units` wraps to 17293822569102704640 and the fraction contributes 17 bytes, so the old result was 1152921504606846993 against a correct 2305843009213693950 - about 1.15 EB (just under 1 EiB) short, not 1.1 GB.",
+          "resolved": true,
+          "author_replies": []
+        },
+        {
+          "id": "68627_ps1-A3",
+          "path": "Documentation/man1/lfs-setstripe.1",
+          "line": 359,
+          "kind": "minor",
+          "message": "(minor) This granularity does not match the code. layout_stripe_size_set() divides an extension size by SEL_UNIT_SIZE (1024) before checking it, and only then calls llapi_stripe_size_is_aligned(), which tests `size & (LOV_MIN_STRIPE_SIZE - 1)`. So EXT_SIZE has to be a multiple of 64MiB, not 64KiB - `-z 1M` and even `-z 64K` are rejected with \"invalid extension size\". Every in-tree user (sanity-flr, sanity-pfl, sanity-hsm, sanity-lfsck) uses 64M or larger, which matches. Should this say 64MiB?",
+          "resolved": true,
+          "author_replies": []
+        },
+        {
+          "id": "68627_ps1-A4",
+          "path": "Documentation/man8/llsom_sync.8",
+          "line": 57,
+          "kind": "typo",
+          "message": "(typo) This \"256MB\" is one of the spellings the patch set out to convert: DEF_CACHE_SIZE is `256 * 1048576`, so it is 256MiB. It now reads oddly right below the new paragraph that defines \"1MB\" as 10^6.\n\nThe suffix list on the line above ([KkGgMm]) is also missing T/P/E and the new B while you are here.",
+          "resolved": true,
+          "author_replies": []
+        },
+        {
+          "id": "68627_ps1-A5",
+          "path": "lustre/tests/sanity.sh",
+          "line": 38073,
+          "kind": "style",
+          "message": "(style) Not a bug, but the skip text only restates the version. Something like \"need client with decimal (SI) size unit support\" says why the gate is there; same for the copies in 921b/921c/921d and sanity-hsm 608.",
+          "resolved": true,
+          "author_replies": []
+        }
+      ]
+    },
+    "68468_ps1": {
+      "change": 68468,
+      "patchset": 1,
+      "subject": "LU-19921 ptlrpc: do not unpack req in gssiam_extract_h_exp",
+      "finding_count": 4,
+      "findings": [
+        {
+          "id": "68468_ps1-A1",
+          "path": "/COMMIT_MSG",
+          "line": 29,
+          "kind": "minor",
+          "message": "(minor) If this does stay a separate change instead of being squashed, could it carry the origin so the bug can be tracked?\n\n    Fixes: b3cfd7572798 (\"LU-19921 target: verify GSSIAM tokens on the target\")",
+          "resolved": false,
+          "author_replies": []
+        },
+        {
+          "id": "68468_ps1-A2",
+          "path": "/COMMIT_MSG",
+          "line": 30,
+          "kind": "suggestion",
+          "message": "(suggestion) This changes how a wire message's byte order is detected, and the failure it fixes only shows up for opposite-endian peers. A Test-Parameters: line asking for a cross-arch/interop run would document that the interop side was exercised, e.g.\n\n    Test-Parameters: clientdistro=rocky9.5 clientarch=aarch64",
+          "resolved": false,
+          "author_replies": []
+        },
+        {
+          "id": "68468_ps1-A3",
+          "path": "lustre/ptlrpc/gss/sec_gssiam_srv.c",
+          "line": 372,
+          "kind": "style",
+          "message": "(style) Can this be NULL? lustre_msg_buf() only returns NULL for n >= lm_bufcount or buflen < min_size, and buffer 1 was already checked to exist with min_size 0, so the branch looks unreachable.",
+          "resolved": false,
+          "author_replies": []
+        },
+        {
+          "id": "68468_ps1-A4",
+          "path": "lustre/ptlrpc/gss/sec_gssiam_srv.c",
+          "line": 395,
+          "kind": "minor",
+          "message": "(minor) This is exactly lustre_msg_hdr_size_v2() from pack_generic.c:\n\n    return round_up(offsetof(struct lustre_msg_v2, lm_buflens[count]), 8);\n\nOpen-coding it here means the two copies can drift if the header layout ever changes. lustre_msg_hdr_size() is the public wrapper but is not EXPORT_SYMBOL'd, so ptlrpc_gss cannot link against it today - would it be worth exporting it (or moving the _v2 helper into a header) and calling it from here?",
+          "resolved": true,
+          "author_replies": []
+        }
+      ]
+    }
+  }
+}
