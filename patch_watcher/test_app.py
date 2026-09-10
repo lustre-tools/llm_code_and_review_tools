@@ -593,13 +593,13 @@ class PatchWatcherTests(AppGlobalsIsolated):
             self.assertNotIn("Last run", quiet)
 
             standing.save(app.PatchAutomationPolicy.for_preset("35302", "retest"))
-            gated = app._patch_now_html(patch_record)
-            self.assertIn("Level <strong>Known retests</strong>, but the global kill switch is off", gated)
-            self.assertIn("href='/automation/global/confirm-enable'", gated)
-            self.assertIn("press Run now", gated)
-            automation.set_global_automation(True, changed_by="test", reason="test")
             live = app._patch_now_html(patch_record)
             self.assertIn("Level <strong>Known retests</strong>: acts unattended", live)
+            automation.set_global_automation(False, changed_by="test", reason="test")
+            gated = app._patch_now_html(patch_record)
+            self.assertIn("Level <strong>Known retests</strong>, but the global kill switch has been turned off", gated)
+            self.assertIn("href='/automation/global/confirm-enable'", gated)
+            self.assertIn("press Run now", gated)
 
             store.register_pinned_session(
                 "pw-session-done", patch_id="35302", run_id="pw-review-35302-ps4-old",
@@ -643,6 +643,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
             root = Path(temp_dir)
             automation = app.initialize_automation_store(root / "automation.sqlite3")
             standing = app.initialize_standing_policy_store(root / "standing.json")
+            automation.set_global_automation(False, changed_by="test", reason="prove the button ignores it")
             self.assertFalse(automation.get_global_automation().enabled)
             patch_record, _ = app.add_patch("https://review.whamcloud.com/c/35302")
             patch_record.update(
@@ -928,7 +929,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertIn("action='/standing-policy/run-now'", rendered)
         self.assertIn("Watch only has nothing to run", rendered)
 
-    def test_retest_automation_defaults_globally_and_per_patch_disabled(self):
+    def test_retest_automation_gate_starts_on_and_per_patch_starts_disabled(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = app.initialize_automation_store(Path(temp_dir) / "automation.sqlite3")
             patch_record, _ = app.add_patch("https://review.whamcloud.com/c/68160")
@@ -942,9 +943,11 @@ class PatchWatcherTests(AppGlobalsIsolated):
             rendered = app.page()
             global_enabled = store.get_global_automation().enabled
             policy_mode = store.get_policy("68160").mode
-        self.assertFalse(global_enabled)
+        # The gate starts on; what a fresh patch does is still nothing, because
+        # its level starts at Watch only.
+        self.assertTrue(global_enabled)
         self.assertEqual(policy_mode, "disabled")
-        self.assertIn("Global execution: Disabled", rendered)
+        self.assertIn("Global execution: Enabled", rendered)
         self.assertIn("Test failure handling: <strong>Disabled", rendered)
         self.assertIn("<strong>Build failures</strong>", rendered)
         self.assertIn("<strong>Review comments</strong>", rendered)
@@ -1373,6 +1376,8 @@ class PatchWatcherTests(AppGlobalsIsolated):
     def test_global_automation_enable_get_is_display_only_then_post_mutates(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = app.initialize_automation_store(Path(temp_dir) / "automation.sqlite3")
+            # The gate starts on; this flow is for turning it back on later.
+            store.set_global_automation(False, changed_by="test", reason="start from off")
             server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -1666,6 +1671,8 @@ class PatchWatcherTests(AppGlobalsIsolated):
             store = app.initialize_automation_store(
                 Path(temp_dir) / "automation.sqlite3"
             )
+            # The gate starts on; this test is about what the switch stops.
+            store.set_global_automation(False, changed_by="test", reason="start from off")
             app.initialize_session_store(Path(temp_dir) / "sessions.sqlite3")
             patch_record, _ = app.add_patch(
                 "https://review.whamcloud.com/c/68160"
@@ -3002,7 +3009,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
             with self.assertRaises(HTTPError) as refused:
                 urlopen(blind)
             self.assertEqual(refused.exception.code, 403)
-            self.assertFalse(store.get_global_automation().enabled)
+            self.assertTrue(store.get_global_automation().enabled)  # the default, untouched
             # Nothing may claim a confirmation the code did not verify.
             self.assertEqual(store.list_global_automation_audit(), [])
 

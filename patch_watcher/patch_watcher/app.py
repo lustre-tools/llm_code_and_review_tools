@@ -2744,9 +2744,10 @@ def _standing_policy_html(patch):
         gate_note = " The global kill switch is <strong>on</strong>, so this level is live."
     else:
         gate_note = (
-            " The global kill switch is <strong>off</strong>, so nothing runs unattended "
-            "until it is <a href='/automation/global/confirm-enable'>turned on</a>; the "
-            "level is saved and waiting. <strong>Run now</strong> applies it once regardless."
+            " The global kill switch has been <strong>turned off</strong>, so nothing runs "
+            "unattended until it is <a href='/automation/global/confirm-enable'>turned back "
+            "on</a>; the level is saved and waiting. <strong>Run now</strong> applies it once "
+            "regardless."
         )
     return (
         "<section class='standing-policy'><div class='policy-heading'>"
@@ -2916,9 +2917,9 @@ def _patch_now_html(patch):
                 f"Level <strong>{escape(policy.label)}</strong>"
                 + (": acts unattended when there is something to do, at the next check."
                    if gate else
-                   ", but the global kill switch is off, so nothing runs unattended until it "
-                   "is <a href='/automation/global/confirm-enable'>turned on</a> -- or you "
-                   "press Run now.")
+                   ", but the global kill switch has been turned off, so nothing runs "
+                   "unattended until it is <a href='/automation/global/confirm-enable'>turned "
+                   "back on</a> -- or you press Run now.")
             )
     except (StandingPolicyError, ValueError):
         level_html = "Level unavailable."
@@ -2931,6 +2932,15 @@ def _patch_now_html(patch):
             f"{escape(last.state.replace('_', ' '))} "
             f"{escape(last.state_changed_at.isoformat(timespec='minutes'))}."
         )
+        # A failure says why, here, not only on the run page: the first thing
+        # an operator asks of a failed run is what happened.
+        failure_code, failure_summary = _run_failure(last)
+        if last.state != "succeeded" and (failure_summary or failure_code):
+            why = " ".join(str(failure_summary or failure_code).split())
+            last_html += (
+                f"<br><span class='run-failure-line'>Why: {escape(why[:240])}"
+                + ("…" if len(why) > 240 else "") + "</span>"
+            )
     try:
         interval = int(configured_refresh_interval())
     except Exception:

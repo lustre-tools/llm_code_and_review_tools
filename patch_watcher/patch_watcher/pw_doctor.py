@@ -225,7 +225,12 @@ def _probe_bypass_disclaimer(
 
     try:
         result = runner(
-            [binary, "--bg", "--permission-mode", "bypassPermissions",
+            # The host runs claude in --print mode; --bg is a different mode
+            # with its own, stricter rule, and probing it reported a refusal
+            # that never applied to a real run.  The bogus resume id is what
+            # keeps this from starting a session: it is rejected after the
+            # permission check and before any model call.
+            [binary, "--print", "--permission-mode", "bypassPermissions",
              "--resume", "00000000-0000-0000-0000-000000000000", "noop"],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             timeout=60, check=False,
@@ -239,8 +244,15 @@ def _probe_bypass_disclaimer(
     if "requires accepting the disclaimer" in blob:
         return Check(
             name="claude:bypass-disclaimer", ok=False,
-            detail="background sessions cannot use bypassPermissions yet",
+            detail="print-mode sessions cannot use bypassPermissions yet",
             fix=DISCLAIMER_HINT,
+        )
+    if "No conversation found" in blob:
+        # Past the permission check and stopped only by the bogus id: exactly
+        # the outcome the probe is built to produce.
+        return Check(
+            name="claude:bypass-disclaimer", ok=True,
+            detail="bypassPermissions is accepted in print mode, which the host uses",
         )
     if result.returncode:
         # Do not report success for an unrelated failure (a bad API key, a
@@ -252,7 +264,7 @@ def _probe_bypass_disclaimer(
         )
     return Check(
         name="claude:bypass-disclaimer", ok=True,
-        detail="bypassPermissions is accepted for background sessions",
+        detail="bypassPermissions is accepted in print mode, which the host uses",
     )
 
 

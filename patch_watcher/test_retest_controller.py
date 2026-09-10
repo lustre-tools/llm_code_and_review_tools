@@ -146,8 +146,8 @@ def configured_store(tmp_path, *, mode="automatic", global_enabled=False):
         delivery_budget=1,
         updated_by="test",
     )
-    if global_enabled:
-        store.set_global_automation(True, changed_by="test", reason="test")
+    # The gate starts on now; the helper says which way it wants it.
+    store.set_global_automation(bool(global_enabled), changed_by="test", reason="test")
     return store
 
 

@@ -266,6 +266,10 @@ class AutomationStateStoreTests(unittest.TestCase):
             "attempt_id": "attempt-1",
             "evidence_fingerprint": "sha256:evidence",
         }
+        self.store.set_global_automation(
+            False, changed_by="patrick", reason="off",
+            at=START + timedelta(minutes=3),
+        )
         with self.assertRaises(GlobalAutomationDisabled):
             self.store.claim_research_admission("68160", **options)
         self.store.set_global_automation(
@@ -332,9 +336,15 @@ class AutomationStateStoreTests(unittest.TestCase):
             trigger,
         )
 
-    def test_global_execution_defaults_off_is_audited_and_gates_only_automatic(self):
+    def test_global_execution_starts_on_and_off_is_audited_and_gates_only_automatic(self):
+        # The gate starts ON: a freshly configured host acts at whatever level
+        # its patches are set to, without a second switch to find first.
         default = self.store.get_global_automation()
-        self.assertFalse(default.enabled)
+        self.assertTrue(default.enabled)
+        self.assertEqual(default.reason, "on by default")
+        self.store.set_global_automation(
+            False, changed_by="patrick", reason="pause", at=START,
+        )
         automatic = self.make_run(mode="automatic")
         with self.assertRaises(GlobalAutomationDisabled):
             self.store.claim_run(automatic.run_id, "worker")
@@ -346,9 +356,9 @@ class AutomationStateStoreTests(unittest.TestCase):
             at=START + timedelta(minutes=1),
         )
         self.assertTrue(enabled.enabled)
-        self.assertEqual(
-            self.store.list_global_automation_audit()[0].reason,
+        self.assertIn(
             "enable controlled trial",
+            [event.reason for event in self.store.list_global_automation_audit()],
         )
         claimed = self.store.claim_run(automatic.run_id, "worker")
         self.assertEqual(claimed.status, "executing")

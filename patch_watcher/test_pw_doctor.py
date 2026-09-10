@@ -173,10 +173,14 @@ class AgentInstructionDiscoveryTests(unittest.TestCase):
 class BypassDisclaimerTests(unittest.TestCase):
     """The default check must never launch anything.
 
-    The obvious probe -- running `claude --bg` with a bogus resume id -- starts
-    a real unattended bypassPermissions session once the disclaimer IS
-    accepted, and leaves it running under a fixed id that later runs collide
-    on. A health check must not spawn agents.
+    The obvious probe -- running claude with a bogus resume id -- starts a
+    real bypassPermissions session once the disclaimer IS accepted, and
+    leaves it running under a fixed id that later runs collide on. A health
+    check must not spawn agents.
+
+    The probe itself uses --print, the mode the host runs claude in; --bg has
+    a stricter rule of its own, and probing it reported a refusal that never
+    applied to a real run.
     """
 
     def test_the_default_check_runs_no_subprocess(self):
@@ -195,7 +199,7 @@ class BypassDisclaimerTests(unittest.TestCase):
         check = check_bypass_disclaimer(
             probe=True,
             runner=lambda *a, **k: completed(
-                stderr="--bg with bypassPermissions requires accepting the disclaimer first"
+                stderr="--print with bypassPermissions requires accepting the disclaimer first"
             ),
         )
         self.assertFalse(check.ok)
@@ -214,6 +218,24 @@ class BypassDisclaimerTests(unittest.TestCase):
     def test_the_probe_reports_success_only_on_a_clean_exit(self):
         check = check_bypass_disclaimer(probe=True, runner=lambda *a, **k: completed())
         self.assertTrue(check.ok)
+
+    def test_the_probe_uses_print_mode_and_a_rejected_bogus_id_is_a_pass(self):
+        """What a real, accepted host produces: exit 1, "No conversation
+        found" -- rejected past the permission check, before any model call."""
+        calls = []
+
+        def runner(command, **kwargs):
+            calls.append(command)
+            return completed(
+                returncode=1,
+                stderr="No conversation found with session ID: 00000000-0000-0000-0000-000000000000",
+            )
+
+        check = check_bypass_disclaimer(probe=True, runner=runner)
+        self.assertTrue(check.ok, check.detail)
+        self.assertIn("--print", calls[0])
+        self.assertNotIn("--bg", calls[0])
+        self.assertEqual(calls[0][calls[0].index("--permission-mode") + 1], "bypassPermissions")
 
     def test_an_unrunnable_claude_is_reported_not_raised(self):
         def explode(*args, **kwargs):

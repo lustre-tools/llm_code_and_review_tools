@@ -1469,14 +1469,24 @@ class ClaudeRunner:
         spec_path = runtime / "launch-spec.json"
         _atomic_private_json(spec_path, spec.to_dict())
         command = [sys.executable, str(Path(__file__).resolve()), "_host", "--spec", str(spec_path)]
-        process = self.host_launcher(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            shell=False,
-        )
+        # The host's stderr used to go to /dev/null.  A host that dies before
+        # its socket is ready then left one sentence behind -- "exited before
+        # its control socket was ready" -- and nothing else, which is what the
+        # first real run on a host produced.  It goes to a private file now,
+        # and its tail rides along in the failure the operator sees.
+        stderr_path = runtime / "host.stderr"
+        stderr_fd = os.open(str(stderr_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            process = self.host_launcher(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr_fd,
+                start_new_session=True,
+                shell=False,
+            )
+        finally:
+            os.close(stderr_fd)
         # Everything from here on runs under the abandon guard.  The host is
         # already launched, so any exit that is not a returned snapshot has to
         # take the process down with it -- including the identity read, whose
@@ -1497,7 +1507,11 @@ class ClaudeRunner:
             last_error: Exception | None = None
             while time.monotonic() < deadline:
                 if process.poll() is not None:
-                    raise ClaudeRunnerError("Claude host exited before its control socket was ready")
+                    raise ClaudeRunnerError(
+                        "Claude host exited before its control socket was ready "
+                        f"(exit status {process.returncode}): "
+                        + _stderr_tail(stderr_path)
+                    )
                 try:
                     snapshot = self.status(preliminary)
                     if snapshot.handle.run_id != spec.run_id or snapshot.handle.session_id != spec.session_id:
@@ -1682,6 +1696,19 @@ def request_host_stop(host: ClaudeHost) -> None:
     """
 
     host.stopping = True
+
+
+def _stderr_tail(path: Path, *, limit: int = 1200) -> str:
+    """The last lines a dead host wrote, or a sentence saying it wrote none."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "no stderr was captured"
+    lines = [line for line in text.strip().splitlines() if line.strip()]
+    if not lines:
+        return "the host wrote nothing to stderr"
+    tail = "\n".join(lines[-12:])
+    return tail[-limit:]
 
 
 def _host_main(spec_path: Path) -> int:

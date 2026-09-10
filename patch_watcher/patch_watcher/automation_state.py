@@ -267,7 +267,7 @@ def _json(name: str, value: Any, *, maximum_bytes: int = 256_000) -> str:
 class AutomationStateStore:
     """SQLite automation ledger with transactional claims and no external I/O."""
 
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 5
 
     _MIGRATIONS: ClassVar[dict] = {
         1: (
@@ -443,7 +443,7 @@ class AutomationStateStore:
             """
             INSERT INTO pw_automation_setting(
                 singleton, enabled, changed_by, reason, changed_at
-            ) VALUES (1, 0, 'system', 'safe default', 0)
+            ) VALUES (1, 1, 'system', 'on by default', 0)
             """,
             """
             CREATE TABLE pw_automation_setting_audit (
@@ -543,6 +543,18 @@ class AutomationStateStore:
             """
             CREATE INDEX pw_research_admission_state
             ON pw_research_admission(state, updated_at, admission_id)
+            """,
+        ),
+        # The global gate used to start OFF, on a card at the bottom of the
+        # page, so a freshly configured host did nothing at any level until
+        # someone found it.  It starts on now; the per-patch level is what an
+        # operator chooses.  A store whose gate no human ever touched (still
+        # 'system') follows suit; one somebody turned off stays off.
+        5: (
+            """
+            UPDATE pw_automation_setting
+            SET enabled = 1, reason = 'on by default'
+            WHERE singleton = 1 AND changed_by = 'system'
             """,
         ),
     }
