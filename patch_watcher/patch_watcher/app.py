@@ -765,6 +765,56 @@ def _consumed_standing_keys(patch, *, attended=False):
     return frozenset(consumed)
 
 
+def _standing_request_id(patch, decision):
+    """Name this ATTEMPT at a standing event, not just the event.
+
+    A controller replays a request identity it has seen: same id, same run.
+    That is what makes observing one event twice start one run -- but the
+    coalescing key is the same for every retry of an event, so a retry after
+    a run that never started replayed the dead run instead of starting a new
+    one.  Prior never-started attempts are counted into the id, so each try
+    is its own run while the event stays one event.
+    """
+    dead = _dead_standing_attempts(patch, decision.coalescing_key)
+    if not dead:
+        return decision.coalescing_key
+    return f"{decision.coalescing_key}#retry{dead}"
+
+
+def _dead_standing_attempts(patch, coalescing_key):
+    """Count runs started for this exact event that never reached an agent."""
+    if AUTOMATION_STORE is None or SESSION_STORE is None:
+        return 0
+    patch_id = str(patch.get("change_number") or "")
+    revision = str(patch.get("revision_sha") or "")
+    if not patch_id:
+        return 0
+    run_ids = [
+        str(item.payload.get("outcome"))
+        for item in AUTOMATION_STORE.list_observations(patch_id)
+        if item.source == "standing_policy"
+        and item.kind == "standing_policy_trigger_decision"
+        and item.revision == revision
+        and str(item.payload.get("coalescing_key")) == str(coalescing_key)
+        and item.payload.get("outcome")
+    ]
+    if not run_ids:
+        return 0
+    sessions = {
+        session.run_id: session
+        for session in SESSION_STORE.list_sessions(include_terminal=True)
+    }
+    dead = 0
+    for run_id in run_ids:
+        session = sessions.get(run_id)
+        if session is None or session.state != "failed":
+            continue
+        failure_code, _summary = _run_failure(session)
+        if failure_code in NEVER_STARTED_FAILURE_CODES:
+            dead += 1
+    return dead
+
+
 def _automatic_standing_decision(patch, policy, kind, fingerprint, *, attended=False):
     identity = _standing_identity(patch)
     active = _revision_owner_session(patch)
@@ -819,7 +869,7 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
             )
             if decision.eligible:
                 session = RUN_CONTROLLER.request_engineering(
-                    patch, request_id=decision.coalescing_key, task="rebase",
+                    patch, request_id=_standing_request_id(patch, decision), task="rebase",
                 )
                 SESSION_STORE.append_event(
                     session.session_id, "standing_policy_triggered", decision.to_dict(),
@@ -855,7 +905,7 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
                 try:
                     session = RUN_CONTROLLER.request_review_comments(
                         patch, snapshot, mode=policy.review_comments,
-                        request_id=decision.coalescing_key,
+                        request_id=_standing_request_id(patch, decision),
                         design_audit=policy.design_audit,
                     )
                 except NoReviewTargets as exc:
@@ -897,7 +947,7 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
             )
             if decision.eligible:
                 session = RUN_CONTROLLER.request_build_failure(
-                    patch, snapshot, request_id=decision.coalescing_key,
+                    patch, snapshot, request_id=_standing_request_id(patch, decision),
                 )
                 SESSION_STORE.append_event(
                     session.session_id, "standing_policy_triggered", decision.to_dict(),

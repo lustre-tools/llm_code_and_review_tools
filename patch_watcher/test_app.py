@@ -749,11 +749,18 @@ class PatchWatcherTests(AppGlobalsIsolated):
             class FakeRuns:
                 def __init__(self):
                     self.started = []
+                    self.requests = []
 
                 def stop(self):
                     return None
 
                 def request_engineering(self, patch, **kwargs):
+                    # A real controller derives the run id from the request id
+                    # and replays a repeat, so each attempt must arrive with a
+                    # distinct request id or it would return the dead run.
+                    request_id = kwargs["request_id"]
+                    assert request_id not in self.requests, "replayed a dead run"
+                    self.requests.append(request_id)
                     run_id = f"pw-engineer-35302-ps4-try{len(self.started) + 1}"
                     self.started.append(run_id)
                     # The real controller registers the session; the caller
@@ -810,6 +817,8 @@ class PatchWatcherTests(AppGlobalsIsolated):
             ]
             self.assertEqual(len(triggered), 4)
             self.assertEqual(len(set(triggered)), 1, "all four retried one event")
+            self.assertEqual(len(set(runs.requests)), 4, "each attempt asked distinctly")
+            self.assertTrue(all(r.startswith(triggered[0]) for r in runs.requests))
 
     def test_a_run_waiting_on_you_is_labelled_counted_and_explained(self):
         """The in-console channel: a paused run shows on the patch row, links
