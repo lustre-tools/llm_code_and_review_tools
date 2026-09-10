@@ -22,8 +22,9 @@ def render_review_start_control(
     disabled = " disabled" if not eligible else ""
     return (
         "<div class='review-start'>"
-        "<p class='detail'>Simple handles only clearly trivial comments; All attempts broadly. "
-        "Both bail to human when judgment is required.</p>"
+        "<p class='detail'>Simple handles only clearly trivial comments; Bots handles "
+        "threads opened by automated reviewers; All attempts everything. Each bails to "
+        "you when judgment is required.</p>"
         f"<form method='post' action='{escape(action, quote=True)}'>"
         f"<input type='hidden' name='csrf_token' value='{escape(csrf_token, quote=True)}'>"
         f"<input type='hidden' name='change_number' value='{escape(str(patch.get('change_number') or ''), quote=True)}'>"
@@ -32,6 +33,7 @@ def render_review_start_control(
         f"<input type='hidden' name='idempotency_token' value='{escape(idempotency_token, quote=True)}'>"
         "<label>Mode <select name='review_mode'>"
         "<option value='simple'>Handle simple comments</option>"
+        "<option value='bots'>Handle bot comments</option>"
         "<option value='all'>Handle all comments</option>"
         "</select></label>"
         f"<button type='submit'{disabled}>Review and start…</button></form>"
@@ -45,7 +47,10 @@ def render_review_start_confirmation(
     idempotency_token: str, confirmation_expires_at: str, csrf_token: str,
     action: str = "/review-runs/start",
 ):
-    label = "Handle simple comments" if mode == "simple" else "Handle all comments"
+    label = {
+        "simple": "Handle simple comments",
+        "bots": "Handle bot comments",
+    }.get(mode, "Handle all comments")
     return (
         "<main class='review-start-confirmation'><h1>Confirm review-comment run</h1>"
         f"<p><strong>{escape(label)}</strong> on change {escape(str(patch['change_number']))}, "

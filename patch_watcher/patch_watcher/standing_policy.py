@@ -32,7 +32,79 @@ STANDING_TRIGGER_PREFIX = "standing:"
 
 TEST_FAILURE_MODES = frozenset({"off", "deterministic", "investigate"})
 BUILD_FAILURE_MODES = frozenset({"off", "repair"})
-REVIEW_COMMENT_MODES = frozenset({"off", "simple", "all"})
+REVIEW_COMMENT_MODES = frozenset({"off", "simple", "bots", "all"})
+# The ladder.  Each level is a strict superset of the one below it; the
+# per-kind modes are DERIVED from the level, never the other way round, so
+# there is one thing to choose per patch.  "custom" is never selectable: it is
+# what a document saved by the old four-select form decodes to when its
+# triple matches no level, and the form offers the ladder to replace it.
+PRESET_LEVELS = ("watch", "retest", "investigate", "bots", "all", "own")
+PRESET_SETTINGS: Mapping[str, Mapping[str, Any]] = {
+    # level:       test_failures   build_failures review_comments trigger    audit
+    "watch":       {"test_failures": "off",           "build_failures": "off",    "review_comments": "off",  "trigger_mode": "manual",    "design_audit": True},
+    "retest":      {"test_failures": "deterministic", "build_failures": "off",    "review_comments": "off",  "trigger_mode": "automatic", "design_audit": True},
+    "investigate": {"test_failures": "investigate",   "build_failures": "off",    "review_comments": "off",  "trigger_mode": "automatic", "design_audit": True},
+    "bots":        {"test_failures": "investigate",   "build_failures": "repair", "review_comments": "bots", "trigger_mode": "automatic", "design_audit": True},
+    "all":         {"test_failures": "investigate",   "build_failures": "repair", "review_comments": "all",  "trigger_mode": "automatic", "design_audit": True},
+    "own":         {"test_failures": "investigate",   "build_failures": "repair", "review_comments": "all",  "trigger_mode": "automatic", "design_audit": False},
+}
+PRESET_LABELS = {
+    "watch": "Watch only",
+    "retest": "Known retests",
+    "investigate": "Investigate failures",
+    "bots": "Handle bot feedback",
+    "all": "Handle all feedback",
+    "own": "Complete responsibility",
+    "custom": "Custom (saved by the old form)",
+}
+PRESET_SUMMARIES = {
+    "watch": "Poll Gerrit and report. Nothing runs.",
+    "retest": (
+        "Retest an enforced failure only when it is classified deterministic and "
+        "linked to an existing LU ticket. Nothing else."
+    ),
+    "investigate": (
+        "Known retests, plus a read-only investigation (VMs, logs, a reproduction "
+        "attempt) and a written report for any unknown failure. Never changes the patch."
+    ),
+    "bots": (
+        "Investigate failures, plus: fix build failures, and address comments from "
+        "automated reviewers (checkpatch, aireview, the janitor) -- make the change, "
+        "reply, upload. Anything design-level is surfaced for your audit first."
+    ),
+    "all": (
+        "Handle bot feedback, plus human review comments under the same rules. "
+        "Anything design-level is still surfaced for your audit first."
+    ),
+    "own": (
+        "Handle all feedback with the audit gate off: makes design-level changes a "
+        "reviewer asked for, rebases when checkpatch says the change cannot be "
+        "cherry-picked, and drives the patch to ready. Asks only what the patch owner "
+        "alone can answer, and never nudges reviewers."
+    ),
+    "custom": "A per-kind combination from the old form that matches no level.",
+}
+
+
+def preset_for(
+    test_failures: str, build_failures: str, review_comments: str, trigger_mode: str,
+    design_audit: bool = True,
+) -> str:
+    """Name the level a per-kind combination is, or "custom" if it is none of them."""
+    wanted = {
+        "test_failures": test_failures, "build_failures": build_failures,
+        "review_comments": review_comments, "trigger_mode": trigger_mode,
+        "design_audit": bool(design_audit),
+    }
+    for level in PRESET_LEVELS:
+        if PRESET_SETTINGS[level] == wanted:
+            return level
+    return "custom"
+
+
+def preset_rank(preset: str) -> int:
+    """Position on the ladder; custom sorts below everything but watch."""
+    return PRESET_LEVELS.index(preset) if preset in PRESET_LEVELS else 0
 TRIGGER_MODES = frozenset({"manual", "automatic"})
 TRIGGER_KINDS = frozenset({"test_failure", "build_failure", "review_comments"})
 TRIGGER_SOURCES = frozenset({"manual", "automatic"})
@@ -111,9 +183,25 @@ class PatchAutomationPolicy:
     review_comments: str = "off"
     trigger_mode: str = "manual"
     version: int = 0
+    preset: str = ""
+    design_audit: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "patch_id", _patch_id(self.patch_id))
+        # A named level is the truth: it overwrites whatever per-kind values
+        # came with it, so a stale triple can never disagree with the level.
+        preset = str(self.preset or "").strip()
+        # "custom" is only ever derived, but dataclasses.replace() feeds a
+        # policy's own fields back through here, so it must round-trip: treat
+        # it as "derive from the triple", never as a level to validate.
+        if preset == "custom":
+            preset = ""
+        if preset:
+            if preset not in PRESET_LEVELS:
+                raise ValueError(f"preset must be one of {', '.join(PRESET_LEVELS)}")
+            for key, value in PRESET_SETTINGS[preset].items():
+                object.__setattr__(self, key, value)
+        object.__setattr__(self, "design_audit", bool(self.design_audit))
         object.__setattr__(
             self, "test_failures", _choice("test_failures", self.test_failures, TEST_FAILURE_MODES)
         )
@@ -127,6 +215,27 @@ class PatchAutomationPolicy:
         )
         object.__setattr__(self, "trigger_mode", _choice("trigger_mode", self.trigger_mode, TRIGGER_MODES))
         object.__setattr__(self, "version", _version(self.version))
+        if not preset:
+            object.__setattr__(self, "preset", preset_for(
+                self.test_failures, self.build_failures, self.review_comments,
+                self.trigger_mode, self.design_audit,
+            ))
+
+    @classmethod
+    def for_preset(cls, patch_id: str, preset: str, *, version: int = 0) -> PatchAutomationPolicy:
+        return cls(patch_id=patch_id, preset=preset, version=version)
+
+    @property
+    def rank(self) -> int:
+        return preset_rank(self.preset)
+
+    @property
+    def label(self) -> str:
+        return PRESET_LABELS.get(self.preset, self.preset)
+
+    @property
+    def summary(self) -> str:
+        return PRESET_SUMMARIES.get(self.preset, "")
 
     @classmethod
     def from_dict(cls, patch_id: str, value: Mapping[str, Any] | None) -> PatchAutomationPolicy:
@@ -143,7 +252,7 @@ class PatchAutomationPolicy:
             raise ValueError("policy must be an object")
         allowed = {
             "patch_id", "test_failures", "build_failures", "review_comments",
-            "trigger_mode", "version", "mode",
+            "trigger_mode", "version", "mode", "preset", "design_audit",
         }
         _strict_keys(value, allowed, "policy")
         embedded_id = value.get("patch_id", patch_id)
@@ -163,6 +272,11 @@ class PatchAutomationPolicy:
             if legacy_mode == "automatic":
                 legacy_trigger = "automatic"
 
+        # "custom" is derived, never stored as an instruction: a document that
+        # says so decodes from its triple, exactly like one from the old form.
+        preset = str(value.get("preset") or "")
+        if preset == "custom":
+            preset = ""
         return cls(
             patch_id=patch_id,
             test_failures=value.get("test_failures", legacy_test),
@@ -170,15 +284,19 @@ class PatchAutomationPolicy:
             review_comments=value.get("review_comments", "off"),
             trigger_mode=value.get("trigger_mode", legacy_trigger),
             version=value.get("version", 0),
+            preset=preset,
+            design_audit=value.get("design_audit", True),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "patch_id": self.patch_id,
+            "preset": self.preset,
             "test_failures": self.test_failures,
             "build_failures": self.build_failures,
             "review_comments": self.review_comments,
             "trigger_mode": self.trigger_mode,
+            "design_audit": self.design_audit,
             "version": self.version,
         }
 

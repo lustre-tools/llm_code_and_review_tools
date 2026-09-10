@@ -39,6 +39,7 @@ from patch_watcher.engineering_state import (
     ExecutionManifest,
     SafeCommand,
 )
+from patch_watcher.gerrit_status import is_bot_author
 from patch_watcher.jenkins_adapter import SNAPSHOT_SCHEMA as JENKINS_SNAPSHOT_SCHEMA
 from patch_watcher.ltvm_resources import (
     LTVMAdapter,
@@ -191,6 +192,12 @@ SECRET_KEY_PARTS = ("token", "password", "passwd", "secret", "api_key", "credent
 
 class RunControllerError(RuntimeError):
     """A run request could not safely be admitted or supervised."""
+
+
+class NoReviewTargets(RunControllerError):
+    """The review mode leaves nothing to handle -- e.g. bots mode on a change
+    whose unresolved threads were all opened by humans.  A recorded
+    non-decision for the poll loop, not a failure."""
 
 
 @dataclass(frozen=True)
@@ -1261,11 +1268,20 @@ class RunController:
         request_id: str | None = None,
         model: str = "",
         effort: str = "",
+        design_audit: bool = True,
     ) -> ManagedSession:
-        """Reserve a revision-pinned Phase 4 review-comment run."""
+        """Reserve a revision-pinned Phase 4 review-comment run.
 
-        if mode not in {"simple", "all"}:
-            raise RunControllerError("review mode must be simple or all")
+        ``mode`` is what to attempt: ``simple`` (clearly trivial targets only),
+        ``bots`` (threads opened by an automated reviewer, and only those --
+        human threads are left out of the target set entirely) or ``all``.
+        ``design_audit`` is whether a design-level change stops for a human
+        first; a run with it off holds complete responsibility for the patch.
+        """
+
+        if mode not in {"simple", "bots", "all"}:
+            raise RunControllerError("review mode must be simple, bots or all")
+        design_audit = bool(design_audit)
         lifecycle = str(patch.get("lifecycle", "")).casefold()
         if lifecycle not in {"open", "new"}:
             raise RunControllerError("only an open Gerrit change can handle comments")
@@ -1296,6 +1312,7 @@ class RunController:
         ):
             raise RunControllerError("review comments do not form a complete exact-revision snapshot")
         target_ids = []
+        skipped_human_threads = 0
         for thread in threads:
             comments = thread.get("comments") if isinstance(thread, Mapping) else None
             if not isinstance(comments, list) or not comments:
@@ -1303,7 +1320,22 @@ class RunController:
             comment_id = str(comments[-1].get("comment_id") or "")
             if not comment_id or comment_id in target_ids:
                 raise RunControllerError("review snapshot contains an invalid target comment")
+            # Bots mode narrows the TARGET SET, not the snapshot: the snapshot
+            # and its digest stay whole (the agent still sees human threads for
+            # context), while the ids the report must answer are only the
+            # threads an automated reviewer opened.  A human replying inside a
+            # checkpatch or aireview thread is still bot feedback.
+            if mode == "bots":
+                opener = comments[0] if isinstance(comments[0], Mapping) else {}
+                if not is_bot_author(opener.get("author_name"), opener.get("author_key")):
+                    skipped_human_threads += 1
+                    continue
             target_ids.append(comment_id)
+        if mode == "bots" and not target_ids:
+            raise NoReviewTargets(
+                f"no threads opened by an automated reviewer; {skipped_human_threads} "
+                "human thread(s) left for a higher level"
+            )
         encoded_snapshot = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
         if len(encoded_snapshot.encode("utf-8")) > 192 * 1024:
             raise RunControllerError("review snapshot exceeds the controller bound")
@@ -1316,7 +1348,7 @@ class RunController:
             "change_number": change_number, "patchset": patchset,
             "revision": revision, "revision_ref": revision_ref, "project": project,
             "review_mode": mode, "snapshot_sha256": digest,
-            "target_comment_ids": target_ids,
+            "target_comment_ids": target_ids, "design_audit": design_audit,
         }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         for existing in self.store.list_sessions(include_terminal=True):
             if existing.run_id != run_id:
@@ -1340,6 +1372,7 @@ class RunController:
             session_id, REVIEW_REQUEST_EVENT,
             {
                 "request_kind": "review_comments", "review_mode": mode,
+                "design_audit": design_audit,
                 "change_number": change_number, "patchset": patchset,
                 "revision": revision, "project": project,
                 "revision_ref": revision_ref,
@@ -2492,14 +2525,39 @@ class RunController:
             )
             os.chmod(snapshot_path, 0o400)
             mode = str(payload["review_mode"])
-            mode_rule = (
-                "Attempt only clearly trivial, unambiguous changes. If any target is "
-                "nontrivial or ambiguous, do not edit for that target: return needs_input "
-                "with one precise human question."
-                if mode == "simple" else
-                "Attempt every target broadly, but return needs_input with one precise "
-                "human question whenever a correct change requires human judgment."
-            )
+            design_audit = bool(payload.get("design_audit", True))
+            if mode == "simple":
+                mode_rule = (
+                    "Attempt only clearly trivial, unambiguous changes. If any target is "
+                    "nontrivial or ambiguous, do not edit for that target: return needs_input "
+                    "with one precise human question."
+                )
+            elif design_audit:
+                mode_rule = (
+                    "Attempt every target broadly, but return needs_input with one precise "
+                    "human question whenever a correct change requires human judgment -- "
+                    "in particular before any design-level change: a new interface, changed "
+                    "semantics, or edits to files the comment did not name."
+                )
+            else:
+                # Level "own": the operator has handed over responsibility for
+                # this patch.  The agent decides design-level questions itself
+                # and asks only what the patch owner alone can answer.
+                mode_rule = (
+                    "You hold complete responsibility for this patch. Attempt every target "
+                    "broadly, including design-level changes a reviewer asked for, using "
+                    "your own judgment; do not stop to ask permission for them. Reserve "
+                    "needs_input for what only the patch owner can answer: reviewers who "
+                    "contradict each other, or a requested change you believe is wrong. "
+                    "Never post a comment that merely asks a reviewer to look again."
+                )
+            if mode == "bots":
+                mode_rule += (
+                    " Your targets are only the threads opened by an automated reviewer "
+                    "(checkpatch, aireview, the janitor, and the like); threads a human "
+                    "opened are present in the snapshot for context but are not yours to "
+                    "answer or act on in this run."
+                )
             # `request_review_comments` targets `comments[-1]` of each thread,
             # and `normalize_review_snapshot` sorts a thread ascending by
             # (updated, comment_id) -- so the target is the NEWEST comment,

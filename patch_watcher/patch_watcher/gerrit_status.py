@@ -43,6 +43,30 @@ MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_MESSAGE_BYTES = 4000
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
+# Review authors that are machines.  Mirrors gerrit_cli's BOT_REVIEWER_NAMES
+# (this package deliberately has no dependencies, so it cannot import it) plus
+# the AI reviewer, which is the bot whose comments most need answering.
+# Matched on display name or on the ``username:`` form of an author key.
+BOT_REVIEW_AUTHORS = frozenset({
+    "maloo", "jenkins", "autotest",
+    "wc-checkpatch", "wc checkpatch",
+    "lustre gerrit janitor", "lgerritjanitor",
+    "misc code checks robot (gatekeeper helper)",
+    "gerrit ai review for lustre", "aireview",
+    "lustre risc-v builder",
+    "ci bot", "build bot", "janitor bot",
+})
+
+
+def is_bot_author(name: Any, author_key: Any = "") -> bool:
+    """Say whether a review comment came from an automated reviewer."""
+    candidates = {" ".join(str(name or "").split()).casefold()}
+    key = str(author_key or "")
+    if key.startswith("username:"):
+        candidates.add(key[len("username:"):].strip().casefold())
+    return any(candidate in BOT_REVIEW_AUTHORS for candidate in candidates if candidate)
+
+
 
 class GerritConfigError(RuntimeError):
     """The private Patch Watcher Gerrit configuration is unavailable."""

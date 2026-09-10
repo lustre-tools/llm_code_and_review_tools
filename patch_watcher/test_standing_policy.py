@@ -10,6 +10,7 @@ from pathlib import Path
 
 from patch_watcher import standing_policy
 from patch_watcher.standing_policy import (
+    PRESET_LEVELS,
     ActivePatchRun,
     PatchAutomationPolicy,
     RevisionIdentity,
@@ -19,6 +20,7 @@ from patch_watcher.standing_policy import (
     TriggerObservation,
     decide_trigger,
     is_standing_trigger_key,
+    preset_for,
     trigger_coalescing_key,
 )
 
@@ -42,13 +44,66 @@ class PolicyModelTests(unittest.TestCase):
             policy.to_dict(),
             {
                 "patch_id": "68541",
+                "preset": "watch",
                 "test_failures": "off",
                 "build_failures": "off",
                 "review_comments": "off",
                 "trigger_mode": "manual",
+                "design_audit": True,
                 "version": 0,
             },
         )
+
+    def test_each_level_is_a_strict_superset_of_the_one_below(self):
+        """The whole point of the ladder: choosing higher never removes anything."""
+        order = {"off": 0, "deterministic": 1, "investigate": 2,
+                 "repair": 1, "simple": 1, "bots": 2, "all": 3,
+                 "manual": 0, "automatic": 1}
+        previous = None
+        for level in PRESET_LEVELS:
+            current = PatchAutomationPolicy.for_preset("68541", level)
+            self.assertEqual(current.preset, level)
+            if previous is not None:
+                for field in ("test_failures", "build_failures", "review_comments", "trigger_mode"):
+                    self.assertGreaterEqual(
+                        order[getattr(current, field)], order[getattr(previous, field)],
+                        f"{level} lost {field} relative to {previous.preset}",
+                    )
+                # The audit gate only ever opens on the way up, at the top.
+                self.assertTrue(previous.design_audit or not current.design_audit)
+            previous = current
+        self.assertFalse(PatchAutomationPolicy.for_preset("68541", "own").design_audit)
+        self.assertTrue(PatchAutomationPolicy.for_preset("68541", "all").design_audit)
+
+    def test_a_named_level_overrides_a_stale_triple(self):
+        policy = PatchAutomationPolicy.from_dict("68541", {
+            "preset": "bots", "test_failures": "off", "build_failures": "off",
+            "review_comments": "off", "trigger_mode": "manual",
+        })
+        self.assertEqual(policy.preset, "bots")
+        self.assertEqual(policy.test_failures, "investigate")
+        self.assertEqual(policy.build_failures, "repair")
+        self.assertEqual(policy.review_comments, "bots")
+        self.assertEqual(policy.trigger_mode, "automatic")
+
+    def test_a_triple_from_the_old_form_names_its_level_or_custom(self):
+        self.assertEqual(preset_for("deterministic", "off", "off", "automatic"), "retest")
+        self.assertEqual(preset_for("investigate", "repair", "all", "automatic"), "all")
+        self.assertEqual(preset_for("investigate", "repair", "all", "automatic", False), "own")
+        # deterministic retests plus build repair matches no rung.
+        self.assertEqual(preset_for("deterministic", "repair", "off", "automatic"), "custom")
+        custom = PatchAutomationPolicy("68541", test_failures="deterministic",
+                                       build_failures="repair", trigger_mode="automatic")
+        self.assertEqual(custom.preset, "custom")
+        # The store re-derives a policy through dataclasses.replace; "custom"
+        # must survive that rather than be rejected as an unknown level.
+        bumped = dataclasses.replace(custom, version=3)
+        self.assertEqual(bumped.preset, "custom")
+        self.assertEqual(bumped.build_failures, "repair")
+        with self.assertRaisesRegex(ValueError, "preset must be one of"):
+            PatchAutomationPolicy("68541", preset="everything")
+        with self.assertRaisesRegex(ValueError, "preset must be one of"):
+            PatchAutomationPolicy.from_dict("68541", {"preset": "custom-ish"})
 
     def test_legacy_generic_mode_only_grants_old_retest_capability(self):
         policy = PatchAutomationPolicy.from_dict("68541", {"mode": "automatic"})

@@ -121,6 +121,7 @@ from patch_watcher.run_controller import (
     REVIEW_REQUEST_EVENT,
     RUNNER_HANDLE_EVENT,
     RunController,
+    NoReviewTargets,
     RunControllerError,
     normalize_unknown_failure_evidence,
     unknown_failure_research_run_id,
@@ -143,6 +144,8 @@ from patch_watcher.session_state import (
 from patch_watcher.standing_policy import (
     ActivePatchRun,
     PatchAutomationPolicy,
+    PRESET_LABELS,
+    PRESET_LEVELS,
     RevisionIdentity,
     StandingPolicyConflict,
     StandingPolicyError,
@@ -577,6 +580,52 @@ def _has_explicit_standing_policy(patch):
     )
 
 
+def _enroll_lane_for_level(patch, policy):
+    """Make the retest lane's own switches follow the patch's level.
+
+    The lane keeps three switches of its own -- global, per project, per patch
+    -- and every one had to be on before a level-1 policy did anything, which
+    is the four-switch lattice the ladder replaces.  A level at or above
+    "retest" now enrols the patch (and its project, and the lane) itself;
+    "watch" withdraws the patch.  The one switch the operator keeps is the
+    global policy gate, which every automatic action still requires.
+    """
+    if AUTONOMOUS_LANE_STORE is None:
+        return
+    project = str(patch.get("project") or "")
+    patch_id = str(patch.get("change_number") or "")
+    if not project or not patch_id:
+        return
+    lane = LaneRef(DETERMINISTIC_RETEST_LANE, DETERMINISTIC_RETEST_VERSION)
+    want = policy.rank >= 1
+    try:
+        controls = AUTONOMOUS_LANE_STORE.load()
+        if want and not controls.global_enabled:
+            controls = AUTONOMOUS_LANE_STORE.set_global_enabled(
+                True, expected_generation=controls.generation,
+            )
+        project_control = controls.project_control(project)
+        if want and (project_control is None or not project_control.enabled):
+            controls = AUTONOMOUS_LANE_STORE.set_project_enabled(
+                project, True, expected_generation=controls.generation,
+            )
+        patch_control = controls.patch_control(project, patch_id)
+        enrolled = (
+            patch_control is not None and patch_control.enabled
+            and patch_control.lane == lane
+        )
+        if want and not enrolled:
+            AUTONOMOUS_LANE_STORE.set_patch_lane(
+                project, patch_id, lane, True, expected_generation=controls.generation,
+            )
+        elif not want and patch_control is not None and patch_control.enabled:
+            AUTONOMOUS_LANE_STORE.set_patch_lane(
+                project, patch_id, lane, False, expected_generation=controls.generation,
+            )
+    except (AutonomousLaneConflict, AutonomousLaneError, ValueError) as exc:
+        log_structured_error("lane_enrolment", str(exc), str(patch.get("url") or ""))
+
+
 def _sync_standing_test_policy(patch, policy):
     """Keep the existing deterministic/research controllers under one policy."""
 
@@ -585,6 +634,7 @@ def _sync_standing_test_policy(patch, policy):
     patch_id = str(patch.get("change_number") or "")
     if not patch_id:
         return
+    _enroll_lane_for_level(patch, policy)
     retest_mode = "disabled"
     research_mode = "disabled"
     if policy.test_failures != "off":
@@ -705,10 +755,15 @@ def _apply_standing_policy(patch, *, policy=None):
                 patch, policy, "review_comments", snapshot["snapshot_sha256"],
             )
             if decision.eligible:
-                session = RUN_CONTROLLER.request_review_comments(
-                    patch, snapshot, mode=policy.review_comments,
-                    request_id=decision.coalescing_key,
-                )
+                try:
+                    session = RUN_CONTROLLER.request_review_comments(
+                        patch, snapshot, mode=policy.review_comments,
+                        request_id=decision.coalescing_key,
+                        design_audit=policy.design_audit,
+                    )
+                except NoReviewTargets as exc:
+                    _record_standing_decision(patch, decision, outcome=str(exc))
+                    return None
                 SESSION_STORE.append_event(
                     session.session_id, "standing_policy_triggered", decision.to_dict(),
                     idempotency_key="standing-trigger:" + decision.coalescing_key,
@@ -2618,47 +2673,57 @@ background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width
 
 
 def _standing_policy_html(patch):
+    """One choice per patch: how far up the ladder Patch Watcher may go.
+
+    This replaced four independent selects (trigger, tests, builds, reviews)
+    plus a separate lane override.  Each level is a strict superset of the one
+    below it, and the per-kind modes are derived from it, so there is nothing
+    else to keep consistent.
+    """
     try:
         policy = _standing_policy(patch)
     except (StandingPolicyError, ValueError) as exc:
         return "<p class='error'>Standing policy unavailable: " + escape(str(exc)) + "</p>"
 
-    def options(values, selected):
-        return "".join(
-            "<option value='" + escape(value, quote=True) + "'"
-            + (" selected" if value == selected else "") + ">"
-            + escape(value.replace("_", " ").title()) + "</option>"
-            for value in values
-        )
-
+    levels = list(PRESET_LEVELS)
+    if policy.preset == "custom":
+        levels.insert(0, "custom")
+    options = "".join(
+        "<option value='" + escape(level, quote=True) + "'"
+        + (" selected" if level == policy.preset else "")
+        + (" disabled" if level == "custom" else "")
+        + ">" + escape(PRESET_LABELS[level]) + "</option>"
+        for level in levels
+    )
     global_enabled = bool(
         AUTOMATION_STORE is not None
         and AUTOMATION_STORE.get_global_automation().enabled
     )
-    gate = "enabled" if global_enabled else "disabled"
+    if policy.rank == 0 and policy.preset != "custom":
+        gate_note = ""
+    elif global_enabled:
+        gate_note = " The global kill switch is <strong>on</strong>, so this level is live."
+    else:
+        gate_note = (
+            " The global kill switch is <strong>off</strong>, so nothing runs until it is "
+            "turned on; the level is saved and waiting."
+        )
     return (
         "<section class='standing-policy'><div class='policy-heading'>"
-        "<strong>Standing automation</strong><span class='availability'>"
-        + escape(policy.trigger_mode.title()) + "</span></div>"
+        "<strong>What Patch Watcher may do</strong><span class='availability'>"
+        + escape(policy.label) + "</span></div>"
         "<form method='post' action='/standing-policy'>"
         f"<input type='hidden' name='csrf_token' value='{escape(CSRF_TOKEN, quote=True)}'>"
         f"<input type='hidden' name='change_number' value='{escape(str(patch.get('change_number') or ''), quote=True)}'>"
         f"<input type='hidden' name='patchset' value='{escape(str(patch.get('patchset') or ''), quote=True)}'>"
         f"<input type='hidden' name='revision_sha' value='{escape(str(patch.get('revision_sha') or ''), quote=True)}'>"
         f"<input type='hidden' name='expected_version' value='{policy.version}'>"
-        "<label>Trigger<select name='trigger_mode'>"
-        + options(("manual", "automatic"), policy.trigger_mode) + "</select></label>"
-        "<label>Tests<select name='test_failures'>"
-        + options(("off", "deterministic", "investigate"), policy.test_failures)
-        + "</select></label><label>Builds<select name='build_failures'>"
-        + options(("off", "repair"), policy.build_failures)
-        + "</select></label><label>Reviews<select name='review_comments'>"
-        + options(("off", "simple", "all"), policy.review_comments)
-        + "</select></label><button class='secondary' type='submit'>Save policy</button>"
-        "</form><p class='detail'>Global automation is <strong>" + gate
-        + "</strong>. Automatic handlers still pin one exact revision, coalesce duplicates, "
-        "and fail to human on uncertainty. A handler posts its own Gerrit "
-        "replies and uploads its own patchsets.</p></section>"
+        "<label>Level<select name='preset'>" + options + "</select></label>"
+        "<button class='secondary' type='submit'>Save</button>"
+        "</form><p class='detail'>" + escape(policy.summary) + gate_note + "</p>"
+        "<p class='detail'>Each level includes everything below it. Whatever the level, a "
+        "run that needs a decision only you can make stops, tells you, and waits.</p>"
+        "</section>"
     )
 
 
@@ -3534,7 +3599,7 @@ class Handler(BaseHTTPRequestHandler):
             request_id = query.get("idempotency_token", [""])[0]
             expires_at = query.get("confirmation_expires_at", [""])[0]
             patch = _find_exact_patch(change, patchset, revision)
-            if patch is None or mode not in {"simple", "all"}:
+            if patch is None or mode not in {"simple", "bots", "all"}:
                 self.send_error(409, "The patch changed; prepare review handling again")
                 return
             # Verify the signed proposal BEFORE fetching from Gerrit; see the
@@ -4150,37 +4215,50 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(409, "The patch changed; refresh before saving its policy")
                 return
             try:
-                proposed = PatchAutomationPolicy(
-                    patch_id=str(change),
-                    test_failures=data.get("test_failures", ["off"])[0],
-                    build_failures=data.get("build_failures", ["off"])[0],
-                    review_comments=data.get("review_comments", ["off"])[0],
-                    trigger_mode=data.get("trigger_mode", ["manual"])[0],
-                    version=expected_version,
-                )
+                preset = data.get("preset", [""])[0].strip()
+                if preset:
+                    proposed = PatchAutomationPolicy.for_preset(
+                        str(change), preset, version=expected_version,
+                    )
+                else:
+                    # The old four-field form, or a caller that still speaks it.
+                    proposed = PatchAutomationPolicy(
+                        patch_id=str(change),
+                        test_failures=data.get("test_failures", ["off"])[0],
+                        build_failures=data.get("build_failures", ["off"])[0],
+                        review_comments=data.get("review_comments", ["off"])[0],
+                        trigger_mode=data.get("trigger_mode", ["manual"])[0],
+                        version=expected_version,
+                    )
                 if path == "/standing-policy" and proposed.trigger_mode == "automatic":
                     expires_at = str(
                         int(time.time()) + ENGINEERING_CONFIRMATION_TTL_SECONDS
                     )
                     confirmation = _signed_confirmation(
                         "standing-policy", change, patchset, revision,
-                        proposed.test_failures, proposed.build_failures,
+                        proposed.preset, proposed.test_failures, proposed.build_failures,
                         proposed.review_comments, proposed.trigger_mode,
-                        expected_version, expires_at,
+                        proposed.design_audit, expected_version, expires_at,
                     )
                     body = (
                         "<main><p><a href='/'>← Keep current policy</a></p>"
-                        "<h1>Confirm automatic patch handlers</h1>"
-                        "<p>No policy has changed yet. This authorizes automatic "
-                        "handlers for the exact configured capabilities whenever the "
-                        "independent global automation gate is enabled.</p>"
+                        "<h1>Confirm: " + escape(proposed.label) + "</h1>"
+                        "<p>No policy has changed yet. This sets how far Patch Watcher "
+                        "may go on this patch without asking, whenever the global kill "
+                        "switch is on.</p>"
                         "<dl><dt>Change</dt><dd>" + escape(str(change))
                         + ", PS " + escape(str(patchset)) + "</dd>"
+                        "<dt>Level</dt><dd>" + escape(proposed.label) + "</dd>"
+                        "<dt>What it does</dt><dd>" + escape(proposed.summary) + "</dd>"
                         "<dt>Tests</dt><dd>" + escape(proposed.test_failures)
                         + "</dd><dt>Builds</dt><dd>"
                         + escape(proposed.build_failures)
                         + "</dd><dt>Reviews</dt><dd>"
-                        + escape(proposed.review_comments) + "</dd></dl>"
+                        + escape(proposed.review_comments)
+                        + "</dd><dt>Design-level changes</dt><dd>"
+                        + ("surfaced for your audit first" if proposed.design_audit
+                           else "made by the agent on its own judgment")
+                        + "</dd></dl>"
                         # What this actually authorises, as the code now
                         # works: there are no separate reply or retrigger
                         # switches to stay disabled -- the agent publishes with
@@ -4202,13 +4280,14 @@ class Handler(BaseHTTPRequestHandler):
                         f"<input type='hidden' name='patchset' value='{patchset}'>"
                         f"<input type='hidden' name='revision_sha' value='{escape(revision, quote=True)}'>"
                         f"<input type='hidden' name='expected_version' value='{expected_version}'>"
+                        f"<input type='hidden' name='preset' value='{escape(proposed.preset, quote=True)}'>"
                         f"<input type='hidden' name='test_failures' value='{escape(proposed.test_failures, quote=True)}'>"
                         f"<input type='hidden' name='build_failures' value='{escape(proposed.build_failures, quote=True)}'>"
                         f"<input type='hidden' name='review_comments' value='{escape(proposed.review_comments, quote=True)}'>"
                         "<input type='hidden' name='trigger_mode' value='automatic'>"
                         f"<input type='hidden' name='confirmation_expires_at' value='{expires_at}'>"
                         f"<input type='hidden' name='confirmation_token' value='{confirmation}'>"
-                        "<button type='submit'>Enable this automatic policy</button>"
+                        "<button type='submit'>Set this level</button>"
                         "</form></main>"
                     )
                     self.respond(_standalone_document(
@@ -4223,9 +4302,10 @@ class Handler(BaseHTTPRequestHandler):
                         or not _engineering_confirmation_unexpired(expires_at)
                         or not _verify_confirmation(
                             confirmation, "standing-policy", change, patchset,
-                            revision, proposed.test_failures,
+                            revision, proposed.preset, proposed.test_failures,
                             proposed.build_failures, proposed.review_comments,
-                            proposed.trigger_mode, expected_version, expires_at,
+                            proposed.trigger_mode, proposed.design_audit,
+                            expected_version, expires_at,
                         )
                         or not _claim_engineering_confirmation(
                             confirmation,
@@ -4360,7 +4440,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             revision = data.get("revision_sha", [""])[0].lower()
             mode = data.get("review_mode", [""])[0]
-            if mode not in {"simple", "all"}:
+            if mode not in {"simple", "bots", "all"}:
                 self.send_error(400, "Invalid review mode")
                 return
             patch = _find_exact_patch(change, patchset, revision)
