@@ -351,7 +351,11 @@ def cmd_run(args) -> int:
         memory_db=memory_db,
         agent_args=args.agent_arg or [],
     )
-    results = run_batch(config, changes, in_place=in_place)
+    try:
+        results = run_batch(config, changes, in_place=in_place)
+    except KeyboardInterrupt:
+        print("\ninterrupted — partial results are in the manifest")
+        return 130
 
     from .runner import format_tokens
     from .ui import console
@@ -396,13 +400,15 @@ def cmd_run(args) -> int:
         for report in reports:
             print(f"  {report}")
 
-    memories = [(r.memory_path, r.memory_updated)
+    memories = [(r.memory_path, r.memory_updated, r.memory_reviews)
                 for r in results if r.memory_path]
     if memories:
         print("\nReview memory (what the patch does, findings, "
               "eliminated false positives):")
-        for path, updated in memories:
-            note = "" if updated else "  (not updated this run)"
+        for path, updated, iteration in memories:
+            note = f"  (iteration {iteration})" if iteration else ""
+            if not updated:
+                note += "  (not updated this run)"
             print(f"  {path}{note}")
 
     output = text_dump_path(args, results_dir)

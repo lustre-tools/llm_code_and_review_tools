@@ -126,6 +126,29 @@ class TestPostResults:
         with pytest.raises(KeyError):
             post_results(results_dir, changes=[999])
 
+    def test_memory_iteration_appended_to_message(self, results_dir):
+        """A -m review's posted cover message says which accumulated
+        iteration it is; entries without the field post unchanged."""
+        summary = load_summary(results_dir)
+        summary["101"]["memory_reviews"] = 3
+        (results_dir / "summary.json").write_text(json.dumps(summary))
+
+        reviewer = _mock_reviewer()
+        p_rev, p_client = _patched(reviewer)
+        with p_rev, p_client:
+            post_results(results_dir, changes=[101])
+        message = reviewer.post_review.call_args[1]["message"]
+        assert message.startswith(REVIEW_SPEC["message"])
+        assert "review iteration 3 of this change" in message
+
+    def test_no_memory_field_message_unchanged(self, results_dir):
+        reviewer = _mock_reviewer()
+        p_rev, p_client = _patched(reviewer)
+        with p_rev, p_client:
+            post_results(results_dir, changes=[101])
+        kwargs = reviewer.post_review.call_args[1]
+        assert kwargs["message"] == REVIEW_SPEC["message"]
+
     def test_mode_tagged_entries_reachable(self, results_dir):
         """A light entry is posted via its exact key or via the bare
         change number (which expands to every mode's entry)."""

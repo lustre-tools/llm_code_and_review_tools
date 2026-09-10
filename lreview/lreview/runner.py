@@ -53,6 +53,40 @@ STATUS_INVALID_JSON = "invalid-json"
 # Grace period between SIGTERM and SIGKILL when a review times out
 _KILL_GRACE_SECONDS = 15
 
+# Live review process groups. Agents run in their own sessions (so
+# the timeout path can group-kill them), which also means a Ctrl+C
+# SIGINT never reaches them on its own — an interrupted batch must
+# kill them explicitly or they keep running (and billing) headless.
+_RUNNING_PGIDS: set = set()
+_RUNNING_PGIDS_LOCK = threading.Lock()
+
+
+def kill_running_reviews(grace: float = 5.0) -> int:
+    """SIGTERM every live review process group, SIGKILL survivors
+    after a grace period; returns how many were signalled."""
+    with _RUNNING_PGIDS_LOCK:
+        pgids = list(_RUNNING_PGIDS)
+    for pgid in pgids:
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+    if pgids:
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            with _RUNNING_PGIDS_LOCK:
+                if not _RUNNING_PGIDS:
+                    break
+            time.sleep(0.2)
+        with _RUNNING_PGIDS_LOCK:
+            survivors = list(_RUNNING_PGIDS)
+        for pgid in survivors:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+    return len(pgids)
+
 # Seconds between status updates: fast in-place redraws on a TTY,
 # sparse appended lines otherwise
 PROGRESS_INTERVAL = 60
@@ -193,6 +227,7 @@ class ReviewResult:
     markdown_path: Optional[Path] = None
     memory_path: Optional[Path] = None
     memory_updated: bool = False
+    memory_reviews: Optional[int] = None
     log_path: Optional[Path] = None
     error: Optional[str] = None
 
@@ -472,6 +507,8 @@ def _run_agent(cmd: list[str], cwd: Path, log_path: Path,
             start_new_session=True,
             env=env,
         )
+        with _RUNNING_PGIDS_LOCK:
+            _RUNNING_PGIDS.add(proc.pid)
         try:
             return proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -488,6 +525,9 @@ def _run_agent(cmd: list[str], cwd: Path, log_path: Path,
                     pass
                 proc.wait()
             raise
+        finally:
+            with _RUNNING_PGIDS_LOCK:
+                _RUNNING_PGIDS.discard(proc.pid)
 
 
 def _collect_json(source: Path, dest: Path):
@@ -748,6 +788,18 @@ def _review_and_cleanup(
                 STATUS_FINDINGS, STATUS_CLEAN):
             _log(f"[{change.slug}] warning: the review did not update "
                  f"its memory document ({memory_path.name})")
+        # Count completed -m iterations in the document itself; the
+        # counter is bumped here (deterministically), never by the
+        # agent, and only for runs that finished the analysis.
+        if result.status in (STATUS_FINDINGS, STATUS_CLEAN):
+            from .memory import bump_review_count
+            try:
+                result.memory_reviews = bump_review_count(
+                    memory_path,
+                    doc_includes_this_run=result.memory_updated)
+            except OSError as exc:
+                _log(f"[{change.slug}] warning: could not bump the "
+                     f"memory review counter: {exc}")
     return result
 
 
@@ -825,9 +877,10 @@ def run_batch(
                         results.append(future.result())
                 except KeyboardInterrupt:
                     interrupted = True
-                    _log("interrupted — cancelling pending reviews "
-                         "(running ones finish or die with the process)")
-                    pool.shutdown(wait=False, cancel_futures=True)
+                    killed = kill_running_reviews()
+                    _log(f"interrupted — killed {killed} running "
+                         "review(s), cancelling pending ones")
+                    pool.shutdown(wait=True, cancel_futures=True)
                     for future in futures:
                         if future.done() and not future.cancelled():
                             result = future.result()
@@ -902,6 +955,7 @@ def update_summary(results_dir: Path, results: list[ReviewResult],
                              if result.markdown_path else None),
                 "memory": (str(result.memory_path)
                            if result.memory_path else None),
+                "memory_reviews": result.memory_reviews,
                 "log": result.log_path.name if result.log_path else None,
                 "error": result.error,
                 "posted": False,

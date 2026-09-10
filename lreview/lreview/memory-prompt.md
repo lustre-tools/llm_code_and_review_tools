@@ -155,6 +155,9 @@ checkout and use the number you find there. A carried-forward
 finding with a stale line number lands the Gerrit comment on the
 wrong code.
 
+The frontmatter's `reviews:` line is a completed-iteration counter
+maintained by lreview itself — never edit or remove it.
+
 Update the frontmatter's `last-reviewed:` line before finishing, in
 exactly this form (it drives the next run's patchset diff):
 

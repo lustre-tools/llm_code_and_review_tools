@@ -233,7 +233,7 @@ lreview run --repo lustre-release -m 64086                # full gate
    `kreview-<change>_ps<N>-<timestamp>.<pid>.log` — every run's log
    is preserved (they are the ground truth for comparing runs;
    `summary.json` names the log of the current entry); on timeout the
-   whole agent process group is killed.
+   whole agent process group is killed, and Ctrl+C kills every running review the same way — the agents run in their own sessions, so without that an interrupted batch would leave them running (and billing) headless.
 4. The prompt writes `./gerrit-review.json` **only when it finds issues**,
    and `./review-metadata.json` (severity score) for **every completed
    analysis** — the metadata file is the completion marker, so a run
@@ -287,6 +287,16 @@ gitignored), named `<change>-<subject>.md` and keyed by **Gerrit
 Change-Id**, so a local pre-push review and later Gerrit reviews of
 the same patch share one document. The paths are listed at the end
 of the run — the explanations are useful reading on their own.
+
+Each document's frontmatter carries a `reviews:` counter — how many
+`-m` iterations have completed on this change. lreview bumps it
+itself after every completed run (the agent is told to leave it
+alone), records it in `summary.json` (`memory_reviews`), shows it in
+the run-end memory listing ("iteration N"), and appends it to the
+Gerrit cover message when the result is posted — "(review iteration
+N of this change, with accumulated review memory)" — so unrepeated
+earlier findings read as tracked, not forgotten. Documents from
+before the counter existed are seeded from their History section.
 
 Without `-m` the database is neither read nor written. `-c` requires
 `-m` and deletes just that change's document before the run.

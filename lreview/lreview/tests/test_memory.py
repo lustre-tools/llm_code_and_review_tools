@@ -100,6 +100,58 @@ class TestPromptFile:
         assert "complete replacement" in text
 
 
+class TestBumpReviewCount:
+
+    def test_skeleton_counts_from_zero(self, tmp_path):
+        from lreview.memory import bump_review_count, ensure_doc
+        doc = ensure_doc(tmp_path, _gerrit_change())
+        assert "reviews: 0" in doc.read_text()
+        assert bump_review_count(doc) == 1
+        assert bump_review_count(doc) == 2
+        text = doc.read_text()
+        assert "reviews: 2" in text
+        assert "reviews: 0" not in text
+
+    def test_pre_counter_doc_seeded_from_history(self, tmp_path):
+        from lreview.memory import bump_review_count
+        doc = tmp_path / "64616-old.md"
+        doc.write_text(
+            "---\nnumber: 64616\nsubject: s\n"
+            "last-reviewed: ps26 aaaa 2026-09-03\n---\n\n"
+            "# notes\n\n## History\n"
+            "- 2026-09-03 ps26 aaa: 3 findings\n"
+            "- 2026-09-04 ps27 bbb: 0 findings\n")
+        assert bump_review_count(doc) == 3
+        text = doc.read_text()
+        # inserted into the frontmatter, above last-reviewed
+        assert text.index("reviews: 3") < text.index("last-reviewed:")
+
+    def test_seeding_does_not_double_count_current_run(self, tmp_path):
+        """The bump runs after the agent's rewrite; when the doc was
+        updated this run its History already contains the current
+        run's bullet, so the seed must not add one on top (the
+        68361 reviews:4-after-3-runs bug)."""
+        from lreview.memory import bump_review_count
+        doc = tmp_path / "68361-x.md"
+        doc.write_text(
+            "---\nnumber: 68361\nsubject: s\n"
+            "last-reviewed: ps9 bd6c 2026-09-10\n---\n\n## History\n"
+            "- 2026-09-10 ps9 aaa: 4 findings\n"
+            "- 2026-09-10 ps9 aaa (2nd run): 5 findings\n"
+            "- 2026-09-10 ps9 aaa (3rd run): 5 findings\n")
+        assert bump_review_count(doc, doc_includes_this_run=True) == 3
+        # and once the line exists, later bumps are plain increments
+        assert bump_review_count(doc, doc_includes_this_run=True) == 4
+
+    def test_body_reviews_text_not_confused_with_counter(self, tmp_path):
+        from lreview.memory import bump_review_count
+        doc = tmp_path / "d.md"
+        doc.write_text("---\nreviews: 5\n---\n\n"
+                       "body line\nreviews: 99\n")
+        assert bump_review_count(doc) == 6
+        assert "reviews: 99" in doc.read_text()  # body untouched
+
+
 class TestMemoryProtocolContract:
     """Guard the load-bearing pieces of the bundled protocol text —
     a future edit must not silently drop them."""
@@ -115,3 +167,5 @@ class TestMemoryProtocolContract:
         assert "UNCHANGED" in text
         # limited (light/partial) passes preserve unexamined content
         assert "must not shrink the document" in text
+        # the iteration counter belongs to lreview, not the agent
+        assert "never edit or remove it" in text

@@ -562,6 +562,33 @@ class TestRunBatch:
         assert summary["105"]["json"] is None
         assert summary["105"]["markdown"] == "markdown/105_change_105_ps1.md"
 
+    def test_kill_running_reviews_stops_the_agents(self, repo, tmp_path,
+                                                   stub_claude):
+        """An interrupted batch kills the running agents — they live
+        in their own sessions, so without the explicit group-kill a
+        cancelled review keeps running (and billing) headless."""
+        import threading
+        import time as time_mod
+        from lreview.runner import kill_running_reviews
+        sha = _commit_with_marker(repo, "SLEEP_MARKER")  # stub sleeps 30s
+        config = _config(repo, tmp_path)
+        results = []
+        worker = threading.Thread(
+            target=lambda: results.extend(
+                run_batch(config, [_change(150, sha)])))
+        start = time_mod.monotonic()
+        worker.start()
+        killed = 0
+        while time_mod.monotonic() - start < 15 and not killed:
+            killed = kill_running_reviews(grace=2.0)
+            time_mod.sleep(0.1)
+        worker.join(timeout=20)
+        assert killed == 1
+        assert not worker.is_alive()
+        # far faster than the stub's 30s sleep, and recorded failed
+        assert time_mod.monotonic() - start < 25
+        assert results[0].status == STATUS_FAILED
+
     def test_no_metadata_means_incomplete_not_clean(self, repo, tmp_path,
                                                     stub_claude):
         sha = _commit_with_marker(repo, "NO_METADATA_MARKER")
@@ -713,9 +740,19 @@ class TestRunBatch:
         results = run_batch(config, [change])
         assert results[0].memory_path == doc
         assert results[0].memory_updated is False
+        # ...but the completed run still counts as an iteration,
+        # bumped by the runner (never by the agent)
+        assert results[0].memory_reviews == 1
+        assert "reviews: 1" in doc.read_text()
         summary = json.loads(
             (config.results_dir / "summary.json").read_text())
         assert summary["701"]["memory"] == str(doc)
+        assert summary["701"]["memory_reviews"] == 1
+
+        # a second completed run makes it iteration 2
+        results = run_batch(config, [change])
+        assert results[0].memory_reviews == 2
+        assert "reviews: 2" in doc.read_text()
 
     def test_memory_updated_detected(self, repo, tmp_path, stub_claude,
                                      monkeypatch):
@@ -740,7 +777,11 @@ class TestRunBatch:
         results = run_batch(config, [change])
         assert results[0].memory_path == doc
         assert results[0].memory_updated is True
-        assert doc.read_text().strip() == "notes"
+        # the stub wrote a bare doc; the runner restored a minimal
+        # frontmatter for the iteration counter around it
+        text = doc.read_text()
+        assert "notes" in text
+        assert text.startswith("---\nreviews: 1\n---")
 
     def test_no_memory_without_flag(self, repo, tmp_path, stub_claude):
         from lreview.runner import review_prompt

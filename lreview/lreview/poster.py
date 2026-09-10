@@ -66,6 +66,16 @@ def _post_one(results_dir: Path, entry: dict, prefix: Optional[str]):
     json_path = results_dir / entry["json"]
     spec = json.loads(json_path.read_text())
 
+    # Reviews run with --memory carry their iteration count: tell the
+    # Gerrit reader this is the Nth accumulated review of the change,
+    # so unrepeated earlier findings read as tracked, not forgotten.
+    message = spec.get("message")
+    iteration = entry.get("memory_reviews")
+    if iteration:
+        note = (f"(review iteration {iteration} of this change, with "
+                "accumulated review memory)")
+        message = f"{message}\n\n{note}" if message else note
+
     # Post to the Gerrit host the change was reviewed from, not
     # whatever $GERRIT_URL happens to point at.
     client = None
@@ -76,7 +86,7 @@ def _post_one(results_dir: Path, entry: dict, prefix: Optional[str]):
     result = reviewer.post_review(
         change_number=entry["number"],
         comments=spec.get("comments"),
-        message=spec.get("message"),
+        message=message,
         vote=spec.get("vote"),
         revision=entry["sha"],
         prefix=prefix,

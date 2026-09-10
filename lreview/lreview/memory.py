@@ -104,6 +104,7 @@ def ensure_doc(db_dir: Path, change) -> Path:
     frontmatter += [
         f"subject: {change.subject}",
         f"created: {date.today().isoformat()}",
+        "reviews: 0",
         "last-reviewed: never",
         "---",
         "",
@@ -123,3 +124,50 @@ def clear_doc(db_dir: Path, change) -> Optional[Path]:
         existing.unlink()
         return existing
     return None
+
+
+_REVIEWS_LINE_RE = re.compile(r"^reviews:\s*(\d+)\s*$", re.MULTILINE)
+_HISTORY_BULLET_RE = re.compile(r"^- \d{4}-\d{2}-\d{2} ", re.MULTILINE)
+
+
+def bump_review_count(path: Path,
+                      doc_includes_this_run: bool = False) -> int:
+    """Increment the document's completed-review counter; returns it.
+
+    The `reviews:` frontmatter line is maintained by lreview, not by
+    the review agent — the runner bumps it after every review that
+    ran to completion, so the number is deterministic. A document
+    from before the counter existed is seeded from its History
+    section (one bullet per run); the bump runs after the agent's
+    rewrite, so when the document was updated this run its History
+    already includes the current run — doc_includes_this_run says
+    so, and the seed then must not add 1 on top or the current run
+    is counted twice.
+    """
+    text = path.read_text()
+    has_frontmatter = text.startswith("---")
+    end = text.find("---", 3) if has_frontmatter else -1
+    head, tail = (text[:end], text[end:]) if end > 0 else ("", text)
+
+    match = _REVIEWS_LINE_RE.search(head)
+    if match:
+        count = int(match.group(1)) + 1
+        head = (head[:match.start()] + f"reviews: {count}"
+                + head[match.end():])
+    else:
+        history = text.split("## History", 1)
+        bullets = (len(_HISTORY_BULLET_RE.findall(history[1]))
+                   if len(history) > 1 else 0)
+        count = max(1, bullets + (0 if doc_includes_this_run else 1))
+        line = f"reviews: {count}\n"
+        anchor = head.find("last-reviewed:")
+        if anchor >= 0:
+            head = head[:anchor] + line + head[anchor:]
+        elif head:
+            head = head.rstrip("\n") + "\n" + line
+        else:
+            # the agent rewrote the doc without any frontmatter —
+            # restore a minimal block rather than appending noise
+            head, tail = f"---\n{line}---\n\n", text
+    path.write_text(head + tail)
+    return count
