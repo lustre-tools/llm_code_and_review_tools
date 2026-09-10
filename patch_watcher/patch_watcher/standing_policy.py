@@ -68,9 +68,10 @@ PRESET_SUMMARIES = {
         "attempt) and a written report for any unknown failure. Never changes the patch."
     ),
     "bots": (
-        "Investigate failures, plus: fix build failures, and address comments from "
-        "automated reviewers (checkpatch, aireview, the janitor) -- make the change, "
-        "reply, upload. Anything design-level is surfaced for your audit first."
+        "Investigate failures, plus: fix build failures, rebase when checkpatch says "
+        "the change cannot be cherry-picked, and address comments from automated "
+        "reviewers (checkpatch, aireview, the janitor) -- make the change, reply, "
+        "upload. Anything design-level is surfaced for your audit first."
     ),
     "all": (
         "Handle bot feedback, plus human review comments under the same rules. "
@@ -78,9 +79,8 @@ PRESET_SUMMARIES = {
     ),
     "own": (
         "Handle all feedback with the audit gate off: makes design-level changes a "
-        "reviewer asked for, rebases when checkpatch says the change cannot be "
-        "cherry-picked, and drives the patch to ready. Asks only what the patch owner "
-        "alone can answer, and never nudges reviewers."
+        "reviewer asked for and drives the patch to ready. Asks only what the patch "
+        "owner alone can answer, and never nudges reviewers."
     ),
     "custom": "A per-kind combination from the old form that matches no level.",
 }
@@ -306,9 +306,11 @@ class PatchAutomationPolicy:
             "test_failure": self.test_failures,
             "build_failure": self.build_failures,
             "review_comments": self.review_comments,
-            # Rebasing is a design-level act on the whole change, so only the
-            # top rung does it unasked.
-            "rebase_needed": "rebase" if self.preset == "own" else "off",
+            # A checkpatch "cannot be cherry-picked" veto is bot feedback --
+            # the most mechanical kind -- so handling bot feedback handles it.
+            # The rebase task itself still stops for a human when a conflict
+            # would change what the patch means, whatever the level.
+            "rebase_needed": "rebase" if self.rank >= preset_rank("bots") else "off",
         }[kind]
 
 

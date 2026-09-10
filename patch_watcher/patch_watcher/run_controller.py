@@ -2739,14 +2739,14 @@ class RunController:
                 "cannot be judged without it;"
             )
             if str(payload.get("task") or "") == "rebase":
-                # Level "own" on a change checkpatch cannot cherry-pick. The
-                # operator has handed over responsibility, and a rebase that
-                # is not uploaded clears nothing, so this run uploads.
+                # A change checkpatch cannot cherry-pick, at a level that
+                # handles bot feedback. A rebase that is not uploaded clears
+                # nothing, so this run uploads.
                 task = (
                     "Rebase the exact pinned Gerrit revision onto the current tip of the "
                     "target branch. Checkpatch has vetoed this patchset because it cannot "
-                    "be cherry-picked to master, and the patch owner has given this run "
-                    "responsibility for fixing that. In this dedicated writable checkout, "
+                    "be cherry-picked to master, and the level set on this patch lets this "
+                    "run fix that. In this dedicated writable checkout, "
                     "which is your working directory named above: fetch the target branch "
                     "from the Gerrit remote, rebase the single commit onto it, and resolve "
                     "conflicts so the patch does exactly what it did before -- no new "

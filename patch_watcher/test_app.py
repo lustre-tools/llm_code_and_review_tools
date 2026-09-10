@@ -1098,11 +1098,12 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertEqual(runs.review_calls, 1)
         self.assertEqual(runs.build_calls, 1)
 
-    def test_level_own_rebases_a_cherry_pick_veto_before_anything_else(self):
+    def test_bot_feedback_and_above_rebase_a_cherry_pick_veto_before_anything_else(self):
         """A patchset checkpatch cannot cherry-pick is rebased first: a build
         repair or a review reply on a revision that will never land is wasted,
         and the rebase makes a new patchset that resets those signals anyway.
-        Every level below "own" leaves the veto to a human."""
+        The veto is bot feedback, so this starts at "bots"; below that it is
+        left to a human."""
 
         def run_at(level, change):
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -1177,11 +1178,19 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertEqual(len(runs.engineering), 1)
         self.assertEqual(runs.build_calls, 0)
 
-        runs, first, _ = run_at("all", 35303)
+        for level, change in (("bots", 35303), ("all", 35304)):
+            runs, first, _ = run_at(level, change)
+            self.assertEqual(first.run_id, "rebase-run", level)
+            self.assertEqual(runs.engineering[0]["task"], "rebase", level)
+            self.assertEqual(runs.review_calls, 0, level)
+
+        # Below "bots" the veto is a human's: nothing at all runs on a
+        # revision that cannot land, and nothing rebases it.
+        runs, first, _ = run_at("investigate", 35305)
         self.assertEqual(runs.engineering, [])
-        # Level "all" still handles what it may -- review work wins the poll
-        # when both signals arrive -- while the veto itself waits for a human.
-        self.assertEqual(first.run_id, "review-run")
+        self.assertEqual(runs.review_calls, 0)
+        self.assertEqual(runs.build_calls, 0)
+        self.assertIsNone(first)
 
     def test_succeeded_run_owns_its_revision_only_until_the_next_poll(self):
         from datetime import timedelta

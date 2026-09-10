@@ -105,16 +105,19 @@ class PolicyModelTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "preset must be one of"):
             PatchAutomationPolicy.from_dict("68541", {"preset": "custom-ish"})
 
-    def test_only_the_top_rung_rebases_unasked(self):
-        for level in ("watch", "retest", "investigate", "bots", "all"):
+    def test_handling_bot_feedback_includes_the_rebase(self):
+        """A checkpatch cherry-pick veto is bot feedback, so the rebase starts at
+        the rung that handles bots and is inherited above it."""
+        for level in ("watch", "retest", "investigate"):
             self.assertEqual(
                 PatchAutomationPolicy.for_preset("68541", level).configured_action("rebase_needed"),
                 "off", level,
             )
-        self.assertEqual(
-            PatchAutomationPolicy.for_preset("68541", "own").configured_action("rebase_needed"),
-            "rebase",
-        )
+        for level in ("bots", "all", "own"):
+            self.assertEqual(
+                PatchAutomationPolicy.for_preset("68541", level).configured_action("rebase_needed"),
+                "rebase", level,
+            )
 
     def test_legacy_generic_mode_only_grants_old_retest_capability(self):
         policy = PatchAutomationPolicy.from_dict("68541", {"mode": "automatic"})
