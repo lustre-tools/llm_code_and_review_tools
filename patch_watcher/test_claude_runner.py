@@ -101,6 +101,33 @@ def wait_for(predicate, timeout=2):
     raise AssertionError("condition did not become true")
 
 
+class ControlSocketPathTests(unittest.TestCase):
+    """The socket used to live under the run's runtime directory, where a real
+    engineering run id made it 108 characters -- one over the AF_UNIX limit --
+    so every such run died with "AF_UNIX path too long" before its socket
+    existed."""
+
+    def test_a_real_run_id_fits_and_is_stable_and_private(self):
+        from patch_watcher.claude_runner import _SUN_PATH_MAX, control_socket_path
+
+        with tempfile.TemporaryDirectory() as short:
+            with unittest.mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": short}):
+                path = control_socket_path("pw-engineer-35302-ps4-8e7bad2a5334")
+                self.assertLessEqual(len(str(path)), _SUN_PATH_MAX)
+                self.assertEqual(
+                    path, control_socket_path("pw-engineer-35302-ps4-8e7bad2a5334"),
+                )
+                self.assertNotEqual(path, control_socket_path("pw-engineer-other"))
+                self.assertEqual(path.parent.name, "patch-watcher")
+
+    def test_a_runtime_dir_too_long_is_a_clear_error_not_an_oserror(self):
+        from patch_watcher.claude_runner import ClaudeRunnerError, control_socket_path
+
+        with unittest.mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": "/" + "d" * 120}):
+            with self.assertRaisesRegex(ClaudeRunnerError, "AF_UNIX limit"):
+                control_socket_path("pw-engineer-1")
+
+
 class ClaudeRunnerTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

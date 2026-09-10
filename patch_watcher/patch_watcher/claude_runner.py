@@ -25,6 +25,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -960,6 +961,34 @@ def _assistant_text(event: Mapping[str, Any]) -> str:
     return "\n".join(parts)[:8192]
 
 
+# An AF_UNIX address is 108 bytes including its NUL, so a socket path has 107
+# usable characters.
+_SUN_PATH_MAX = 107
+
+
+def control_socket_path(run_id: str) -> Path:
+    """Where one run's control socket lives.
+
+    Deliberately NOT under the run's runtime directory.  That put it at
+    ~/.local/state/patch-watcher/runs/<run id>/work/scratch/claude/claude.sock
+    -- 108 characters for a real engineering run id, one over the limit -- so
+    every such run died with "AF_UNIX path too long" before its socket
+    existed, and the two places that derived the path had to agree on it
+    besides.  It is addressed by a digest of the run id under the user's
+    runtime directory: short, private, and cleaned up when the login session
+    ends.
+    """
+    base = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
+    digest = hashlib.sha256(str(run_id).encode("utf-8")).hexdigest()[:16]
+    path = Path(base) / "patch-watcher" / f"{digest}.sock"
+    if len(str(path).encode("utf-8")) > _SUN_PATH_MAX:
+        raise ClaudeRunnerError(
+            f"control socket path {path} exceeds the {_SUN_PATH_MAX}-character "
+            "AF_UNIX limit; set XDG_RUNTIME_DIR to a shorter directory"
+        )
+    return path
+
+
 class ClaudeHost:
     """Long-lived owner of one Claude stream and its control socket."""
 
@@ -976,7 +1005,7 @@ class ClaudeHost:
         spec.validate()
         self.spec = spec
         self.runtime_dir = Path(spec.runtime_dir).expanduser().resolve()
-        self.socket_path = self.runtime_dir / "claude.sock"
+        self.socket_path = control_socket_path(spec.run_id)
         self.event_log_path = self.runtime_dir / "events.jsonl"
         self.state_path = self.runtime_dir / "host-state.json"
         self.process_factory = process_factory
@@ -1006,6 +1035,8 @@ class ClaudeHost:
     def _prepare_private_paths(self) -> None:
         self.runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.runtime_dir, 0o700)
+        self.socket_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.socket_path.parent, 0o700)
         if self.socket_path.exists():
             self.socket_path.unlink()
         descriptor = os.open(self.event_log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -1498,7 +1529,7 @@ class ClaudeRunner:
             preliminary = RunnerHandle(
                 run_id=spec.run_id,
                 session_id=spec.session_id,
-                socket_path=str(runtime / "claude.sock"),
+                socket_path=str(control_socket_path(spec.run_id)),
                 event_log_path=str(runtime / "events.jsonl"),
                 state_path=str(runtime / "host-state.json"),
                 host_identity=host_identity,
