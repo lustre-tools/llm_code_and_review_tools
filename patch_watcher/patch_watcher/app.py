@@ -120,8 +120,8 @@ from patch_watcher.run_controller import (
     RESEARCH_REQUEST_EVENT,
     REVIEW_REQUEST_EVENT,
     RUNNER_HANDLE_EVENT,
-    RunController,
     NoReviewTargets,
+    RunController,
     RunControllerError,
     normalize_unknown_failure_evidence,
     unknown_failure_research_run_id,
@@ -142,10 +142,10 @@ from patch_watcher.session_state import (
     SessionStateStore,
 )
 from patch_watcher.standing_policy import (
-    ActivePatchRun,
-    PatchAutomationPolicy,
     PRESET_LABELS,
     PRESET_LEVELS,
+    ActivePatchRun,
+    PatchAutomationPolicy,
     RevisionIdentity,
     StandingPolicyConflict,
     StandingPolicyError,
@@ -742,6 +742,37 @@ def _apply_standing_policy(patch, *, policy=None):
             or not AUTOMATION_STORE.get_global_automation().enabled
         ):
             return None
+        # A patchset checkpatch cannot cherry-pick has to be rebased before
+        # anything else is worth doing to it: a build repair or a review reply
+        # on a revision that will never land is wasted, and a rebase makes a
+        # new patchset that resets every other signal anyway.
+        if (
+            policy.configured_action("rebase_needed") == "rebase"
+            and bool(patch.get("rebase_needed"))
+        ):
+            seed = hashlib.sha256(json.dumps({
+                "revision": patch.get("revision_sha"),
+                "blockers": patch.get("review_blockers") or [],
+            }, sort_keys=True).encode("utf-8")).hexdigest()
+            decision = _automatic_standing_decision(
+                patch, policy, "rebase_needed", seed,
+            )
+            if decision.eligible:
+                session = RUN_CONTROLLER.request_engineering(
+                    patch, request_id=decision.coalescing_key, task="rebase",
+                )
+                SESSION_STORE.append_event(
+                    session.session_id, "standing_policy_triggered", decision.to_dict(),
+                    idempotency_key="standing-trigger:" + decision.coalescing_key,
+                )
+                _record_standing_decision(patch, decision, outcome=session.run_id)
+                return session
+            _record_standing_decision(patch, decision)
+            # Whatever the reason the rebase did not start now -- already
+            # started for this revision, at its ceiling, or not yet eligible --
+            # the revision still cannot land, so nothing below is worth doing
+            # to it.  The next patchset is where the other handlers resume.
+            return None
         # Review work wins when both review and build signals arrive together;
         # the one-run owner invariant defers the build event to a later poll.
         if (
@@ -1316,6 +1347,7 @@ def _watch_chip(value):
         "terminal": "neutral",
         "ci-failed": "bad",
         "needs-attention": "bad",
+        "rebase-needed": "warn",
         "needs-review": "warn",
         "awaiting-ci": "warn",
         "work-in-progress": "info",
@@ -1330,6 +1362,7 @@ def _watch_chip(value):
         "terminal": "Terminal",
         "ci-failed": "CI failed",
         "needs-attention": "Needs attention",
+        "rebase-needed": "Rebase needed",
         "needs-review": "Needs review",
         "awaiting-ci": "Awaiting CI",
         "work-in-progress": "Work in progress",

@@ -276,6 +276,65 @@ class StatusTests(unittest.TestCase):
         self.assertIn("builds=42", result["maloo_url"])
         self.assertIn("Maloo posted on patchset 4", result["change_summary"])
 
+    def test_checkpatch_cherry_pick_veto_alone_means_rebase_needed(self):
+        """The one purely mechanical veto: nobody disagrees with anything, the
+        patchset just no longer applies.  It gets its own watch state so a
+        level-5 policy can act on it and an operator can tell it from real
+        review feedback."""
+
+        change = sample_change()
+        change["labels"]["Code-Review"]["all"] = [
+            {"name": "Owner", "value": 2},
+            {"name": "Reviewer A", "value": 1},
+            {"name": "Reviewer B", "value": 1},
+            {"name": "wc-checkpatch", "value": -1},
+        ]
+        change["messages"].append({
+            "_revision_number": 4,
+            "date": "2026-08-29 13:00:00.000000000",
+            "author": {"name": "wc-checkpatch"},
+            "message": "Patch Set 4: Code-Review-1\n\nThis change cannot be "
+                       "cherry-picked to master.\nPlease rebase the change locally "
+                       "and upload the rebased commit for review.",
+        })
+        result = status.summarize_change(change)
+        self.assertEqual(result["review"], "Veto")
+        self.assertTrue(result["rebase_needed"])
+        self.assertEqual(result["watch_state"], "rebase-needed")
+        self.assertIn("Rebase onto master", result["recommendation"])
+
+    def test_a_human_veto_beside_checkpatch_is_not_a_rebase_problem(self):
+        change = sample_change()
+        change["labels"]["Code-Review"]["all"] = [
+            {"name": "Owner", "value": 2},
+            {"name": "wc-checkpatch", "value": -1},
+            {"name": "Reviewer A", "value": -1},
+        ]
+        change["messages"].append({
+            "_revision_number": 4,
+            "date": "2026-08-29 13:00:00.000000000",
+            "author": {"name": "wc-checkpatch"},
+            "message": "Patch Set 4: Code-Review-1\n\nThis change cannot be cherry-picked to master.",
+        })
+        result = status.summarize_change(change)
+        self.assertFalse(result["rebase_needed"])
+        self.assertEqual(result["watch_state"], "needs-attention")
+
+    def test_rebase_needed_predicate_reads_bot_name_and_message(self):
+        cherry = {"name": "wc-checkpatch", "value": -1, "patchset": 4,
+                  "message": "This change cannot be cherry-picked to master."}
+        self.assertTrue(status.rebase_needed([cherry]))
+        self.assertFalse(status.rebase_needed([]))
+        self.assertFalse(status.rebase_needed([
+            {"name": "wc-checkpatch", "value": -1, "patchset": 4, "message": "Code-Review -1"},
+        ]))
+        self.assertFalse(status.rebase_needed([
+            cherry, {"name": "Andreas Dilger", "value": -1, "patchset": 4, "message": "no"},
+        ]))
+        self.assertTrue(status.is_bot_author("Gerrit AI review for Lustre"))
+        self.assertTrue(status.is_bot_author("", "username:wc-checkpatch"))
+        self.assertFalse(status.is_bot_author("Andreas Dilger", "account:1"))
+
     def test_owner_vote_does_not_count_as_external_review(self):
         change = sample_change()
         change["labels"]["Code-Review"]["all"] = [

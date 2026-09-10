@@ -911,7 +911,11 @@ def _review_blocker_details(
             ]
             if lines:
                 excerpt = lines[0]
-                if re.fullmatch(r"Patch Set [0-9]+:", excerpt) and len(lines) > 1:
+                # Gerrit prefixes a vote's message with "Patch Set 4:" or
+                # "Patch Set 4: Code-Review-1".  Either is the header, not the
+                # reason; the reason is the next line, and it is what both an
+                # operator and the rebase-needed check need to see.
+                if re.fullmatch(_VOTE_HEADER_RE, excerpt) and len(lines) > 1:
                     excerpt = lines[1]
             break
         details.append({
@@ -923,6 +927,28 @@ def _review_blocker_details(
     return details
 
 
+_CHERRY_PICK_VETO_RE = re.compile(r"cannot be cherry-?picked", re.IGNORECASE)
+_VOTE_HEADER_RE = r"Patch Set [0-9]+:(?: [A-Za-z-]+[+-][0-9])?"
+
+
+def rebase_needed(review_blockers: list[dict[str, Any]]) -> bool:
+    """True when every -1 on the change is checkpatch saying it does not apply.
+
+    "This change cannot be cherry-picked to master. Please rebase" is the one
+    veto that is purely mechanical -- no reviewer disagrees with anything --
+    and it is what left change 35302 sitting for seven years with two +1s.
+    A human -1 alongside it means there is real feedback too, and that is
+    not a rebase problem.
+    """
+    if not review_blockers:
+        return False
+    return all(
+        is_bot_author(blocker.get("name"))
+        and _CHERRY_PICK_VETO_RE.search(str(blocker.get("message") or ""))
+        for blocker in review_blockers
+    )
+
+
 def _watch_classification(
     lifecycle: str,
     wip: bool,
@@ -930,6 +956,7 @@ def _watch_classification(
     unresolved: int,
     jenkins: str,
     maloo: str,
+    needs_rebase: bool = False,
 ) -> tuple[str, str]:
     """Classify read-only state and recommend a future human action.
 
@@ -943,6 +970,8 @@ def _watch_classification(
         return "abandoned", "Patch is abandoned; consider stopping the watch"
     if wip:
         return "work-in-progress", "Wait for the author to remove WIP"
+    if review_health == "Veto" and needs_rebase:
+        return "rebase-needed", "Rebase onto master; checkpatch cannot cherry-pick this patchset"
     if review_health == "Veto":
         return "needs-attention", "Resolve outstanding review feedback"
     if "failed" in review_health.casefold() or "FAIL" in {jenkins, maloo}:
@@ -1039,6 +1068,9 @@ def _summarize_change(
     unresolved = _require_count(
         change.get("unresolved_comment_count"), "unresolved comment count"
     )
+    review_blockers = _review_blocker_details(
+        labels["review_blockers"], messages, patchset
+    )
     watch_state, recommendation = _watch_classification(
         lifecycle,
         bool(change.get("work_in_progress", False)),
@@ -1046,12 +1078,10 @@ def _summarize_change(
         unresolved,
         jenkins,
         maloo,
+        needs_rebase=rebase_needed(review_blockers),
     )
     change_time, change_summary = _describe_latest_update(
         current, messages, patchset, _safe_line(change.get("updated", ""), limit=64)
-    )
-    review_blockers = _review_blocker_details(
-        labels["review_blockers"], messages, patchset
     )
     checked_at = datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -1072,6 +1102,7 @@ def _summarize_change(
         "review": review_health,
         "review_votes": labels["cr_votes"],
         "review_blockers": review_blockers,
+        "rebase_needed": rebase_needed(review_blockers),
         "test_flow_blocked": bool(review_blockers),
         "verified_votes": labels["verified_votes"],
         "unresolved": unresolved,

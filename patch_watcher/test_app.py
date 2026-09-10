@@ -1074,6 +1074,91 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertEqual(runs.review_calls, 1)
         self.assertEqual(runs.build_calls, 1)
 
+    def test_level_own_rebases_a_cherry_pick_veto_before_anything_else(self):
+        """A patchset checkpatch cannot cherry-pick is rebased first: a build
+        repair or a review reply on a revision that will never land is wasted,
+        and the rebase makes a new patchset that resets those signals anyway.
+        Every level below "own" leaves the veto to a human."""
+
+        def run_at(level, change):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                automation = app.initialize_automation_store(root / "automation.sqlite3")
+                standing = app.initialize_standing_policy_store(root / "standing.json")
+                patch_record, _ = app.add_patch(f"https://review.whamcloud.com/c/{change}")
+                patch_record.update(
+                    change_number=change, patchset=4, revision_sha="d" * 40,
+                    revision_ref=f"refs/changes/{str(change)[-2:]}/{change}/4",
+                    project="fs/lustre-release", lifecycle="Open", unresolved=1,
+                    jenkins="FAIL", jenkins_url="https://build.whamcloud.com/job/x/4/",
+                    rebase_needed=True,
+                    review_blockers=[{
+                        "name": "wc-checkpatch", "value": -1, "patchset": 4,
+                        "message": "This change cannot be cherry-picked to master.",
+                    }],
+                )
+                app.sync_automation_patch(patch_record)
+                standing.save(app.PatchAutomationPolicy.for_preset(str(change), level))
+                automation.set_global_automation(True, changed_by="test", reason="test")
+
+                class FakeSessions:
+                    def list_sessions(self, include_terminal=True):
+                        return []
+
+                    def append_event(self, *args, **kwargs):
+                        return None
+
+                class FakeRuns:
+                    def __init__(self):
+                        self.engineering = []
+                        self.review_calls = 0
+                        self.build_calls = 0
+
+                    def stop(self):
+                        return None
+
+                    def request_engineering(self, patch, **kwargs):
+                        self.engineering.append(kwargs)
+                        return SimpleNamespace(session_id="rebase-session", run_id="rebase-run")
+
+                    def request_review_comments(self, *args, **kwargs):
+                        self.review_calls += 1
+                        return SimpleNamespace(session_id="review-session", run_id="review-run")
+
+                    def request_build_failure(self, *args, **kwargs):
+                        self.build_calls += 1
+                        return SimpleNamespace(session_id="build-session", run_id="build-run")
+
+                class FakeGerrit:
+                    def fetch_review_snapshot(self, *args, **kwargs):
+                        return {"snapshot_sha256": "a" * 64, "threads": []}
+
+                runs = FakeRuns()
+                app.SESSION_STORE = FakeSessions()
+                app.RUN_CONTROLLER = runs
+                with patch.object(app.GerritStatusClient, "configured", return_value=FakeGerrit()), \
+                     patch.object(app, "_capture_build_failure_snapshot",
+                                  return_value={"snapshot_sha256": "b" * 64}):
+                    first = app._apply_standing_policy(patch_record)
+                    second = app._apply_standing_policy(patch_record)
+                return runs, first, second
+
+        runs, first, second = run_at("own", 35302)
+        self.assertEqual(first.run_id, "rebase-run")
+        self.assertEqual(runs.engineering[0]["task"], "rebase")
+        self.assertEqual(runs.engineering[0]["request_id"].split(":")[0], "standing")
+        # The same veto on the same revision is one event: no second run, and
+        # the build repair is still not attempted underneath it.
+        self.assertIsNone(second)
+        self.assertEqual(len(runs.engineering), 1)
+        self.assertEqual(runs.build_calls, 0)
+
+        runs, first, _ = run_at("all", 35303)
+        self.assertEqual(runs.engineering, [])
+        # Level "all" still handles what it may -- review work wins the poll
+        # when both signals arrive -- while the veto itself waits for a human.
+        self.assertEqual(first.run_id, "review-run")
+
     def test_succeeded_run_owns_its_revision_only_until_the_next_poll(self):
         from datetime import timedelta
 

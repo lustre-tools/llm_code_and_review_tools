@@ -493,6 +493,24 @@ class RunControllerTests(unittest.TestCase):
              "gerrit": ("failed", "no notifier configured")},
         )
 
+    def test_an_engineering_request_records_its_task(self):
+        """A rebase run is a different job from the open-ended engineering run,
+        and the request event has to say which it is so the prompt and the run
+        page both know."""
+
+        plain = self.controller.request_engineering(patch_record())
+        self.assertEqual(self.controller._request_payload(plain)["task"], "")
+        rebase = self.controller.request_engineering(
+            patch_record(change_number=68161, revision_ref="refs/changes/61/68161/4"),
+            task="rebase",
+        )
+        self.assertEqual(self.controller._request_payload(rebase)["task"], "rebase")
+        with self.assertRaisesRegex(RunControllerError, "unsupported engineering task"):
+            self.controller.request_engineering(
+                patch_record(change_number=68162, revision_ref="refs/changes/62/68162/4"),
+                task="rewrite",
+            )
+
     def test_waiting_question_answer_is_delivered_exactly_once(self):
         session = self.start_run()
         self.runner.events_by_session[session.session_id] = [RunnerEvent(

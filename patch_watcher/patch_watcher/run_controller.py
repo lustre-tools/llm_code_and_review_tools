@@ -1189,8 +1189,18 @@ class RunController:
         request_id: str | None = None,
         model: str = "",
         effort: str = "",
+        task: str = "",
     ) -> ManagedSession:
-        """Reserve one manually confirmed Phase 3 source-edit run."""
+        """Reserve one Phase 3 source-edit run.
+
+        ``task`` names a specific job for the run -- today ``rebase`` -- and
+        is empty for the open-ended manually confirmed run.  It is part of the
+        request event, so the prompt and the run page both know what the run
+        was for.
+        """
+        task = str(task or "").strip()
+        if task not in {"", "rebase"}:
+            raise RunControllerError("unsupported engineering task")
 
         lifecycle = str(patch.get("lifecycle", "")).casefold()
         if lifecycle not in {"open", "new"}:
@@ -1246,6 +1256,7 @@ class RunController:
             ENGINEERING_REQUEST_EVENT,
             {
                 "request_kind": "engineering",
+                "task": task,
                 "change_number": change_number,
                 "patchset": patchset,
                 "revision": revision,
@@ -2727,18 +2738,46 @@ class RunController:
                 "resource_exhausted naming that missing capacity if the work genuinely "
                 "cannot be judged without it;"
             )
-            task = (
-                "Work on the exact pinned Gerrit revision in this dedicated writable checkout, "
-                "which is your working directory named above. "
-                "Diagnose the patch and make the smallest evidence-supported source changes. "
-                + validation_rule
-                + " validation_requests are optional planning evidence, "
-                "not authorization. Tag every validation request with evidence_role: test, "
-                "build, diagnostic, or other; only a successful explicit test can qualify "
-                "a Gerrit upload. This session produces a diff and evidence for human review; "
-                "do not upload a patchset unless the operator asked for one. Patch subject: "
-                + str(payload.get("subject") or "(unavailable)")
-            )
+            if str(payload.get("task") or "") == "rebase":
+                # Level "own" on a change checkpatch cannot cherry-pick. The
+                # operator has handed over responsibility, and a rebase that
+                # is not uploaded clears nothing, so this run uploads.
+                task = (
+                    "Rebase the exact pinned Gerrit revision onto the current tip of the "
+                    "target branch. Checkpatch has vetoed this patchset because it cannot "
+                    "be cherry-picked to master, and the patch owner has given this run "
+                    "responsibility for fixing that. In this dedicated writable checkout, "
+                    "which is your working directory named above: fetch the target branch "
+                    "from the Gerrit remote, rebase the single commit onto it, and resolve "
+                    "conflicts so the patch does exactly what it did before -- no new "
+                    "behavior, no cleanup of neighboring code, the smallest resolution "
+                    "that restores the original intent against today's tree. Keep the "
+                    "commit message and its Change-Id line exactly as they are; never "
+                    "invent or alter a Change-Id. Then build. "
+                    + validation_rule
+                    + " If the rebase is clean or its conflicts have one obviously correct "
+                    "resolution, upload the rebased commit as a new patchset of the same "
+                    "change with the gerrit CLI. If a conflict can only be resolved by "
+                    "deciding what the patch should now mean -- the code it touched was "
+                    "redesigned, or the fix is no longer needed -- do not guess and do not "
+                    "upload: return needs_input with one precise question that names the "
+                    "conflicting hunk and the choice. Never vote, abandon, or post any "
+                    "comment other than the reply the upload itself makes. Patch subject: "
+                    + str(payload.get("subject") or "(unavailable)")
+                )
+            else:
+                task = (
+                    "Work on the exact pinned Gerrit revision in this dedicated writable checkout, "
+                    "which is your working directory named above. "
+                    "Diagnose the patch and make the smallest evidence-supported source changes. "
+                    + validation_rule
+                    + " validation_requests are optional planning evidence, "
+                    "not authorization. Tag every validation request with evidence_role: test, "
+                    "build, diagnostic, or other; only a successful explicit test can qualify "
+                    "a Gerrit upload. This session produces a diff and evidence for human review; "
+                    "do not upload a patchset unless the operator asked for one. Patch subject: "
+                    + str(payload.get("subject") or "(unavailable)")
+                )
             organization_policy = (
                 "This is an operator-confirmed engineering session. The checkout is private to "
                 "this run. " + ENVIRONMENT_POLICY

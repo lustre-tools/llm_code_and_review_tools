@@ -106,7 +106,7 @@ def preset_rank(preset: str) -> int:
     """Position on the ladder; custom sorts below everything but watch."""
     return PRESET_LEVELS.index(preset) if preset in PRESET_LEVELS else 0
 TRIGGER_MODES = frozenset({"manual", "automatic"})
-TRIGGER_KINDS = frozenset({"test_failure", "build_failure", "review_comments"})
+TRIGGER_KINDS = frozenset({"test_failure", "build_failure", "review_comments", "rebase_needed"})
 TRIGGER_SOURCES = frozenset({"manual", "automatic"})
 ACTIVE_RUN_STATES = frozenset(
     {"planned", "starting", "running", "waiting_external", "waiting_human"}
@@ -306,6 +306,9 @@ class PatchAutomationPolicy:
             "test_failure": self.test_failures,
             "build_failure": self.build_failures,
             "review_comments": self.review_comments,
+            # Rebasing is a design-level act on the whole change, so only the
+            # top rung does it unasked.
+            "rebase_needed": "rebase" if self.preset == "own" else "off",
         }[kind]
 
 

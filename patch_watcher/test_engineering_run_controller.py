@@ -185,6 +185,36 @@ class EngineeringRunControllerTests(unittest.TestCase):
         (destination / "README").write_text("pinned source\n", encoding="utf-8")
         return destination
 
+    def test_a_rebase_task_changes_the_prompt_and_permits_the_upload(self):
+        """Level "own" on a change checkpatch cannot cherry-pick.  The default
+        engineering prompt forbids uploading; the rebase task is the one job
+        whose whole point is the upload, and it must still keep the Change-Id
+        and stop for a human when a conflict is a design decision."""
+
+        controller = self.controller()
+        plain = controller.request_engineering(engineering_patch())
+        controller.tick()
+        plain_prompt = self.runner.starts[0].prompt
+        self.assertIn("do not upload a patchset unless the operator asked", plain_prompt)
+        self.assertNotIn("Rebase the exact pinned Gerrit revision", plain_prompt)
+        self.store.finish_session(plain.session_id, "cancelled")
+
+        rebase = controller.request_engineering(
+            engineering_patch(revision="e" * 40, patchset=5,
+                              revision_ref="refs/changes/60/68160/5"),
+            request_id="standing:rebase:1", task="rebase",
+        )
+        controller.tick()
+        prompt = self.runner.starts[-1].prompt
+        self.assertEqual(controller._request_payload(rebase)["task"], "rebase")
+        self.assertIn("Rebase the exact pinned Gerrit revision", prompt)
+        self.assertIn("Change-Id line exactly as they are", prompt)
+        self.assertIn("upload the rebased commit as a new patchset", prompt)
+        self.assertIn("return needs_input with one precise question that names the "
+                      "conflicting hunk", prompt)
+        self.assertIn("Never vote, abandon", prompt)
+        self.assertNotIn("do not upload a patchset unless the operator asked", prompt)
+
     def controller(self, checkout=None, **overrides):
         controller = RunController(
             self.store,
