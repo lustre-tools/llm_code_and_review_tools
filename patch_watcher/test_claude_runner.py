@@ -309,7 +309,11 @@ class ClaudeRunnerTests(unittest.TestCase):
         self.assertNotIn("Write", command_text)
         self.assertNotIn(self.spec().prompt, command_text)
         schema_index = command.index("--json-schema") + 1
-        self.assertEqual(json.loads(command[schema_index]), READ_ONLY_REPORT_SCHEMA)
+        self.assertEqual(
+            json.loads(command[schema_index]),
+            # The CLI's validator lacks the draft the schema declares.
+            {k: v for k, v in READ_ONLY_REPORT_SCHEMA.items() if k != "$schema"},
+        )
 
     def test_no_profile_accepts_an_mcp_server(self):
         """The only server ever brokered was pw_ltvm, whose module is gone."""
@@ -730,7 +734,9 @@ class FullCapabilityProfileTests(unittest.TestCase):
         )
         schema_index = command.index("--json-schema") + 1
         self.assertEqual(
-            json.loads(command[schema_index]), ENGINEERING_REPORT_SCHEMA
+            json.loads(command[schema_index]),
+            # The CLI's validator lacks the draft the schema declares.
+            {k: v for k, v in ENGINEERING_REPORT_SCHEMA.items() if k != "$schema"},
         )
 
     def test_bounded_profiles_keep_their_allowlist_and_hardening(self):
