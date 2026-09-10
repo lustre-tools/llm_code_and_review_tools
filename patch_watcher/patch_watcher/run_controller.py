@@ -212,6 +212,11 @@ class ResearchRequestResult:
 
 
 AlertSender = Callable[[ManagedSession, str, list[Any], str], bool]
+# Fans a paused run's question out to the human: (session, question, run_url)
+# -> {channel: (sent, detail)}.  Injected by the app so this module never
+# knows about sendmail or Gerrit writes; the controller only records outcomes.
+HumanNotifier = Callable[[ManagedSession, Any, str], Mapping[str, tuple[bool, str]]]
+HUMAN_NOTICE_CHANNELS = ("email", "gerrit")
 
 
 def _utc_now() -> datetime:
@@ -632,6 +637,7 @@ class RunController:
         clock: Callable[[], datetime] = _utc_now,
         monotonic: Callable[[], float] = time.monotonic,
         alert_sender: AlertSender | None = None,
+        human_notifier: HumanNotifier | None = None,
         public_base_url: str = "http://127.0.0.1:8080",
         poll_seconds: float = 1.0,
         model: str = "",
@@ -654,6 +660,7 @@ class RunController:
         # time together (an ordinary fast-forward) or apart (a real step).
         self.monotonic = monotonic
         self.alert_sender = alert_sender
+        self.human_notifier = human_notifier
         self.public_base_url = public_base_url.rstrip("/")
         self.poll_seconds = poll_seconds
         # How long salvage waits for an already-signalled worker to exit
@@ -3385,9 +3392,10 @@ class RunController:
             session.session_id, "agent-report", report["summary"], at=self.clock()
         )
         if report["state"] == "needs_input":
-            self.store.ask_human(
+            question = self.store.ask_human(
                 session.session_id, report["question"], at=self.clock()
             )
+            self._notify_human_once(session, question)
             return
         self._stop_runner_once(session, handle)
         if engineering_report:
@@ -3855,6 +3863,70 @@ class RunController:
             idempotency_key="engineering-evidence:" + session.run_id,
             at=self.clock(),
         )
+    def _notify_human_once(self, session: ManagedSession, question: Any) -> dict[str, bool]:
+        """Tell the human a run is waiting on them, once per question per channel.
+
+        The console shows the open question by itself (that is the "label");
+        this covers the channels that reach someone who is not looking at it:
+        email, if the host has it configured, and a change message on the
+        review.  Each channel gets its own ledger entry keyed on the question,
+        so a crash between the two cannot post the Gerrit message twice on
+        recovery, and a failed channel is recorded as failed rather than
+        silently retried into a duplicate.
+        """
+        pending = []
+        for channel in HUMAN_NOTICE_CHANNELS:
+            key = f"human-notice:{question.question_id}:{channel}"
+            delivery = self.store.ensure_delivery(
+                session.session_id,
+                kind="human_notice",
+                idempotency_key=key,
+                payload={"channel": channel, "question_id": question.question_id},
+                at=self.clock(),
+            )
+            if delivery.status == "pending":
+                pending.append((channel, key))
+        if not pending:
+            return {}
+        run_url = f"{self.public_base_url}/runs/{session.run_id}"
+        outcomes: Mapping[str, tuple[bool, str]] = {}
+        if self.human_notifier is not None:
+            try:
+                outcomes = dict(self.human_notifier(session, question, run_url))
+            except Exception as exc:  # a notifier bug must not take the run down
+                outcomes = {
+                    channel: (False, f"notifier raised {type(exc).__name__}: {exc}"[:500])
+                    for channel, _ in pending
+                }
+        results = {}
+        for channel, key in pending:
+            sent, detail = outcomes.get(channel, (False, "no notifier configured"))
+            sent = bool(sent)
+            self.store.finish_delivery(
+                key,
+                delivered=sent,
+                at=self.clock(),
+                failure_summary=None if sent else str(detail)[:500],
+            )
+            results[channel] = sent
+        self.store.append_event(
+            session.session_id,
+            "human_notice",
+            {
+                "summary": "Asked the human: " + ", ".join(
+                    f"{channel} {'sent' if ok else 'not sent'}" for channel, ok in results.items()
+                ),
+                "question_id": question.question_id,
+                "channels": {
+                    channel: {"sent": ok, "detail": str(outcomes.get(channel, (False, "no notifier configured"))[1])[:500]}
+                    for channel, ok in results.items()
+                },
+            },
+            idempotency_key=f"human-notice-event:{question.question_id}",
+            at=self.clock(),
+        )
+        return results
+
     def _send_alert_once(
         self, session: ManagedSession, reason: str, *, key: str | None = None
     ) -> bool:

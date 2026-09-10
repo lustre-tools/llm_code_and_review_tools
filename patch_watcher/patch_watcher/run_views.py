@@ -386,7 +386,26 @@ def render_run_summary(run, *, base_url="/runs", kind=None):
     )
 
 
-def _render_question(run, question):
+def _render_notices(notices):
+    """Say how the human was told, per channel, with what happened."""
+    items = _items(notices)
+    if not items:
+        return ""
+    rows = []
+    for item in items:
+        status = _state(_get(item, "status"))
+        tone = "good" if status == "delivered" else ("bad" if status == "failed" else "neutral")
+        label = {"delivered": "sent", "failed": "not sent", "pending": "pending"}.get(status, status)
+        detail = _plain(_get(item, "detail"), "")
+        rows.append(
+            f"<li><span class='run-state tone-{tone}'>{escape(_plain(_get(item, 'channel')))}: {escape(label)}</span>"
+            + (f" <span class='control-note'>{escape(detail)}</span>" if detail else "")
+            + "</li>"
+        )
+    return "<h4>How you were told</h4><ul class='human-notices'>" + "".join(rows) + "</ul>"
+
+
+def _render_question(run, question, notices=()):
     question = question if question is not None else _get(run, "question", "waiting_question")
     if question is None:
         return ""
@@ -404,7 +423,7 @@ def _render_question(run, question):
         f"<p><strong>Why:</strong> {escape(_plain(_get(question, 'why', 'reason')))}</p>"
         f"<p><strong>Already tried:</strong> {escape(_plain(_get(question, 'tried', 'already_tried')))}</p>"
         f"<p><strong>Recommended safe default:</strong> {escape(_plain(_get(question, 'recommended', 'recommended_default')))}</p>"
-        f"{choices_html}</section>"
+        f"{choices_html}{_render_notices(notices)}</section>"
     )
 
 
@@ -549,7 +568,7 @@ def _render_guidance(run, *, base_url, csrf_token, idempotency_token):
 
 
 def render_run_detail(
-    run, *, messages=(), events=(), question=None,
+    run, *, messages=(), events=(), question=None, notices=(),
     csrf_token=None, idempotency_token=None, base_url="/runs",
 ):
     """Render complete run detail without unsafe mutations."""
@@ -591,7 +610,7 @@ def render_run_detail(
         + _field("Started", _get(run, "started_at", "created_at"))
         + _field("Last qualifying activity", _get(run, "last_activity_at", "last_qualifying_activity"))
         + "</dl>" + _countdowns(run) + "</section>"
-        + _render_question(run, question)
+        + _render_question(run, question, notices=notices)
         + _render_history(messages or _get(run, "messages"), events or _get(run, "events"))
         + _render_guidance(run, base_url=base_url, csrf_token=csrf_token, idempotency_token=idempotency_token)
         + _render_controls(run, base_url=base_url, csrf_token=csrf_token, idempotency_token=idempotency_token)

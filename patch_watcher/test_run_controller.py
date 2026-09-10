@@ -207,7 +207,10 @@ class RunControllerTests(unittest.TestCase):
             # object that exists right now; these tests rebind self.now.
             monotonic=lambda: self.now.timestamp() - self.clock_offset,
             alert_sender=self._alert,
+            human_notifier=self._notify,
         )
+        self.notices = []
+        self.notify_outcomes = {"email": (True, "sent"), "gerrit": (True, "change message posted")}
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -215,6 +218,32 @@ class RunControllerTests(unittest.TestCase):
     def _alert(self, session, reason, messages, url):
         self.alerts.append((session.session_id, reason, len(messages), url))
         return True
+
+    def _notify(self, session, question, run_url):
+        self.notices.append((session.session_id, question.question, run_url))
+        if isinstance(self.notify_outcomes, Exception):
+            raise self.notify_outcomes
+        return dict(self.notify_outcomes)
+
+    def pause_on_question(self, question="Should this include legacy behavior?"):
+        session = self.start_run()
+        self.runner.events_by_session[session.session_id] = [RunnerEvent(
+            1, self.now.timestamp(), "worker_report", {
+                "schema": "patch-watcher-read-only-report/v1",
+                "state": "needs_input",
+                "summary": "A choice is required.",
+                "findings": [],
+                "question": question,
+            },
+        )]
+        self.controller.tick()
+        return self.store.get_session(session.session_id)
+
+    def notice_ledger(self, session):
+        return {
+            item.payload["channel"]: (item.status, item.failure_summary)
+            for item in self.store.list_deliveries(session.session_id, kind="human_notice")
+        }
 
     def step_clock(self, delta):
         """Move the host clock without moving real time."""
@@ -401,6 +430,67 @@ class RunControllerTests(unittest.TestCase):
         self.assertEqual(
             self.store.get_terminal_result(other.session_id).failure_code,
             "worker_report_invalid",
+        )
+
+    def test_a_paused_run_tells_the_human_once_per_channel(self):
+        """needs_input must reach someone who is not watching the console.
+
+        The open question is the in-console label by itself; email and a
+        Gerrit change message are the channels that reach out. Each gets one
+        ledger entry keyed on the question, so nothing is sent twice."""
+
+        session = self.pause_on_question("Drop the legacy fallback?")
+        self.assertEqual(session.state, "waiting_human")
+        self.assertEqual(len(self.notices), 1)
+        session_id, question, url = self.notices[0]
+        self.assertEqual(session_id, session.session_id)
+        self.assertEqual(question, "Drop the legacy fallback?")
+        self.assertEqual(url, f"http://127.0.0.1:8080/runs/{session.run_id}")
+        self.assertEqual(
+            self.notice_ledger(session),
+            {"email": ("delivered", None), "gerrit": ("delivered", None)},
+        )
+        summaries = [
+            event.payload.get("summary") for event in self.store.list_events(session.session_id)
+            if event.event_type == "human_notice"
+        ]
+        self.assertEqual(summaries, ["Asked the human: email sent, gerrit sent"])
+        # Another controller pass changes nothing: the ledger already answers.
+        self.controller.tick()
+        self.assertEqual(len(self.notices), 1)
+
+    def test_a_failed_channel_is_recorded_and_never_retried_into_a_duplicate(self):
+        self.notify_outcomes = {"email": (False, "Email is disabled; the notice was recorded only."),
+                                "gerrit": (False, "Gerrit rejected the configured credentials.")}
+        session = self.pause_on_question()
+        self.assertEqual(
+            self.notice_ledger(session),
+            {
+                "email": ("failed", "Email is disabled; the notice was recorded only."),
+                "gerrit": ("failed", "Gerrit rejected the configured credentials."),
+            },
+        )
+        self.controller.tick()
+        self.assertEqual(len(self.notices), 1)
+        # The run itself is untouched: still waiting, still answerable.
+        self.assertEqual(self.store.get_session(session.session_id).state, "waiting_human")
+
+    def test_a_notifier_bug_cannot_take_the_run_down(self):
+        self.notify_outcomes = RuntimeError("sendmail exploded")
+        session = self.pause_on_question()
+        self.assertEqual(session.state, "waiting_human")
+        ledger = self.notice_ledger(session)
+        self.assertEqual({status for status, _ in ledger.values()}, {"failed"})
+        self.assertIn("notifier raised RuntimeError: sendmail exploded", ledger["email"][1])
+
+    def test_without_a_notifier_the_channels_are_recorded_as_not_sent(self):
+        self.controller.human_notifier = None
+        session = self.pause_on_question()
+        self.assertEqual(session.state, "waiting_human")
+        self.assertEqual(
+            self.notice_ledger(session),
+            {"email": ("failed", "no notifier configured"),
+             "gerrit": ("failed", "no notifier configured")},
         )
 
     def test_waiting_question_answer_is_delivered_exactly_once(self):

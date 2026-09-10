@@ -2219,6 +2219,18 @@ class SessionStateStore:
                 )
         return self._delivery_from_row(row)
 
+    def list_deliveries(self, session_id: str, kind: str | None = None) -> list[DeliveryRecord]:
+        """Return a session's delivery ledger, oldest first, optionally one kind."""
+        query = "SELECT * FROM pw_delivery_ledger WHERE session_id = ?"
+        params: list[Any] = [_required_text("session_id", session_id)]
+        if kind is not None:
+            query += " AND kind = ?"
+            params.append(_required_text("kind", kind))
+        query += " ORDER BY created_at, idempotency_key"
+        with self._connection() as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [self._delivery_from_row(row) for row in rows]
+
     def finish_delivery(
         self,
         idempotency_key: str,

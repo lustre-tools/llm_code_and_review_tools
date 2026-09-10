@@ -39,6 +39,8 @@ _MALOO_BUILD_RE = re.compile(r"sessions will be run for Build ([0-9]+)")
 # data.  The transport reads one byte past the bound so an oversized body is
 # detected without materializing it.
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+# A change message longer than this is not a request for help.
+MAX_MESSAGE_BYTES = 4000
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
@@ -401,18 +403,39 @@ class GerritStatusClient:
             )
         return change
 
+    def post_message(self, change_number: int, message: str) -> None:
+        """Post one change message (a plain review comment) to the current revision.
+
+        The only write this otherwise read-only client makes.  It exists so a
+        run that bails to a human can say so on the review itself, where the
+        patch owner will see it even if they never open the console.
+        """
+        text = _safe_text(message, limit=MAX_MESSAGE_BYTES)
+        if not text.strip():
+            raise GerritRequestError("Refusing to post an empty change message.")
+        endpoint = (
+            f"/a/changes/{quote(str(int(change_number)), safe='')}"
+            "/revisions/current/review"
+        )
+        body = json.dumps({"message": text}).encode("utf-8")
+        self._request_json(endpoint, method="POST", data=body)
+
     def _fetch_json(self, endpoint: str) -> Any:
+        return self._request_json(endpoint, method="GET")
+
+    def _request_json(self, endpoint: str, *, method: str, data: bytes | None = None) -> Any:
         token = base64.b64encode(
             f"{self._config.username}:{self._config.password}".encode()
         ).decode("ascii")
+        headers = {
+            "Authorization": f"Basic {token}",
+            "Accept": "application/json",
+            "User-Agent": "patch-watcher/0.1",
+        }
+        if data is not None:
+            headers["Content-Type"] = "application/json; charset=utf-8"
         request = Request(
-            self._config.url + endpoint,
-            headers={
-                "Authorization": f"Basic {token}",
-                "Accept": "application/json",
-                "User-Agent": "patch-watcher/0.1",
-            },
-            method="GET",
+            self._config.url + endpoint, headers=headers, method=method, data=data,
         )
         try:
             payload = self._transport(request, self._timeout)
@@ -435,6 +458,8 @@ class GerritStatusClient:
             text = payload.decode("utf-8")
             if text.startswith(")]}'"):
                 text = text.split("\n", 1)[1] if "\n" in text else ""
+            if method != "GET" and not text.strip():
+                return None
             value = json.loads(text)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise GerritRequestError("Gerrit returned an invalid JSON response.") from exc

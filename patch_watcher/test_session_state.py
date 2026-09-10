@@ -56,6 +56,32 @@ class SessionStateStoreTests(unittest.TestCase):
             patchset=patchset,
         )
 
+    def test_list_deliveries_filters_by_kind_oldest_first(self):
+        from datetime import timedelta
+
+        self.store.register_pinned_session(
+            "ledger-session", patch_id="68160", run_id="ledger-run", revision="a" * 40,
+            patchset=1, profile="engineering", started_at=START,
+        )
+        for index, (kind, key) in enumerate((
+            ("human_notice", "human-notice:q1:email"),
+            ("session_alert", "session-alert:x"),
+            ("human_notice", "human-notice:q1:gerrit"),
+        )):
+            self.store.ensure_delivery(
+                "ledger-session", kind=kind, idempotency_key=key,
+                payload={"channel": key.rsplit(":", 1)[-1]},
+                at=START + timedelta(seconds=index),
+            )
+        every = self.store.list_deliveries("ledger-session")
+        self.assertEqual(
+            [item.idempotency_key for item in every],
+            ["human-notice:q1:email", "session-alert:x", "human-notice:q1:gerrit"],
+        )
+        notices = self.store.list_deliveries("ledger-session", kind="human_notice")
+        self.assertEqual([item.payload["channel"] for item in notices], ["email", "gerrit"])
+        self.assertEqual({item.status for item in notices}, {"pending"})
+
     def test_sessions_activity_and_messages_persist_across_restart(self):
         self.register()
         activity_at = START + timedelta(minutes=8)

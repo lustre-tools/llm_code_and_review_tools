@@ -411,6 +411,77 @@ def compose_session_alert(
     return "\n".join(lines) + "\n"
 
 
+HUMAN_QUESTION_LIMIT = 2000
+GERRIT_HELP_LIMIT = 4000
+
+
+def compose_human_notice(
+    *, session_id: str, patch_id: str, run_id: str, question: str, run_url: str = "",
+) -> str:
+    """Body of the "an agent needs your decision" email."""
+    lines = [
+        "A Patch Watcher run has paused and needs a decision from you.",
+        "",
+        f"Patch: {_summary_field(patch_id, limit=200)}",
+        f"Run: {_summary_field(run_id, limit=200)}",
+        f"Session: {_summary_field(session_id, limit=200)}",
+        "",
+        "Question:",
+        _mail_safe(question, limit=HUMAN_QUESTION_LIMIT),
+        "",
+    ]
+    if run_url:
+        lines.append(f"Answer it here: {_mail_safe(run_url, limit=500)}")
+    else:
+        lines.append("Answer it in the Patch Watcher console.")
+    lines.append("The run stays paused until you do; nothing is posted or uploaded meanwhile.")
+    return "\n".join(lines) + "\n"
+
+
+def compose_gerrit_help_message(*, run_id: str, question: str) -> str:
+    """The change message posted to Gerrit when a run bails to a human.
+
+    This is public on the review, so it says what it is and no more: no
+    host names, no console URL, no session ids.  ``run_id`` is enough for
+    the operator to find the run and means nothing to anyone else.
+    """
+    text = " ".join(str(question or "").split())[:HUMAN_QUESTION_LIMIT]
+    body = (
+        "Patch Watcher paused an automated run on this change because it "
+        "needs a human decision:\n\n"
+        f"{text}\n\n"
+        f"(run {' '.join(str(run_id).split())[:120]}; the run stays paused, and "
+        "nothing further is posted or uploaded, until the patch owner answers "
+        "in the Patch Watcher console)"
+    )
+    return body[:GERRIT_HELP_LIMIT]
+
+
+def send_human_notice(
+    config: Any,
+    *,
+    session_id: str,
+    patch_id: str,
+    run_id: str,
+    question: str,
+    run_url: str = "",
+    runner: Runner = subprocess.run,
+) -> MailResult:
+    """Email the operator that a run is waiting on them, if email is configured."""
+
+    if not config.email_enabled:
+        return MailResult(False, "Email is disabled; the notice was recorded only.")
+    body = compose_human_notice(
+        session_id=session_id, patch_id=patch_id, run_id=run_id,
+        question=question, run_url=run_url,
+    )
+    return SendmailMailer(config.sendmail_path, runner=runner).send(
+        config.email_to,
+        f"Patch Watcher needs your decision — {str(patch_id)[:120]}",
+        body,
+    )
+
+
 def send_session_alert(
     config: Any,
     *,

@@ -610,6 +610,46 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertNotIn("<article class='engineering-run'", index)
         self.assertIn("href='/runs/pw-engineer-68160-ps4-abc'", index)
 
+    def test_a_run_waiting_on_you_is_labelled_counted_and_explained(self):
+        """The in-console channel: a paused run shows on the patch row, links
+        to itself, is counted in the header, and the run page says how you
+        were told on the other channels."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_session_store(Path(temp_dir) / "sessions.sqlite3")
+            patch_record, _ = app.add_patch("https://review.whamcloud.com/c/35302")
+            patch_record.update(change_number=35302, patchset=4, revision_sha="b" * 40)
+            store.register_pinned_session(
+                "pw-session-paused", patch_id="35302", run_id="pw-review-35302-ps4-abc",
+                revision="b" * 40, patchset=4, profile="engineering", state="running",
+            )
+            question = store.ask_human("pw-session-paused", "Convert vvp_object.c too?")
+            for channel, delivered, why in (
+                ("email", False, "Email is disabled; the notice was recorded only."),
+                ("gerrit", True, None),
+            ):
+                key = f"human-notice:{question.question_id}:{channel}"
+                store.ensure_delivery(
+                    "pw-session-paused", kind="human_notice", idempotency_key=key,
+                    payload={"channel": channel, "question_id": question.question_id},
+                )
+                store.finish_delivery(key, delivered=delivered, failure_summary=why)
+            app.RUN_CONTROLLER = None
+            with patch("patch_watcher.app.refresh_resource_status",
+                       return_value={"ltvm": {"vms": []}}):
+                page = app.page()
+                detail = app.run_detail_html(store.get_session("pw-session-paused"))
+
+        self.assertIn("Needs you", page)
+        self.assertIn("href='/runs/pw-review-35302-ps4-abc'", page)
+        self.assertIn("1 needs you", page)
+        self.assertIn("Waiting for your decision", detail)
+        self.assertIn("Convert vvp_object.c too?", detail)
+        self.assertIn("How you were told", detail)
+        self.assertIn("email: not sent", detail)
+        self.assertIn("Email is disabled; the notice was recorded only.", detail)
+        self.assertIn("gerrit: sent", detail)
+
     def test_finished_runs_of_every_kind_are_discoverable(self):
         """Before the three run panels became one, the engineering panel listed
         only pw-engineer- runs and the agent-run panel only non-terminal ones,

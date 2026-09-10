@@ -345,6 +345,55 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(result["review"], "—")
         self.assertEqual(result["watch_state"], "abandoned")
 
+    def test_post_message_is_a_json_post_to_the_current_revision(self):
+        captured = {}
+
+        def transport(request, timeout):
+            captured["request"] = request
+            return b")]}'\n{}"
+
+        config = status.GerritConfig("https://review.whamcloud.com", "writer", "private-password")
+        client = status.GerritStatusClient(config, transport=transport, timeout=3)
+        client.post_message(35302, "Patch Watcher paused an automated run on this change.")
+        request = captured["request"]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(
+            request.full_url,
+            "https://review.whamcloud.com/a/changes/35302/revisions/current/review",
+        )
+        self.assertTrue(request.get_header("Authorization").startswith("Basic "))
+        self.assertIn("application/json", request.get_header("Content-type"))
+        self.assertEqual(
+            json.loads(request.data.decode("utf-8")),
+            {"message": "Patch Watcher paused an automated run on this change."},
+        )
+
+    def test_post_message_tolerates_an_empty_write_response(self):
+        config = status.GerritConfig("https://review.whamcloud.com", "writer", "pw")
+        client = status.GerritStatusClient(config, transport=lambda r, t: b"", timeout=3)
+        client.post_message(35302, "hello")  # must not raise
+
+    def test_post_message_refuses_an_empty_message_without_calling_gerrit(self):
+        def transport(request, timeout):
+            raise AssertionError("no request may be made for an empty message")
+
+        config = status.GerritConfig("https://review.whamcloud.com", "writer", "pw")
+        client = status.GerritStatusClient(config, transport=transport, timeout=3)
+        with self.assertRaises(status.GerritRequestError):
+            client.post_message(35302, "   ")
+
+    def test_post_message_reports_rejected_credentials_plainly(self):
+        from urllib.error import HTTPError
+
+        def transport(request, timeout):
+            raise HTTPError(request.full_url, 403, "Forbidden", {}, None)
+
+        config = status.GerritConfig("https://review.whamcloud.com", "writer", "pw")
+        client = status.GerritStatusClient(config, transport=transport, timeout=3)
+        with self.assertRaises(status.GerritRequestError) as raised:
+            client.post_message(35302, "hello")
+        self.assertIn("rejected the configured credentials", str(raised.exception))
+
     def test_client_uses_basic_auth_and_strips_gerrit_xssi_prefix(self):
         change = sample_change()
         captured = {}

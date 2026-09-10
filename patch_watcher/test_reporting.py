@@ -49,6 +49,55 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("opens a confirmation page", body)
         self.assertIn("agent inactivity timeout", body)
 
+    def test_human_notice_email_names_the_question_and_the_run(self):
+        captured = {}
+
+        def runner(command, **kwargs):
+            captured["command"] = command
+            captured["kwargs"] = kwargs
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+
+        config = SimpleNamespace(
+            email_enabled=True, email_to="paf@mulberrytree.us", sendmail_path="/custom/sendmail",
+        )
+        result = reporting.send_human_notice(
+            config, session_id="session-1", patch_id="35302", run_id="pw-review-35302-ps4-abc",
+            question="Keep OBD_OBJECT_EOF in vvp_object.c, or convert it too?",
+            run_url="http://127.0.0.1:8080/runs/pw-review-35302-ps4-abc", runner=runner,
+        )
+        self.assertTrue(result.sent)
+        self.assertEqual(captured["command"], ["/custom/sendmail", "-t", "-oi"])
+        message = captured["kwargs"]["input"].decode("utf-8")
+        self.assertIn("Subject: Patch Watcher needs your decision", message)
+        self.assertIn("35302", message)
+        self.assertIn("Keep OBD_OBJECT_EOF in vvp_object.c, or convert it too?", message)
+        self.assertIn("http://127.0.0.1:8080/runs/pw-review-35302-ps4-abc", message)
+        self.assertIn("nothing is posted or uploaded meanwhile", message)
+
+    def test_disabled_human_notice_sends_nothing(self):
+        def runner(command, **kwargs):
+            raise AssertionError("sendmail must not be invoked")
+
+        result = reporting.send_human_notice(
+            SimpleNamespace(email_enabled=False, email_to="x", sendmail_path="/bin/false"),
+            session_id="s", patch_id="35302", run_id="r", question="q", runner=runner,
+        )
+        self.assertFalse(result.sent)
+        self.assertIn("Email is disabled", result.message)
+
+    def test_gerrit_help_message_is_bounded_and_says_nothing_private(self):
+        """It is posted on a public review: the question and the run id, only."""
+        text = reporting.compose_gerrit_help_message(
+            run_id="pw-review-35302-ps4-abc",
+            question="  Keep   OBD_OBJECT_EOF\n in vvp_object.c?  " + "x" * 5000,
+        )
+        self.assertTrue(text.startswith("Patch Watcher paused an automated run"))
+        self.assertIn("Keep OBD_OBJECT_EOF in vvp_object.c?", text)
+        self.assertIn("run pw-review-35302-ps4-abc", text)
+        self.assertLessEqual(len(text), reporting.GERRIT_HELP_LIMIT)
+        for private in ("http://", "127.0.0.1", "session"):
+            self.assertNotIn(private, text)
+
     def test_disabled_session_alert_sends_nothing(self):
         calls = []
         result = reporting.send_session_alert(
