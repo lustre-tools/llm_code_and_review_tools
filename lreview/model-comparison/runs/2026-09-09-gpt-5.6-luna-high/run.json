@@ -1,0 +1,92 @@
+{
+  "run_id": "2026-09-09-gpt-5.6-luna-high",
+  "agent": "codex",
+  "model": "gpt-5.6-luna",
+  "effort": "high",
+  "note": "codex gpt-5.6-luna, --effort high, jobs 4; 68339 completed but wrote no gerrit-review.json/review-metadata.json (output-contract failure), recorded as failed",
+  "review_count": 4,
+  "totals": {
+    "findings": 3,
+    "duration_s": 2722,
+    "tokens": 21718397,
+    "cost_usd": null
+  },
+  "reviews": [
+    {
+      "case": "67980_ps2",
+      "sha": "f3b4f4d37635a9297f65906b682369860e2179b9",
+      "subject": "LU-20582 llite: fix statahead SFNAME pattern detection",
+      "status": "findings",
+      "finding_count": 2,
+      "severity": null,
+      "duration_s": 585,
+      "tokens": 6104415,
+      "cost_usd": null,
+      "tool_calls": 46,
+      "shell_commands": 38,
+      "findings": [
+        {
+          "path": "lustre/llite/statahead.c",
+          "line": 2329,
+          "kind": "defect",
+          "message": "(defect) Can the invalid-name/parse-error path avoid clearing a slot owned by another PID? `sa_pattern_sfname_detect()` selects `current->pid % LSA_MAX_SEE_ENT`, but `sa_sfi_detect()` jumps to `reset:` before it checks `*pid != current->pid`. If PID A has a valid entry and PID B hashes to the same slot, a stat of `README` (or an unparseable numeric suffix) by B zeroes A's `sse_pid` and match state. A's next consecutive stat starts over, so unrelated malformed-name stats can prevent the shared FNAME detector from ever reaching `match_hit`."
+        },
+        {
+          "path": "lustre/llite/lproc_llite.c",
+          "line": 1106,
+          "kind": "minor",
+          "message": "(minor) This adds the user-visible `llite.*.enable_statahead_sfname` tunable, but there is no matching `Documentation/man4` page in the patch. Could the parameter's default and its coupling to `enable_statahead_fname` be documented?"
+        }
+      ]
+    },
+    {
+      "case": "68339_ps2",
+      "sha": "f240b09615b29a8f79389617bd53b9746ae6bea0",
+      "subject": "LU-12669 ec: serialize concurrent EC recovery readers",
+      "status": "failed",
+      "finding_count": 0,
+      "severity": null,
+      "duration_s": 870,
+      "tokens": 6882718,
+      "cost_usd": null,
+      "tool_calls": 57,
+      "shell_commands": 48,
+      "findings": []
+    },
+    {
+      "case": "68468_ps1",
+      "sha": "a8acdb84d3addb1dd0c27029cca60e708e36e7e0",
+      "subject": "LU-19921 ptlrpc: do not unpack req in gssiam_extract_h_exp",
+      "status": "clean",
+      "finding_count": 0,
+      "severity": "none",
+      "duration_s": 412,
+      "tokens": 3191146,
+      "cost_usd": null,
+      "tool_calls": 110,
+      "shell_commands": 103,
+      "findings": []
+    },
+    {
+      "case": "68627_ps1",
+      "sha": "c756d1ed0844fccf0f5260f0472036060f4209d8",
+      "subject": "LU-20689 utils: Support decimal (SI) size units",
+      "status": "findings",
+      "finding_count": 1,
+      "severity": "medium",
+      "duration_s": 855,
+      "tokens": 5540118,
+      "cost_usd": null,
+      "tool_calls": 59,
+      "shell_commands": 48,
+      "findings": [
+        {
+          "path": "lustre/utils/liblustreapi.c",
+          "line": 254,
+          "kind": "defect",
+          "message": "(defect) Could the decimal `size_units` remain in bytes for callers such as `lfs.c:8100`? That path divides `fp_ext_size` and `fp_ext_size_units` independently by `SEL_UNIT_SIZE` before `find_value_cmp()`. For `lfs find --ext-size -67.108865MB`, this produces limit=65536 and margin=976 for a 64MiB extension, so `file + margin <= limit` is false even though the extension is below the requested 67,108,865-byte limit. The newly supported SI form therefore misses a valid less-than match."
+        }
+      ]
+    }
+  ]
+}

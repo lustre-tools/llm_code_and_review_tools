@@ -46,18 +46,28 @@ def hhmm(seconds):
     return f"{int(seconds) // 60}m{int(seconds) % 60:02d}s"
 
 
-def overlap(findings, ref_findings):
-    """(same file, same file within NEAR_LINES) counts."""
+def overlap(findings, others):
+    """How many of `findings` have a counterpart in `others`.
+
+    Counted per finding in `findings`: it lands in same_file if any
+    other finding touches the same path, and in near if any of those
+    is within NEAR_LINES. Checking *all* same-path candidates matters
+    -- stopping at the first one silently misses a nearby match that
+    happens to sit behind a distant one.
+
+    Deliberately asymmetric: one finding in A can answer three in B,
+    so A->B and B->A differ, and both numbers are informative.
+    """
     same_file = near = 0
     for f in findings:
-        for r in ref_findings:
-            if f.get("path") != r.get("path"):
-                continue
-            same_file += 1
-            fl, rl = f.get("line"), r.get("line")
-            if fl and rl and abs(fl - rl) <= NEAR_LINES:
-                near += 1
-            break
+        same_path = [r for r in others if r.get("path") == f.get("path")]
+        if not same_path:
+            continue
+        same_file += 1
+        line = f.get("line")
+        if line and any(r.get("line") and abs(line - r["line"]) <= NEAR_LINES
+                        for r in same_path):
+            near += 1
     return same_file, near
 
 
@@ -67,6 +77,8 @@ def main():
     ap.add_argument("run_ids", nargs="*")
     ap.add_argument("--findings", action="store_true",
                     help="also print every finding, grouped by case")
+    ap.add_argument("--matrix", action="store_true",
+                    help="pairwise agreement between runs, not just vs the reference")
     args = ap.parse_args()
 
     runs = load_runs(args.run_ids or None)
@@ -110,6 +122,42 @@ def main():
             same, near = overlap(entry["findings"], refs)
             line += f" | {entry['finding_count']:>3} ({same} file, {near}~)"
         print(line)
+
+    if args.matrix:
+        print()
+        print("=" * 78)
+        print(f"PAIRWISE AGREEMENT  (findings within {NEAR_LINES} lines, "
+              "both directions)")
+        print("=" * 78)
+        print("Runs agreeing on a finding is the useful signal: a claim two")
+        print("models reach independently is far likelier to be real than one")
+        print("either reaches alone. Still line-based, so still a pointer.")
+        print("Read row -> column: 'of row's findings, how many the column")
+        print("also raised'. Not symmetric -- one finding can answer several.")
+        print("Caveat: /COMMIT_MSG findings cluster within a few lines of each")
+        print("other, so proximity there is weak evidence and inflates counts.")
+        print()
+        named = [(r["run_id"], [f for rev in r["reviews"] for f in rev["findings"]])
+                 for r in runs]
+        if ref:
+            named.append(("aireview (reference)",
+                          [f for c in ref.values() for f in c["findings"]]))
+        width = max(len(n) for n, _ in named)
+        print(f"{'':<{width}} " + " ".join(f"{i:>5}" for i in range(len(named))))
+        for i, (name, mine) in enumerate(named):
+            cells = []
+            for j, (_, theirs) in enumerate(named):
+                if i == j:
+                    cells.append(f"{len(mine):>5}")
+                else:
+                    _, near = overlap(mine, theirs)
+                    cells.append(f"{near:>5}")
+                cells[-1] = cells[-1]
+            print(f"{name:<{width}} " + " ".join(cells)
+                  + ("   <- diagonal is that run's total" if i == 0 else ""))
+        print()
+        for i, (name, _) in enumerate(named):
+            print(f"  {i} = {name}")
 
     print()
     print("=" * 78)

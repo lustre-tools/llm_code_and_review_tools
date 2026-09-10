@@ -1,0 +1,123 @@
+{
+  "run_id": "2026-09-09-gpt-6-astra-high",
+  "agent": "codex",
+  "model": "gpt-6-astra",
+  "effort": "high",
+  "note": "codex gpt-6-astra, --effort high, jobs 4; 68468 refused by the provider content filter (cybersecurity risk), recorded as failed",
+  "review_count": 4,
+  "totals": {
+    "findings": 8,
+    "duration_s": 2187,
+    "tokens": 7482447,
+    "cost_usd": null
+  },
+  "reviews": [
+    {
+      "case": "67980_ps2",
+      "sha": "f3b4f4d37635a9297f65906b682369860e2179b9",
+      "subject": "LU-20582 llite: fix statahead SFNAME pattern detection",
+      "status": "findings",
+      "finding_count": 3,
+      "severity": "medium",
+      "duration_s": 530,
+      "tokens": 1354124,
+      "cost_usd": null,
+      "tool_calls": 32,
+      "shell_commands": 25,
+      "findings": [
+        {
+          "path": "lustre/llite/statahead.c",
+          "line": 2456,
+          "kind": "defect",
+          "message": "(defect) Could an expired single-process owner be released before this PID check? With enable_statahead_fname=1 and enable_statahead_sfname=0, process A can leave a partial match and exit before a worker starts. Every later process B returns here, and the shared detector returns -EACCES. The one-second expiry in sa_sfi_detect() is never reached. lli_sa_enabled stays set, so ll_statahead_enter() also cannot restart prediction. A subsequent sequential scan therefore never starts FNAME statahead on this cached directory, even after waiting past the expiry."
+        },
+        {
+          "path": "lustre/llite/statahead.c",
+          "line": 2330,
+          "kind": "defect",
+          "message": "(defect) Should the slot ownership/expiry check run before either filename-parse failure can reset the entry? Once the shared cache exists, a task with a colliding PID reaches sa_sfi_detect() even for a nonnumeric name. For example, PID 100 can own slot 0 with a valid partial sequence, then PID 105 stats README: this reset clears PID 100 and its match count before checking ownership. Repeating those accesses prevents PID 100 from matching despite consecutive stats within the one-second validity window. Invalid numeric suffixes take the same reset path."
+        },
+        {
+          "path": "/COMMIT_MSG",
+          "line": 39,
+          "kind": "minor",
+          "message": "(minor) Could the Fixes trailer point to 629b0534e141 (\"LU-14361 statahead: add support for mdtest shared dir workload\")? That change introduced the different-PID early success before numeric sequence and match-count validation. e10bf68d7c introduced the original filename detector, which still applied those checks and had no shared-process bypass."
+        }
+      ]
+    },
+    {
+      "case": "68339_ps2",
+      "sha": "f240b09615b29a8f79389617bd53b9746ae6bea0",
+      "subject": "LU-12669 ec: serialize concurrent EC recovery readers",
+      "status": "findings",
+      "finding_count": 2,
+      "severity": "high",
+      "duration_s": 694,
+      "tokens": 3454372,
+      "cost_usd": null,
+      "tool_calls": 47,
+      "shell_commands": 38,
+      "findings": [
+        {
+          "path": "lustre/llite/vvp_io.c",
+          "line": 1579,
+          "kind": "defect",
+          "message": "(defect) Could the page lock protect this invalidation and removal from ec_page_list? After cl_page_disown(), this clears Uptodate while cp_batch is still linked. A concurrent ordinary CIT_READ can now enter ll_readpage() -> ll_io_read_page() -> cl_page_list_add() before the next statement removes the page, hitting LASSERT(list_empty(&page->cp_batch)). Those readers never check CP_EC_RECOVERY, so the flag being set does not exclude them.\n\nThis is reachable when reconstruction follows a BRW read failure on a live OST: the DLM read lock can still be held, and another reader can acquire a compatible read lock. lli_trunc_sem is also held for read on both paths. The parent left the recovered page Uptodate during list removal and did not expose this requeue window."
+        },
+        {
+          "path": "lustre/lov/lov_io.c",
+          "line": 2026,
+          "kind": "style",
+          "message": "(style) This is not a functional bug by itself, but could the new page unlock/reference handling go through a CLIO helper implemented in llite? Calling unlock_page() and put_page() here extends direct VM page manipulation in LOV; the client layering convention keeps these operations in llite."
+        }
+      ]
+    },
+    {
+      "case": "68468_ps1",
+      "sha": "a8acdb84d3addb1dd0c27029cca60e708e36e7e0",
+      "subject": "LU-19921 ptlrpc: do not unpack req in gssiam_extract_h_exp",
+      "status": "failed",
+      "finding_count": 0,
+      "severity": null,
+      "duration_s": 348,
+      "tokens": null,
+      "cost_usd": null,
+      "tool_calls": 35,
+      "shell_commands": 30,
+      "findings": []
+    },
+    {
+      "case": "68627_ps1",
+      "sha": "c756d1ed0844fccf0f5260f0472036060f4209d8",
+      "subject": "LU-20689 utils: Support decimal (SI) size units",
+      "status": "findings",
+      "finding_count": 3,
+      "severity": "low",
+      "duration_s": 615,
+      "tokens": 2673951,
+      "cost_usd": null,
+      "tool_calls": 39,
+      "shell_commands": 31,
+      "findings": [
+        {
+          "path": "Documentation/man1/lfs-setstripe.1",
+          "line": 329,
+          "kind": "minor",
+          "message": "(minor) Could this say that unaligned decimal sizes are refused? For example, 1024MB is 1024000000 bytes, exactly 15625 * 65536, so `-E 1024MB -S 64K` passes both the component-end mask in lfs_setstripe_internal() and the stripe-size alignment check. Decimal suffixes themselves are accepted."
+        },
+        {
+          "path": "lustre/utils/liblustreapi.c",
+          "line": 270,
+          "kind": "minor",
+          "message": "(minor) Could the changed public llapi_parse_size() contract also be documented in a man3 page and added to Documentation/man3/Makefile.am? There is currently no API manual entry for it. The new decimal suffixes and stricter suffix validation affect library consumers as well as lfs; the command manuals do not document size_units or bytes_spec for those callers."
+        },
+        {
+          "path": "lustre/utils/lhsmtool_posix.c",
+          "line": 231,
+          "kind": "minor",
+          "message": "(minor) Could the usage text explain that MB/GB now select decimal units while M/G and MiB/GiB remain binary? Changing the default label to MiB documents unsuffixed arguments, but leaves the changed meaning of explicit suffixes undisclosed for both -b and -c."
+        }
+      ]
+    }
+  ]
+}

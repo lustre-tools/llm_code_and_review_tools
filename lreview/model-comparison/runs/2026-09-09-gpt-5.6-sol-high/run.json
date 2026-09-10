@@ -1,0 +1,111 @@
+{
+  "run_id": "2026-09-09-gpt-5.6-sol-high",
+  "agent": "codex",
+  "model": "gpt-5.6-sol",
+  "effort": "high",
+  "note": "codex gpt-5.6-sol, --effort high, jobs 4",
+  "review_count": 4,
+  "totals": {
+    "findings": 6,
+    "duration_s": 3483,
+    "tokens": 19189744,
+    "cost_usd": null
+  },
+  "reviews": [
+    {
+      "case": "67980_ps2",
+      "sha": "f3b4f4d37635a9297f65906b682369860e2179b9",
+      "subject": "LU-20582 llite: fix statahead SFNAME pattern detection",
+      "status": "findings",
+      "finding_count": 2,
+      "severity": "low",
+      "duration_s": 986,
+      "tokens": 5456868,
+      "cost_usd": null,
+      "tool_calls": 48,
+      "shell_commands": 41,
+      "findings": [
+        {
+          "path": "lustre/llite/statahead.c",
+          "line": 2310,
+          "kind": "style",
+          "message": "(style) This isn't a bug, but `OBD_FREE_PTR_ARRAY()` already accepts NULL. If the patch is refreshed, could this redundant guard be dropped?"
+        },
+        {
+          "path": "lustre/llite/super25.c",
+          "line": 60,
+          "kind": "style",
+          "message": "(style) This isn't a bug, but `OBD_FREE_PTR_ARRAY()` already accepts NULL. If the patch is refreshed, could this redundant guard be dropped?"
+        }
+      ]
+    },
+    {
+      "case": "68339_ps2",
+      "sha": "f240b09615b29a8f79389617bd53b9746ae6bea0",
+      "subject": "LU-12669 ec: serialize concurrent EC recovery readers",
+      "status": "findings",
+      "finding_count": 1,
+      "severity": "low",
+      "duration_s": 789,
+      "tokens": 5866527,
+      "cost_usd": null,
+      "tool_calls": 45,
+      "shell_commands": 36,
+      "findings": [
+        {
+          "path": "lustre/lov/lov_io.c",
+          "line": 2026,
+          "kind": "style",
+          "message": "(style) This isn't a bug, but the new retry path directly manipulates a Linux page-cache page with `unlock_page()` and `put_page()` from LOV. Client layering keeps VFS/MM page handling in llite/VVP and exposes it to LOV through CLIO operations; could this retry cleanup go through a VVP/CLIO helper instead?"
+        }
+      ]
+    },
+    {
+      "case": "68468_ps1",
+      "sha": "a8acdb84d3addb1dd0c27029cca60e708e36e7e0",
+      "subject": "LU-19921 ptlrpc: do not unpack req in gssiam_extract_h_exp",
+      "status": "clean",
+      "finding_count": 0,
+      "severity": "none",
+      "duration_s": 638,
+      "tokens": 2693599,
+      "cost_usd": null,
+      "tool_calls": 32,
+      "shell_commands": 24,
+      "findings": []
+    },
+    {
+      "case": "68627_ps1",
+      "sha": "c756d1ed0844fccf0f5260f0472036060f4209d8",
+      "subject": "LU-20689 utils: Support decimal (SI) size units",
+      "status": "findings",
+      "finding_count": 3,
+      "severity": "medium",
+      "duration_s": 1070,
+      "tokens": 5172750,
+      "cost_usd": null,
+      "tool_calls": 47,
+      "shell_commands": 40,
+      "findings": [
+        {
+          "path": "lustre/utils/liblustreapi.c",
+          "line": 354,
+          "kind": "defect",
+          "message": "(defect) Can the fraction be scaled without multiplying a digit by the caller-supplied unit? `size_units` is part of the exported API and has no stated upper bound; with `size_units = 1ULL << 63`, parsing `.5` wraps `5 * size_units` and returns 922337203685477580 instead of 4611686018427387904 with success. Staying below ten times the unit does not ensure that the intermediate fits in `unsigned long long`."
+        },
+        {
+          "path": "Documentation/man1/lfs-setstripe.1",
+          "line": 329,
+          "kind": "minor",
+          "message": "(minor) This says decimal units are refused, but the implementation only refuses an unaligned byte result: `8.192MB` parses to 8,192,000 bytes (125 * 64KiB) and passes the alignment check. Could this say that unaligned decimal values such as `1MB` are refused?"
+        },
+        {
+          "path": "lustre/tests/sanity.sh",
+          "line": 38187,
+          "kind": "style",
+          "message": "(style) This isn't a bug, but new quota tests should invoke `$LFS quota` directly instead of adding uses of the deprecated `getquota` wrapper. Could these three lookups use `$LFS quota`?"
+        }
+      ]
+    }
+  ]
+}
