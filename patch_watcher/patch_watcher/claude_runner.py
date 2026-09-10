@@ -562,17 +562,30 @@ def _safe_environment(
     return environment
 
 
-def _cli_json_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
-    """The report schema as the CLI's validator will accept it.
+# Keys the report schemas carry that cannot survive the trip to the model.
+# The schema given to --json-schema becomes a tool's input_schema, and:
+#
+#   $schema  the CLI validates --json-schema with a validator that has only
+#            draft-07 registered, and refused ours outright -- "no schema with
+#            key or ref https://json-schema.org/draft/2020-12/schema" -- so
+#            claude exited 1 before reading a message.
+#   allOf    "API Error: 400 tools.N.custom.input_schema: input_schema does
+#            not support oneOf, allOf, or anyOf at the top level".
+#
+# Both are dropped on the way out only.  The schema we validate reports
+# against keeps them, and the rule the allOf expresses -- a needs_input report
+# must carry a question -- is enforced in validate_engineering_report and
+# validate_read_only_report, which is what actually rejects a bad report.
+_CLI_UNSUPPORTED_SCHEMA_KEYS = ("$schema", "allOf")
 
-    Our schemas declare draft 2020-12.  The CLI validates --json-schema with a
-    validator that has only draft-07 registered, so it refused the schema
-    outright -- "no schema with key or ref https://json-schema.org/draft/
-    2020-12/schema" -- and exited 1 before reading a message.  The keywords we
-    use are draft-07 compatible; only the declaration was not, so it is
-    dropped here rather than weakening the schema we validate reports against.
-    """
-    return {key: value for key, value in schema.items() if key != "$schema"}
+
+def _cli_json_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """The report schema as the CLI and the API will accept it."""
+    return {
+        key: value
+        for key, value in schema.items()
+        if key not in _CLI_UNSUPPORTED_SCHEMA_KEYS
+    }
 
 
 def build_read_only_claude_command(spec: ReadOnlyRunSpec) -> list[str]:

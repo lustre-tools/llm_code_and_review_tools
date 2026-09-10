@@ -140,7 +140,35 @@ class ClaudeArgvTests(unittest.TestCase):
             )
             passed = json.loads(command[command.index("--json-schema") + 1])
             self.assertNotIn("$schema", passed, profile)
+            # The schema becomes a tool's input_schema, and the API refuses
+            # "oneOf, allOf, or anyOf at the top level" with a 400.
+            self.assertNotIn("allOf", passed, profile)
             self.assertIn("properties", passed, profile)
+
+    def test_the_rule_the_dropped_all_of_expressed_is_still_enforced(self):
+        """Dropping allOf must not make a needs_input report without a
+        question acceptable; the validators are what actually reject it."""
+        from patch_watcher.claude_runner import (
+            ENGINEERING_REPORT_SCHEMA,
+            READ_ONLY_REPORT_SCHEMA,
+            RunnerProtocolError,
+            validate_engineering_report,
+            validate_read_only_report,
+        )
+
+        self.assertIn("allOf", ENGINEERING_REPORT_SCHEMA)
+        self.assertIn("allOf", READ_ONLY_REPORT_SCHEMA)
+        with self.assertRaisesRegex(RunnerProtocolError, "requires question"):
+            validate_engineering_report({
+                "schema": ENGINEERING_REPORT_SCHEMA["properties"]["schema"]["const"],
+                "state": "needs_input", "summary": "s",
+                "changed_files": [], "validation_requests": [],
+            })
+        with self.assertRaisesRegex(RunnerProtocolError, "requires question"):
+            validate_read_only_report({
+                "schema": READ_ONLY_REPORT_SCHEMA["properties"]["schema"]["const"],
+                "state": "needs_input", "summary": "s", "findings": [],
+            })
 
 
 class ControlSocketPathTests(unittest.TestCase):
@@ -311,8 +339,10 @@ class ClaudeRunnerTests(unittest.TestCase):
         schema_index = command.index("--json-schema") + 1
         self.assertEqual(
             json.loads(command[schema_index]),
-            # The CLI's validator lacks the draft the schema declares.
-            {k: v for k, v in READ_ONLY_REPORT_SCHEMA.items() if k != "$schema"},
+            # Dropped on the way to the CLI: the draft its validator lacks,
+            # and the top-level allOf the API refuses in a tool schema.
+            {k: v for k, v in READ_ONLY_REPORT_SCHEMA.items()
+             if k not in ("$schema", "allOf")},
         )
 
     def test_no_profile_accepts_an_mcp_server(self):
@@ -735,8 +765,10 @@ class FullCapabilityProfileTests(unittest.TestCase):
         schema_index = command.index("--json-schema") + 1
         self.assertEqual(
             json.loads(command[schema_index]),
-            # The CLI's validator lacks the draft the schema declares.
-            {k: v for k, v in ENGINEERING_REPORT_SCHEMA.items() if k != "$schema"},
+            # Dropped on the way to the CLI: the draft its validator lacks,
+            # and the top-level allOf the API refuses in a tool schema.
+            {k: v for k, v in ENGINEERING_REPORT_SCHEMA.items()
+             if k not in ("$schema", "allOf")},
         )
 
     def test_bounded_profiles_keep_their_allowlist_and_hardening(self):

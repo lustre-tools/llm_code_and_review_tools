@@ -702,7 +702,13 @@ def _run_did_nothing(session):
     """
     if SESSION_STORE is None or session.state != "failed":
         return False
-    if SESSION_STORE.recent_messages(session.session_id, limit=1):
+    # An API error is the CLI reporting that the model never ran; it is not
+    # the agent saying anything about the patch.  A run whose only output was
+    # "API Error: 400 ..." did nothing, and its event is still there to handle.
+    if any(
+        not str(message.body or "").startswith("API Error:")
+        for message in SESSION_STORE.recent_messages(session.session_id, limit=20)
+    ):
         return False
     terminal = SESSION_STORE.get_terminal_result(session.session_id)
     result = getattr(terminal, "result", None) if terminal is not None else None

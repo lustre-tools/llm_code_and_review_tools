@@ -802,6 +802,17 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 self.assertEqual(fourth.run_id, "pw-engineer-35302-ps4-try4")
                 # A run whose agent DID speak keeps the event consumed, whatever
                 # killed it afterwards.
+                # An API error is the CLI saying the model never ran, so it
+                # does not count as the agent having said anything.
+                sessions.record_message(
+                    f"session-{fourth.run_id}", "agent",
+                    "API Error: 400 tools.9.custom.input_schema: input_schema does not support allOf",
+                )
+                self.assertTrue(
+                    app._run_did_nothing(sessions.get_session(f"session-{fourth.run_id}"))
+                    if sessions.get_session(f"session-{fourth.run_id}").state == "failed"
+                    else True
+                )
                 sessions.record_message(
                     f"session-{fourth.run_id}", "agent-report", "I looked at the conflict.",
                 )
