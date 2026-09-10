@@ -8,7 +8,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from patch_watcher import run_controller
-from patch_watcher.claude_runner import ProcessIdentity, RunnerEvent, RunnerHandle, RunnerSnapshot
+from patch_watcher.claude_runner import (
+    ENGINEERING_REPORT_SCHEMA,
+    ProcessIdentity,
+    ReconciliationProbe,
+    RunnerEvent,
+    RunnerHandle,
+    RunnerSnapshot,
+)
 from patch_watcher.engineering_state import EngineeringConflict
 from patch_watcher.gerrit_status import normalize_review_snapshot
 from patch_watcher.ltvm_resources import LTVMAdapter, LTVMInventory
@@ -184,6 +191,59 @@ class EngineeringRunControllerTests(unittest.TestCase):
         (destination / ".git").mkdir()
         (destination / "README").write_text("pinned source\n", encoding="utf-8")
         return destination
+
+    @staticmethod
+    def make_real_repo(path):
+        """Turn a started run's checkout into a repo the capture can diff.
+
+        The start path needs `fake_full_clone` (its safety checks read the
+        pinned tree by revision); the evidence capture needs a real HEAD.  So
+        the repo is made after the run is under way, which is also when a real
+        agent's edits would appear.
+        """
+        path = Path(path)
+        (path / "lustre" / "llite").mkdir(parents=True, exist_ok=True)
+        (path / "lustre" / "llite" / "file.c").write_text("int x;\n", encoding="utf-8")
+        git = ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-C", str(path)]
+        for argv in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "pinned"]):
+            subprocess.run(git + argv, check=True, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+        (path / "lustre" / "llite" / "file.c").write_text("int y;\n", encoding="utf-8")
+
+    def test_a_worker_that_will_not_stop_does_not_void_a_finished_report(self):
+        """The first run that actually rebased a patch, built it clean and
+        uploaded a patchset was recorded as failed/worker_report_invalid,
+        because a background build it had spawned outlived the seven-second
+        stop window.  A report that arrived is the agent's result; a worker
+        that will not stop is a cleanup problem, recorded as one."""
+
+        controller = self.controller()
+        session = controller.request_engineering(engineering_patch())
+        controller.tick()
+        allocation = controller.engineering_store.get_allocation_by_run(session.run_id)
+        self.make_real_repo(allocation.checkout_path)
+
+        def never_dies(handle):
+            return ReconciliationProbe(True, True, True, True, "alive")
+
+        self.runner.probe = never_dies
+        controller.salvage_quiesce_seconds = 0.0
+        self.runner.events_by_session[session.session_id] = [RunnerEvent(
+            1, self.now.timestamp(), "worker_report", {
+                "schema": ENGINEERING_REPORT_SCHEMA["properties"]["schema"]["const"],
+                "state": "complete",
+                "summary": "Rebased, built clean, uploaded patchset 5.",
+                "changed_files": ["lustre/llite/file.c"],
+                "validation_requests": [],
+            },
+        )]
+        controller.tick()
+
+        finished = self.store.get_session(session.session_id)
+        self.assertEqual(finished.state, "succeeded", "a finished report was voided")
+        events = {event.event_type for event in self.store.list_events(session.session_id)}
+        self.assertIn("runner_stop_timed_out", events)
+        self.assertIn("evidence_capture_unquiesced", events)
 
     def test_a_rebase_task_changes_the_prompt_and_permits_the_upload(self):
         """Level "own" on a change checkpatch cannot cherry-pick.  The default

@@ -20,6 +20,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from patch_watcher.claude_runner import (
@@ -107,6 +108,9 @@ def is_build_output(relative: str) -> bool:
 DEFAULT_RUNS_DIRECTORY = (
     Path.home() / ".local" / "state" / "patch-watcher" / "runs"
 )
+# A salvaged diff past this is not a patch: an engineering run builds in its
+# checkout, so `git add -A` there sweeps up whole staging trees.
+MAX_SALVAGED_DIFF_BYTES = 8 * 1024 * 1024
 RUNNER_EVENT_PREFIX = "runner-event:"
 RUNNER_HANDLE_EVENT = "runner_attached"
 UNKNOWN_FAILURE_EVIDENCE_SCHEMA = "patch-watcher-unknown-failure-evidence/v1"
@@ -3399,8 +3403,10 @@ class RunController:
                     # Freeze the writable tree before deriving controller-owned
                     # evidence; otherwise the worker could race status/diff
                     # capture after emitting its terminal report.
-                    self._stop_runner_and_wait(session, handle)
-                    self._capture_engineering_evidence(session, report)
+                    quiesced = self._stop_runner_and_wait(session, handle)
+                    self._capture_engineering_evidence(
+                        session, report, quiesced=quiesced,
+                    )
             elif payload.get("request_kind") == "review_comments":
                 engineering_report = True
                 report = dict(validate_engineering_report(value))
@@ -3435,8 +3441,10 @@ class RunController:
                         "simple mode cannot complete nontrivial or ambiguous comments"
                     )
                 if report["state"] != "needs_input":
-                    self._stop_runner_and_wait(session, handle)
-                    self._capture_engineering_evidence(session, report)
+                    quiesced = self._stop_runner_and_wait(session, handle)
+                    self._capture_engineering_evidence(
+                        session, report, quiesced=quiesced,
+                    )
             elif payload.get("request_kind") == "build_failure":
                 engineering_report = True
                 report = dict(validate_engineering_report(value))
@@ -3471,8 +3479,10 @@ class RunController:
                 # classification and diagnosis as the `jenkins_resolution`
                 # artifact, and the whole report as the terminal result.
                 if report["state"] != "needs_input":
-                    self._stop_runner_and_wait(session, handle)
-                    self._capture_engineering_evidence(session, report)
+                    quiesced = self._stop_runner_and_wait(session, handle)
+                    self._capture_engineering_evidence(
+                        session, report, quiesced=quiesced,
+                    )
             else:
                 report = dict(validate_read_only_report(value))
         except Exception as exc:
@@ -3627,25 +3637,56 @@ class RunController:
             # without touching the checkout's real index. `git diff HEAD`
             # alone shows only tracked edits, and an agent adding a new file
             # is exactly as much work to lose.
+            #
+            # Tracked edits are staged first and diffed alone if adding the
+            # untracked files blows the bound: an engineering run BUILDS in
+            # its checkout, and `add -A` swept up 62 MB of ltvm staging trees
+            # and build stamps -- a "salvaged diff" in which the actual source
+            # change could not be found, stored forever under its own sha.
             with tempfile.TemporaryDirectory() as index_dir:
                 environment = dict(os.environ)
                 environment["GIT_INDEX_FILE"] = str(Path(index_dir) / "index")
-                staged = subprocess.run(
-                    [*common, "add", "-A", "--", "."],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, check=False, timeout=120,
-                    env=environment,
-                )
-                if staged.returncode:
-                    return False
-                diff = subprocess.run(
-                    [*common, "diff", "--binary", "--no-ext-diff", "--cached", "HEAD"],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL, check=False, timeout=60,
-                    env=environment,
-                )
-            if diff.returncode or not diff.stdout:
+
+                def staged_diff(argv: list[str]) -> bytes | None:
+                    staged = subprocess.run(
+                        [*common, *argv],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, check=False, timeout=120,
+                        env=environment,
+                    )
+                    if staged.returncode:
+                        return None
+                    captured = subprocess.run(
+                        [*common, "diff", "--binary", "--no-ext-diff", "--cached", "HEAD"],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL, check=False, timeout=60,
+                        env=environment,
+                    )
+                    return None if captured.returncode else captured.stdout
+
+                content = staged_diff(["add", "-A", "--", "."])
+                if content is not None and len(content) > MAX_SALVAGED_DIFF_BYTES:
+                    tracked = staged_diff(["add", "--update", "--", "."])
+                    if tracked is not None:
+                        self.store.append_event(
+                            session.session_id,
+                            "salvage_excluded_untracked",
+                            {
+                                "summary": (
+                                    "Untracked files were left out of the salvaged "
+                                    f"diff: with them it was {len(content)} bytes, "
+                                    f"over the {MAX_SALVAGED_DIFF_BYTES}-byte bound. "
+                                    "An engineering run builds in its checkout."
+                                ),
+                                "size_bytes": len(content),
+                            },
+                            idempotency_key="salvage-untracked:" + session.run_id,
+                            at=self.clock(),
+                        )
+                        content = tracked
+            if content is None or not content:
                 return False
+            diff = SimpleNamespace(stdout=content, returncode=0)
             # OUTSIDE the run root, next to the success-path artifacts. It
             # was written inside `runs_directory/<run_id>/artifacts`, which
             # `_cleanup_session` deletes wholesale on the next tick -- so the
@@ -3717,9 +3758,18 @@ class RunController:
             return False
 
     def _capture_engineering_evidence(
-        self, session: ManagedSession, report: Mapping[str, Any]
+        self,
+        session: ManagedSession,
+        report: Mapping[str, Any],
+        *,
+        quiesced: bool = True,
     ) -> None:
-        """Capture the actual diff and freeze requested VM validation argv."""
+        """Capture the actual diff and freeze requested VM validation argv.
+
+        ``quiesced`` is False when the worker outlived its stop window: the
+        capture is still made, because losing a finished run's work is worse
+        than recording a possibly torn diff, but the run says so.
+        """
 
         allocation = self.engineering_store.get_allocation_by_run(session.run_id)
         if allocation is None or allocation.state != "active":
@@ -3756,6 +3806,19 @@ class RunController:
             or changed_names.returncode
         ):
             raise RunControllerError("git evidence capture failed")
+        if not quiesced:
+            self.store.append_event(
+                session.session_id,
+                "evidence_capture_unquiesced",
+                {
+                    "summary": (
+                        "Evidence was captured while the worker was still alive; "
+                        "the diff may be torn."
+                    ),
+                },
+                idempotency_key="unquiesced-capture:" + session.run_id,
+                at=self.clock(),
+            )
         diff_bytes = bytearray(diff.stdout)
         all_untracked = [path for path in untracked.stdout.split(b"\0") if path]
         untracked_paths = []
@@ -4353,30 +4416,49 @@ class RunController:
 
     def _stop_runner_and_wait(
         self, session: ManagedSession, handle: RunnerHandle | None
-    ) -> None:
+    ) -> bool:
         """Stop a source editor and verify it is gone before reading its tree.
+
+        Returns whether the tree is quiesced.  It used to RAISE when the
+        worker outlived the window, and the caller's handler recorded that as
+        ``worker_report_invalid`` -- so the first run that rebased a patch,
+        built it clean and uploaded a patchset was recorded as a failed run
+        with an invalid report, because a background build it had spawned took
+        more than seven seconds to die.  A report that arrived is the agent's
+        result; a worker that will not stop is a cleanup problem, and cleanup
+        already escalates it every tick.  The caller records the un-quiesced
+        capture instead of discarding the work.
 
         A ``None`` handle means the worker is already proven gone -- the
         crash-recovery path -- so the tree is already frozen and there is
-        nothing to signal.  Signalling anyway would raise on the dead control
-        socket and turn a recoverable report into ``worker_report_invalid``.
+        nothing to signal.
         """
 
         if handle is None:
-            return
+            return True
         self._stop_runner_once(session, handle)
         for _attempt in range(50):
             if not self.runner.probe(handle).alive:
-                return
+                return True
             time.sleep(0.1)
         self._stop_runner_once(session, handle, force=True)
         for _attempt in range(20):
             if not self.runner.probe(handle).alive:
-                return
+                return True
             time.sleep(0.1)
-        raise RunControllerError(
-            "engineering runner did not stop before evidence capture"
+        self.store.append_event(
+            session.session_id,
+            "runner_stop_timed_out",
+            {
+                "summary": (
+                    "The worker was still alive after stop and force-stop; its "
+                    "evidence was captured from a tree it may still be writing."
+                ),
+            },
+            idempotency_key="runner-stop-timeout:" + session.run_id,
+            at=self.clock(),
         )
+        return False
 
     def _stop_runner_once(
         self,
