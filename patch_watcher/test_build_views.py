@@ -53,8 +53,9 @@ class BuildViewsTests(unittest.TestCase):
         self.assertIn("d" * 40, html)
         self.assertIn("a" * 64, html)
         self.assertIn("action='/build-runs/prepare'", html)
-        self.assertIn("open-ended", html)
-        self.assertIn("LTVM guests it owns", html)
+        # What the run may do is stated on the confirmation page, where the
+        # operator authorises it (asserted below); not repeated under the button.
+        self.assertNotIn("open-ended", html)
         self.assertNotIn(" disabled", html)
 
     def test_start_control_fails_closed_on_flags_snapshot_and_active_owner(self):

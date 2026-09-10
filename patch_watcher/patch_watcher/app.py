@@ -2839,6 +2839,75 @@ def autonomous_lane_summary_html(nested=False):
         return "<section class='card'><h2>Unattended actions</h2><p class='error'>" + escape(str(exc)) + "</p></section>"
 
 
+def _last_finished_session_for_patch(patch):
+    """The most recently finished run on this patch, if any."""
+    if SESSION_STORE is None:
+        return None
+    change_number = patch.get("change_number")
+    if change_number is None:
+        return None
+    finished = [
+        session for session in SESSION_STORE.list_sessions(include_terminal=True)
+        if session.patch_id == str(change_number)
+        and session.state in SESSION_TERMINAL_STATES
+    ]
+    return max(finished, key=lambda item: item.state_changed_at, default=None)
+
+
+def _patch_now_html(patch):
+    """Answer, first, the questions the panel used to leave open: is anything
+    running on this patch, what will run without asking, and when was it last
+    looked at.  A run's absence is stated, not left to be inferred from a
+    missing chip three cards away.
+    """
+    change_number = patch.get("change_number")
+    active = _active_session_for_patch(change_number) if change_number is not None else None
+    if active is not None:
+        href = "/runs/" + escape(active.run_id, quote=True)
+        state = active.state.replace("_", " ")
+        run_html = (
+            f"<strong>A run is {escape(state)}:</strong> "
+            f"<a href='{href}'>{escape(active.run_id)}</a> ({escape(_run_kind(active.run_id))})."
+        )
+        if active.state == "waiting_human":
+            run_html += " <strong>It is waiting for you.</strong>"
+    else:
+        run_html = "<strong>No run</strong> on this patch."
+    try:
+        policy = _standing_policy(patch)
+        if policy.rank == 0:
+            level_html = f"Level <strong>{escape(policy.label)}</strong>: nothing runs unattended."
+        else:
+            gate = bool(AUTOMATION_STORE is not None and AUTOMATION_STORE.get_global_automation().enabled)
+            level_html = (
+                f"Level <strong>{escape(policy.label)}</strong>"
+                + (": acts unattended when there is something to do."
+                   if gate else ", but the global kill switch is off, so nothing runs unattended.")
+            )
+    except (StandingPolicyError, ValueError):
+        level_html = "Level unavailable."
+    last = _last_finished_session_for_patch(patch)
+    last_html = ""
+    if last is not None:
+        href = "/runs/" + escape(last.run_id, quote=True)
+        last_html = (
+            f" Last run: <a href='{href}'>{escape(last.run_id)}</a> "
+            f"{escape(last.state.replace('_', ' '))} "
+            f"{escape(last.state_changed_at.isoformat(timespec='minutes'))}."
+        )
+    try:
+        interval = int(configured_refresh_interval())
+    except Exception:
+        interval = 300
+    checked = str(patch.get("last_checked") or "—")
+    return (
+        "<section class='patch-now' aria-label='What is happening now'>"
+        f"<p>{run_html} {level_html}{last_html}</p>"
+        f"<p class='detail'>Gerrit last checked {escape(checked)}; checks every {interval} s.</p>"
+        "</section>"
+    )
+
+
 def _waiting_session_for_patch(patch):
     """Return this patch's run that is paused on a human question, if any."""
     if SESSION_STORE is None:
@@ -2981,33 +3050,42 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
     action_policy_html = (
         f"<details class='patch-actions' id='{identity}'>"
         "<summary>Actions for this patch</summary>"
-        "<div class='quick-actions'>"
-        f"{investigate_html}{engineering_html}"
-        f"<form class='quick-action' method='post' action='/remove'><input type='hidden' name='csrf_token' value='{CSRF_TOKEN}'>"
-        f"<input type='hidden' name='url' value='{escape(patch['url'], quote=True)}'>"
-        "<button class='danger' type='submit'>Remove…</button></form></div>"
-        # Both are one-off runs on the exact pinned revision, independent of the
-        # level chosen below; the difference is what the agent may touch.
-        "<p class='detail'><strong>Investigate</strong> reads the pinned source and "
-        "reports, with file references; it cannot change files, run commands, or "
-        "reach Gerrit or CI. <strong>Engineering run</strong> gets a writable checkout, "
-        "a shell and VMs, builds and tests, and leaves a diff for your review without "
-        "uploading it. Both are one-off and ignore the level below.</p>"
+        f"{_patch_now_html(patch)}"
         f"{standing_policy_html}"
+        "<section class='manual-runs' aria-label='Start a run by hand'>"
+        "<div class='policy-heading'><strong>Start a run by hand</strong></div>"
+        "<p class='detail'>One-off runs on the exact pinned revision, whatever the level. "
+        "A greyed button says why it cannot start.</p>"
         "<div class='action-policy-grid'>"
-        "<section class='action-policy-item available' aria-label='Build failure handling'>"
-        "<div class='policy-heading'><strong>Build failures</strong>"
-        "<span class='availability'>Available</span></div>"
+        # Generic runs: look at anything, or fix anything.
+        "<section class='action-policy-item' aria-label='Investigate'>"
+        "<div class='policy-heading'><strong>Investigate</strong></div>"
+        "<p class='detail'>Reads the pinned source and reports, with file references. "
+        "Cannot change files, run commands, or reach Gerrit or CI.</p>"
+        f"{investigate_html}</section>"
+        "<section class='action-policy-item' aria-label='Engineering run'>"
+        "<div class='policy-heading'><strong>Engineering run</strong></div>"
+        "<p class='detail'>A writable checkout, a shell and VMs; builds and tests, and "
+        "leaves a diff for your review without uploading it.</p>"
+        f"{engineering_html}</section>"
+        # Specific runs: each bound to one signal on the patch.
+        "<section class='action-policy-item' aria-label='Build failure handling'>"
+        "<div class='policy-heading'><strong>Build failures</strong></div>"
         f"{build_html}</section>"
-        "<section class='action-policy-item available' aria-label='Test failure handling'>"
-        "<div class='policy-heading'><strong>Test failures</strong>"
-        "<span class='availability'>Available</span></div>"
+        "<section class='action-policy-item' aria-label='Test failure handling'>"
+        "<div class='policy-heading'><strong>Test failures</strong></div>"
+        "<p class='detail'>Retest a failure already classified as known, or research one "
+        "that is not.</p>"
         f"{retest_html}{research_html}</section>"
-        "<section class='action-policy-item available' aria-label='Review comment handling'>"
-        "<div class='policy-heading'><strong>Review comments</strong>"
-        "<span class='availability'>Available</span></div>"
+        "<section class='action-policy-item' aria-label='Review comment handling'>"
+        "<div class='policy-heading'><strong>Review comments</strong></div>"
         f"{review_html}</section>"
-        "</div></details>"
+        "</div></section>"
+        f"<form class='quick-action remove-patch' method='post' action='/remove'>"
+        f"<input type='hidden' name='csrf_token' value='{CSRF_TOKEN}'>"
+        f"<input type='hidden' name='url' value='{escape(patch['url'], quote=True)}'>"
+        "<button class='danger' type='submit'>Remove…</button></form>"
+        "</details>"
     )
     return (
         "<tr><td>"
@@ -3212,7 +3290,7 @@ def page(message="", jira_base=JIRA_BASE_URL):
     return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>Patch Watcher</title><style>
 body{{margin:0;
-background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1450px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card,.resource-card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a;overflow-x:auto}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input,textarea,select{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px}}input,textarea{{flex:1;min-width:240px}}textarea{{display:block;width:min(620px,95%);min-height:70px;margin:7px 0 10px}}button,.button-link{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}.button-link{{display:inline-block;text-decoration:none}}button:disabled{{cursor:not-allowed;opacity:.68}}button.danger,button.secondary,.button-link.danger-link{{background:#fff;padding:7px 11px}}button.danger,.button-link.danger-link{{color:#b42318;border:1px solid #fecdca}}button.secondary{{color:#344054;border:1px solid #d0d5dd}}table{{width:100%;border-collapse:collapse;margin-top:18px;min-width:1050px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url,.detail{{color:#667085;font-size:12px;margin-top:4px;word-break:break-word}}.patch-meta{{display:flex;align-items:center;gap:6px;color:#667085;font-size:12px;margin-top:7px}}.ticket{{display:inline-block;margin-left:8px;font-size:12px}}.error{{color:#b42318;font-size:12px;margin-top:5px;max-width:340px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}.section-title{{display:flex;justify-content:space-between;align-items:center;gap:16px}}small{{display:block;color:#667085;margin-top:4px}}details{{margin-top:7px;font-size:12px;color:#475467}}details ol{{padding-left:18px;max-height:140px;overflow:auto}}details li{{margin:5px 0}}details time{{font-variant-numeric:tabular-nums}}.history-state{{color:#667085}}.status-chip,.resource-status{{display:inline-block;border:1px solid transparent;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;line-height:1.35;white-space:nowrap}}.tone-good{{background:#dcfce7;border-color:#86efac;color:#166534}}.tone-bad{{background:#fee2e2;border-color:#fca5a5;color:#991b1b}}.tone-warn{{background:#fef3c7;border-color:#fcd34d;color:#78350f}}.tone-info{{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}}.tone-neutral{{background:#f2f4f7;border-color:#d0d5dd;color:#344054}}.status-link{{text-decoration:none}}.status-link:focus-visible .status-chip{{outline:3px solid #315efb;outline-offset:2px}}.ci-stack{{display:flex;align-items:flex-start;gap:5px;flex-wrap:wrap;margin-top:8px}}.patch-actions{{width:min(720px,80vw)}}.patch-actions>summary{{cursor:pointer;display:inline-flex;align-items:center;border:1px solid #d0d5dd;border-radius:8px;padding:7px 11px;background:white;color:#344054;font-weight:700}}.quick-actions{{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}}.quick-action{{margin:0}}.standing-policy{{border:1px solid #b2ccff;border-radius:10px;padding:10px;background:#f5f8ff;margin:10px 0}}.standing-policy form{{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr)) auto;gap:7px;align-items:end;margin-top:8px}}.standing-policy label{{display:grid;gap:3px}}.standing-policy select{{min-width:0;width:100%;padding:7px}}.action-policy-grid{{display:grid;grid-template-columns:repeat(3,minmax(190px,1fr));gap:10px}}.action-policy-item{{border:1px solid #d0d5dd;border-radius:10px;padding:10px;background:#fff}}.action-policy-item.unavailable{{background:#f8fafc;color:#667085}}.policy-heading{{display:flex;justify-content:space-between;gap:8px;align-items:center}}.availability{{border:1px solid #d0d5dd;border-radius:999px;padding:2px 6px;font-size:10px;text-transform:uppercase;font-weight:700}}.available .availability{{background:#dcfce7;border-color:#86efac;color:#166534}}.retest-control,.research-controls{{width:auto;padding:6px 8px;border:1px solid #d0d5dd;border-radius:8px}}.agent-choice{{display:grid;grid-template-columns:repeat(2,minmax(140px,1fr));gap:7px;margin:10px 0;align-items:end}}.agent-choice label{{font-size:12px;color:#667085}}.agent-choice input,.agent-choice select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}@media(max-width:600px){{.agent-choice{{grid-template-columns:1fr}}}}.retest-control form{{display:grid;gap:7px;margin-top:9px}}.retest-control label{{display:grid;gap:4px}}.retest-control input,.retest-control select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.retest-decision,.retest-approval{{display:grid;gap:6px;margin-top:9px;padding:8px;background:#f8fafc;border-radius:7px}}.retest-approval{{background:#fffaeb}}.retest-timeline{{padding-left:18px}}.retest-global form{{margin-top:12px}}.runs .empty{{padding:18px}}.run-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;margin-top:16px}}.run-summary{{border:1px solid #eaecf0;border-radius:10px;padding:14px;background:#f8fafc}}.run-summary header{{display:flex;justify-content:space-between;align-items:center;gap:10px}}.run-summary h3{{margin:0;font-size:15px}}.run-summary p{{font-size:13px;word-break:break-word}}.run-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:12px 0}}.run-metrics dt{{font-size:11px;color:#667085}}.run-metrics dd{{margin:2px 0;font-size:13px;word-break:break-word}}.finished-runs{{margin-top:20px;font-size:15px;color:inherit}}.finished-runs>summary{{cursor:pointer;font-size:13px;color:#475467;font-weight:600}}.finished-runs table{{min-width:0}}.engineering-capabilities{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:10px 14px;margin-top:14px;font-size:13px}}.engineering-capabilities h3{{margin:0 0 6px;font-size:13px;text-transform:uppercase;color:#667085}}.engineering-capabilities ul{{margin:0;padding-left:18px}}.engineering-capabilities p{{color:#667085;margin-bottom:0}}.orphan-vms{{border:1px solid #fecdca;background:#fef3f2;border-radius:10px;padding:12px 14px;margin-top:14px}}.orphan-vms h3{{margin:0 0 6px;color:#b42318;font-size:15px}}.orphan-vms ul{{margin:0;padding-left:18px;font-size:13px}}.orphan-ok{{color:#027a48;font-size:13px;margin-top:12px}}.resource-toolbar{{display:flex;justify-content:flex-end;margin-top:20px}}.resource-dashboard{{display:grid;gap:18px}}.resource-card{{margin-top:0}}.resource-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}}.other-vms-headline{{font-size:15px;margin:6px 0 0;color:#344054}}.other-vms-detail{{margin-top:12px;font-size:15px;color:inherit}}.other-vms-detail>summary{{cursor:pointer;font-size:13px;color:#475467;font-weight:600}}.vm-controls{{white-space:nowrap}}.vm-controls form{{display:inline-block;margin:0 4px 0 0}}.vm-controls button{{font-size:12px;padding:5px 9px}}.host-memory-headline{{font-size:17px;margin:6px 0 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap}}.host-memory-detail{{margin-top:14px;font-size:15px;color:inherit}}.host-memory-detail>summary{{cursor:pointer;font-size:13px;color:#475467;font-weight:600}}.resource-metric{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:12px}}.resource-metric dt{{font-size:12px;color:#667085}}.resource-metric dd{{margin:5px 0 0;font-size:18px;font-weight:700}}.resource-errors{{color:#b42318}}.resource-ok{{color:#027a48}}.session-controls{{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-top:16px}}fieldset{{border:1px solid #fecdca;border-radius:8px}}.message-content{{white-space:pre-wrap;margin-top:3px}}.run-failure{{background:#fef3f2;border:1px solid #fecdca;border-radius:10px;padding:12px 14px}}.run-failure h3{{margin-top:0;color:#b42318}}.run-failure-line{{color:#b42318}}.control-note,.controls-unavailable{{color:#667085;font-size:12px}}.refresh-health{{color:#b42318}}@media(max-width:980px){{.action-policy-grid{{grid-template-columns:1fr}}.standing-policy form{{grid-template-columns:repeat(2,minmax(140px,1fr))}}}}@media(max-width:760px){{.session-controls{{grid-template-columns:1fr}}}}</style></head>
+background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1450px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card,.resource-card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a;overflow-x:auto}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input,textarea,select{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px}}input,textarea{{flex:1;min-width:240px}}textarea{{display:block;width:min(620px,95%);min-height:70px;margin:7px 0 10px}}button,.button-link{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}.button-link{{display:inline-block;text-decoration:none}}button:disabled{{cursor:not-allowed;opacity:.68}}button.danger,button.secondary,.button-link.danger-link{{background:#fff;padding:7px 11px}}button.danger,.button-link.danger-link{{color:#b42318;border:1px solid #fecdca}}button.secondary{{color:#344054;border:1px solid #d0d5dd}}table{{width:100%;border-collapse:collapse;margin-top:18px;min-width:1050px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url,.detail{{color:#667085;font-size:12px;margin-top:4px;word-break:break-word}}.patch-meta{{display:flex;align-items:center;gap:6px;color:#667085;font-size:12px;margin-top:7px}}.ticket{{display:inline-block;margin-left:8px;font-size:12px}}.error{{color:#b42318;font-size:12px;margin-top:5px;max-width:340px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}.section-title{{display:flex;justify-content:space-between;align-items:center;gap:16px}}small{{display:block;color:#667085;margin-top:4px}}details{{margin-top:7px;font-size:12px;color:#475467}}details ol{{padding-left:18px;max-height:140px;overflow:auto}}details li{{margin:5px 0}}details time{{font-variant-numeric:tabular-nums}}.history-state{{color:#667085}}.status-chip,.resource-status{{display:inline-block;border:1px solid transparent;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;line-height:1.35;white-space:nowrap}}.tone-good{{background:#dcfce7;border-color:#86efac;color:#166534}}.tone-bad{{background:#fee2e2;border-color:#fca5a5;color:#991b1b}}.tone-warn{{background:#fef3c7;border-color:#fcd34d;color:#78350f}}.tone-info{{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}}.tone-neutral{{background:#f2f4f7;border-color:#d0d5dd;color:#344054}}.status-link{{text-decoration:none}}.status-link:focus-visible .status-chip{{outline:3px solid #315efb;outline-offset:2px}}.ci-stack{{display:flex;align-items:flex-start;gap:5px;flex-wrap:wrap;margin-top:8px}}.patch-actions{{width:min(720px,80vw)}}.patch-actions>summary{{cursor:pointer;display:inline-flex;align-items:center;border:1px solid #d0d5dd;border-radius:8px;padding:7px 11px;background:white;color:#344054;font-weight:700}}.quick-actions{{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}}.patch-now{{border:1px solid #d0d5dd;border-radius:10px;padding:10px 12px;margin:12px 0;background:#fff;font-size:13px}}.patch-now p{{margin:0}}.patch-now .detail{{margin-top:4px}}.manual-runs{{margin:12px 0}}.manual-runs>.policy-heading{{margin-bottom:2px}}.remove-patch{{margin-top:10px}}.action-policy-item .quick-action{{margin-top:8px}}.quick-action{{margin:0}}.standing-policy{{border:1px solid #b2ccff;border-radius:10px;padding:10px;background:#f5f8ff;margin:10px 0}}.standing-policy form{{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr)) auto;gap:7px;align-items:end;margin-top:8px}}.standing-policy label{{display:grid;gap:3px}}.standing-policy select{{min-width:0;width:100%;padding:7px}}.action-policy-grid{{display:grid;grid-template-columns:repeat(3,minmax(190px,1fr));gap:10px}}.action-policy-item{{border:1px solid #d0d5dd;border-radius:10px;padding:10px;background:#fff}}.action-policy-item.unavailable{{background:#f8fafc;color:#667085}}.policy-heading{{display:flex;justify-content:space-between;gap:8px;align-items:center}}.availability{{border:1px solid #d0d5dd;border-radius:999px;padding:2px 6px;font-size:10px;text-transform:uppercase;font-weight:700}}.available .availability{{background:#dcfce7;border-color:#86efac;color:#166534}}.retest-control,.research-controls{{width:auto;padding:6px 8px;border:1px solid #d0d5dd;border-radius:8px}}.agent-choice{{display:grid;grid-template-columns:repeat(2,minmax(140px,1fr));gap:7px;margin:10px 0;align-items:end}}.agent-choice label{{font-size:12px;color:#667085}}.agent-choice input,.agent-choice select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}@media(max-width:600px){{.agent-choice{{grid-template-columns:1fr}}}}.retest-control form{{display:grid;gap:7px;margin-top:9px}}.retest-control label{{display:grid;gap:4px}}.retest-control input,.retest-control select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.retest-decision,.retest-approval{{display:grid;gap:6px;margin-top:9px;padding:8px;background:#f8fafc;border-radius:7px}}.retest-approval{{background:#fffaeb}}.retest-timeline{{padding-left:18px}}.retest-global form{{margin-top:12px}}.runs .empty{{padding:18px}}.run-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;margin-top:16px}}.run-summary{{border:1px solid #eaecf0;border-radius:10px;padding:14px;background:#f8fafc}}.run-summary header{{display:flex;justify-content:space-between;align-items:center;gap:10px}}.run-summary h3{{margin:0;font-size:15px}}.run-summary p{{font-size:13px;word-break:break-word}}.run-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:12px 0}}.run-metrics dt{{font-size:11px;color:#667085}}.run-metrics dd{{margin:2px 0;font-size:13px;word-break:break-word}}.finished-runs{{margin-top:20px;font-size:15px;color:inherit}}.finished-runs>summary{{cursor:pointer;font-size:13px;color:#475467;font-weight:600}}.finished-runs table{{min-width:0}}.engineering-capabilities{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:10px 14px;margin-top:14px;font-size:13px}}.engineering-capabilities h3{{margin:0 0 6px;font-size:13px;text-transform:uppercase;color:#667085}}.engineering-capabilities ul{{margin:0;padding-left:18px}}.engineering-capabilities p{{color:#667085;margin-bottom:0}}.orphan-vms{{border:1px solid #fecdca;background:#fef3f2;border-radius:10px;padding:12px 14px;margin-top:14px}}.orphan-vms h3{{margin:0 0 6px;color:#b42318;font-size:15px}}.orphan-vms ul{{margin:0;padding-left:18px;font-size:13px}}.orphan-ok{{color:#027a48;font-size:13px;margin-top:12px}}.resource-toolbar{{display:flex;justify-content:flex-end;margin-top:20px}}.resource-dashboard{{display:grid;gap:18px}}.resource-card{{margin-top:0}}.resource-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}}.other-vms-headline{{font-size:15px;margin:6px 0 0;color:#344054}}.other-vms-detail{{margin-top:12px;font-size:15px;color:inherit}}.other-vms-detail>summary{{cursor:pointer;font-size:13px;color:#475467;font-weight:600}}.vm-controls{{white-space:nowrap}}.vm-controls form{{display:inline-block;margin:0 4px 0 0}}.vm-controls button{{font-size:12px;padding:5px 9px}}.host-memory-headline{{font-size:17px;margin:6px 0 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap}}.host-memory-detail{{margin-top:14px;font-size:15px;color:inherit}}.host-memory-detail>summary{{cursor:pointer;font-size:13px;color:#475467;font-weight:600}}.resource-metric{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:12px}}.resource-metric dt{{font-size:12px;color:#667085}}.resource-metric dd{{margin:5px 0 0;font-size:18px;font-weight:700}}.resource-errors{{color:#b42318}}.resource-ok{{color:#027a48}}.session-controls{{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-top:16px}}fieldset{{border:1px solid #fecdca;border-radius:8px}}.message-content{{white-space:pre-wrap;margin-top:3px}}.run-failure{{background:#fef3f2;border:1px solid #fecdca;border-radius:10px;padding:12px 14px}}.run-failure h3{{margin-top:0;color:#b42318}}.run-failure-line{{color:#b42318}}.control-note,.controls-unavailable{{color:#667085;font-size:12px}}.refresh-health{{color:#b42318}}@media(max-width:980px){{.action-policy-grid{{grid-template-columns:1fr}}.standing-policy form{{grid-template-columns:repeat(2,minmax(140px,1fr))}}}}@media(max-width:760px){{.session-controls{{grid-template-columns:1fr}}}}</style></head>
 <body><style>.research-controls{{width:min(430px,88vw);
 border:1px solid #d0d5dd;border-radius:8px;padding:8px}}.research-controls>summary{{cursor:pointer;font-weight:700}}.research-controls section{{border-top:1px solid #eaecf0;margin-top:10px;padding-top:10px}}.research-controls form{{display:grid;gap:7px;margin-top:8px}}.research-controls input,.research-controls select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.research-controls dl{{display:grid;gap:6px}}.research-controls dd{{margin:2px 0 6px;word-break:break-word}}.action-approval-card{{background:#fffaeb;border:1px solid #fedf89;border-radius:8px;padding:10px}}</style><main><h1>Patch Watcher</h1><p class='sub'>Track Gerrit patches, managed sessions, and worker resources.</p>
 <section class='card'><div class='section-title'><div><h2>Watched patches <small>({len(patches)} · checks every {refresh_interval}s{needs_you_html})</small></h2><div class='detail'>Last successful check: {escape(overall_last_successful_check())}</div><div class='detail'>Last check attempt: {escape(overall_last_checked())}</div>{refresh_health_html}</div><div class='actions'><form method='post' action='/refresh-all'><input type='hidden' name='csrf_token' value='{CSRF_TOKEN}'><button class='secondary'>Refresh all</button></form><form method='post' action='/email'><input type='hidden' name='csrf_token' value='{CSRF_TOKEN}'><button class='secondary'>Send status email</button></form></div></div><table><thead><tr><th>Patch</th><th>Watch state / CI</th><th>Review</th><th>Latest change</th><th></th></tr></thead><tbody>{rows}</tbody></table></section>

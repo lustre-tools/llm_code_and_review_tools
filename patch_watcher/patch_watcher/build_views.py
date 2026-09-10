@@ -181,9 +181,9 @@ def render_build_start_control(
         f"<input type='hidden' name='idempotency_token' value='{escape(idempotency_token, quote=True)}'>"
         f"<button type='submit'{disabled}>Handle build failure…</button></form>"
         + (f"<p class='detail' role='status'>{escape(reason)}</p>" if not eligible else "")
-        + "<p class='detail'>Commands are open-ended: the run works on this host and in "
-          "LTVM guests it owns.</p>"
-          "</div>"
+        # What the run may do is stated on the confirmation page, where the
+        # operator is about to authorise it; on the panel it was noise.
+        + "</div>"
     )
 
 

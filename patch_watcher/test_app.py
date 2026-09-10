@@ -571,6 +571,58 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertNotIn("<article class='engineering-run'", index)
         self.assertIn("href='/runs/pw-engineer-68160-ps4-abc'", index)
 
+    def test_the_panel_says_first_what_is_happening_now(self):
+        """Is anything running?  What runs without asking?  When was it last
+        looked at?  The panel used to answer none of these; a run's absence
+        could only be inferred from a chip that was not there."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = app.initialize_session_store(root / "sessions.sqlite3")
+            automation = app.initialize_automation_store(root / "automation.sqlite3")
+            standing = app.initialize_standing_policy_store(root / "standing.json")
+            patch_record, _ = app.add_patch("https://review.whamcloud.com/c/35302")
+            patch_record.update(change_number=35302, patchset=4, revision_sha="b" * 40,
+                                last_checked="2026-09-10 12:00:00")
+            app.RUN_CONTROLLER = None
+
+            quiet = app._patch_now_html(patch_record)
+            self.assertIn("<strong>No run</strong> on this patch", quiet)
+            self.assertIn("Level <strong>Watch only</strong>: nothing runs unattended", quiet)
+            self.assertIn("last checked 2026-09-10 12:00:00", quiet)
+            self.assertNotIn("Last run", quiet)
+
+            standing.save(app.PatchAutomationPolicy.for_preset("35302", "retest"))
+            gated = app._patch_now_html(patch_record)
+            self.assertIn("Level <strong>Known retests</strong>, but the global kill switch is off", gated)
+            automation.set_global_automation(True, changed_by="test", reason="test")
+            live = app._patch_now_html(patch_record)
+            self.assertIn("Level <strong>Known retests</strong>: acts unattended", live)
+
+            store.register_pinned_session(
+                "pw-session-done", patch_id="35302", run_id="pw-review-35302-ps4-old",
+                revision="b" * 40, patchset=4, profile="engineering", state="running",
+            )
+            store.finish_session("pw-session-done", "succeeded")
+            finished = app._patch_now_html(patch_record)
+            self.assertIn("<strong>No run</strong> on this patch", finished)
+            self.assertIn("Last run: <a href='/runs/pw-review-35302-ps4-old'>", finished)
+            self.assertIn("succeeded", finished)
+
+            store.register_pinned_session(
+                "pw-session-live", patch_id="35302", run_id="pw-engineer-35302-ps4-new",
+                revision="b" * 40, patchset=4, profile="engineering", state="running",
+            )
+            running = app._patch_now_html(patch_record)
+            self.assertIn("<strong>A run is running:</strong>", running)
+            self.assertIn("href='/runs/pw-engineer-35302-ps4-new'", running)
+            self.assertIn("(engineering)", running)
+            self.assertNotIn("waiting for you", running)
+            store.ask_human("pw-session-live", "Convert vvp_object.c too?")
+            waiting = app._patch_now_html(patch_record)
+            self.assertIn("A run is waiting human", waiting)
+            self.assertIn("<strong>It is waiting for you.</strong>", waiting)
+
     def test_a_run_waiting_on_you_is_labelled_counted_and_explained(self):
         """The in-console channel: a paused run shows on the patch row, links
         to itself, is counted in the header, and the run page says how you
@@ -765,6 +817,13 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertIn("method='post' action='/automation/dry-run'", rendered)
         self.assertIn("method='post' action='/runs/investigate'", rendered)
         self.assertIn("method='post' action='/engineering-runs/prepare'", rendered)
+        # The panel leads with what is happening; the "Available" chips, which
+        # meant "installed on this host" and read as "something to do", are gone.
+        self.assertLess(rendered.index("No run</strong> on this patch"),
+                        rendered.index("name='preset'"))
+        self.assertLess(rendered.index("name='preset'"), rendered.index("Start a run by hand"))
+        self.assertNotIn("class='availability'>Available", rendered)
+        self.assertNotIn("Commands are open-ended", rendered)
 
     def test_retest_automation_defaults_globally_and_per_patch_disabled(self):
         with tempfile.TemporaryDirectory() as temp_dir:
