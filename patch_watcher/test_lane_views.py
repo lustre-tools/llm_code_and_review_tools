@@ -1,7 +1,6 @@
 import inspect
 import re
 import unittest
-from dataclasses import dataclass
 
 from patch_watcher import lane_views
 
@@ -15,95 +14,29 @@ class LaneViewTests(unittest.TestCase):
         self.assertIn("grants no credentials and no broader authority", html)
         self.assertNotIn("Unattended actions: Enabled", html)
 
-    def test_summary_has_post_only_global_project_and_replay_controls(self):
+    def test_summary_is_status_only_apart_from_replay(self):
+        """The lane's own global and project switches are gone: a patch's level
+        enrols it, and re-applies that every poll, so a switch here would have
+        been silently undone.  What remains is a badge, what the rule does,
+        and the dry-run control -- the one form left."""
+
         html = lane_views.render_autonomous_lane_summary({
             "global_enabled": True,
             "lane": {"name": "safe-retest", "version": 3},
-            "project_overrides": [{
-                "project": "fs/lustre-release",
-                "mode": "disabled",
-                "effective_enabled": False,
-            }],
             "replay": {"state": "complete", "summary": "12 observations evaluated"},
         }, csrf_token="token<&'\"")
         self.assertIn("Unattended actions: Enabled", html)
         self.assertIn("safe-retest", html)
         self.assertIn("version 3", html)
-        self.assertIn("fs/lustre-release", html)
-        self.assertIn("Disable / kill switch", html)
+        self.assertIn("nothing to switch here", html)
         self.assertIn("12 observations evaluated", html)
-        self.assertGreaterEqual(html.count("method='post'"), 3)
-        self.assertEqual(html.count("name='csrf_token'"), html.count("<form"))
+        self.assertNotIn("Project overrides", html)
+        self.assertNotIn("Allow unattended actions", html)
+        self.assertNotIn("Disable / kill switch", html)
+        self.assertEqual(html.count("<form"), 1)
+        self.assertEqual(html.count("name='csrf_token'"), 1)
         self.assertNotRegex(html, r"(?i)<form[^>]+method=['\"]get")
         self.assertNotIn("token<&", html)
-
-    def test_patch_control_shows_exact_revision_rejection_and_override(self):
-        revision = "a" * 40
-        html = lane_views.render_patch_lane_controls(
-            {"change_number": 68541, "patchset": 7, "revision_sha": revision},
-            policy={
-                "lane_name": "deterministic-retest",
-                "lane_version": "v1",
-                "mode": "enabled",
-                "effective_enabled": True,
-            },
-            evaluation={
-                "eligible": False,
-                "code": "non_maloo_minus_one",
-                "explanation": "Human review blocks automation.",
-                "change_number": 68541,
-                "patchset": 7,
-                "revision_sha": revision,
-            },
-            csrf_token="csrf",
-        )
-        self.assertIn("Patch: Enabled", html)
-        self.assertIn("deterministic-retest", html)
-        self.assertIn("Rejected", html)
-        self.assertIn("change 68541, PS 7", html)
-        self.assertIn(revision, html)
-        self.assertIn("non_maloo_minus_one", html)
-        self.assertIn("Human review blocks automation.", html)
-        self.assertIn("does not grant credentials", html)
-        self.assertRegex(html, r"<option value='enabled' selected>")
-
-    def test_patch_replay_is_bound_to_exact_revision(self):
-        revision = "b" * 40
-        html = lane_views.render_patch_lane_controls(
-            {"change_number": 91, "patchset": 4, "revision_sha": revision},
-            replay={"status": "dry_run", "summary": "Would reject"},
-            csrf_token="csrf",
-        )
-        self.assertIn("Replay: Dry run · Would reject", html)
-        # The revision is what scopes the replay, and it is the only field
-        # this form needs: change_number, patchset and a `mode` of `dry_run`
-        # were all posted and ignored, and a hidden field nothing reads is how
-        # a form comes to disagree with its handler.
-        self.assertIn(f"name='revision_sha' value='{revision}'", html)
-        self.assertNotIn("name='change_number'", html.split("/autonomous-lanes/replay")[-1])
-        self.assertNotIn("value='dry_run'", html)
-        self.assertEqual(html.count("name='csrf_token'"), html.count("<form"))
-
-    def test_stale_eligible_decision_cannot_look_current(self):
-        html = lane_views.render_patch_lane_controls(
-            {"change_number": 91, "patchset": 5, "revision_sha": "b" * 40},
-            evaluation={
-                "eligible": True, "code": "eligible", "explanation": "Matched.",
-                "change_number": 91, "patchset": 4, "revision_sha": "a" * 40,
-            },
-        )
-        self.assertIn("Stale decision", html)
-        self.assertIn("cannot authorize the current patch revision", html)
-        self.assertNotIn("class='lane-eligibility tone-good'>Eligible", html)
-
-    def test_missing_evaluation_identity_is_not_invented_from_patch(self):
-        html = lane_views.render_patch_lane_controls(
-            {"change_number": 91, "patchset": 5, "revision_sha": "b" * 40},
-            evaluation={"eligible": False, "explanation": "No evidence."},
-        )
-        self.assertIn("Exact revision identity unavailable", html)
-        decision = html.split("class='lane-latest-evaluation'", 1)[1].split("</div>", 1)[0]
-        self.assertNotIn("revision <code>", decision)
 
     def test_budgets_and_outcomes_are_visible_and_recent_outcomes_bounded(self):
         outcomes = [
@@ -143,41 +76,23 @@ class LaneViewTests(unittest.TestCase):
         self.assertNotIn("csrf<script>", html)
 
     def test_dataclass_and_to_dict_inputs_are_supported(self):
-        @dataclass
-        class Evaluation:
-            eligible: bool
-            code: str
-            explanation: str
-            change_number: int
-            patchset: int
-            revision_sha: str
-
-        class Policy:
+        class Status:
             def to_dict(self):
                 return {
-                    "lane_name": "lane-one", "lane_version": 9,
-                    "mode": "disabled", "effective_enabled": False,
+                    "global_enabled": False,
+                    "lane": {"name": "lane-one", "version": 9},
+                    "replay": {"state": "pending", "summary": "not yet"},
                 }
 
-        html = lane_views.render_patch_lane_controls(
-            {"change_number": 8, "patchset": 2, "revision_sha": "c" * 40},
-            policy=Policy(),
-            evaluation=Evaluation(False, "budget_exhausted", "No actions left.", 8, 2, "c" * 40),
-        )
+        html = lane_views.render_autonomous_lane_summary(Status())
         self.assertIn("lane-one", html)
         self.assertIn("version 9", html)
-        self.assertIn("Patch: Disabled", html)
-        self.assertIn("budget_exhausted", html)
+        self.assertIn("Unattended actions: Disabled", html)
+        self.assertIn("not yet", html)
 
     def test_every_form_carries_caller_supplied_csrf(self):
-        summary = lane_views.render_autonomous_lane_summary({
-            "projects": [{"name": "one"}, {"name": "two"}],
-        }, csrf_token="exact-csrf")
-        patch = lane_views.render_patch_lane_controls(
-            {"change_number": 1, "patchset": 1, "revision_sha": "d" * 40},
-            csrf_token="exact-csrf",
-        )
-        for html in (summary, patch):
+        summary = lane_views.render_autonomous_lane_summary({}, csrf_token="exact-csrf")
+        for html in (summary,):
             forms = re.findall(r"<form\b.*?</form>", html)
             self.assertTrue(forms)
             for form in forms:

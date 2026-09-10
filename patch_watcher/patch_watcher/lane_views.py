@@ -6,7 +6,6 @@ engine: the controller remains responsible for authentication, CSRF checks,
 fresh exact-revision validation, capability enforcement, and all writes.
 """
 
-import hashlib
 from collections.abc import Mapping
 from html import escape
 
@@ -65,11 +64,6 @@ def _human(value):
     return value.replace("_", " ").replace("-", " ").capitalize()
 
 
-def _truth(value):
-    """Only explicit booleans enable a safety-sensitive display state."""
-    return value is True
-
-
 def _hidden(name, value):
     return (
         f"<input type='hidden' name='{escape(name, quote=True)}' "
@@ -105,14 +99,6 @@ def _identity(record):
     patchset = _get(record, "patchset", "patch_set")
     revision = _get(record, "revision_sha", "revision", "commit_sha")
     return change, patchset, revision
-
-
-def _identity_html(record):
-    change, patchset, revision = _identity(record)
-    return (
-        f"change {escape(_text(change))}, PS {escape(_text(patchset))}, "
-        f"revision <code>{escape(_text(revision))}</code>"
-    )
 
 
 def _lane_identity(*records):
@@ -188,68 +174,6 @@ def _render_outcomes(outcomes):
     ) + "</ol>"
 
 
-def _mode(record, default="inherit"):
-    value = _text(_get(record, "mode", "override", "state"), default).casefold()
-    return value if value in {"inherit", "enabled", "disabled"} else default
-
-
-def _option(value, current, label):
-    selected = " selected" if value == current else ""
-    return f"<option value='{value}'{selected}>{escape(label)}</option>"
-
-
-def _override_form(*, scope, identity, current, csrf_token, action, record=None):
-    digest = hashlib.sha256(f"{scope}\0{_text(identity)}".encode()).hexdigest()[:12]
-    field_id = f"lane-{scope}-mode-{digest}"
-    return (
-        f"<form class='lane-override compact-form' method='post' action='{escape(action, quote=True)}'>"
-        # Only the fields the handler reads. `scope` comes from the URL path,
-        # and `lane_name`/`lane_version` were never read at all -- a hidden
-        # field nothing consumes reads as a control the operator has, and is
-        # how a form comes to disagree with its handler.
-        f"{_csrf(csrf_token)}{_hidden(f'{scope}_id', identity)}"
-        f"{_hidden('expected_generation', _get(record, 'expected_generation', 'generation', default=0))}"
-        f"{_hidden('project', _get(record, 'project', 'project_id', default=''))}"
-        f"<label for='{field_id}'>{escape(_human(scope))} override</label>"
-        f"<select id='{field_id}' name='mode'>"
-        f"{_option('inherit', current, 'Inherit')}{_option('enabled', current, 'Enable')}"
-        f"{_option('disabled', current, 'Disable / kill switch')}</select>"
-        "<button type='submit'>Save</button></form>"
-    )
-
-
-def _render_projects(projects, *, csrf_token, action):
-    rows = []
-    for project in _items(projects):
-        project_id = _get(project, "project_id", "project", "name")
-        if project_id is None:
-            continue
-        current = _mode(project)
-        rows.append(
-            "<li><strong>" + escape(_text(project_id)) + "</strong> "
-            + _switch_badge("Effective", _get(project, "effective_enabled", "enabled"))
-            + _override_form(
-                scope="project", identity=project_id, current=current,
-                csrf_token=csrf_token, action=action, record=project,
-            ) + "</li>"
-        )
-    if not rows:
-        return "<p>No project overrides configured.</p>"
-    return "<ul class='lane-project-overrides'>" + "".join(rows) + "</ul>"
-
-
-def _render_global_switch(status, *, csrf_token, action):
-    enabled = _truth(_get(status, "global_enabled", "enabled"))
-    next_value = "disabled" if enabled else "enabled"
-    label = "Turn off unattended actions" if enabled else "Allow unattended actions…"
-    return (
-        f"<form class='lane-global-switch' method='post' action='{escape(action, quote=True)}'>"
-        f"{_csrf(csrf_token)}{_hidden('mode', next_value)}"
-        f"{_hidden('expected_generation', _get(status, 'expected_generation', 'generation', default=0))}"
-        f"<button type='submit'>{escape(label)}</button></form>"
-    )
-
-
 def _render_replay_control(status, *, csrf_token, action):
     replay = _get(status, "replay", "dry_run", "latest_replay")
     state = _human(_get(replay, "state", "status"))
@@ -268,8 +192,6 @@ def _render_replay_control(status, *, csrf_token, action):
 
 def render_autonomous_lane_summary(
     status=None, *, csrf_token="",
-    global_action="/autonomous-lanes/global",
-    project_action="/autonomous-lanes/project",
     replay_action="/autonomous-lanes/replay",
     nested=False,
 ):
@@ -282,7 +204,6 @@ def render_autonomous_lane_summary(
     status = _project(status)
     lane_name, lane_version = _lane_identity(status)
     enabled = _get(status, "global_enabled", "enabled")
-    projects = _get(status, "project_overrides", "projects", default=[])
     budgets = _get(status, "budgets", "capability_budgets", "budget")
     outcomes = _get(status, "outcomes", "recent_outcomes", default=[])
     heading = "h3" if nested else "h2"
@@ -297,11 +218,12 @@ def render_autonomous_lane_summary(
         "a single retest for one exact failure snapshot whose failures were all "
         "classified deterministic, and nothing else.</p>"
         "<p class='authority-boundary'><strong>What this does not do:</strong> being "
-        "eligible grants no credentials and no broader authority. The capability gates, "
-        "exact-revision checks, and per-project and per-patch switches all still apply.</p>"
-        f"{_render_global_switch(status, csrf_token=csrf_token, action=global_action)}"
-        "<details><summary>Project overrides</summary>"
-        f"{_render_projects(projects, csrf_token=csrf_token, action=project_action)}</details>"
+        "eligible grants no credentials and no broader authority. The capability gates "
+        "and exact-revision checks still apply, and the global policy gate stops it "
+        "like everything else.</p>"
+        "<p class='detail'>There is nothing to switch here: a patch takes part when its "
+        "level is <strong>Known retests</strong> or higher, and leaves when it is set "
+        "back to <strong>Watch only</strong>.</p>"
         "<details><summary>Budgets and recent outcomes</summary><h3>Capability budgets</h3>"
         f"{_render_budgets(budgets)}<h3>Recent outcomes</h3>{_render_outcomes(outcomes)}</details>"
         "<details><summary>Dry run and replay</summary>"
@@ -310,92 +232,3 @@ def render_autonomous_lane_summary(
     )
 
 
-def _eligibility_badge(evaluation, *, stale=False):
-    eligible = _get(evaluation, "eligible")
-    if stale:
-        label, tone = "Stale decision", "warn"
-    elif eligible is True:
-        label, tone = "Eligible", "good"
-    elif eligible is False:
-        label, tone = "Rejected", "bad"
-    else:
-        label, tone = "Not evaluated", "neutral"
-    return f"<span class='lane-eligibility tone-{tone}'>{label}</span>"
-
-
-def _complete_identity(record):
-    return all(value is not None and value != "" for value in _identity(record))
-
-
-def _stale_evaluation(evaluation, patch):
-    if not (_complete_identity(evaluation) and _complete_identity(patch)):
-        return False
-    return tuple(_text(value) for value in _identity(evaluation)) != tuple(
-        _text(value) for value in _identity(patch)
-    )
-
-
-def _render_patch_replay(patch, replay, *, csrf_token, action):
-    _change, _patchset, revision = _identity(patch)
-    state = _human(_get(replay, "state", "status"))
-    explanation = _text(_get(replay, "summary", "explanation"), "No exact-revision replay recorded.")
-    return (
-        f"<p class='lane-patch-replay' role='status'>Replay: {escape(state)} · "
-        f"{escape(explanation)}</p>"
-        f"<form method='post' action='{escape(action, quote=True)}'>"
-        # revision_sha is what scopes the replay, so it is the one field this
-        # form needs; change_number, patchset and mode were posted and ignored.
-        f"{_csrf(csrf_token)}{_hidden('revision_sha', revision)}"
-        "<button type='submit'>Replay this exact revision</button></form>"
-    )
-
-
-def render_patch_lane_controls(
-    patch, *, policy=None, evaluation=None, outcome=None, replay=None,
-    csrf_token="", patch_action="/autonomous-lanes/patch",
-    replay_action="/autonomous-lanes/replay",
-):
-    """Render one patch's override and latest exact-revision lane evidence."""
-    patch = _project(patch)
-    policy = _project(policy)
-    evaluation = _project(evaluation)
-    change, _, _ = _identity(patch)
-    patch_id = _get(patch, "patch_id", default=change)
-    lane_name, lane_version = _lane_identity(policy, evaluation)
-    current = _mode(policy)
-    explanation = _text(
-        _get(evaluation, "explanation", "reason", "message"),
-        "No exact-revision eligibility decision has been recorded.",
-    )
-    code = _text(_get(evaluation, "code", "reason_code"))
-    effective = _get(policy, "effective_enabled", "enabled")
-    stale = _stale_evaluation(evaluation, patch)
-    title_digest = hashlib.sha256(_text(patch_id).encode()).hexdigest()[:12]
-    title_id = f"patch-lane-title-{title_digest}"
-    if _complete_identity(evaluation):
-        decision_identity = _identity_html(evaluation)
-    else:
-        decision_identity = "Exact revision identity unavailable"
-    stale_warning = (
-        "<p class='lane-stale-warning' role='alert'>This decision is for a different "
-        "revision and cannot authorize the current patch revision.</p>"
-        if stale else ""
-    )
-    return (
-        f"<section class='patch-lane-controls' aria-labelledby='{title_id}'>"
-        f"<h3 id='{title_id}'>Unattended action</h3>"
-        f"<p>{_switch_badge('Patch', effective)} "
-        f"Lane <strong>{escape(lane_name)}</strong> version {escape(lane_version)}</p>"
-        f"{_override_form(scope='patch', identity=patch_id, current=current, csrf_token=csrf_token, action=patch_action, record=policy)}"
-        "<p class='authority-boundary'>Enabling this patch only opts it into the named lane. "
-        "It does not grant credentials, expand the lane budget, or bypass any broader kill switch.</p>"
-        "<div class='lane-latest-evaluation'>"
-        f"<h4>Latest exact-revision decision {_eligibility_badge(evaluation, stale=stale)}</h4>"
-        f"<p>{decision_identity}</p>{stale_warning}"
-        f"<p><code>{escape(code)}</code>: {escape(explanation)}</p></div>"
-        "<details><summary>Budget use, outcome, and replay</summary>"
-        f"{_render_budgets(_get(evaluation, 'budgets', 'budget_use', 'capability_budgets'))}"
-        f"<h4>Latest outcome</h4>{_render_outcomes([] if outcome is None else [outcome])}"
-        f"{_render_patch_replay(patch, replay, csrf_token=csrf_token, action=replay_action)}"
-        "</details></section>"
-    )

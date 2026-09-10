@@ -197,45 +197,6 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertIn("deterministic-test-retest", rendered)
         self.assertIn("Remote writes per exact revision", rendered)
 
-    def test_lane_global_enable_uses_bound_one_time_confirmation(self):
-        with tempfile.TemporaryDirectory() as directory:
-            app.initialize_autonomous_lanes(
-                Path(directory) / "lanes.json",
-                Path(directory) / "history.jsonl",
-            )
-            server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            base = f"http://127.0.0.1:{server.server_address[1]}"
-            try:
-                proposal = urlencode({
-                    "csrf_token": app.CSRF_TOKEN,
-                    "mode": "enabled",
-                    "expected_generation": 0,
-                }).encode()
-                confirmation = urlopen(Request(
-                    base + "/autonomous-lanes/global", data=proposal, method="POST"
-                )).read().decode()
-                self.assertFalse(app.AUTONOMOUS_LANE_STORE.load().global_enabled)
-                fields = dict(re.findall(
-                    r"name='([^']+)' value='([^']*)'", confirmation
-                ))
-                body = urlencode(fields).encode()
-                response = urlopen(Request(
-                    base + "/autonomous-lanes/global/confirm", data=body, method="POST"
-                ))
-                self.assertEqual(response.status, 200)
-                self.assertTrue(app.AUTONOMOUS_LANE_STORE.load().global_enabled)
-                with self.assertRaises(HTTPError) as caught:
-                    urlopen(Request(
-                        base + "/autonomous-lanes/global/confirm", data=body, method="POST"
-                    ))
-                self.assertEqual(caught.exception.code, 403)
-            finally:
-                server.shutdown()
-                server.server_close()
-                thread.join(timeout=2)
-
     def test_post_parser_rejects_unsupported_oversized_and_invalid_forms(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -3063,7 +3024,6 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertIn("https://review.whamcloud.com/c/68160", body)
         self.assertIn("https://review.whamcloud.com/c/68161", body)
         self.assertIn(app.CSRF_TOKEN, body)
-        self.assertIn("Unattended actions unavailable", body)
         self.assertIn("</html>", body)
 
     def test_one_unrenderable_patch_row_degrades_only_that_row(self):

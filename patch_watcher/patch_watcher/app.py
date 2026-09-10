@@ -68,7 +68,7 @@ from patch_watcher.gerrit_status import (
     refresh_patch,
 )
 from patch_watcher.jenkins_adapter import JenkinsSnapshotClient, JenkinsSnapshotError
-from patch_watcher.lane_views import render_autonomous_lane_summary, render_patch_lane_controls
+from patch_watcher.lane_views import render_autonomous_lane_summary
 from patch_watcher.ltvm_resources import (
     LTVMAdapter,
     LTVMCommandError,
@@ -2839,51 +2839,6 @@ def autonomous_lane_summary_html(nested=False):
         return "<section class='card'><h2>Unattended actions</h2><p class='error'>" + escape(str(exc)) + "</p></section>"
 
 
-def _patch_lane_html(patch):
-    if AUTONOMOUS_LANE_STORE is None:
-        return ""
-    project = str(patch.get("project") or "")
-    patch_id = str(patch.get("change_number") or "")
-    if not project or not patch_id:
-        return "<p class='detail'>Unattended-action controls appear after an exact Gerrit refresh.</p>"
-    try:
-        controls = AUTONOMOUS_LANE_STORE.load()
-        control = controls.patch_control(project, patch_id)
-        project_control = controls.project_control(project)
-        records = [
-            item for item in _lane_records()
-            if item.decision.identity.project == project
-            and item.decision.identity.patch_id == patch_id
-        ]
-        latest = records[-1] if records else None
-        policy = {
-            "lane_name": DETERMINISTIC_RETEST_LANE,
-            "lane_version": DETERMINISTIC_RETEST_VERSION,
-            "mode": (
-                "inherit" if control is None
-                else "enabled" if control.enabled else "disabled"
-            ),
-            "effective_enabled": bool(
-                control is not None and control.enabled and controls.global_enabled
-                and project_control is not None and project_control.enabled
-            ),
-            "expected_generation": controls.generation,
-            "project": project,
-        }
-        return render_patch_lane_controls(
-            patch,
-            policy=policy,
-            evaluation=(None if latest is None else _lane_decision_projection(latest)),
-            outcome=(None if latest is None else _lane_decision_projection(latest)),
-            csrf_token=CSRF_TOKEN,
-        )
-    except (AutonomousLaneError, ValueError) as exc:
-        # autonomous_lane._identifier raises a plain ValueError for a project
-        # or patch id outside its charset, so a single odd Gerrit value must
-        # not escape into page() and blank the whole dashboard.
-        return "<p class='error'>Unattended actions unavailable: " + escape(str(exc)) + "</p>"
-
-
 def _waiting_session_for_patch(patch):
     """Return this patch's run that is paused on a human question, if any."""
     if SESSION_STORE is None:
@@ -3019,7 +2974,6 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
     )
     research_html = _research_and_failure_html(patch, show_policy_form=False)
     standing_policy_html = _standing_policy_html(patch)
-    autonomous_lane_html = _patch_lane_html(patch)
     identity = "patch-actions-" + escape(
         f"{patch.get('change_number', 'unknown')}-{patch.get('patchset', 'unknown')}",
         quote=True,
@@ -3033,7 +2987,6 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         f"<input type='hidden' name='url' value='{escape(patch['url'], quote=True)}'>"
         "<button class='danger' type='submit'>Remove…</button></form></div>"
         f"{standing_policy_html}"
-        f"{autonomous_lane_html}"
         "<div class='action-policy-grid'>"
         "<section class='action-policy-item available' aria-label='Build failure handling'>"
         "<div class='policy-heading'><strong>Build failures</strong>"
@@ -4108,124 +4061,13 @@ class Handler(BaseHTTPRequestHandler):
                     "observation and control snapshots."
                 ))
                 return
-            if len(parts) not in {2, 3} or parts[1] not in {"global", "project", "patch"}:
-                self.send_error(404)
-                return
-            if len(parts) == 3 and parts[2] != "confirm":
-                self.send_error(404)
-                return
-            scope = parts[1]
-            confirming = len(parts) == 3 and parts[2] == "confirm"
-            mode = data.get("mode", ["inherit"])[0]
-            if mode not in {"inherit", "enabled", "disabled"}:
-                self.send_error(400, "Invalid unattended-action mode")
-                return
-            try:
-                expected_generation = int(data.get("expected_generation", ["-1"])[0])
-            except ValueError:
-                self.send_error(400, "Invalid unattended-action generation")
-                return
-            project = data.get("project", [""])[0]
-            patch_id = data.get("patch_id", [""])[0]
-            if scope == "project":
-                project = data.get("project_id", [project])[0]
-            patch = None
-            if scope == "patch":
-                with PATCHES_LOCK:
-                    patch = next((
-                        item for item in PATCHES
-                        if str(item.get("change_number") or "") == patch_id
-                    ), None)
-                if patch is None or not patch.get("project"):
-                    self.send_error(409, "Refresh the exact Gerrit patch before changing its lane")
-                    return
-                project = str(patch["project"])
-            target = "global" if scope == "global" else project
-            if scope == "patch":
-                target = project + ":" + patch_id
-            if mode == "enabled" and not confirming:
-                expires_at = str(int(time.time()) + ENGINEERING_CONFIRMATION_TTL_SECONDS)
-                confirmation = _signed_confirmation(
-                    "autonomous-lane", scope, target, mode,
-                    expected_generation, expires_at,
-                )
-                hidden = "".join(
-                    f"<input type='hidden' name='{escape(name, quote=True)}' value='{escape(str(value), quote=True)}'>"
-                    for name, value in {
-                        "csrf_token": CSRF_TOKEN,
-                        "mode": mode,
-                        "expected_generation": expected_generation,
-                        "project": project,
-                        "patch_id": patch_id,
-                        "confirmation_expires_at": expires_at,
-                        "confirmation_token": confirmation,
-                    }.items()
-                )
-                self.respond(_standalone_document(
-                    "Confirm unattended actions",
-                    "<main><p><a href='/'>← Cancel</a></p>"
-                    "<h1>Confirm unattended actions</h1>"
-                    "<p>This enables the narrow deterministic Maloo-retest lane at "
-                    + escape(scope) + " scope for <code>" + escape(target) + "</code>. "
-                    "It still requires the existing automatic deterministic standing policy "
-                    "and primary global automation gate. Its budget is one remote write per "
-                    "exact revision; it grants no Claude, Gerrit, Jenkins, or LTVM capability.</p>"
-                    f"<form method='post' action='/autonomous-lanes/{scope}/confirm'>"
-                    + hidden + "<button type='submit'>Enable this lane scope</button></form></main>",
-                ))
-                return
-            if mode == "enabled":
-                expires_at = data.get("confirmation_expires_at", [""])[0]
-                confirmation = data.get("confirmation_token", [""])[0]
-                if (
-                    not _engineering_confirmation_unexpired(expires_at)
-                    or not _verify_confirmation(
-                        confirmation, "autonomous-lane", scope, target, mode,
-                        expected_generation, expires_at,
-                    )
-                    or not _claim_engineering_confirmation(
-                        confirmation, f"autonomous-lane:{scope}:{target}:{expected_generation}",
-                    )
-                ):
-                    self.send_error(403, "Invalid, expired, or used lane confirmation")
-                    return
-            try:
-                if scope == "global":
-                    saved = AUTONOMOUS_LANE_STORE.set_global_enabled(
-                        mode == "enabled", expected_generation=expected_generation,
-                    )
-                elif scope == "project":
-                    if mode == "inherit":
-                        saved = AUTONOMOUS_LANE_STORE.clear_project(
-                            project, expected_generation=expected_generation,
-                        )
-                    else:
-                        saved = AUTONOMOUS_LANE_STORE.set_project_enabled(
-                            project, mode == "enabled",
-                            expected_generation=expected_generation,
-                        )
-                elif mode == "inherit":
-                    saved = AUTONOMOUS_LANE_STORE.clear_patch_lane(
-                        project, patch_id, expected_generation=expected_generation,
-                    )
-                else:
-                    saved = AUTONOMOUS_LANE_STORE.set_patch_lane(
-                        project, patch_id,
-                        LaneRef(DETERMINISTIC_RETEST_LANE, DETERMINISTIC_RETEST_VERSION),
-                        mode == "enabled", expected_generation=expected_generation,
-                    )
-                del saved
-                with PATCHES_LOCK:
-                    candidates = [dict(item) for item in PATCHES]
-                for candidate in candidates:
-                    if _has_explicit_standing_policy(candidate):
-                        _sync_standing_test_policy(candidate, _standing_policy(candidate))
-            except (AutonomousLaneConflict, AutonomousLaneError, ValueError) as exc:
-                self.send_error(409, str(exc))
-                return
-            self.send_response(303)
-            self.send_header("Location", "/")
-            self.end_headers()
+            # The lane used to have its own global, project, and patch switches
+            # here, each behind a signed confirmation.  A patch's level now
+            # enrols or withdraws it -- and re-applies that on every poll --
+            # so a switch set here was silently undone within seconds.  The
+            # two things an operator sets are the level on each patch and the
+            # global policy gate; nothing else is accepted.
+            self.send_error(404)
             return
         if path in {"/standing-policy", "/standing-policy/confirm"}:
             token = data.get("csrf_token", [""])[0]
