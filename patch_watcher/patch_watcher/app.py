@@ -691,8 +691,29 @@ def _record_standing_decision(patch, decision, *, outcome=""):
     )
 
 
-def _consumed_standing_keys(patch):
-    """Return exact standing events that already reserved a managed run."""
+# Failure codes that mean the agent never ran at all: the host died before
+# its socket was ready, or was never launched.  A run that ended this way did
+# no work on the patch, so the event it was started for is still there to
+# handle.
+NEVER_STARTED_FAILURE_CODES = frozenset({
+    "controller_error", "runner_start_failed", "runner_start_interrupted",
+})
+# How many never-started runs an unattended trigger may burn on one exact
+# event before it stops and leaves the event to a human.  Without a bound, a
+# host that cannot launch agents would start one every poll, forever.
+STANDING_DEAD_RUN_RETRY_LIMIT = 3
+
+
+def _consumed_standing_keys(patch, *, attended=False):
+    """Return exact standing events that already reserved a managed run.
+
+    An event stays consumed by the run it started -- unless that run never
+    got as far as an agent.  The first real run on this host died before its
+    control socket was ready, and the only way to try again was to touch the
+    patch so its fingerprint changed.  A never-started run releases its event:
+    unconditionally for Run now, where a person is asking; up to
+    ``STANDING_DEAD_RUN_RETRY_LIMIT`` times for the unattended path.
+    """
 
     if AUTOMATION_STORE is None:
         return frozenset()
@@ -700,19 +721,51 @@ def _consumed_standing_keys(patch):
     revision = str(patch.get("revision_sha") or "")
     if not patch_id:
         return frozenset()
-    return frozenset(
-        str(item.payload.get("coalescing_key"))
-        for item in AUTOMATION_STORE.list_observations(patch_id)
-        if item.source == "standing_policy"
-        and item.kind == "standing_policy_trigger_decision"
-        and item.revision == revision
-        and item.payload.get("eligible") is True
-        and item.payload.get("outcome")
-        and item.payload.get("coalescing_key")
-    )
+    runs_by_key: dict[str, list[str]] = {}
+    for item in AUTOMATION_STORE.list_observations(patch_id):
+        if (
+            item.source == "standing_policy"
+            and item.kind == "standing_policy_trigger_decision"
+            and item.revision == revision
+            and item.payload.get("eligible") is True
+            and item.payload.get("outcome")
+            and item.payload.get("coalescing_key")
+        ):
+            runs_by_key.setdefault(str(item.payload["coalescing_key"]), []).append(
+                str(item.payload["outcome"])
+            )
+    if not runs_by_key:
+        return frozenset()
+    sessions = {}
+    if SESSION_STORE is not None:
+        sessions = {
+            session.run_id: session
+            for session in SESSION_STORE.list_sessions(include_terminal=True)
+        }
+    consumed = set()
+    for key, run_ids in runs_by_key.items():
+        dead = 0
+        for run_id in run_ids:
+            session = sessions.get(run_id)
+            if session is None or session.state not in SESSION_TERMINAL_STATES:
+                # Unknown or still going: the event is spoken for.
+                consumed.add(key)
+                break
+            failure_code, _summary = _run_failure(session)
+            if session.state == "failed" and failure_code in NEVER_STARTED_FAILURE_CODES:
+                dead += 1
+                continue
+            # Finished and did something (or failed after starting): consumed.
+            consumed.add(key)
+            break
+        else:
+            # Every run for this key died before starting.
+            if not attended and dead >= STANDING_DEAD_RUN_RETRY_LIMIT:
+                consumed.add(key)
+    return frozenset(consumed)
 
 
-def _automatic_standing_decision(patch, policy, kind, fingerprint):
+def _automatic_standing_decision(patch, policy, kind, fingerprint, *, attended=False):
     identity = _standing_identity(patch)
     active = _revision_owner_session(patch)
     active_run = None
@@ -723,7 +776,7 @@ def _automatic_standing_decision(patch, policy, kind, fingerprint):
     observation = TriggerObservation(kind, identity, fingerprint)
     return decide_trigger(
         policy, observation, identity, source="automatic", active_run=active_run,
-        consumed_keys=_consumed_standing_keys(patch),
+        consumed_keys=_consumed_standing_keys(patch, attended=attended),
     )
 
 
@@ -762,6 +815,7 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
             }, sort_keys=True).encode("utf-8")).hexdigest()
             decision = _automatic_standing_decision(
                 patch, policy, "rebase_needed", seed,
+                attended=attended,
             )
             if decision.eligible:
                 session = RUN_CONTROLLER.request_engineering(
@@ -769,7 +823,12 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
                 )
                 SESSION_STORE.append_event(
                     session.session_id, "standing_policy_triggered", decision.to_dict(),
-                    idempotency_key="standing-trigger:" + decision.coalescing_key,
+                    # Keyed by the RUN, not the event: pw_session_event's
+                    # idempotency key is globally unique, and a coalescing key
+                    # is deliberately the same across retries of one event, so
+                    # keying by it made the second attempt at an event raise
+                    # instead of recording its trigger.
+                    idempotency_key="standing-trigger:" + session.run_id,
                 )
                 _record_standing_decision(patch, decision, outcome=session.run_id)
                 return session
@@ -790,6 +849,7 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
             )
             decision = _automatic_standing_decision(
                 patch, policy, "review_comments", snapshot["snapshot_sha256"],
+                attended=attended,
             )
             if decision.eligible:
                 try:
@@ -803,7 +863,12 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
                     return None
                 SESSION_STORE.append_event(
                     session.session_id, "standing_policy_triggered", decision.to_dict(),
-                    idempotency_key="standing-trigger:" + decision.coalescing_key,
+                    # Keyed by the RUN, not the event: pw_session_event's
+                    # idempotency key is globally unique, and a coalescing key
+                    # is deliberately the same across retries of one event, so
+                    # keying by it made the second attempt at an event raise
+                    # instead of recording its trigger.
+                    idempotency_key="standing-trigger:" + session.run_id,
                 )
                 _record_standing_decision(patch, decision, outcome=session.run_id)
                 return session
@@ -819,6 +884,7 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
             }, sort_keys=True).encode("utf-8")).hexdigest()
             preliminary = _automatic_standing_decision(
                 patch, policy, "build_failure", seed,
+                attended=attended,
             )
             if not preliminary.eligible:
                 _record_standing_decision(patch, preliminary)
@@ -827,6 +893,7 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
             snapshot = _capture_build_failure_snapshot(patch)
             decision = _automatic_standing_decision(
                 patch, policy, "build_failure", snapshot["snapshot_sha256"],
+                attended=attended,
             )
             if decision.eligible:
                 session = RUN_CONTROLLER.request_build_failure(
@@ -834,7 +901,12 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
                 )
                 SESSION_STORE.append_event(
                     session.session_id, "standing_policy_triggered", decision.to_dict(),
-                    idempotency_key="standing-trigger:" + decision.coalescing_key,
+                    # Keyed by the RUN, not the event: pw_session_event's
+                    # idempotency key is globally unique, and a coalescing key
+                    # is deliberately the same across retries of one event, so
+                    # keying by it made the second attempt at an event raise
+                    # instead of recording its trigger.
+                    idempotency_key="standing-trigger:" + session.run_id,
                 )
                 _record_standing_decision(patch, decision, outcome=session.run_id)
                 return session

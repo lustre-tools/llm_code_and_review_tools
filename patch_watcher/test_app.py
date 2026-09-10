@@ -721,6 +721,96 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 server.server_close()
                 thread.join(timeout=2)
 
+    def test_a_run_that_never_started_does_not_consume_its_event(self):
+        """The first real run on this host died before its control socket was
+        ready, and the rebase it was started for could never fire again: the
+        event's key was consumed by a run that did nothing.  A never-started
+        run releases its event -- always for Run now, and up to a bound for
+        the unattended path, so a host that cannot launch agents does not
+        start one every poll forever."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            sessions = app.initialize_session_store(root / "sessions.sqlite3")
+            app.initialize_automation_store(root / "automation.sqlite3")
+            standing = app.initialize_standing_policy_store(root / "standing.json")
+            patch_record, _ = app.add_patch("https://review.whamcloud.com/c/35302")
+            patch_record.update(
+                change_number=35302, patchset=4, revision_sha="d" * 40,
+                revision_ref="refs/changes/02/35302/4",
+                project="fs/lustre-release", lifecycle="Open", unresolved=0,
+                jenkins="PASS", rebase_needed=True,
+                review_blockers=[{"name": "wc-checkpatch", "value": -1, "patchset": 4,
+                                  "message": "This change cannot be cherry-picked to master."}],
+            )
+            app.sync_automation_patch(patch_record)
+            standing.save(app.PatchAutomationPolicy.for_preset("35302", "own"))
+
+            class FakeRuns:
+                def __init__(self):
+                    self.started = []
+
+                def stop(self):
+                    return None
+
+                def request_engineering(self, patch, **kwargs):
+                    run_id = f"pw-engineer-35302-ps4-try{len(self.started) + 1}"
+                    self.started.append(run_id)
+                    # The real controller registers the session; the caller
+                    # appends a trigger event to it straight after.
+                    sessions.register_pinned_session(
+                        f"session-{run_id}", patch_id="35302", run_id=run_id,
+                        revision="d" * 40, patchset=4, profile="engineering",
+                        state="running",
+                    )
+                    return SimpleNamespace(session_id=f"session-{run_id}", run_id=run_id)
+
+            runs = FakeRuns()
+            app.RUN_CONTROLLER = runs
+
+            def kill_before_start(run_id):
+                sessions.finish_session(
+                    f"session-{run_id}", "failed", failure_code="controller_error",
+                    failure_summary="Claude host exited before its control socket was ready",
+                )
+
+            with patch("patch_watcher.app.refresh_resource_status",
+                       return_value={"ltvm": {"vms": []}}):
+                first = app._apply_standing_policy(patch_record)
+                self.assertEqual(first.run_id, "pw-engineer-35302-ps4-try1")
+                # While it is running it owns the patch outright.
+                self.assertIsNone(app._apply_standing_policy(patch_record))
+                kill_before_start(first.run_id)
+                # Dead before starting: the event is free again, unattended too.
+                second = app._apply_standing_policy(patch_record)
+                self.assertEqual(second.run_id, "pw-engineer-35302-ps4-try2")
+                kill_before_start(second.run_id)
+                third = app._apply_standing_policy(patch_record)
+                self.assertEqual(third.run_id, "pw-engineer-35302-ps4-try3")
+                kill_before_start(third.run_id)
+                # Three dead runs: the unattended path stops and leaves it to a
+                # human -- who can still press Run now.
+                self.assertIsNone(app._apply_standing_policy(patch_record))
+                fourth = app._apply_standing_policy(patch_record, attended=True)
+                self.assertEqual(fourth.run_id, "pw-engineer-35302-ps4-try4")
+                # A run that failed AFTER starting keeps the event consumed.
+                sessions.finish_session(
+                    f"session-{fourth.run_id}", "failed", failure_code="worker_report_invalid",
+                    failure_summary="bad report",
+                )
+                self.assertIsNone(app._apply_standing_policy(patch_record, attended=True))
+            self.assertEqual(len(runs.started), 4)
+            # Each attempt recorded its own trigger event: the idempotency key
+            # is the run, so retrying one event does not collide with itself.
+            triggered = [
+                event.payload.get("coalescing_key")
+                for run_id in runs.started
+                for event in sessions.list_events(f"session-{run_id}")
+                if event.event_type == "standing_policy_triggered"
+            ]
+            self.assertEqual(len(triggered), 4)
+            self.assertEqual(len(set(triggered)), 1, "all four retried one event")
+
     def test_a_run_waiting_on_you_is_labelled_counted_and_explained(self):
         """The in-console channel: a paused run shows on the patch row, links
         to itself, is counted in the header, and the run page says how you
