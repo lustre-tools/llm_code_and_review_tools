@@ -149,6 +149,19 @@ class ClaudeArgvTests(unittest.TestCase):
             self.assertNotIn("allOf", passed, profile)
             self.assertIn("properties", passed, profile)
 
+    def test_no_servers_is_sent_in_the_form_the_cli_accepts(self):
+        """The spec's "no MCP servers" is {}; the CLI spells it
+        {"mcpServers": {}} and exits 1 on a bare {} -- which killed every
+        read-only run with nothing but "host_process_missing"."""
+        from patch_watcher.claude_runner import build_read_only_claude_command
+
+        command = build_read_only_claude_command(
+            self.spec(capability_profile="read_only", report_kind="read_only")
+        )
+        sent = command[command.index("--mcp-config") + 1]
+        self.assertEqual(json.loads(sent), {"mcpServers": {}})
+        self.assertNotEqual(sent, "{}")
+
     def test_the_rule_the_dropped_all_of_expressed_is_still_enforced(self):
         """Dropping allOf must not make a needs_input report without a
         question acceptable; the validators are what actually reject it."""
@@ -613,6 +626,22 @@ class ClaudeRunnerTests(unittest.TestCase):
         wait_for(lambda: any(event.type == "protocol_error" for event in host.event_tail()))
         log = Path(host.handle.event_log_path).read_text()
         self.assertNotIn("not-json-with-secret", log)
+
+    def test_the_clis_own_refusal_is_quoted_because_it_is_the_tools_words(self):
+        """Claude's stderr is folded into this stream, so a CLI that refuses
+        to start says so as an unparseable line.  Recording its byte count
+        discarded the only explanation there was, and every read-only run
+        reported "host_process_missing" instead of "Invalid MCP
+        configuration".  Its own "Error:" lines are quoted; anything else on
+        the stream is still counted and not."""
+        host, process, _calls, _thread = self.start_server()
+        process.stdout.feed("Error: Invalid MCP configuration: mcpServers: Invalid input\n")
+        wait_for(lambda: any(event.type == "protocol_error" for event in host.event_tail()))
+        recorded = next(
+            event for event in host.event_tail() if event.type == "protocol_error"
+        )
+        self.assertIn("Invalid MCP configuration", recorded.payload.get("text", ""))
+        self.assertEqual(recorded.payload["reason"], "invalid_json")
 
     def test_interrupt_targets_verified_claude_process_group(self):
         host, _process, calls, _thread = self.start_server()

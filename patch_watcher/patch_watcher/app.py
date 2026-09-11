@@ -2713,7 +2713,10 @@ def _run_messages(session):
 # first.  ``name`` is last because it identifies the resource rather than
 # explaining it.
 EVENT_SUMMARY_KEYS = (
-    "summary", "detail", "reason", "failure_summary", "error_type",
+    # "text" outranks "reason": a protocol_error's reason is the generic code
+    # "invalid_json" while its text is the line itself -- which for a CLI that
+    # refused to start is the whole explanation.
+    "summary", "detail", "text", "reason", "failure_summary", "error_type",
     "runner_type", "name",
 )
 # Companion facts, and the labels they read as.  The destroy ladder

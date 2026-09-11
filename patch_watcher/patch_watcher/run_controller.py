@@ -4249,20 +4249,39 @@ class RunController:
             self._settled_sessions.add(session.session_id)
 
     def _with_host_stderr(self, session: ManagedSession, reason: str) -> str:
-        """Append what the host said to a bare failure reason.
+        """Append whatever explanation exists to a bare failure reason.
 
-        "host_process_missing" names the symptom; the host's last words name
-        the cause, and they are three directories away in a tree cleanup is
-        about to delete.
+        "host_process_missing" names the symptom.  The cause is in one of two
+        places, and neither reaches the operator by itself:
+
+        * host.stderr, the HOST process's own output -- a Python traceback,
+          which is how the AF_UNIX socket-path failure was found; and
+        * a protocol_error event, because Claude's stderr is folded into the
+          stream the host parses, so the CLI refusing to start ("Invalid MCP
+          configuration") arrives as an unparseable line rather than as the
+          host dying with a message.
         """
+        detail = ""
         try:
             source = self._run_root(session) / "work" / "scratch" / "claude" / "host.stderr"
-            text = source.read_text(encoding="utf-8", errors="replace").strip()
+            detail = source.read_text(encoding="utf-8", errors="replace").strip()
         except OSError:
+            detail = ""
+        if not detail:
+            for event in self.store.list_events(session.session_id):
+                if event.event_type != "runner_event":
+                    continue
+                payload = event.payload if isinstance(event.payload, Mapping) else {}
+                runner_payload = payload.get("runner_payload")
+                if (
+                    payload.get("runner_type") == "protocol_error"
+                    and isinstance(runner_payload, Mapping)
+                    and runner_payload.get("text")
+                ):
+                    detail = str(runner_payload["text"])
+        if not detail:
             return reason
-        if not text:
-            return reason
-        tail = "\n".join(text.splitlines()[-12:])
+        tail = "\n".join(detail.splitlines()[-12:])
         return f"{reason}: {tail}"[:2000]
 
     def _preserve_host_stderr(self, session: ManagedSession) -> None:

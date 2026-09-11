@@ -628,7 +628,19 @@ def build_read_only_claude_command(spec: ReadOnlyRunSpec) -> list[str]:
             "--strict-mcp-config",
             "--disable-slash-commands",
         ]
-        command.extend(["--tools", tools, "--mcp-config", spec.mcp_config_json])
+        # The spec's "no servers" is {}, which the validator enforces; the CLI
+        # spells the same thing {"mcpServers": {}} and rejects a bare {} with
+        # "Invalid MCP configuration: mcpServers: Invalid input", exiting 1
+        # before reading a message.  Every read-only run -- investigation and
+        # failure research, the whole read-only half of the ladder -- died
+        # that way, reported only as "host_process_missing".
+        command.extend([
+            "--tools", tools,
+            "--mcp-config", json.dumps(
+                {"mcpServers": json.loads(spec.mcp_config_json)},
+                sort_keys=True, separators=(",", ":"),
+            ),
+        ])
     if spec.name:
         command.extend(["--name", spec.name])
     if spec.model:
@@ -937,6 +949,14 @@ def _user_message(text: str) -> str:
         "message": {"role": "user", "content": [{"type": "text", "text": text}]},
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+
+
+# The CLI prefixes its own refusals this way ("Error: Invalid MCP
+# configuration", "Error: When using --print, ..."), which is what makes them
+# safe to quote: they are the tool's words, not a passthrough of whatever
+# happened to be on the stream.
+CLI_ERROR_PREFIX = "Error:"
+MAX_CLI_ERROR_TEXT = 500
 
 
 def _is_number(value: Any) -> bool:
@@ -1277,7 +1297,21 @@ class ClaudeHost:
             try:
                 raw = json.loads(line)
             except json.JSONDecodeError:
-                self._append_event("protocol_error", {"reason": "invalid_json", "bytes": len(line)})
+                # An unparseable line may be anything, so its content is not
+                # persisted -- except when it is the CLI announcing its own
+                # refusal to start.  Claude's stderr is folded into this
+                # stream, so "Error: Invalid MCP configuration", which killed
+                # every read-only run, arrived here and was recorded as a
+                # BYTE COUNT: the only explanation that existed, discarded,
+                # leaving the run to report "host_process_missing".
+                #
+                # Only the tool's own "Error:" lines are kept, bounded.  Every
+                # other unparseable line is still counted and not quoted.
+                payload = {"reason": "invalid_json", "bytes": len(line)}
+                stripped = line.strip()
+                if stripped.startswith(CLI_ERROR_PREFIX):
+                    payload["text"] = stripped[:MAX_CLI_ERROR_TEXT]
+                self._append_event("protocol_error", payload)
                 continue
             if not isinstance(raw, Mapping):
                 self._append_event("protocol_error", {"reason": "event_not_object"})
