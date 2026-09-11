@@ -185,6 +185,19 @@ Also installed from this repo:
 - `lustre-crash` — drgn-based crash-dump analysis; no auth.
   See `lustre_crash/README.md`.
 
+## Claude skills
+
+`skills/` holds task-shaped skills for these tools --
+`lustre-ci-triage`, `gerrit-patch-workflow`, `lreview-spin-cycle`,
+`lustre-crash-triage`, `jira-bug-research`. `./install.sh` links them
+into `~/.claude/skills`; `--skills` does only that, `--no-skills`
+skips it. They are symlinks, so edits in this checkout take effect
+immediately -- edit the skill here, not the copy in `~/.claude`.
+
+Keep them task-shaped rather than tool-shaped: each CLI already
+answers `--help` and `describe`, so a skill earns its place by
+carrying the sequencing and judgment that those cannot.
+
 ## Development
 
 All tools share `llm-tool-common` for envelope formatting and

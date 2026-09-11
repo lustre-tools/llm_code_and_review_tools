@@ -110,6 +110,23 @@ source install.sh            # install + activate in this shell
 change your shell's environment; sourcing is what makes activation
 possible.)
 
+## Claude skills
+
+This repo ships task-shaped Claude skills for the tools, in
+`skills/`. `./install.sh` links them into `~/.claude/skills`
+(a symlink each, so `git pull` updates them with the tools they
+describe); `--skills` links them on their own and `--no-skills`
+installs without them. A skill directory you wrote yourself is never
+replaced -- the installer says so and skips it.
+
+| Skill | Loads when |
+|-------|------------|
+| `lustre-ci-triage` | a change fails CI: maloo, jenkins, janitor, and what to retest |
+| `gerrit-patch-workflow` | review comments, staged replies, series sessions, commit rules |
+| `lreview-spin-cycle` | the local AI review pass before pushing, and when to stop |
+| `lustre-crash-triage` | vmcore and LBUG analysis with lustre-crash and drgn |
+| `jira-bug-research` | finding, filing and linking LU tickets |
+
 ## Configuration
 
 The installer sets all of this up for you, and offers to as soon as it

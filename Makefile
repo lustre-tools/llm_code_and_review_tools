@@ -36,4 +36,4 @@ uninstall:
 	@./install.sh --uninstall
 
 test:
-	@./test_install_configure.sh
+	@./test_install.sh

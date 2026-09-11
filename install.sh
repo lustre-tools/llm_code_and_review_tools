@@ -84,6 +84,10 @@ usage() {
     echo "                 server"
     echo "  --status       Show which tools have credentials configured"
     echo "  --no-configure Install without offering the credential walkthrough"
+    echo "  --skills       Link this checkout's skills into ~/.claude/skills"
+    echo "                 (and ~/.codex/skills if Codex is installed), then"
+    echo "                 exit"
+    echo "  --no-skills    Install without linking the skills"
     echo "  --with-ltvm    Also install ltvm from lustre-test-vms-v2, which"
     echo "                 Patch Watcher agents need to create test VMs"
     echo "  --doctor       Check whether this host can run Patch Watcher agents"
@@ -458,6 +462,9 @@ uninstall_tools() {
 
     echo "Uninstalling llm-tool-common..."
     $PYTHON -m pip uninstall -y llm-tool-common 2>/dev/null || true
+
+    echo "Removing Claude skills..."
+    uninstall_skills
 
     echo ""
     echo -e "${GREEN}✓${NC} Python tools uninstalled"
@@ -1014,6 +1021,105 @@ configure_tools() {
     configure_summary
 }
 
+# ---------------------------------------------------------------------------
+# Claude skills
+#
+# The skills under .claude/skills/ are task-shaped guides to these tools --
+# CI triage, Gerrit workflow, the lreview spin cycle, crash triage, JIRA
+# research.  They are linked rather than copied into ~/.claude/skills so a
+# `git pull` in this checkout updates them with the tools they describe.
+# ---------------------------------------------------------------------------
+
+SKILLS_SRC="$SCRIPT_DIR/skills"
+
+# Claude Code and Codex read the same SKILL.md format out of their own
+# directory: ~/.claude/skills and $CODEX_HOME/skills.  Claude's is always
+# written; Codex's only when that installation exists, so a host without
+# codex does not grow an empty ~/.codex.
+skill_dests() {
+    printf '%s\n' "$HOME/.claude/skills"
+    local codex_home="${CODEX_HOME:-$HOME/.codex}"
+    [ -d "$codex_home" ] && printf '%s\n' "$codex_home/skills"
+    return 0
+}
+
+link_skills_into() {
+    local dest_dir="$1" skill name dest linked="" skipped=""
+    mkdir -p "$dest_dir"
+    for skill in "$SKILLS_SRC"/*/; do
+        [ -f "$skill/SKILL.md" ] || continue
+        name=$(basename "$skill")
+        dest="$dest_dir/$name"
+        if [ -e "$dest" ] && [ ! -L "$dest" ]; then
+            # Someone's own skill of the same name.  Replacing it with a
+            # link would delete work this installer did not create.
+            skipped="$skipped $name"
+            continue
+        fi
+        ln -sfn "${skill%/}" "$dest"
+        linked="$linked $name"
+    done
+    if [ -n "$linked" ]; then
+        echo "Skills linked into $(tilde_path "$dest_dir"):"
+        echo " $linked"
+    fi
+    if [ -n "$skipped" ]; then
+        echo -e "${YELLOW}not linked${NC} into $(tilde_path "$dest_dir")" \
+            "(a real directory is already there):$skipped"
+        echo "  Move it aside and re-run with --skills to use this checkout's version."
+    fi
+}
+
+# Claude Code discovers project skills at <repo>/.claude/skills.  The
+# skills themselves live in the visible skills/ directory; this is the
+# pointer that makes a session started inside this checkout find them,
+# and it is local state, not something to commit.
+link_project_skills() {
+    local dot="$SCRIPT_DIR/.claude"
+    if [ -e "$dot/skills" ] && [ ! -L "$dot/skills" ]; then
+        rmdir "$dot/skills" 2>/dev/null || return 0
+    fi
+    mkdir -p "$dot"
+    ln -sfn "$SKILLS_SRC" "$dot/skills"
+}
+
+install_skills() {
+    local dest_dir
+    if [ ! -d "$SKILLS_SRC" ]; then
+        echo -e "${YELLOW}note:${NC} no skills in this checkout ($SKILLS_SRC)"
+        return 0
+    fi
+    link_project_skills
+    while read -r dest_dir; do
+        [ -n "$dest_dir" ] || continue
+        link_skills_into "$dest_dir"
+    done <<EOF
+$(skill_dests)
+EOF
+    echo "  (a running session does not see new skills; start a new one)"
+}
+
+uninstall_skills() {
+    local dest_dir dest name target
+    while read -r dest_dir; do
+        [ -n "$dest_dir" ] || continue
+        [ -d "$dest_dir" ] || continue
+        for dest in "$dest_dir"/*; do
+            [ -L "$dest" ] || continue
+            target=$(readlink "$dest")
+            case "$target" in
+                "$SKILLS_SRC"/*)
+                    name=$(basename "$dest")
+                    rm -f "$dest"
+                    echo "  removed skill $name from $(tilde_path "$dest_dir")"
+                    ;;
+            esac
+        done
+    done <<EOF
+$(skill_dests)
+EOF
+}
+
 # Allow sourcing the functions without running the installer (tests).  This
 # guard sat above install_ltvm/run_configure/run_doctor, so the three
 # functions that carried the --configure, --doctor and --with-ltvm bugs were
@@ -1029,6 +1135,7 @@ ONLY_TOOLS=""
 RECONFIGURE=0
 VERIFY=1
 CONFIGURE_AFTER_INSTALL=1
+INSTALL_SKILLS=1
 while [ $# -gt 0 ]; do
     case "$1" in
         --help|-h)
@@ -1066,6 +1173,12 @@ while [ $# -gt 0 ]; do
             ;;
         --no-configure)
             CONFIGURE_AFTER_INSTALL=0
+            ;;
+        --skills)
+            ACTION="skills"
+            ;;
+        --no-skills)
+            INSTALL_SKILLS=0
             ;;
         --doctor)
             ACTION="doctor"
@@ -1108,6 +1221,9 @@ case "$ACTION" in
     status)
         configure_summary
         ;;
+    skills)
+        install_skills
+        ;;
     doctor)
         require_runtime_python || exit 1
         run_doctor
@@ -1117,6 +1233,10 @@ case "$ACTION" in
         ltvm_failed=0
         if [ "$WITH_LTVM" = "1" ]; then
             install_ltvm || ltvm_failed=1
+        fi
+        if [ "$INSTALL_SKILLS" = "1" ]; then
+            echo ""
+            install_skills
         fi
         if [ "$CONFIGURE_AFTER_INSTALL" = "1" ] && [ -t 0 ]; then
             configure_tools "$ONLY_TOOLS"

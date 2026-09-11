@@ -1,9 +1,10 @@
 #!/bin/bash
 #
-# Tests for install.sh's credential walkthrough.
+# Tests for install.sh: the credential walkthrough and the Claude skills.
 #
 # Everything runs against a temporary HOME with the network check turned off;
-# no real credential file is read or written.  Run it with:  ./test_install_configure.sh
+# no real credential file or skill is read or written.  Run it with:
+#   ./test_install.sh
 
 set -u
 
@@ -47,7 +48,7 @@ fresh_home() {
     TRASH="$TRASH $HOME_DIR"
 }
 
-echo "install.sh credential walkthrough"
+echo "install.sh"
 
 # --- a fully answered tool is written where the CLI reads it ---------------
 fresh_home
@@ -233,6 +234,88 @@ if echo "$out" | grep -q "Installing"; then
     bad "--only on its own configures rather than installs"
 else
     ok "--only on its own configures rather than installs"
+fi
+
+# --- the skills ------------------------------------------------------------
+# They are linked, not copied, so a git pull updates them in place.
+SKILLS_DIR="$SCRIPT_DIR/skills"
+for skill in "$SKILLS_DIR"/*/; do
+    [ -d "$skill" ] || continue
+    name=$(basename "$skill")
+    front=$(sed -n '2,/^---$/p' "$skill/SKILL.md")
+    declared=$(printf '%s' "$front" | sed -n 's/^name: *//p')
+    description=$(printf '%s' "$front" | sed -n 's/^description: *//p')
+    if [ "$declared" = "$name" ]; then
+        ok "$name declares the name of its directory"
+    else
+        bad "$name declares the name of its directory" "frontmatter says [$declared]"
+    fi
+    case "$description" in
+        "This skill should be used"*) ok "$name describes when it applies, in third person" ;;
+        "") bad "$name has a description" ;;
+        *) bad "$name describes when it applies, in third person" "starts: ${description:0:40}" ;;
+    esac
+done
+
+fresh_home
+out=$(HOME="$HOME_DIR" bash "$INSTALL_SH" --skills 2>&1)
+missing=""
+for skill in "$SKILLS_DIR"/*/; do
+    name=$(basename "$skill")
+    [ -L "$HOME_DIR/.claude/skills/$name" ] || missing="$missing $name"
+done
+if [ -z "$missing" ]; then
+    ok "--skills links every skill into ~/.claude/skills"
+else
+    bad "--skills links every skill into ~/.claude/skills" "missing:$missing"
+fi
+
+# Codex reads the same format from its own directory, but only when it is
+# installed -- a host without codex must not grow an empty ~/.codex.
+fresh_home
+mkdir -p "$HOME_DIR/.codex"
+out=$(HOME="$HOME_DIR" bash "$INSTALL_SH" --skills 2>&1)
+if [ -L "$HOME_DIR/.codex/skills/lustre-ci-triage" ]; then
+    ok "skills are linked for codex when codex is installed"
+else
+    bad "skills are linked for codex when codex is installed" "$out"
+fi
+
+fresh_home
+out=$(HOME="$HOME_DIR" bash "$INSTALL_SH" --skills 2>&1)
+if [ -e "$HOME_DIR/.codex" ]; then
+    bad "no ~/.codex is created for a host without codex"
+else
+    ok "no ~/.codex is created for a host without codex"
+fi
+
+# A skill directory someone wrote themselves must not be replaced by a link.
+rm -f "$HOME_DIR/.claude/skills/lustre-ci-triage"
+mkdir -p "$HOME_DIR/.claude/skills/lustre-ci-triage"
+echo "mine" > "$HOME_DIR/.claude/skills/lustre-ci-triage/SKILL.md"
+out=$(HOME="$HOME_DIR" bash "$INSTALL_SH" --skills 2>&1)
+check "a real skill directory is left alone" "mine" \
+    "$(cat "$HOME_DIR/.claude/skills/lustre-ci-triage/SKILL.md")"
+contains "and the collision is reported" "not linked" "$out"
+
+# Uninstalling removes the links it made, and nothing else.
+ln -sfn /tmp "$HOME_DIR/.claude/skills/someone-elses"
+HOME="$HOME_DIR" bash -c \
+    "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; uninstall_skills" > /dev/null 2>&1
+if [ -L "$HOME_DIR/.claude/skills/gerrit-patch-workflow" ]; then
+    bad "uninstall removes the skill links"
+else
+    ok "uninstall removes the skill links"
+fi
+if [ -L "$HOME_DIR/.claude/skills/someone-elses" ]; then
+    ok "uninstall leaves unrelated links alone"
+else
+    bad "uninstall leaves unrelated links alone"
+fi
+if [ -d "$HOME_DIR/.claude/skills/lustre-ci-triage" ]; then
+    ok "uninstall leaves a real skill directory alone"
+else
+    bad "uninstall leaves a real skill directory alone"
 fi
 
 echo ""
