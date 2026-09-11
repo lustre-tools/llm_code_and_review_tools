@@ -51,22 +51,11 @@ The only flags are `--vmlinux`, `--vmcore`, `--mod-dir`, `--timeout` and
 rebuild, so the `.ko` files on disk are whatever was built last; pointing
 at a different build yields symbol offsets that are quietly wrong.
 
-## When the recipes fail
+## Going further than the recipes
 
-As of 2026-09 the recipes return `could not find 'init_uts_ns'`,
-`'runqueues'` or `'PIDTYPE_PID'` even with a version-matched vmlinux that
-has full DWARF -- the recipe is not handing the debug info to drgn. drgn
-itself works, so drive it directly rather than re-diagnosing the
-wrapper -- and check whether the recipe works before assuming it does
-not, since this is a bug someone may have fixed:
-
-```bash
-drgn -c <vmcore> -s <vmlinux>
-```
-
-The individual scripts under `lustre-drgn-tools/` in the tools checkout
-work the same way, each taking `--vmcore`, `--vmlinux`, `--mod-dir` and
-`--pretty`:
+The recipes are built from the scripts under `lustre-drgn-tools/` in the
+tools checkout, and each answers one question directly. They take the
+same `--vmcore`, `--vmlinux`, `--mod-dir` and `--pretty`:
 
 `lustre_triage.py` (what `recipes lustre` wraps), `obd_devs.py`,
 `ldlm_dumplocks.py`, `ldlm_deadlock.py`, `ptlrpc.py`, `dk.py`,
@@ -77,13 +66,24 @@ python3 <tools-checkout>/lustre-drgn-tools/lustre_triage.py \
     --vmcore <path> --vmlinux <path> --mod-dir <build> --pretty
 ```
 
+For a question none of them answers, drive drgn against the same dump:
+
+```bash
+drgn -c <vmcore> -s <vmlinux>
+```
+
 drgn must be installed **in the tools venv** that runs `lustre-crash`; a
-standalone `drgn` on PATH built against the system Python does not satisfy
-it:
+standalone `drgn` on PATH built against the system Python does not
+satisfy it:
 
 ```bash
 <tools-checkout>/.venv/bin/pip install drgn
 ```
+
+A recipe that answers `could not find 'init_uts_ns'` (or `'runqueues'`,
+or `'PIDTYPE_PID'`) is not finding kernel debug info: the vmlinux does
+not match the dump, or is stripped. Check the build-id rather than the
+version string -- `ltvm vm crash-collect` compares them and says so.
 
 For an ad-hoc query against the `crash` binary rather than drgn,
 `lustre-crash run` takes crash commands and `lustre-crash script` takes a

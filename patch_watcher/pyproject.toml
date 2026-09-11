@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "patch-watcher"
-version = "0.1.2"
+version = "0.1.1"
 description = "A session console for long-running Lustre agents, with Gerrit as the work queue"
 readme = "README.md"
 requires-python = ">=3.11"
