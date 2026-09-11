@@ -1136,6 +1136,82 @@ class EngineeringRunControllerTests(unittest.TestCase):
         terminal = self.store.get_terminal_result(session.session_id)
         self.assertIn("simple mode", terminal.failure_summary)
 
+    def _review_run(self, request_id):
+        seed, revision = self.create_seed_repository()
+
+        def checkout(destination, requested):
+            subprocess.run(
+                ["git", "clone", "--quiet", "--no-local", str(seed), str(destination)],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(destination), "checkout", "--quiet", "--detach", revision],
+                check=True,
+            )
+            return Path(destination)
+
+        controller = self.controller(checkout)
+        snapshot = review_snapshot(revision)
+        snapshot["change"]["revision_sha"] = revision
+        session = controller.request_review_comments(
+            engineering_patch(revision=revision), snapshot, mode="all",
+            request_id=request_id,
+        )
+        controller.tick()
+        return controller, session
+
+    def _report_review(self, controller, session, state, disposition):
+        self.runner.events_by_session[session.session_id] = [RunnerEvent(
+            1, self.now.timestamp(), "worker_report", {
+                "schema": "patch-watcher-engineering-report/v1",
+                "state": state, "summary": "Triaged the one comment.",
+                "changed_files": [], "validation_requests": [],
+                "review_mode": "all", "review_snapshot_sha256": "a" * 64,
+                "comment_results": [{
+                    "comment_id": "comment-1", "assessment": "ambiguous",
+                    "disposition": disposition,
+                    "summary": "This is the reviewer's call, not mine.",
+                    "reply_draft": "", "changed_files": [],
+                }],
+            },
+        )]
+        controller.tick()
+
+    def test_declining_a_comment_is_terminal_rather_than_a_parked_question(self):
+        """Declining used to have nowhere terminal to go.
+
+        A report deferring any comment could not be `complete`, so the only
+        route was `needs_input` -- which parks the run waiting on a question
+        nobody asked, and records no terminal result.  Since a conclusion is
+        read back out of terminal results, a declined thread was never
+        recorded as concluded and stayed a live trigger.
+        """
+
+        controller, session = self._review_run("review-acknowledged")
+        self._report_review(controller, session, "acknowledged", "not_attempted")
+
+        finished = self.store.get_session(session.session_id)
+        self.assertEqual(finished.state, "succeeded")
+        terminal = self.store.get_terminal_result(session.session_id)
+        self.assertEqual(terminal.result["state"], "acknowledged")
+        self.assertEqual(
+            terminal.result["comment_results"][0]["disposition"], "not_attempted"
+        )
+        # No question was asked, so nothing is waiting on a human to answer.
+        self.assertEqual(self.store.list_human_questions(session.session_id), [])
+
+    def test_acknowledged_needs_something_actually_deferred(self):
+        """Otherwise it is just `complete` wearing a weaker word, and every
+        run could avoid the completion rules by claiming it."""
+
+        controller, session = self._review_run("review-ack-empty")
+        self._report_review(controller, session, "acknowledged", "addressed")
+
+        failed = self.store.get_session(session.session_id)
+        self.assertEqual(failed.state, "failed")
+        terminal = self.store.get_terminal_result(session.session_id)
+        self.assertIn("defer at least one", terminal.failure_summary)
+
     def test_automatic_runs_are_bounded_across_revisions(self):
         """Per-event coalescing cannot bound a loop that regenerates the event.
 

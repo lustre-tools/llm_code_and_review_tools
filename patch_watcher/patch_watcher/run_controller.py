@@ -16,7 +16,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1285,6 +1285,7 @@ class RunController:
         model: str = "",
         effort: str = "",
         design_audit: bool = True,
+        skip_threads: Collection[str] = (),
     ) -> ManagedSession:
         """Reserve a revision-pinned Phase 4 review-comment run.
 
@@ -1293,6 +1294,12 @@ class RunController:
         human threads are left out of the target set entirely) or ``all``.
         ``design_audit`` is whether a design-level change stops for a human
         first; a run with it off holds complete responsibility for the patch.
+
+        ``skip_threads`` names threads a previous run already concluded.  They
+        stay in the snapshot, because the agent should read them as context,
+        but they are not targets: without this, a thread the agent declined
+        was re-targeted on every poll, and its own reply changed the digest
+        enough to look like a new event each time.
         """
 
         if mode not in {"simple", "bots", "all"}:
@@ -1327,6 +1334,7 @@ class RunController:
             or not isinstance(threads, list) or not threads
         ):
             raise RunControllerError("review comments do not form a complete exact-revision snapshot")
+        skipped = {str(value) for value in skip_threads}
         target_ids = []
         skipped_human_threads = 0
         for thread in threads:
@@ -1336,6 +1344,8 @@ class RunController:
             comment_id = str(comments[-1].get("comment_id") or "")
             if not comment_id or comment_id in target_ids:
                 raise RunControllerError("review snapshot contains an invalid target comment")
+            if str(thread.get("thread_id") or "") in skipped:
+                continue
             # Bots mode narrows the TARGET SET, not the snapshot: the snapshot
             # and its digest stay whole (the agent still sees human threads for
             # context), while the ids the report must answer are only the
@@ -1347,6 +1357,10 @@ class RunController:
                     skipped_human_threads += 1
                     continue
             target_ids.append(comment_id)
+        if not target_ids and skipped:
+            raise NoReviewTargets(
+                f"every unresolved thread was already concluded ({len(skipped)})"
+            )
         if mode == "bots" and not target_ids:
             raise NoReviewTargets(
                 f"no threads opened by an automated reviewer; {skipped_human_threads} "
@@ -1365,6 +1379,7 @@ class RunController:
             "revision": revision, "revision_ref": revision_ref, "project": project,
             "review_mode": mode, "snapshot_sha256": digest,
             "target_comment_ids": target_ids, "design_audit": design_audit,
+            "skipped_threads": sorted(skipped),
         }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         for existing in self.store.list_sessions(include_terminal=True):
             if existing.run_id != run_id:
@@ -2625,8 +2640,9 @@ class RunController:
             organization_policy = (
                 "This is an operator-confirmed review-handling session. " + ENVIRONMENT_POLICY
                 + (
-                    " Post replies and upload a patchset only for a complete result with a "
-                    "nonempty diff and successful test evidence."
+                    " Post replies and upload a patchset only for a complete or "
+                    "acknowledged result with a nonempty diff and successful test "
+                    "evidence."
                     if guests else
                     " This run may not create guests, so it can produce no test evidence "
                     "and must not post a reply or upload a patchset at all."
@@ -2640,9 +2656,15 @@ class RunController:
                 "comment -- the last, newest comment of each snapshot thread, that set "
                 "exactly, in every report including needs_input. "
                 "Classify each assessment as simple, nontrivial, or ambiguous. "
-                "Use addressed or reply_draft only for completed work. Use needs_input rather "
-                "than complete if any target needs_human or was not_attempted. "
-                "On every terminal state -- complete, failed, or resource_exhausted -- the "
+                "Use addressed or reply_draft only for completed work. A target you "
+                "are not going to act on is needs_human or not_attempted, and a report "
+                "carrying any of those is acknowledged, not complete. Acknowledged is "
+                "terminal: say in each entry's summary why you are leaving it, and do "
+                "not manufacture a change you do not believe in to reach complete. "
+                "Reserve needs_input for when you genuinely cannot proceed without one "
+                "precise answer -- it parks the run waiting for a human. "
+                "On every terminal state -- complete, acknowledged, failed, or "
+                "resource_exhausted -- the "
                 "controller re-reads the checkout and requires changed_files to equal, "
                 "exactly, `git diff --name-only HEAD` plus every untracked file that is not "
                 "ltvm build output, written as checkout-relative paths; each comment_results "
@@ -3477,6 +3499,15 @@ class RunController:
                     raise RunControllerError(
                         "a complete review report cannot contain deferred comments"
                     )
+                # The distinction is what stops the review loop: a thread the
+                # agent decided not to act on has to be RECORDED as concluded,
+                # and only a terminal report is read back.  Forcing those runs
+                # into needs_input parked them on a question nobody had asked
+                # for, and the threads stayed live triggers either way.
+                if report.get("state") == "acknowledged" and not deferred:
+                    raise RunControllerError(
+                        "an acknowledged review report must defer at least one comment"
+                    )
                 if report.get("state") == "complete" and expected_mode == "simple" and any(
                     item.get("assessment") != "simple"
                     for item in report.get("comment_results", ())
@@ -3551,7 +3582,7 @@ class RunController:
         self._stop_runner_once(session, handle)
         if engineering_report:
             self._finish_ltvm_guest_capability(session, report)
-        if report["state"] == "complete":
+        if report["state"] in {"complete", "acknowledged"}:
             self._finish_session(
                 session,
                 "succeeded",
@@ -3604,7 +3635,7 @@ class RunController:
             state = "resource_exhausted"
             failure_code = "ltvm_resource_exhausted"
             summary = str(report.get("summary") or "LTVM resources were exhausted")
-        elif reported != "complete":
+        elif reported not in {"complete", "acknowledged"}:
             state = "failed"
             failure_code = "guest_validation_failed"
             summary = str(report.get("summary") or "Guest validation failed")

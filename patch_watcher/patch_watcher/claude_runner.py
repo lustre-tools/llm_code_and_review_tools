@@ -72,15 +72,22 @@ ENGINEERING_REPORT_SCHEMA: Mapping[str, Any] = {
     "properties": {
         "schema": {"const": "patch-watcher-engineering-report/v1"},
         "state": {
-            "enum": ["complete", "needs_input", "failed", "resource_exhausted"],
+            "enum": [
+                "complete", "acknowledged", "needs_input", "failed",
+                "resource_exhausted",
+            ],
             # `resource_exhausted` used to appear here as a bare enum value, so
             # the only thing distinguishing it from `failed` was its name. The
             # controller treats them very differently -- it alerts an operator
             # and does not count the patch as judged -- so the schema says
             # which is which, and the run instructions repeat it.
             "description": (
-                "complete: the task finished. needs_input: one precise human "
-                "decision is required. failed: the work did not succeed, or "
+                "complete: the task finished. acknowledged: you triaged every "
+                "target and are deliberately leaving some of them to a human, "
+                "with no question outstanding -- use this rather than inventing "
+                "work you do not believe in. needs_input: one precise human "
+                "decision is required, and you are waiting for the answer. "
+                "failed: the work did not succeed, or "
                 "the answer you reached is a negative one. resource_exhausted: "
                 "this host could not supply the LTVM capacity the work needed."
             ),
@@ -668,7 +675,9 @@ def validate_engineering_report(value: Any) -> Mapping[str, Any]:
     if value.get("schema") != "patch-watcher-engineering-report/v1":
         raise RunnerProtocolError("engineering report has unsupported schema")
     state = value.get("state")
-    if state not in {"complete", "needs_input", "failed", "resource_exhausted"}:
+    if state not in {
+        "complete", "acknowledged", "needs_input", "failed", "resource_exhausted",
+    }:
         raise RunnerProtocolError("engineering report has invalid state")
     summary = value.get("summary")
     if not isinstance(summary, str) or not summary.strip() or len(summary) > 2000:

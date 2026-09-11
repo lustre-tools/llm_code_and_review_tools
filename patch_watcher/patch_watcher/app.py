@@ -827,6 +827,113 @@ def _dead_standing_attempts(patch, coalescing_key):
     return dead
 
 
+# Dispositions that mean the agent is finished with a thread, whether or not
+# it changed anything.  "needs_human" and "not_attempted" are the ones that
+# matter here: the agent looked, decided this is not its call, and said so.
+# Leaving the thread unresolved for a person is the correct outcome, and it
+# must not be read as "still to do".
+CONCLUDED_REVIEW_DISPOSITIONS = frozenset({
+    "addressed", "reply_draft", "needs_human", "not_attempted",
+})
+
+
+def _concluded_review_threads(patch):
+    """Threads a past run already dealt with, and when it finished.
+
+    The review trigger fires on "unresolved > 0", so a thread the agent
+    declined stayed a trigger forever -- and worse, the agent's own reply
+    changed the snapshot digest, minting a fresh event each time.  Only a
+    six-run-per-patch ceiling stopped it, after six runs had been spent.
+
+    Conclusions are read back out of the runs themselves: each review run's
+    request payload holds the snapshot that maps a comment to its thread, and
+    its report holds a disposition per comment.  Nothing new is stored.
+    """
+    concluded = {}
+    if SESSION_STORE is None:
+        return concluded
+    patch_id = str(patch.get("change_number") or "")
+    if not patch_id:
+        return concluded
+    for session in SESSION_STORE.list_sessions(include_terminal=True):
+        if session.patch_id != patch_id or not session.run_id.startswith("pw-review-"):
+            continue
+        terminal = SESSION_STORE.get_terminal_result(session.session_id)
+        report = getattr(terminal, "result", None) if terminal is not None else None
+        if not isinstance(report, Mapping):
+            continue
+        # Read the request straight from the immutable event log rather than
+        # through the run controller: a conclusion is a fact about finished
+        # runs, and it has to be readable when no controller is running.
+        events = SESSION_STORE.list_events(
+            session.session_id, event_types=(REVIEW_REQUEST_EVENT,)
+        )
+        if not events:
+            continue
+        snapshot = (events[-1].payload or {}).get("review_snapshot")
+        if not isinstance(snapshot, Mapping):
+            continue
+        thread_of = {}
+        for thread in snapshot.get("threads") or ():
+            if not isinstance(thread, Mapping):
+                continue
+            for comment in thread.get("comments") or ():
+                if isinstance(comment, Mapping) and comment.get("comment_id"):
+                    thread_of[str(comment["comment_id"])] = str(thread.get("thread_id") or "")
+        finished = session.state_changed_at
+        for item in report.get("comment_results") or ():
+            if not isinstance(item, Mapping):
+                continue
+            disposition = str(item.get("disposition") or "").strip().casefold()
+            if disposition not in CONCLUDED_REVIEW_DISPOSITIONS:
+                continue
+            thread_id = thread_of.get(str(item.get("comment_id") or ""))
+            if not thread_id:
+                continue
+            previous = concluded.get(thread_id)
+            if previous is None or finished > previous[1]:
+                concluded[thread_id] = (disposition, finished)
+    return concluded
+
+
+def _pending_review_threads(patch, snapshot):
+    """Split a snapshot's unresolved threads into what is new and what is not.
+
+    A concluded thread comes back only if someone has said something in it
+    SINCE the run that concluded it -- which is how a reviewer's genuine
+    follow-up re-arms the trigger while the agent's own reply, posted before
+    its report arrived, does not.
+
+    That ordering is the whole discriminator, and it compares Gerrit's comment
+    timestamps against this host's clock.  Telling the agent's reply from a
+    reviewer's would otherwise need to know which Gerrit account the run posts
+    as, which is not derivable from the snapshot.  Skew large enough to invert
+    the order costs one extra run, not a loop: the per-patch run ceiling is
+    still underneath this.
+    """
+    concluded = _concluded_review_threads(patch)
+    pending, settled = [], []
+    for thread in snapshot.get("threads") or ():
+        if not isinstance(thread, Mapping):
+            continue
+        thread_id = str(thread.get("thread_id") or "")
+        record = concluded.get(thread_id)
+        if record is None:
+            pending.append(thread_id)
+            continue
+        _disposition, concluded_at = record
+        newer = False
+        for comment in thread.get("comments") or ():
+            moment = _parse_timestamp(
+                comment.get("updated") if isinstance(comment, Mapping) else None
+            )
+            if moment is not None and moment > concluded_at:
+                newer = True
+                break
+        (pending if newer else settled).append(thread_id)
+    return pending, settled
+
+
 def _automatic_standing_decision(patch, policy, kind, fingerprint, *, attended=False):
     identity = _standing_identity(patch)
     active = _revision_owner_session(patch)
@@ -909,6 +1016,27 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
             snapshot = GerritStatusClient.configured().fetch_review_snapshot(
                 patch["url"], expected_revision=str(patch.get("revision_sha") or "")
             )
+            pending, settled = _pending_review_threads(patch, snapshot)
+            # Only "every thread was already concluded" short-circuits.  A
+            # snapshot with no threads at all is not handled work -- it is an
+            # incomplete snapshot, and the controller rejects it with a
+            # message that says so rather than being silently skipped here.
+            if settled and not pending:
+                # Every unresolved thread has already been through a run that
+                # concluded it.  They stay unresolved on Gerrit, for a person;
+                # they are not work still waiting to be done.
+                _record_standing_decision(
+                    patch,
+                    _automatic_standing_decision(
+                        patch, policy, "review_comments",
+                        snapshot["snapshot_sha256"], attended=attended,
+                    ),
+                    outcome=(
+                        f"no new review comments: {len(settled)} thread(s) already "
+                        "handled and left for a human"
+                    ),
+                )
+                return None
             decision = _automatic_standing_decision(
                 patch, policy, "review_comments", snapshot["snapshot_sha256"],
                 attended=attended,
@@ -919,6 +1047,7 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
                         patch, snapshot, mode=policy.review_comments,
                         request_id=_standing_request_id(patch, decision),
                         design_audit=policy.design_audit,
+                        skip_threads=settled,
                     )
                 except NoReviewTargets as exc:
                     _record_standing_decision(patch, decision, outcome=str(exc))
@@ -3187,10 +3316,30 @@ def _idle_explanation(patch, policy):
         and patch.get("jenkins_url")
     ):
         pending.append("a failed Jenkins build to repair")
+    handled = ""
     if policy.review_comments != "off" and int(patch.get("unresolved") or 0) > 0:
-        pending.append(f"{int(patch['unresolved'])} unresolved review comment(s)")
+        unresolved = int(patch["unresolved"])
+        # Threads a run already concluded stay unresolved on Gerrit on purpose,
+        # so "unresolved > 0" alone would promise a run that the next check
+        # will correctly decline to start.  The exact test needs the snapshot
+        # and happens at poll time; this is the cheap local read of how many
+        # threads have been concluded, which is enough to stop the card
+        # claiming work it is not going to do.
+        concluded = len(_concluded_review_threads(patch))
+        if concluded >= unresolved:
+            handled = (
+                f" {unresolved} unresolved review comment(s) are left open "
+                "deliberately: a run has already been through them and they are "
+                "waiting on a person, not on the watcher."
+            )
+        else:
+            pending.append(f"{unresolved - concluded} unresolved review comment(s)")
     if pending:
-        return "Ready to act on " + ", and ".join(pending) + " at the next check."
+        return (
+            "Ready to act on " + ", and ".join(pending) + " at the next check." + handled
+        )
+    if handled:
+        return handled.strip()
     quiet = []
     if str(patch.get("jenkins") or "").upper() == "PASS":
         quiet.append("Jenkins passed")

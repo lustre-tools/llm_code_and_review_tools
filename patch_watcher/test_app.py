@@ -628,6 +628,120 @@ class PatchWatcherTests(AppGlobalsIsolated):
             self.assertIn("href='/runs/pw-engineer-35302-ps4-live'", done)
             self.assertIn("host_process_missing", done)
 
+    def test_a_thread_the_agent_concluded_does_not_trigger_again(self):
+        """The review trigger fires on "unresolved > 0", so a comment the
+        agent declined stayed a trigger forever -- and its own reply changed
+        the snapshot digest, minting a fresh event each poll.  A thread a run
+        concluded is done until someone says something new in it."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = app.initialize_session_store(root / "sessions.sqlite3")
+            automation = app.initialize_automation_store(root / "automation.sqlite3")
+            standing = app.initialize_standing_policy_store(root / "standing.json")
+            record, _ = app.add_patch("https://review.whamcloud.com/c/35302")
+            record.update(change_number=35302, patchset=5, revision_sha="e" * 40,
+                          revision_ref="refs/changes/02/35302/5",
+                          project="fs/lustre-release", lifecycle="Open",
+                          unresolved=1, jenkins="PASS",
+                          # Polled after the run below finished: that is what
+                          # ends the run's hold on the revision, and it is also
+                          # how a reviewer's new comment gets noticed at all.
+                          last_checked="2026-09-11T10:10:00+00:00")
+            app.sync_automation_patch(record)
+            standing.save(app.PatchAutomationPolicy.for_preset("35302", "all"))
+            automation.set_global_automation(True, changed_by="test", reason="test")
+
+            def snapshot(extra_comment=None):
+                comments = [{"comment_id": "c1", "updated": "2026-09-11T10:00:00+00:00"}]
+                if extra_comment:
+                    comments.append(extra_comment)
+                return {
+                    "schema": "patch-watcher-review-snapshot/v1", "complete": True,
+                    # A new comment changes the digest, as it does in reality:
+                    # the digest is what the old dedupe keyed on, and it is
+                    # exactly why the agent's own reply used to re-fire.
+                    "snapshot_sha256": ("b" if extra_comment else "a") * 64,
+                    "threads": [{"thread_id": "t1", "comments": comments}],
+                }
+
+            # A finished run that declined the one thread: acknowledged, not done.
+            store.register_pinned_session(
+                "review-done", patch_id="35302", run_id="pw-review-35302-ps5-first",
+                revision="e" * 40, patchset=5, profile="engineering", state="running",
+            )
+            store.append_event(
+                "review-done", "review_comment_run_requested",
+                {"request_kind": "review_comments", "review_mode": "all",
+                 "review_snapshot": snapshot()},
+                idempotency_key="request:pw-review-35302-ps5-first",
+            )
+            store.finish_session("review-done", "succeeded", finished_at=datetime(
+                2026, 9, 11, 10, 5, tzinfo=UTC), result={
+                "schema": "patch-watcher-engineering-report/v1", "state": "complete",
+                "summary": "Acknowledged; this is the reviewer's call.",
+                "comment_results": [{"comment_id": "c1", "assessment": "ambiguous",
+                                     "disposition": "not_attempted"}],
+            })
+
+            # Readable with no run controller at all: it is a fact about
+            # finished runs, not about anything currently running.
+            self.assertIsNone(app.RUN_CONTROLLER)
+            concluded = app._concluded_review_threads(record)
+            self.assertEqual(set(concluded), {"t1"})
+            self.assertEqual(concluded["t1"][0], "not_attempted")
+
+            pending, settled = app._pending_review_threads(record, snapshot())
+            self.assertEqual((pending, settled), ([], ["t1"]))
+
+            # A reviewer saying something new re-arms exactly that thread.
+            later = {"comment_id": "c9", "updated": "2026-09-11T11:00:00+00:00"}
+            pending, settled = app._pending_review_threads(record, snapshot(later))
+            self.assertEqual((pending, settled), (["t1"], []))
+
+            class FakeRuns:
+                def __init__(self):
+                    self.calls = []
+
+                def stop(self):
+                    return None
+
+                def request_review_comments(self, patch, snap, **kwargs):
+                    self.calls.append(kwargs)
+                    return store.register_pinned_session(
+                        "review-new", patch_id="35302",
+                        run_id="pw-review-35302-ps5-new", revision="e" * 40,
+                        patchset=5, profile="engineering", state="running",
+                    )
+
+            runs = FakeRuns()
+            app.RUN_CONTROLLER = runs
+
+            class FakeGerrit:
+                def __init__(self, snap):
+                    self.snap = snap
+
+                def fetch_review_snapshot(self, *a, **k):
+                    return self.snap
+
+            # The card must not promise a run the next check will decline.
+            idle = app._idle_explanation(record, standing.get("35302"))
+            self.assertIn("left open deliberately", idle)
+            self.assertNotIn("Ready to act", idle)
+
+            # Nothing new: no run, and the reason is recorded.
+            with patch.object(app.GerritStatusClient, "configured",
+                              return_value=FakeGerrit(snapshot())):
+                self.assertIsNone(app._apply_standing_policy(record))
+            self.assertEqual(runs.calls, [])
+
+            # Something new: it fires, and tells the run which threads to leave.
+            with patch.object(app.GerritStatusClient, "configured",
+                              return_value=FakeGerrit(snapshot(later))):
+                started = app._apply_standing_policy(record)
+            self.assertIsNotNone(started)
+            self.assertEqual(runs.calls[0]["skip_threads"], [])
+
     def test_usage_is_reported_per_run_per_patch_and_overall(self):
         """List cost is what the CLI reported; the subscription figure is that
         divided by a configured divisor, and says so wherever it appears."""
