@@ -318,6 +318,60 @@ else
     bad "uninstall leaves a real skill directory alone"
 fi
 
+# --- the version-bump hook -------------------------------------------------
+# The list this hook used to carry had drifted: it named crash_tool, which
+# has no pyproject.toml, and not lreview, lustre_crash, gerrit_dashboard or
+# patch_watcher, whose versions therefore never moved.  Discovery cannot
+# drift, and these pin the behaviour.
+HOOK="$SCRIPT_DIR/.githooks/pre-commit"
+
+hook_repo() {  # a checkout shaped like this one
+    local repo
+    repo=$(mktemp -d)
+    TRASH="$TRASH $repo"
+    (
+        cd "$repo" || exit 1
+        git init -q .
+        git config user.email t@example.invalid
+        git config user.name Test
+        for tool in jira_tool lreview; do
+            mkdir -p "$tool"
+            printf '[project]\nname = "%s"\nversion = "0.2.0"\n' "$tool" \
+                > "$tool/pyproject.toml"
+            echo "x = 1" > "$tool/code.py"
+        done
+        mkdir docs && echo hi > docs/readme.md
+        git add -A && git commit -qm init
+        cp "$HOOK" .git/hooks/pre-commit
+    )
+    printf '%s' "$repo"
+}
+
+tool_version() {  # tool_version <repo> <tool>
+    sed -n 's/^version = "\(.*\)"/\1/p' "$1/$2/pyproject.toml"
+}
+
+repo=$(hook_repo)
+(cd "$repo" && echo "x = 2" > lreview/code.py && git add lreview/code.py &&
+    git commit -qm "lreview change") > /dev/null 2>&1
+check "a staged tool change bumps that tool" "0.2.1" "$(tool_version "$repo" lreview)"
+check "  and leaves the other tools alone" "0.2.0" "$(tool_version "$repo" jira_tool)"
+
+repo=$(hook_repo)
+(cd "$repo" && echo bye > docs/readme.md && git add docs &&
+    git commit -qm docs) > /dev/null 2>&1
+check "a change outside every tool bumps nothing" "0.2.0" \
+    "$(tool_version "$repo" lreview)"
+
+repo=$(hook_repo)
+(cd "$repo" &&
+    printf '[project]\nname = "jira_tool"\nversion = "0.3.0"\n' \
+        > jira_tool/pyproject.toml &&
+    echo "x = 3" > jira_tool/code.py && git add -A &&
+    git commit -qm "minor bump") > /dev/null 2>&1
+check "a hand-edited version is not bumped on top" "0.3.0" \
+    "$(tool_version "$repo" jira_tool)"
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

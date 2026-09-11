@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Bump the patch version of every tool with staged changes.  That tool's
+# pyproject.toml is the single source of truth for its version.
+#
+# Enable per clone:  make hooks   (git config core.hooksPath .githooks)
+
+set -uo pipefail
+
+root=$(git rev-parse --show-toplevel) || exit 0
+cd "$root" || exit 0
+
+# Tools are discovered, not listed.  A hardcoded list drifts: the one
+# this replaced still named crash_tool, which has no pyproject.toml, and
+# had never heard of lreview, lustre_crash, gerrit_dashboard or
+# patch_watcher -- four tools whose versions therefore never moved.
+#
+# Submodules carry their own history and versioning; never touch them.
+submodules=$(git ls-files --stage | awk '$1 == "160000" { print $4 }')
+
+bumped=""
+for pyproject in */pyproject.toml; do
+	[[ -f "$pyproject" ]] || continue
+	tool=${pyproject%/pyproject.toml}
+	case " $submodules " in
+		*" $tool "*) continue ;;
+	esac
+
+	# Anything staged in this tool other than its own pyproject.toml.
+	git diff --cached --name-only -- "$tool/" |
+		grep -qv "^$tool/pyproject.toml\$" || continue
+
+	# A version edited by hand in this same commit wins: bumping on top
+	# of a deliberate minor bump undoes what the author chose.
+	if git diff --cached -- "$pyproject" | grep -q '^[+-]version = '; then
+		continue
+	fi
+
+	current=$(sed -n 's/^version = "\(.*\)"/\1/p' "$pyproject" | head -1)
+	IFS='.' read -r major minor patch <<< "$current"
+	[[ "$patch" =~ ^[0-9]+$ ]] || continue
+	new="$major.$minor.$((patch + 1))"
+
+	# `sed -i` differs between GNU and BSD; temp file + mv works on both.
+	sed "0,/^version = \"$current\"/s//version = \"$new\"/" \
+		"$pyproject" > "$pyproject.tmp" || continue
+	mv "$pyproject.tmp" "$pyproject"
+	git add "$pyproject"
+	bumped="$bumped $tool: $current -> $new"$'\n'
+done
+
+if [[ -n "${bumped// /}" ]]; then
+	printf '\033[1;34m[version-bump]\033[0m%s' "$bumped" >&2
+fi
+exit 0

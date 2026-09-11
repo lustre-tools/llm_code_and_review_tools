@@ -198,6 +198,17 @@ Keep them task-shaped rather than tool-shaped: each CLI already
 answers `--help` and `describe`, so a skill earns its place by
 carrying the sequencing and judgment that those cannot.
 
+## Versioning
+
+Each tool's `pyproject.toml` carries its own version. The tracked
+pre-commit hook bumps the patch of every tool with staged changes;
+docs- and test-only commits move nothing, and a version edited by hand
+in the same commit is left alone. Enable it per clone:
+
+```bash
+make hooks        # git config core.hooksPath .githooks
+```
+
 ## Development
 
 All tools share `llm-tool-common` for envelope formatting and
