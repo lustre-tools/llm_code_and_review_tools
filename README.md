@@ -126,6 +126,7 @@ replaced -- the installer says so and skips it.
 | `lreview-spin-cycle` | the local AI review pass before pushing, and when to stop |
 | `lustre-crash-triage` | vmcore and LBUG analysis with lustre-crash and drgn |
 | `jira-bug-research` | finding, filing and linking LU tickets |
+| `lustre-debug-logs` | lctl debug masks, capturing and reading a dk log |
 
 ## Configuration
 

@@ -189,7 +189,7 @@ Also installed from this repo:
 
 `skills/` holds task-shaped skills for these tools --
 `lustre-ci-triage`, `gerrit-patch-workflow`, `lreview-spin-cycle`,
-`lustre-crash-triage`, `jira-bug-research`. `./install.sh` links them
+`lustre-crash-triage`, `jira-bug-research`, `lustre-debug-logs`. `./install.sh` links them
 into `~/.claude/skills`; `--skills` does only that, `--no-skills`
 skips it. They are symlinks, so edits in this checkout take effect
 immediately -- edit the skill here, not the copy in `~/.claude`.
