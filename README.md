@@ -112,6 +112,30 @@ possible.)
 
 ## Configuration
 
+The installer sets all of this up for you, and offers to as soon as it
+finishes installing:
+
+```bash
+./install.sh --configure                # every tool, one at a time
+./install.sh --configure --only jira    # just one
+./install.sh --status                   # what is set up, what is not
+```
+
+It says what each tool needs and where that credential comes from, then
+takes an answer: Enter accepts the value in [brackets], `n` at the first
+question leaves a tool for later, and `skip` at any prompt abandons just
+that one. A tool you skip costs nothing until you use it. Answers are
+written to `~/.config/<tool>/.env` at mode 0600 -- the same files
+described below -- and each one is checked against its server as you
+enter it, so a mistyped token is caught immediately rather than at the
+first command.
+
+Values you already have exported in your shell are offered as the
+defaults, so pressing Enter writes down what you are already using --
+which is what an agent, running without your shell, needs.
+
+The rest of this section is the same configuration by hand.
+
 ### Gerrit
 
 Set environment variables directly or in a `.env` file. All

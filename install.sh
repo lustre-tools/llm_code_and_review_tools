@@ -49,11 +49,20 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+# Colors are for a terminal: a redirected install log should not be full of
+# escape sequences.  NO_COLOR is honoured too (https://no-color.org).
+if [ ! -t 1 ] || [ -n "${NO_COLOR:-}" ]; then
+    GREEN=''
+    RED=''
+    YELLOW=''
+    NC=''
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Console scripts our packages install (used for ~/.local/bin symlinks
 # when installing into a venv, and for cleanup on uninstall)
-TOOL_BINS="jira gerrit gerrit-cli gc maloo jenkins janitor lustre-crash lreview"
+TOOL_BINS="jira gerrit gerrit-cli gc maloo jenkins janitor lustre-crash lreview patch-watcher pw-doctor pw-configure"
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -64,6 +73,20 @@ usage() {
     echo "Options:"
     echo "  --help, -h     Show this help message"
     echo "  --uninstall    Uninstall all tools"
+    echo "  --configure    Walk through the credentials the tools need:"
+    echo "                 what each one is for, where to get it, and"
+    echo "                 \"not now\" as an answer. Writes only"
+    echo "                 ~/.config/<tool>/.env, mode 0600."
+    echo "  --only TOOL    Configure just one tool (gerrit, jira, maloo,"
+    echo "                 jenkins); repeatable"
+    echo "  --reconfigure  Prompt for values that are already set too"
+    echo "  --no-verify    Do not check entered credentials against the"
+    echo "                 server"
+    echo "  --status       Show which tools have credentials configured"
+    echo "  --no-configure Install without offering the credential walkthrough"
+    echo "  --with-ltvm    Also install ltvm from lustre-test-vms-v2, which"
+    echo "                 Patch Watcher agents need to create test VMs"
+    echo "  --doctor       Check whether this host can run Patch Watcher agents"
     echo "  --venv [PATH]  Install into a virtual environment (created if"
     echo "                 missing; default path: <repo>/.venv). Offered"
     echo "                 automatically when the system Python is"
@@ -96,6 +119,29 @@ import os, sys, sysconfig
 in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
 marker = os.path.join(sysconfig.get_path("stdlib"), "EXTERNALLY-MANAGED")
 sys.exit(0 if (not in_venv and os.path.exists(marker)) else 1)'
+}
+
+# Pick the interpreter for --configure and --doctor. Sets PYTHON.
+#
+# Those two called resolve_python with the still-unset $PYTHON, so the PEP 668
+# probe ran the empty string ("line 99: : command not found") and the tool was
+# then exec'd as `"" -m patch_watcher.pw_configure`, exiting 127. They do not
+# want resolve_python either: it exists to decide where pip may install, and
+# neither of these installs anything -- patch_watcher is dependency-free and
+# runs straight out of the checkout. Demanding a venv (which resolve_python
+# does on any PEP 668 host, and refuses to do without a tty) would make both
+# documented setup commands unusable there. So: reuse a venv if one is already
+# there, otherwise just take a new-enough python3.
+require_runtime_python() {
+    local venv="${VENV_PATH:-$SCRIPT_DIR/.venv}"
+    if [ -x "$venv/bin/python" ]; then
+        PYTHON="$venv/bin/python"
+        return 0
+    fi
+    PYTHON=$(check_python) || {
+        echo -e "${RED}Error: Python 3.11+ required${NC}"
+        return 1
+    }
 }
 
 # Resolve the interpreter to install with. Sets PYTHON and VENV_USED.
@@ -241,6 +287,12 @@ install_tools() {
     $PYTHON -m pip install -q -e "$SCRIPT_DIR/gerrit_dashboard"
     echo -e "${GREEN}✓${NC} gerrit-dashboard installed"
 
+    # Install patch_watcher (the agent session console)
+    echo ""
+    echo "Installing patch-watcher..."
+    $PYTHON -m pip install -q -e "$SCRIPT_DIR/patch_watcher"
+    echo -e "${GREEN}\u2713${NC} patch-watcher installed"
+
     # Install maloo_tool
     echo ""
     echo "Installing maloo..."
@@ -349,13 +401,6 @@ install_tools() {
     echo "  janitor --help"
     echo "  lreview check"
     echo ""
-    echo "Configuration:"
-    echo "  JIRA:    Set JIRA_SERVER and JIRA_TOKEN env vars"
-    echo "  Gerrit:  Set GERRIT_URL, GERRIT_USER, GERRIT_PASS env vars (config dir: ~/.config/gerrit-cli)"
-    echo "  Maloo:   Set MALOO_USER and MALOO_PASS env vars"
-    echo "  Jenkins: Set JENKINS_URL, JENKINS_USER, JENKINS_TOKEN env vars"
-    echo "  lreview: Run 'lreview setup' for guided AI-review setup"
-    echo ""
     echo "See AGENTS.md for usage documentation."
 }
 
@@ -401,6 +446,12 @@ uninstall_tools() {
     echo "Uninstalling gerrit-dashboard..."
     $PYTHON -m pip uninstall -y gerrit-dashboard 2>/dev/null || true
 
+    # Removing only the ~/.local/bin symlinks above left the editable install
+    # itself in place: invisible, still importable, and dangling as soon as
+    # the checkout it points at is deleted.
+    echo "Uninstalling patch-watcher..."
+    $PYTHON -m pip uninstall -y patch-watcher 2>/dev/null || true
+
     echo "Uninstalling lustre-crash..."
     $PYTHON -m pip uninstall -y lustre-crash 2>/dev/null || true
     $PYTHON -m pip uninstall -y crash-tool 2>/dev/null || true
@@ -413,13 +464,571 @@ uninstall_tools() {
     echo ""
 }
 
-# Allow sourcing the functions without running the installer (tests)
+install_ltvm() {
+    # ltvm lives in its own repository; Patch Watcher agents shell out to it to
+    # create the VMs they build and test in.
+    local ltvm_repo="${LTVM_REPO:-$HOME/lustre-test-vms-v2}"
+    echo ""
+    echo "Installing ltvm..."
+    if command -v ltvm >/dev/null 2>&1; then
+        echo -e "${GREEN}\u2713${NC} ltvm already on PATH: $(command -v ltvm)"
+        return 0
+    fi
+    if [ ! -d "$ltvm_repo" ]; then
+        echo -e "${YELLOW}!${NC} lustre-test-vms-v2 not found at $ltvm_repo"
+        echo "  Clone it, then re-run with --with-ltvm, or set LTVM_REPO."
+        return 1
+    fi
+    # lustre-test-vms-v2 has no install.sh -- we looked for one that has never
+    # existed, so --with-ltvm was a no-op on every host. Its documented
+    # installer is `make install`, whose whole body is `sudo ./ltvm install`
+    # (Makefile "install" target); calling that directly avoids also requiring
+    # make.
+    if [ ! -x "$ltvm_repo/ltvm" ]; then
+        echo -e "${YELLOW}!${NC} $ltvm_repo/ltvm is missing or not executable"
+        echo "  Check the clone is complete, or set LTVM_REPO."
+        return 1
+    fi
+    # `ltvm install` writes /usr/local/bin and /etc, so it needs root.
+    local elevate=""
+    if [ "$(id -u)" -ne 0 ]; then
+        if ! command -v sudo >/dev/null 2>&1; then
+            echo -e "${YELLOW}!${NC} ltvm install needs root and sudo is not available"
+            echo "  Run as root:  $ltvm_repo/ltvm install"
+            return 1
+        fi
+        elevate="sudo"
+    fi
+    (cd "$ltvm_repo" && $elevate ./ltvm install) || return 1
+    hash -r 2>/dev/null || true
+    if ! command -v ltvm >/dev/null 2>&1; then
+        echo -e "${YELLOW}!${NC} ltvm install finished but ltvm is still not on PATH"
+        echo "  Expected /usr/local/bin/ltvm; check the output above."
+        return 1
+    fi
+    echo -e "${GREEN}\u2713${NC} ltvm installed: $(command -v ltvm)"
+}
+
+# Credential setup is bash and needs no interpreter, no install and no
+# network: it writes the same ~/.config/<tool>/.env files the CLIs already
+# read, so it works on a host where nothing is installed yet.
+run_configure() {
+    if [ ! -t 0 ]; then
+        configure_summary
+        echo ""
+        echo "Setting credentials needs a terminal; run it interactively:"
+        echo "  ./install.sh --configure"
+        return 2
+    fi
+    configure_tools "$ONLY_TOOLS"
+}
+
+run_doctor() {
+    if command -v pw-doctor >/dev/null 2>&1; then
+        pw-doctor "$@"
+    else
+        (cd "$SCRIPT_DIR/patch_watcher" && "$PYTHON" -m patch_watcher.pw_doctor "$@")
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Credential configuration
+#
+# jira, gerrit, maloo and jenkins each read a private KEY=VALUE file under
+# ~/.config.  The walkthrough below takes one tool at a time: what it is for,
+# what it needs, where that credential comes from, and "not now" as a
+# first-class answer -- an unconfigured tool costs nothing until it is used.
+# ---------------------------------------------------------------------------
+
+CONFIG_TOOLS="gerrit jira maloo jenkins"
+
+# Per-tool metadata, returned in SPEC_* globals.  SPEC_FIELDS is one
+# "KEY|prompt|kind|default" record per line; kind is url, text or secret.
+tool_spec() {
+    SPEC_LABEL=""
+    SPEC_FILE=""
+    SPEC_USED_BY=""
+    SPEC_FIELDS=""
+    SPEC_REQUIRED=""
+    SPEC_WHERE=""
+    SPEC_NOTE=""
+    case "$1" in
+        gerrit)
+            SPEC_LABEL="Gerrit"
+            SPEC_USED_BY="gerrit (gc), lreview"
+            SPEC_FILE="$HOME/.config/gerrit-cli/.env"
+            SPEC_REQUIRED="GERRIT_URL GERRIT_USER GERRIT_PASS"
+            SPEC_FIELDS="GERRIT_URL|Gerrit URL|url|https://review.whamcloud.com
+GERRIT_USER|Gerrit username|text|
+GERRIT_PASS|Gerrit HTTP password|secret|"
+            SPEC_WHERE="Log in to Gerrit, then Settings > HTTP Credentials >
+    Generate Password.  It is that generated password, not the one
+    you log into the web UI with."
+            ;;
+        jira)
+            SPEC_LABEL="Jira"
+            SPEC_USED_BY="jira"
+            SPEC_FILE="$HOME/.config/jira-tool/.env"
+            SPEC_REQUIRED="JIRA_SERVER JIRA_TOKEN"
+            SPEC_FIELDS="JIRA_SERVER|Jira URL|url|https://jira.whamcloud.com
+JIRA_TOKEN|Jira personal access token|secret|"
+            SPEC_WHERE="Jira > your avatar > Profile > Personal Access Tokens >
+    Create token.  For Atlassian Cloud instead, an API token from
+    https://id.atlassian.com/manage-profile/security/api-tokens"
+            SPEC_NOTE="No username: the token is the whole login.  Several Jira
+        instances at once go in ~/.jira-tool.json -- see README.md."
+            ;;
+        maloo)
+            SPEC_LABEL="Maloo"
+            SPEC_USED_BY="maloo"
+            SPEC_FILE="$HOME/.config/maloo-tool/.env"
+            SPEC_REQUIRED="MALOO_USER MALOO_PASS"
+            SPEC_FIELDS="MALOO_URL|Maloo URL|url|https://testing.whamcloud.com
+MALOO_USER|Maloo username|text|
+MALOO_PASS|Maloo password|secret|"
+            SPEC_WHERE="The account you sign in to https://testing.whamcloud.com
+    with -- there is no separate token.  Ask Whamcloud for an
+    account if you do not have one."
+            ;;
+        jenkins)
+            SPEC_LABEL="Jenkins"
+            SPEC_USED_BY="jenkins"
+            SPEC_FILE="$HOME/.config/jenkins-tool/.env"
+            SPEC_REQUIRED="JENKINS_USER JENKINS_TOKEN"
+            SPEC_FIELDS="JENKINS_URL|Jenkins URL|url|https://build.whamcloud.com
+JENKINS_USER|Jenkins username|text|
+JENKINS_TOKEN|Jenkins API token|secret|"
+            SPEC_WHERE="Log in to Jenkins, then your name (top right) >
+    Configure > API Token > Add new Token.  Copy it before
+    leaving the page; Jenkins shows it once."
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Shorten $HOME to ~ for display.  These paths are printed a dozen times and
+# the full home directory buries the part that matters.
+tilde_path() {
+    case "$1" in
+        "$HOME"/*) printf '~%s' "${1#$HOME}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+# Print the value of KEY in a KEY=VALUE file, or nothing.  Always succeeds:
+# under `set -e` a failing command substitution in an assignment would end
+# the script.
+env_file_get() {
+    local file="$1" key="$2" line value
+    [ -f "$file" ] || return 0
+    line=$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$file" 2>/dev/null | tail -n 1) || true
+    [ -n "$line" ] || return 0
+    value="${line#*=}"
+    printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+        -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
+
+# Merge the KEY=VALUE lines in $2 into the file at $1, leaving comments and
+# any keys we do not manage untouched.  Written to a temp file in the same
+# (0700) directory and renamed, so an interrupted write cannot leave a
+# truncated credential file behind.
+env_file_write() {
+    local file="$1" pairs="$2" dir source tmp pairfile
+    dir=$(dirname "$file")
+    mkdir -p "$dir"
+    chmod 700 "$dir" 2>/dev/null || true
+    pairfile=$(mktemp "$dir/.pairs.XXXXXX") || return 1
+    chmod 600 "$pairfile"
+    printf '%s' "$pairs" > "$pairfile"
+    tmp=$(mktemp "$dir/.env.XXXXXX") || { rm -f "$pairfile"; return 1; }
+    chmod 600 "$tmp"
+    source="$file"
+    [ -f "$source" ] || source="/dev/null"
+    awk '
+        NR == FNR {
+            if (match($0, /^[A-Za-z_][A-Za-z0-9_]*=/)) {
+                k = substr($0, 1, RLENGTH - 1)
+                value[k] = $0
+                order[++n] = k
+            }
+            next
+        }
+        {
+            k = $0
+            sub(/[[:space:]]*=.*$/, "", k)
+            sub(/^[[:space:]]*/, "", k)
+            if (k in value) {
+                if (!(k in done)) {
+                    print value[k]
+                    done[k] = 1
+                }
+                next
+            }
+            print $0
+        }
+        END {
+            for (i = 1; i <= n; i++)
+                if (!(order[i] in done))
+                    print value[order[i]]
+        }
+    ' "$pairfile" "$source" > "$tmp" || { rm -f "$pairfile" "$tmp"; return 1; }
+    rm -f "$pairfile"
+    mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+    chmod 600 "$file"
+}
+
+# Required keys of $1 that are absent or empty.
+tool_missing_keys() {
+    local tool="$1" key out=""
+    tool_spec "$tool" || return 0
+    for key in $SPEC_REQUIRED; do
+        [ -n "$(env_file_get "$SPEC_FILE" "$key")" ] || out="$out $key"
+    done
+    printf '%s' "${out# }"
+}
+
+# configured | partial | missing
+tool_status() {
+    local tool="$1" missing
+    tool_spec "$tool" || return 0
+    missing=$(tool_missing_keys "$tool")
+    if [ -z "$missing" ]; then
+        echo configured
+    elif [ ! -f "$SPEC_FILE" ] || [ "$missing" = "$SPEC_REQUIRED" ]; then
+        echo missing
+    else
+        echo partial
+    fi
+}
+
+# Where else the tools would find this credential.  llm_tool_common's loader
+# also reads the environment, /etc/<tool>/.env, /shared/support_files/.env and
+# ./.env, and jira keeps multi-instance config in ~/.jira-tool.json -- so a
+# host can be working perfectly with nothing in the file this script writes.
+# Reporting that as "not configured" would be a lie.
+tool_external_source() {
+    local tool="$1" key dir alt complete
+    tool_spec "$tool" || return 0
+    complete=1
+    for key in $SPEC_REQUIRED; do
+        [ -n "${!key:-}" ] || complete=0
+    done
+    if [ "$complete" = "1" ]; then
+        printf '%s' "your environment"
+        return 0
+    fi
+    dir=$(basename "$(dirname "$SPEC_FILE")")
+    for alt in "/etc/$dir/.env" "/shared/support_files/.env" "$PWD/.env"; do
+        [ -f "$alt" ] || continue
+        complete=1
+        for key in $SPEC_REQUIRED; do
+            [ -n "$(env_file_get "$alt" "$key")" ] || complete=0
+        done
+        if [ "$complete" = "1" ]; then
+            printf '%s' "$alt"
+            return 0
+        fi
+    done
+    if [ "$tool" = "jira" ] && [ -f "$HOME/.jira-tool.json" ] &&
+        grep -q '"token"' "$HOME/.jira-tool.json" 2>/dev/null; then
+        printf '%s' "$HOME/.jira-tool.json"
+    fi
+    return 0
+}
+
+curl_escape() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+# Check a credential against the server it is for.  Prints the HTTP status
+# (or no-curl), and succeeds only on 200.  The secret reaches curl through a
+# config file on stdin, never on the command line, where ps would show it.
+tool_probe() {
+    local tool="$1" url user pass token config code
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "no-curl"
+        return 2
+    fi
+    tool_spec "$tool" || return 2
+    case "$tool" in
+        gerrit)
+            url=$(env_file_get "$SPEC_FILE" GERRIT_URL)
+            user=$(env_file_get "$SPEC_FILE" GERRIT_USER)
+            pass=$(env_file_get "$SPEC_FILE" GERRIT_PASS)
+            config="url = \"$(curl_escape "${url%/}/a/accounts/self")\"
+user = \"$(curl_escape "$user:$pass")\""
+            ;;
+        jira)
+            url=$(env_file_get "$SPEC_FILE" JIRA_SERVER)
+            token=$(env_file_get "$SPEC_FILE" JIRA_TOKEN)
+            config="url = \"$(curl_escape "${url%/}/rest/api/2/myself")\"
+header = \"Authorization: Bearer $(curl_escape "$token")\""
+            ;;
+        maloo)
+            url=$(env_file_get "$SPEC_FILE" MALOO_URL)
+            [ -n "$url" ] || url="https://testing.whamcloud.com"
+            user=$(env_file_get "$SPEC_FILE" MALOO_USER)
+            pass=$(env_file_get "$SPEC_FILE" MALOO_PASS)
+            config="url = \"$(curl_escape "${url%/}/api/test_sessions?limit=1")\"
+user = \"$(curl_escape "$user:$pass")\""
+            ;;
+        jenkins)
+            url=$(env_file_get "$SPEC_FILE" JENKINS_URL)
+            [ -n "$url" ] || url="https://build.whamcloud.com"
+            user=$(env_file_get "$SPEC_FILE" JENKINS_USER)
+            token=$(env_file_get "$SPEC_FILE" JENKINS_TOKEN)
+            config="url = \"$(curl_escape "${url%/}/api/json?tree=nodeName")\"
+user = \"$(curl_escape "$user:$token")\""
+            ;;
+        *)
+            echo "no-probe"
+            return 2
+            ;;
+    esac
+    code=$(printf '%s\n' "$config" |
+        curl -sS -m 20 -o /dev/null -w '%{http_code}' -K - 2>/dev/null) || code="000"
+    echo "$code"
+    [ "$code" = "200" ]
+}
+
+ask_yes() {
+    local prompt="$1" default="$2" answer suffix
+    if [ "$default" = "y" ]; then suffix="[Y/n]"; else suffix="[y/N]"; fi
+    printf '%s %s ' "$prompt" "$suffix" >&2
+    read -r answer || answer=""
+    answer=$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    [ -n "$answer" ] || answer="$default"
+    case "$answer" in
+        y|yes) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Ask for one field.  Prints the answer; returns 2 if the operator typed
+# "skip", which abandons the whole tool without writing anything.
+#
+# The prompt is printed here rather than passed to `read -p`, which bash
+# suppresses whenever stdin is not a terminal -- that silently swallows every
+# prompt under a pipe.  stderr keeps it clear of the answer on stdout.
+prompt_field() {
+    local prompt="$1" kind="$2" shown="$3" answer="" suffix=""
+    [ -z "$shown" ] || suffix=" [$shown]"
+    printf '%s%s: ' "$prompt" "$suffix" >&2
+    if [ "$kind" = "secret" ]; then
+        read -r -s answer || answer=""
+        echo "" >&2
+    else
+        read -r answer || answer=""
+    fi
+    case "$answer" in
+        skip|SKIP|Skip) return 2 ;;
+    esac
+    printf '%s' "$answer" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+configure_one_tool() {
+    local tool="$1" status key prompt kind default current shown answer rc
+    local pairs code attempt=0 last_code="" from_env external
+    status=$(tool_status "$tool")
+    tool_spec "$tool" || return 0
+
+    echo ""
+    echo "--------------------------------------------------------------"
+    echo " $SPEC_LABEL   (used by: $SPEC_USED_BY)"
+    echo "--------------------------------------------------------------"
+    echo "  file:  $(tilde_path "$SPEC_FILE")"
+    echo "  where to get it:"
+    echo "    $SPEC_WHERE"
+    [ -z "$SPEC_NOTE" ] || echo "  note: $SPEC_NOTE"
+    echo ""
+
+    if [ "$status" != "configured" ]; then
+        external=$(tool_external_source "$tool")
+        if [ -n "$external" ]; then
+            echo -e "  ${GREEN}already working${NC} via $(tilde_path "$external")"
+            echo "  Setting it up here as well puts it where a tool started"
+            echo "  outside your shell -- an agent, a cron job -- also finds it."
+        fi
+    fi
+
+    case "$status" in
+        configured)
+            echo -e "  ${GREEN}already configured${NC}"
+            if [ "${RECONFIGURE:-0}" != "1" ]; then
+                echo "  (re-enter it with: ./install.sh --configure --only $tool --reconfigure)"
+                return 0
+            fi
+            ;;
+        partial)
+            echo -e "  ${YELLOW}incomplete${NC} -- missing: $(tool_missing_keys "$tool")"
+            ;;
+    esac
+
+    if ! ask_yes "  Set up $SPEC_LABEL now?" y; then
+        echo "  Left for later:  ./install.sh --configure --only $tool"
+        return 0
+    fi
+
+    while :; do
+        attempt=$((attempt + 1))
+        pairs=""
+        # The field list comes in on fd 3: on stdin it would be what the
+        # prompts below read from, and the operator would answer nothing.
+        while IFS='|' read -r key prompt kind default <&3; do
+            [ -n "$key" ] || continue
+            current=$(env_file_get "$SPEC_FILE" "$key")
+            from_env=""
+            if [ -z "$current" ] && [ -n "${!key:-}" ]; then
+                # Already exported in the operator's shell.  The CLIs read the
+                # environment first, so offering it here just writes down what
+                # they are already using -- which is what an agent running
+                # without that shell needs.
+                current="${!key}"
+                from_env=" from environment"
+            fi
+            [ -n "$current" ] || current="$default"
+            shown="$current$from_env"
+            if [ "$kind" = "secret" ] && [ -n "$current" ]; then
+                # After a rejection the stored secret is the one that just
+                # failed; offering it as a bare "****" invites the operator
+                # to press Enter and retry the same wrong value.  An
+                # unreachable server says nothing about the secret, so only a
+                # real rejection is labelled one.
+                case "$last_code" in
+                    401|403) shown="**** rejected" ;;
+                    *) shown="****$from_env" ;;
+                esac
+            fi
+            answer=$(prompt_field "    $prompt" "$kind" "$shown") && rc=0 || rc=$?
+            if [ "$rc" = "2" ]; then
+                echo "  Skipped $SPEC_LABEL -- nothing written."
+                echo "  Later:  ./install.sh --configure --only $tool"
+                return 0
+            fi
+            [ -n "$answer" ] || answer="$current"
+            case " $SPEC_REQUIRED " in
+                *" $key "*)
+                    if [ -z "$answer" ]; then
+                        echo -e "  ${YELLOW}$key is required${NC} -- leaving $SPEC_LABEL unconfigured."
+                        echo "  Later:  ./install.sh --configure --only $tool"
+                        return 0
+                    fi
+                    ;;
+            esac
+            [ -z "$answer" ] || pairs="$pairs$key=$answer
+"
+        done 3<<EOF
+$SPEC_FIELDS
+EOF
+
+        if ! env_file_write "$SPEC_FILE" "$pairs"; then
+            echo -e "  ${RED}could not write $(tilde_path "$SPEC_FILE")${NC}"
+            return 0
+        fi
+        echo -e "  ${GREEN}wrote $(tilde_path "$SPEC_FILE")${NC} (mode 0600)"
+
+        [ "${VERIFY:-1}" = "1" ] || return 0
+        printf '  checking against the server... '
+        if code=$(tool_probe "$tool"); then
+            echo -e "${GREEN}ok${NC}"
+            return 0
+        fi
+        last_code="$code"
+        case "$code" in
+            no-curl|no-probe)
+                echo "skipped (curl not installed)"
+                return 0
+                ;;
+            000)
+                echo -e "${YELLOW}could not reach the server${NC} -- check the URL,"
+                echo "    your network or VPN.  The values are saved either way."
+                ;;
+            401|403)
+                echo -e "${RED}rejected (HTTP $code)${NC} -- the username or secret is wrong."
+                ;;
+            *)
+                echo -e "${YELLOW}unexpected HTTP $code${NC} -- saved, but unverified."
+                ;;
+        esac
+        ask_yes "  Enter $SPEC_LABEL again?" n || return 0
+    done
+}
+
+configure_summary() {
+    local tool status pad external
+    echo ""
+    echo "Credential status:"
+    for tool in $CONFIG_TOOLS; do
+        status=$(tool_status "$tool")
+        tool_spec "$tool" || continue
+        pad=$(printf '%-8s' "$tool")
+        case "$status" in
+            configured)
+                echo -e "  ${GREEN}ok${NC}    $pad $(tilde_path "$SPEC_FILE")"
+                ;;
+            *)
+                external=$(tool_external_source "$tool")
+                if [ -n "$external" ]; then
+                    echo -e "  ${GREEN}ok${NC}    $pad via $(tilde_path "$external")"
+                elif [ "$status" = "partial" ]; then
+                    echo -e "  ${YELLOW}part${NC}  $pad missing $(tool_missing_keys "$tool")" \
+                        "-- ./install.sh --configure --only $tool"
+                else
+                    echo -e "  ${YELLOW}--${NC}    $pad not configured" \
+                        "-- ./install.sh --configure --only $tool"
+                fi
+                ;;
+        esac
+    done
+    echo ""
+    echo "  janitor and lustre-crash need no credentials."
+    echo "  lreview: run 'lreview setup' -- it reuses the Gerrit credentials"
+    echo "           above and walks through the agent CLI and review prompts."
+    echo ""
+    echo "Check by hand:  gerrit info <change-url>   jira get LU-1"
+    echo "                maloo queue                jenkins jobs"
+}
+
+configure_tools() {
+    local only="$1" tool
+    echo ""
+    echo "========================================"
+    echo "Credentials"
+    echo "========================================"
+    echo ""
+    echo "One tool at a time.  Enter accepts the value in [brackets], 'n' at"
+    echo "the first question leaves a tool for later, and 'skip' at any prompt"
+    echo "abandons just that tool.  Files are written 0600 under ~/.config and"
+    echo "nothing is sent anywhere except the server the credential is for."
+    for tool in $CONFIG_TOOLS; do
+        if [ -n "$only" ]; then
+            case " $only " in
+                *" $tool "*) ;;
+                *) continue ;;
+            esac
+        fi
+        configure_one_tool "$tool" || true
+    done
+    configure_summary
+}
+
+# Allow sourcing the functions without running the installer (tests).  This
+# guard sat above install_ltvm/run_configure/run_doctor, so the three
+# functions that carried the --configure, --doctor and --with-ltvm bugs were
+# exactly the three no test could reach.
 if [ -n "${INSTALL_SH_NO_MAIN:-}" ]; then return 0 2>/dev/null || exit 0; fi
 
 # Parse arguments
 ACTION="install"
+WITH_LTVM=0
 VENV_FLAG=0
 VENV_PATH=""
+ONLY_TOOLS=""
+RECONFIGURE=0
+VERIFY=1
+CONFIGURE_AFTER_INSTALL=1
 while [ $# -gt 0 ]; do
     case "$1" in
         --help|-h)
@@ -428,6 +1037,41 @@ while [ $# -gt 0 ]; do
             ;;
         --uninstall)
             ACTION="uninstall"
+            ;;
+        --configure)
+            ACTION="configure"
+            ;;
+        --status)
+            ACTION="status"
+            ;;
+        --only)
+            if [ -z "${2:-}" ]; then
+                echo -e "${RED}--only needs a tool name${NC} ($CONFIG_TOOLS)"
+                exit 1
+            fi
+            case " $CONFIG_TOOLS " in
+                *" $2 "*) ONLY_TOOLS="$ONLY_TOOLS $2" ;;
+                *)
+                    echo -e "${RED}Unknown tool: $2${NC} (known: $CONFIG_TOOLS)"
+                    exit 1
+                    ;;
+            esac
+            shift
+            ;;
+        --reconfigure)
+            RECONFIGURE=1
+            ;;
+        --no-verify)
+            VERIFY=0
+            ;;
+        --no-configure)
+            CONFIGURE_AFTER_INSTALL=0
+            ;;
+        --doctor)
+            ACTION="doctor"
+            ;;
+        --with-ltvm)
+            WITH_LTVM=1
             ;;
         --venv)
             VENV_FLAG=1
@@ -445,8 +1089,49 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if [ "$ACTION" = "uninstall" ]; then
-    uninstall_tools
-else
-    install_tools
+ONLY_TOOLS="${ONLY_TOOLS# }"
+# --only/--reconfigure on their own mean "configure that": asking for one
+# tool and silently getting a full reinstall would be a nasty surprise.
+if [ "$ACTION" = "install" ] && { [ -n "$ONLY_TOOLS" ] || [ "$RECONFIGURE" = "1" ]; }; then
+    ACTION="configure"
 fi
+
+case "$ACTION" in
+    uninstall)
+        uninstall_tools
+        ;;
+    configure)
+        configure_rc=0
+        run_configure || configure_rc=$?
+        exit $configure_rc
+        ;;
+    status)
+        configure_summary
+        ;;
+    doctor)
+        require_runtime_python || exit 1
+        run_doctor
+        ;;
+    *)
+        install_tools
+        ltvm_failed=0
+        if [ "$WITH_LTVM" = "1" ]; then
+            install_ltvm || ltvm_failed=1
+        fi
+        if [ "$CONFIGURE_AFTER_INSTALL" = "1" ] && [ -t 0 ]; then
+            configure_tools "$ONLY_TOOLS"
+        else
+            configure_summary
+            echo ""
+            echo "Set them up any time with:  ./install.sh --configure"
+        fi
+        # The Python tools are installed either way, but the operator asked
+        # for ltvm and agents cannot create VMs without it, so do not report
+        # success.
+        if [ "$ltvm_failed" = "1" ]; then
+            echo ""
+            echo -e "${RED}--with-ltvm was requested but ltvm was not installed${NC} (see above)."
+            exit 1
+        fi
+        ;;
+esac
