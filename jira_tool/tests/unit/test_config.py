@@ -55,11 +55,16 @@ class TestJiraConfig:
             JiraConfig(server="", token="test-token")
         assert "Server URL is required" in str(exc_info.value)
 
-    def test_empty_token_raises_error(self):
-        """Should raise ConfigError for empty token."""
-        with pytest.raises(ConfigError) as exc_info:
-            JiraConfig(server="https://jira.example.com", token="")
-        assert "API token is required" in str(exc_info.value)
+    def test_empty_token_is_allowed(self):
+        """A public Jira serves reads to anyone, so a token is optional."""
+        config = JiraConfig(server="https://jira.example.com", token="")
+        assert config.authenticated is False
+        assert config.get_auth_header() == ""
+
+    def test_a_token_makes_it_authenticated(self):
+        config = JiraConfig(server="https://jira.example.com", token="t")
+        assert config.authenticated is True
+        assert config.get_auth_header() == "Bearer t"
 
     def test_invalid_auth_type_raises_error(self):
         """Should raise ConfigError for invalid auth type."""
@@ -301,7 +306,7 @@ class TestLoadConfig:
         assert config.token == "file-token"
 
     def test_missing_config_and_env_raises_error(self, tmp_path, monkeypatch):
-        """Should raise ConfigError when no config source available."""
+        """The server is still required -- it is not a credential."""
         monkeypatch.delenv("JIRA_SERVER", raising=False)
         monkeypatch.delenv("JIRA_TOKEN", raising=False)
 
@@ -309,7 +314,7 @@ class TestLoadConfig:
 
         with pytest.raises(ConfigError) as exc_info:
             load_config(config_path=nonexistent)
-        assert "No configuration found" in str(exc_info.value)
+        assert "Server URL not configured" in str(exc_info.value)
 
     def test_missing_server_raises_error(self, tmp_path, monkeypatch):
         """Should raise ConfigError when server is missing."""
@@ -323,17 +328,17 @@ class TestLoadConfig:
             load_config(config_path=config_file)
         assert "Server URL not configured" in str(exc_info.value)
 
-    def test_missing_token_raises_error(self, tmp_path, monkeypatch):
-        """Should raise ConfigError when token is missing."""
+    def test_a_server_without_a_token_loads_read_only(self, tmp_path, monkeypatch):
+        """Configuring only the server is a working, read-only setup."""
         monkeypatch.delenv("JIRA_SERVER", raising=False)
         monkeypatch.delenv("JIRA_TOKEN", raising=False)
 
         config_file = tmp_path / "config.json"
         config_file.write_text(json.dumps({"server": "https://jira.example.com"}))
 
-        with pytest.raises(ConfigError) as exc_info:
-            load_config(config_path=config_file)
-        assert "API token not configured" in str(exc_info.value)
+        config = load_config(config_path=config_file)
+        assert config.server == "https://jira.example.com"
+        assert config.authenticated is False
 
     def test_invalid_json_raises_error(self, tmp_path, monkeypatch):
         """Should raise ConfigError for invalid JSON."""
@@ -609,3 +614,57 @@ class TestLoadEnvFile:
             os.chdir(original_cwd)
             monkeypatch.delenv("JIRA_SERVER", raising=False)
             monkeypatch.delenv("JIRA_TOKEN", raising=False)
+
+
+class TestAnonymousAccess:
+    """Reads work without a token; writes do not.
+
+    jira.whamcloud.com serves issues and JQL search to anyone, which is
+    what `jira get`, `jira search` and `jira comments` need.
+    """
+
+    def _client(self, token=""):
+        from jira_tool.client import JiraClient
+
+        return JiraClient(
+            JiraConfig(server="https://jira.example.com", token=token)
+        )
+
+    def test_no_authorization_header_when_anonymous(self):
+        client = self._client()
+        assert "Authorization" not in client._session.headers
+
+    def test_a_token_is_sent_when_present(self):
+        client = self._client(token="t")
+        assert client._session.headers["Authorization"] == "Bearer t"
+
+    def test_reads_are_allowed(self):
+        client = self._client()
+        client._require_auth("GET")  # does not raise
+
+    def test_writes_are_refused_with_the_fix_in_the_message(self):
+        from jira_tool.errors import AuthError
+
+        client = self._client()
+        for method in ("POST", "PUT", "DELETE"):
+            with pytest.raises(AuthError, match="token is required"):
+                client._require_auth(method)
+
+    def test_writes_are_allowed_once_configured(self):
+        client = self._client(token="t")
+        for method in ("POST", "PUT", "DELETE"):
+            client._require_auth(method)  # does not raise
+
+    def test_search_is_a_read_even_though_it_posts(self):
+        # Jira's search API is a POST; refusing it anonymously would
+        # block `jira search`, which is the main read this tool does.
+        client = self._client()
+        client._require_auth("POST", "search")
+        client._require_auth("POST", "search/jql")
+
+    def test_other_posts_are_still_refused(self):
+        from jira_tool.errors import AuthError
+
+        client = self._client()
+        with pytest.raises(AuthError):
+            client._require_auth("POST", "issue/LU-1/comment")

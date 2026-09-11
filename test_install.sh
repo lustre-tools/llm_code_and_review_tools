@@ -70,11 +70,11 @@ fi
 fresh_home
 out=$(printf 'n\n' | env HOME="$HOME_DIR" VERIFY=0 \
     bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; configure_tools 'jira'" 2>&1)
-if [ -e "$HOME_DIR/.config/jira-tool/.env" ]; then
-    bad "answering no writes nothing"
-else
-    ok "answering no writes nothing"
-fi
+# Declining leaves a tool that still reads: the server is not a secret,
+# and without it an anonymous read has nothing to talk to.
+check "answering no writes the server and nothing else" \
+    "JIRA_SERVER=https://jira.whamcloud.com" \
+    "$(cat "$HOME_DIR/.config/jira-tool/.env")"
 contains "answering no names the command to come back with" \
     "--configure --only jira" "$out"
 
@@ -92,12 +92,10 @@ fi
 fresh_home
 out=$(printf 'y\n\n\n\n' | env HOME="$HOME_DIR" VERIFY=0 \
     bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; configure_tools 'gerrit'" 2>&1)
-if [ -e "$HOME_DIR/.config/gerrit-cli/.env" ]; then
-    bad "an unanswered credential writes nothing" "$(cat "$HOME_DIR/.config/gerrit-cli/.env")"
-else
-    ok "an unanswered credential writes nothing"
-fi
-contains "and says which key was missing" "GERRIT_USER is required" "$out"
+check "an unanswered credential writes the server, not half a login" \
+    "GERRIT_URL=https://review.whamcloud.com" \
+    "$(cat "$HOME_DIR/.config/gerrit-cli/.env")"
+contains "and says the tool is left read-only" "read-only" "$out"
 
 # --- an existing file keeps its comments, its other keys and its values ----
 fresh_home
@@ -328,23 +326,25 @@ out=$(printf '\n' | env HOME="$HOME_DIR" VERIFY=0 \
 contains "an optional tool says the tool works without it" \
     "Optional -- the tool works without it" "$out"
 contains "  and does not default to yes" "(not needed for reads) [y/N]" "$out"
-contains "  and Enter leaves it anonymous" "Left anonymous" "$out"
-if [ -e "$HOME_DIR/.config/jenkins-tool/.env" ]; then
-    bad "  writing nothing when declined"
+contains "  and Enter leaves it read-only" "Left read-only" "$out"
+# jenkins needs no server written: its URL has a built-in default.
+if [ -s "$HOME_DIR/.config/jenkins-tool/.env" ] &&
+    grep -q "JENKINS_TOKEN" "$HOME_DIR/.config/jenkins-tool/.env"; then
+    bad "  no credential is written when declined"
 else
-    ok "  writing nothing when declined"
+    ok "  no credential is written when declined"
 fi
 
 out=$(HOME="$HOME_DIR" bash "$INSTALL_SH" --status 2>&1)
 contains "--status calls an unconfigured optional tool workable" \
-    "reads work anonymously" "$out"
+    "reads work" "$out"
 
 # Saying yes and then giving nothing is also not a failure.
 fresh_home
 out=$(printf 'y\n\n\n\n' | env HOME="$HOME_DIR" VERIFY=0 \
     bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; configure_tools 'jenkins'" 2>&1)
-contains "an unanswered optional credential leaves it anonymous" \
-    "leaving Jenkins anonymous" "$out"
+contains "an unanswered optional credential leaves it read-only" \
+    "leaving Jenkins read-only" "$out"
 
 # --- the version-bump hook -------------------------------------------------
 # The list this hook used to carry had drifted: it named crash_tool, which

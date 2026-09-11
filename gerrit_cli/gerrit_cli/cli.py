@@ -390,7 +390,18 @@ def main():
             parser.print_help()
             sys.exit(1)
     else:
-        args.func(args)
+        from .client import GerritConfigError
+
+        try:
+            args.func(args)
+        except GerritConfigError as e:
+            # Previously this reached the user as a traceback.
+            envelope = error_response_from_dict(
+                ErrorCode.AUTH_MISSING, str(e), args.command
+            )
+            print(format_json(envelope, pretty=False,
+                              full_envelope=FULL_ENVELOPE))
+            sys.exit(ExitCode.AUTH_ERROR)
 
 
 if __name__ == "__main__":

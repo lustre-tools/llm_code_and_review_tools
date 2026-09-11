@@ -104,6 +104,11 @@ The single-instance path is `JIRA_SERVER` and `JIRA_TOKEN`, written by
 `./install.sh --configure --only jira` into `~/.config/jira-tool/.env`.
 There is no username: the token is the whole login.
 
+The token is only needed to write. Against a public Jira, `get`,
+`search` and `comments` work with `JIRA_SERVER` alone -- so research
+needs no account, while filing, commenting, linking and transitioning
+refuse up front with exit 2 until there is one.
+
 Multi-instance configuration lives in `~/.jira-tool.json`, with an
 `instances` map and a `default`. Cloud routing additionally reads
 `JIRA_CLOUD_SERVER`, `JIRA_CLOUD_EMAIL`, `JIRA_CLOUD_TOKEN` and

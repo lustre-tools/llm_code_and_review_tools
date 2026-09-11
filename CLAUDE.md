@@ -12,6 +12,8 @@ human-readable colored output (no `--envelope`).
 ### JIRA tool (`jira`, v0.5.2)
 
 Bug tracking, issue management, and test failure research.
+Reads (`get`, `search`, `comments`) work with no token against a public
+Jira; writes need one.
 
 **Key commands:** `jira get`, `jira search` (JQL), `jira comment`,
 `jira create`, `jira update`, `jira link`, `jira transition`,
@@ -77,6 +79,8 @@ Run `jira --help` for full command list.
 ### Gerrit tool (`gerrit`, aliased as `gc`, v0.2.4)
 
 Code review, comment management, patch workflows, and CI triage.
+Reads work with only `GERRIT_URL`; anything that changes a patch needs
+`GERRIT_USER` and `GERRIT_PASS`.
 
 **Key commands:**
 - **Review:** `gc comments <url>`,

@@ -7,7 +7,11 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 from llm_tool_common.config import load_env_files
-from pygerrit2 import GerritRestAPI, HTTPBasicAuth  # type: ignore[import-untyped]
+from pygerrit2 import (  # type: ignore[import-untyped]
+    Anonymous,
+    GerritRestAPI,
+    HTTPBasicAuth,
+)
 
 
 # Credential loading is shared with jira-tool, maloo-tool and jenkins-tool so
@@ -30,9 +34,48 @@ CONFIG_PATH = Path.home() / ".config" / "gerrit-cli" / ".env"
 DEFAULT_GERRIT_URL: str | None = os.environ.get("GERRIT_URL")
 
 
+CREDENTIAL_HINT = (
+    "Set GERRIT_USER and GERRIT_PASS, or run "
+    "`install.sh --configure --only gerrit`. The password is generated "
+    "in Gerrit under Settings > HTTP Credentials."
+)
+
+
 class GerritConfigError(Exception):
-    """Raised when Gerrit credentials are not configured."""
+    """Raised when Gerrit configuration is missing."""
     pass
+
+
+class GerritAuthRequired(GerritConfigError):
+    """Raised when an operation needs credentials that are not set.
+
+    A subclass of GerritConfigError so callers that already handle a
+    missing configuration keep working.
+    """
+    pass
+
+
+class _ReadOnlyRestAPI(GerritRestAPI):
+    """An anonymous REST client that refuses writes rather than trying.
+
+    Public Gerrit serves reads to anyone, so the tool is useful with no
+    credentials at all.  A write without them fails at the server with a
+    403 whose body says nothing about credentials being the fix; every
+    write in this package goes through post/put/delete/review, so
+    refusing here covers them all, including ones added later.
+    """
+
+    def _refuse(self, *_args: Any, **_kwargs: Any) -> Any:
+        raise GerritAuthRequired(
+            "Gerrit credentials are required to change anything -- reply, "
+            "vote, push, abandon, reviewers. Reading works without them. "
+            + CREDENTIAL_HINT
+        )
+
+    post = _refuse
+    put = _refuse
+    delete = _refuse
+    review = _refuse
 
 
 class GerritCommentsClient:
@@ -58,24 +101,30 @@ class GerritCommentsClient:
         self.username = username or os.environ.get("GERRIT_USER")
         self.password = password or os.environ.get("GERRIT_PASS")
 
-        # Check for missing configuration
-        missing = []
         if not self.url:
-            missing.append("GERRIT_URL")
-        if not self.username:
-            missing.append("GERRIT_USER")
-        if not self.password:
-            missing.append("GERRIT_PASS")
-
-        if missing:
             raise GerritConfigError(
-                f"Missing configuration: {', '.join(missing)}. "
-                f"Set environment variables or create config file at {CONFIG_PATH}"
+                "Missing configuration: GERRIT_URL. "
+                f"Set the environment variable or create {CONFIG_PATH}"
             )
 
-        auth = HTTPBasicAuth(self.username, self.password)
-        self.rest = GerritRestAPI(url=self.url, auth=auth)
+        # Credentials are optional: reads are served anonymously by a
+        # public Gerrit, and half a credential is not a credential --
+        # Gerrit rejects a request carrying one, where the same request
+        # with no Authorization header would have been answered.
+        if self.username and self.password:
+            self.rest = GerritRestAPI(
+                url=self.url, auth=HTTPBasicAuth(self.username, self.password)
+            )
+        else:
+            # Anonymous() rather than auth=None: None makes pygerrit2 fall
+            # back to ~/.netrc and adopt an identity nobody asked for.
+            self.rest = _ReadOnlyRestAPI(url=self.url, auth=Anonymous())
         self.rest.kwargs["timeout"] = 60
+
+    @property
+    def authenticated(self) -> bool:
+        """True when this client can change anything."""
+        return bool(self.username and self.password)
 
     @staticmethod
     def parse_gerrit_url(url: str, default_base_url: str | None = None) -> tuple[str, int]:

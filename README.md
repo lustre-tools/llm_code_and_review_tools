@@ -156,6 +156,11 @@ The rest of this section is the same configuration by hand.
 
 ### Gerrit
 
+Credentials are optional for reading. `gc comments`, `info`, `search`,
+`diff` and `series-status` work against a public Gerrit with only
+`GERRIT_URL` set; replying, voting, pushing and anything else that
+changes a patch needs `GERRIT_USER` and `GERRIT_PASS`.
+
 Set environment variables directly or in a `.env` file. All
 existing files from these locations are loaded, highest priority
 first (earlier-listed files override later ones): `./.env`,
@@ -180,6 +185,10 @@ user is auto-discovered from `ssh://user@<gerrit-host>` URLs in
 Verify: `gerrit info <any-change-url>`
 
 ### JIRA
+
+A token is optional for reading: `jira get`, `jira search` and
+`jira comments` work against a public Jira with only `JIRA_SERVER` set.
+Filing, commenting, linking and transitioning need `JIRA_TOKEN`.
 
 **Single instance** -- environment variables:
 

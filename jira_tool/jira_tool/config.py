@@ -51,20 +51,28 @@ class JiraConfig:
     extras: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
-        """Validate configuration after initialization."""
+        """Validate configuration after initialization.
+
+        A token is optional: a public Jira serves issues and JQL search
+        to anyone, which is everything this tool reads.  It is required
+        only to change something.
+        """
         if not self.server:
             raise ConfigError("Server URL is required")
-        if not self.token:
-            raise ConfigError("API token is required")
         if self.auth_type not in VALID_AUTH_TYPES:
             raise ConfigError(
                 f"Invalid auth type '{self.auth_type}'. Must be one of: {', '.join(sorted(VALID_AUTH_TYPES))}"
             )
-        if self.auth_type == AUTH_TYPE_BASIC and not self.email:
+        if self.token and self.auth_type == AUTH_TYPE_BASIC and not self.email:
             raise ConfigError("Email is required for basic auth (JIRA Cloud)")
 
         # Normalize server URL (remove trailing slash)
         self.server = self.server.rstrip("/")
+
+    @property
+    def authenticated(self) -> bool:
+        """True when this config can change anything."""
+        return bool(self.token)
 
     @property
     def is_cloud(self) -> bool:
@@ -78,7 +86,14 @@ class JiraConfig:
         return default
 
     def get_auth_header(self) -> str:
-        """Return the Authorization header value for this config."""
+        """Return the Authorization header value, or "" when anonymous.
+
+        An empty or malformed credential is worse than none: Jira
+        rejects a request carrying one, where the same request with no
+        Authorization header is served anonymously.
+        """
+        if not self.token:
+            return ""
         if self.auth_type == AUTH_TYPE_BASIC:
             credentials = base64.b64encode(
                 f"{self.email}:{self.token}".encode()
@@ -272,24 +287,14 @@ def load_config(
     if not token and "auth" in config_data:
         token = config_data.get("auth", {}).get("token", "")
 
-    if not server and not token:
-        raise ConfigError(
-            "No configuration found. Set JIRA_SERVER and JIRA_TOKEN environment variables "
-            f"or create config file at {DEFAULT_CONFIG_PATH}",
-            details={
-                "config_path": str(config_path),
-                "env_vars": ["JIRA_SERVER", "JIRA_TOKEN"],
-            },
-        )
-
     if not server:
         raise ConfigError(
-            "Server URL not configured. Set JIRA_SERVER environment variable or add 'server' to config file."
-        )
-
-    if not token:
-        raise ConfigError(
-            "API token not configured. Set JIRA_TOKEN environment variable or add 'token' to config file."
+            "Server URL not configured. Set JIRA_SERVER environment variable "
+            f"or add 'server' to {DEFAULT_CONFIG_PATH}.",
+            details={
+                "config_path": str(config_path),
+                "env_vars": ["JIRA_SERVER"],
+            },
         )
 
     return JiraConfig.from_dict(config_data)

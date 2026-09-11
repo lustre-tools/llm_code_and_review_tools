@@ -216,13 +216,42 @@ class JiraClient:
         self.debug = debug
         self._session = requests.Session()
 
-        # Set up authentication header based on auth type
-        self._session.headers.update(
-            {
-                "Authorization": config.get_auth_header(),
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            }
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        # Send no Authorization header when there is no token: an empty
+        # one is rejected, where its absence is served anonymously.
+        auth_header = config.get_auth_header()
+        if auth_header:
+            headers["Authorization"] = auth_header
+        self._session.headers.update(headers)
+
+    # Jira's search API is a POST that only reads, so the HTTP method
+    # alone cannot decide whether an operation writes.
+    READ_ONLY_POSTS = frozenset({"search", "search/jql"})
+
+    def _require_auth(self, method: str, endpoint: str = "") -> None:
+        """Refuse a write before making it when there is no token.
+
+        Reads are served anonymously by a public Jira; a write without a
+        token fails at the server with a 401 whose body does not say
+        that a token is the fix.  Both request paths pass through here,
+        so a new write cannot bypass it.
+        """
+        if method.upper() in ("GET", "HEAD", "OPTIONS"):
+            return
+        if (
+            method.upper() == "POST"
+            and endpoint.strip("/") in self.READ_ONLY_POSTS
+        ):
+            return
+        if self.config.authenticated:
+            return
+        raise AuthError(
+            f"A Jira token is required to {method.upper()} "
+            f"({self.config.server}). Reading works without one. "
+            "Set JIRA_TOKEN, or run `install.sh --configure --only jira`."
         )
 
     def _debug(self, msg: str) -> None:
@@ -424,6 +453,7 @@ class JiraClient:
             NetworkError: For connection/timeout issues (after retries exhausted)
             Various JiraToolError subclasses for API errors
         """
+        self._require_auth(method, endpoint)
         url = self._build_url(endpoint)
         last_error: Exception | None = None
         self._debug_request(method, url, params, json_data)
@@ -506,6 +536,7 @@ class JiraClient:
             NetworkError: For connection/timeout issues
             JiraToolError: For HTTP errors
         """
+        self._require_auth(method)
         if "timeout" not in kwargs:
             kwargs["timeout"] = self.timeout
 

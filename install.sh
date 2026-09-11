@@ -560,6 +560,8 @@ tool_spec() {
     SPEC_WHERE=""
     SPEC_NOTE=""
     SPEC_OPTIONAL=""
+    SPEC_ANON_READS=""
+    SPEC_READ_KEYS=""
     case "$1" in
         gerrit)
             SPEC_LABEL="Gerrit"
@@ -572,6 +574,11 @@ GERRIT_PASS|Gerrit HTTP password|secret|"
             SPEC_WHERE="Log in to Gerrit, then Settings > HTTP Credentials >
     Generate Password.  It is that generated password, not the one
     you log into the web UI with."
+            SPEC_ANON_READS=1
+            SPEC_READ_KEYS="GERRIT_URL"
+            SPEC_NOTE="Reading -- comments, info, search, diff -- works
+        without credentials.  They are needed to reply, vote, push or
+        change a patch, which is most of what people use this for."
             ;;
         jira)
             SPEC_LABEL="Jira"
@@ -583,8 +590,12 @@ JIRA_TOKEN|Jira personal access token|secret|"
             SPEC_WHERE="Jira > your avatar > Profile > Personal Access Tokens >
     Create token.  For Atlassian Cloud instead, an API token from
     https://id.atlassian.com/manage-profile/security/api-tokens"
-            SPEC_NOTE="No username: the token is the whole login.  Several Jira
-        instances at once go in ~/.jira-tool.json -- see README.md."
+            SPEC_ANON_READS=1
+            SPEC_READ_KEYS="JIRA_SERVER"
+            SPEC_NOTE="No username: the token is the whole login.  Reading --
+        get, search, comments -- works without one; filing, commenting
+        and linking need it.  Several Jira instances at once go in
+        ~/.jira-tool.json -- see README.md."
             ;;
         maloo)
             SPEC_LABEL="Maloo"
@@ -610,6 +621,7 @@ JENKINS_TOKEN|Jenkins API token|secret|"
     Configure > API Token > Add new Token.  Copy it before
     leaving the page; Jenkins shows it once."
             SPEC_OPTIONAL=1
+            SPEC_ANON_READS=1
             SPEC_NOTE="Optional -- the tool works without it.  Reads
         (jobs, builds, console, review) are served anonymously by
         build.whamcloud.com.  A token adds what your Jenkins account
@@ -700,6 +712,19 @@ tool_missing_keys() {
         [ -n "$(env_file_get "$SPEC_FILE" "$key")" ] || out="$out $key"
     done
     printf '%s' "${out# }"
+}
+
+# True when a tool has everything it needs to read, credentials aside.
+# jenkins needs nothing (its URL has a built-in default); gerrit and jira
+# need to know which server to ask.
+tool_can_read() {
+    local tool="$1" key
+    tool_spec "$tool" || return 1
+    [ -n "$SPEC_ANON_READS" ] || return 1
+    for key in $SPEC_READ_KEYS; do
+        [ -n "$(env_file_get "$SPEC_FILE" "$key")" ] || return 1
+    done
+    return 0
 }
 
 # configured | partial | missing
@@ -841,6 +866,32 @@ prompt_field() {
     printf '%s' "$answer" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
+# Write only the non-secret keys a tool needs to read.  Declining to
+# give credentials should leave a tool that works for reading, not an
+# empty file and a tool that cannot find its server.
+write_read_only_keys() {
+    local tool="$1" key prompt kind default pairs="" current
+    tool_spec "$tool" || return 0
+    [ -n "$SPEC_READ_KEYS" ] || return 0
+    while IFS='|' read -r key prompt kind default <&3; do
+        [ -n "$key" ] || continue
+        [ "$kind" = "url" ] || continue
+        case " $SPEC_READ_KEYS " in
+            *" $key "*) ;;
+            *) continue ;;
+        esac
+        current=$(env_file_get "$SPEC_FILE" "$key")
+        [ -n "$current" ] || current="$default"
+        [ -z "$current" ] || pairs="$pairs$key=$current
+"
+    done 3<<EOF
+$SPEC_FIELDS
+EOF
+    [ -n "$pairs" ] || return 0
+    env_file_write "$SPEC_FILE" "$pairs" || return 0
+    echo "  wrote $(tilde_path "$SPEC_FILE") with the server only"
+}
+
 configure_one_tool() {
     local tool="$1" status key prompt kind default current shown answer rc
     local pairs code attempt=0 last_code="" from_env external
@@ -890,8 +941,9 @@ configure_one_tool() {
         prompt="  Add $SPEC_LABEL credentials? (not needed for reads)"
     fi
     if ! ask_yes "$prompt" "$default_answer"; then
-        if [ -n "$SPEC_OPTIONAL" ]; then
-            echo "  Left anonymous -- reads still work."
+        if [ -n "$SPEC_ANON_READS" ]; then
+            write_read_only_keys "$tool"
+            echo "  Left read-only -- reads work, writes need credentials."
             echo "  Add them later:  ./install.sh --configure --only $tool"
         else
             echo "  Left for later:  ./install.sh --configure --only $tool"
@@ -939,10 +991,11 @@ configure_one_tool() {
             case " $SPEC_REQUIRED " in
                 *" $key "*)
                     if [ -z "$answer" ]; then
-                        if [ -n "$SPEC_OPTIONAL" ]; then
-                            echo "  No $key given -- leaving $SPEC_LABEL anonymous."
-                            echo "  Reads still work; credentials only add the"
-                            echo "  actions your account is permitted to take."
+                        if [ -n "$SPEC_ANON_READS" ]; then
+                            write_read_only_keys "$tool"
+                            echo "  No $key given -- leaving $SPEC_LABEL read-only."
+                            echo "  Reads work; credentials add what your account"
+                            echo "  is permitted to change."
                         else
                             echo -e "  ${YELLOW}$key is required${NC} -- leaving $SPEC_LABEL unconfigured."
                             echo "  Later:  ./install.sh --configure --only $tool"
@@ -1006,6 +1059,10 @@ configure_summary() {
                 external=$(tool_external_source "$tool")
                 if [ -n "$external" ]; then
                     echo -e "  ${GREEN}ok${NC}    $pad via $(tilde_path "$external")"
+                elif [ -n "$SPEC_ANON_READS" ] && tool_can_read "$tool"; then
+                    echo -e "  ${GREEN}read${NC}  $pad reads work" \
+                        "-- add credentials to write:" \
+                        "./install.sh --configure --only $tool"
                 elif [ "$status" = "partial" ]; then
                     echo -e "  ${YELLOW}part${NC}  $pad missing $(tool_missing_keys "$tool")" \
                         "-- ./install.sh --configure --only $tool"

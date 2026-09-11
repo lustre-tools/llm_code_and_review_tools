@@ -150,7 +150,14 @@ Run the local AI review first -- see the lreview spin-cycle skill. Fixing
 findings locally costs one round trip less than having a reviewer or a bot
 find them.
 
-Credentials come from the installer: `./install.sh --status` shows what is
-set up, `./install.sh --configure --only gerrit` sets it up. The HTTP
-password is generated in Gerrit under Settings > HTTP Credentials, and is
-not the web login password.
+Reading needs no credentials: with only `GERRIT_URL` set, `comments`,
+`info`, `search`, `diff` and `series-status` work against a public
+Gerrit, and a write refuses up front with exit 2 rather than failing at
+the server. Replying, voting, pushing and staging need `GERRIT_USER` and
+`GERRIT_PASS` -- `./install.sh --status` shows what is set up and
+`./install.sh --configure --only gerrit` sets it up. The HTTP password
+is generated in Gerrit under Settings > HTTP Credentials; it is not the
+web login password.
+
+An anonymous read sees what any logged-out user sees: drafts and private
+changes are not in it.
