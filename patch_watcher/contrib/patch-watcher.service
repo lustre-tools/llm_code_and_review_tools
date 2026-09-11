@@ -1,0 +1,40 @@
+[Unit]
+Description=Patch Watcher -- Gerrit patch console and agent orchestrator
+Documentation=https://github.com/lustre-tools/llm_code_and_review_tools
+# The console is useless without Gerrit, and the runs it starts need the
+# network from their first second.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/llm_code_and_review_tools/patch_watcher
+ExecStart=/usr/bin/python3.12 -m patch_watcher.app --port 8080
+
+# The agent a run spawns is a child of this service and inherits its PATH, so
+# every tool the prompt tells it to use has to be on this line: claude from
+# nvm, the LLM CLIs from ~/.local/bin, ltvm from /usr/local/bin.  A bare
+# systemd PATH would leave an agent unable to run the commands it is asked to.
+#
+# The nvm entry is version-pinned because nvm has no stable "current" symlink
+# for a non-login shell; after a node upgrade, correct it here.
+Environment=PATH=%h/.nvm/versions/node/v22.22.0/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+# Restart, but do not fight a boot-time fault forever: five tries in five
+# minutes and it stays down, where `systemctl --user status` will say so,
+# rather than respawning into the same failure every five seconds.
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# It binds loopback and has no authentication of its own; reach it from
+# another machine with `ssh -N -L 8080:127.0.0.1:8080 <this host>`, which the
+# service prints on startup.  Do not widen the bind.
+#
+# No sandboxing directives: a run legitimately needs a host shell, sudo for
+# ltvm, and the operator's own credentials.  Restricting this unit would
+# restrict the agents it starts, which is the opposite of what it is for.
+
+[Install]
+WantedBy=default.target

@@ -661,13 +661,21 @@ class PatchWatcherTests(AppGlobalsIsolated):
             self.assertIn("$4.00", row)          # 3.7461 + 0.25, rounded
             self.assertIn("on subscription (÷37)", row)
             self.assertIn("$0.11", row)          # 3.9961 / 37
+            # What you actually pay leads; the list price follows it.
+            self.assertLess(row.index("$0.11"), row.index("$4.00"))
             self.assertIn("74.0k tokens", row)   # (1000+2000+30000+4000) * 2
 
             with patch("patch_watcher.app.refresh_resource_status",
                        return_value={"ltvm": {"vms": []}}):
                 runs_card = app.runs_html()
+                page = app.page()
             self.assertIn("Spend across every run:", runs_card)
             self.assertIn("$4.00", runs_card)
+            # And a total at the top of the page, subscription first.
+            self.assertIn("Spent so far:", page)
+            header = page[:page.index("<tbody>")]
+            self.assertIn("$0.11", header)
+            self.assertLess(header.index("$0.11"), header.index("$4.00"))
 
             detail = app._run_usage_html(store.get_session("session-1"))
             self.assertIn("What this run cost", detail)
