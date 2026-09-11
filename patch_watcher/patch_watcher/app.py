@@ -3021,6 +3021,74 @@ def _last_finished_session_for_patch(patch):
     return max(finished, key=lambda item: item.state_changed_at, default=None)
 
 
+def _relative_age(value):
+    """"47s ago", "3m ago" -- an absolute timestamp does not say whether a
+    watcher is alive, which is the whole question being asked of it."""
+    moment = _parse_timestamp(value)
+    if moment is None:
+        return ""
+    seconds = int((datetime.now(UTC) - moment).total_seconds())
+    if seconds < 0:
+        return "just now"
+    if seconds < 60:
+        return f"{seconds}s ago"
+    if seconds < 3600:
+        return f"{seconds // 60}m ago"
+    if seconds < 86400:
+        return f"{seconds // 3600}h ago"
+    return f"{seconds // 86400}d ago"
+
+
+def _idle_explanation(patch, policy):
+    """Say why nothing is running, from the conditions that decide it.
+
+    "No run" alone reads as inert.  What an operator wants to know is that
+    the watcher is alive and what it is waiting for, so this walks the same
+    signals `_apply_standing_policy` dispatches on and names the first one
+    that would fire -- or says that none of them are present.
+    """
+    if policy.rank == 0:
+        return (
+            f"Level <strong>{escape(policy.label)}</strong>: it reports what it sees "
+            "and runs nothing."
+        )
+    gate = bool(
+        AUTOMATION_STORE is not None
+        and AUTOMATION_STORE.get_global_automation().enabled
+    )
+    if not gate:
+        return (
+            "The global kill switch has been turned off, so nothing runs unattended "
+            "until it is <a href='/automation/global/confirm-enable'>turned back on</a>."
+        )
+    pending = []
+    if policy.configured_action("rebase_needed") == "rebase" and patch.get("rebase_needed"):
+        pending.append("a cherry-pick veto to rebase")
+    if (
+        policy.build_failures == "repair"
+        and str(patch.get("jenkins") or "").upper() == "FAIL"
+        and patch.get("jenkins_url")
+    ):
+        pending.append("a failed Jenkins build to repair")
+    if policy.review_comments != "off" and int(patch.get("unresolved") or 0) > 0:
+        pending.append(f"{int(patch['unresolved'])} unresolved review comment(s)")
+    if pending:
+        return "Ready to act on " + ", and ".join(pending) + " at the next check."
+    quiet = []
+    if str(patch.get("jenkins") or "").upper() == "PASS":
+        quiet.append("Jenkins passed")
+    if not patch.get("rebase_needed"):
+        quiet.append("no veto")
+    if not int(patch.get("unresolved") or 0):
+        quiet.append("no unresolved comments")
+    maloo = str(patch.get("maloo") or "").upper()
+    waiting = " Waiting on Maloo." if maloo in {"RUNNING", "—", ""} else ""
+    return (
+        f"Nothing to act on: {', '.join(quiet) if quiet else 'no signal on this revision'}."
+        + waiting
+    )
+
+
 def _patch_run_html(patch):
     """The run, on the row itself.
 
@@ -3038,25 +3106,46 @@ def _patch_run_html(patch):
         return ""
     active = _active_session_for_patch(change_number)
     if active is None:
+        try:
+            policy = _standing_policy(patch)
+            explanation = _idle_explanation(patch, policy)
+        except (StandingPolicyError, ValueError) as exc:
+            explanation = "Policy unavailable: " + escape(str(exc))
+        checked = _relative_age(patch.get("last_checked"))
+        try:
+            interval = int(configured_refresh_interval())
+        except Exception:
+            interval = 300
+        heartbeat = (
+            f"checked {escape(checked)}, every {interval}s" if checked
+            else f"checks every {interval}s"
+        )
+        last_html = ""
         last = _last_finished_session_for_patch(patch)
-        if last is None:
-            return "<div class='patch-run idle'><strong>No run</strong> on this patch.</div>"
-        href = "/runs/" + escape(last.run_id, quote=True)
-        tone = "good" if last.state == "succeeded" else "bad"
-        why = ""
-        failure_code, failure_summary = _run_failure(last)
-        if last.state != "succeeded" and (failure_summary or failure_code):
-            text = " ".join(str(failure_summary or failure_code).split())
-            why = (
-                f"<div class='detail run-failure-line'>{escape(text[:160])}"
-                + ("…" if len(text) > 160 else "") + "</div>"
+        if last is not None:
+            href = "/runs/" + escape(last.run_id, quote=True)
+            tone = "good" if last.state == "succeeded" else "bad"
+            why = ""
+            failure_code, failure_summary = _run_failure(last)
+            if last.state != "succeeded" and (failure_summary or failure_code):
+                text = " ".join(str(failure_summary or failure_code).split())
+                why = (
+                    f"<div class='detail run-failure-line'>{escape(text[:160])}"
+                    + ("…" if len(text) > 160 else "") + "</div>"
+                )
+            last_html = (
+                "<div class='detail'>Last run: "
+                + _chip(last.state.replace("_", " ").capitalize(), tone)
+                + f" <a href='{href}'>{escape(last.run_id)}</a> "
+                + f"{escape(last.state_changed_at.isoformat(timespec='minutes'))}</div>"
+                + why
             )
         return (
-            "<div class='patch-run idle'><strong>No run</strong> on this patch. "
-            f"Last: {_chip(last.state.replace('_', ' ').capitalize(), tone)} "
-            f"<a href='{href}'>{escape(last.run_id)}</a> "
-            f"{escape(last.state_changed_at.isoformat(timespec='minutes'))}"
-            f"{why}</div>"
+            "<div class='patch-run watching'>"
+            + _chip("Watching", "info")
+            + f" <span class='detail'>{heartbeat}</span>"
+            f"<div class='detail watch-why'>{explanation}</div>"
+            f"{last_html}</div>"
         )
 
     href = "/runs/" + escape(active.run_id, quote=True)
@@ -3553,7 +3642,7 @@ def page(message="", jira_base=JIRA_BASE_URL):
     return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>Patch Watcher</title><style>
 body{{margin:0;
-background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1450px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card,.resource-card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a;overflow-x:auto}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input,textarea,select{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px}}input,textarea{{flex:1;min-width:240px}}textarea{{display:block;width:min(620px,95%);min-height:70px;margin:7px 0 10px}}button,.button-link{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}.button-link{{display:inline-block;text-decoration:none}}button:disabled{{cursor:not-allowed;opacity:.68}}button.danger,button.secondary,.button-link.danger-link{{background:#fff;padding:7px 11px}}button.danger,.button-link.danger-link{{color:#b42318;border:1px solid #fecdca}}button.secondary{{color:#344054;border:1px solid #d0d5dd}}table{{width:100%;border-collapse:collapse;margin-top:18px;min-width:1050px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url,.detail{{color:#667085;font-size:12px;margin-top:4px;word-break:break-word}}.patch-meta{{display:flex;align-items:center;gap:6px;color:#667085;font-size:12px;margin-top:7px}}.ticket{{display:inline-block;margin-left:8px;font-size:12px}}.error{{color:#b42318;font-size:12px;margin-top:5px;max-width:340px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}.section-title{{display:flex;justify-content:space-between;align-items:center;gap:16px}}small{{display:block;color:#667085;margin-top:4px}}details{{margin-top:7px;font-size:12px;color:#475467}}details ol{{padding-left:18px;max-height:140px;overflow:auto}}details li{{margin:5px 0}}details time{{font-variant-numeric:tabular-nums}}.history-state{{color:#667085}}.status-chip,.resource-status{{display:inline-block;border:1px solid transparent;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;line-height:1.35;white-space:nowrap}}.tone-good{{background:#dcfce7;border-color:#86efac;color:#166534}}.tone-bad{{background:#fee2e2;border-color:#fca5a5;color:#991b1b}}.tone-warn{{background:#fef3c7;border-color:#fcd34d;color:#78350f}}.tone-info{{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}}.tone-neutral{{background:#f2f4f7;border-color:#d0d5dd;color:#344054}}.status-link{{text-decoration:none}}.status-link:focus-visible .status-chip{{outline:3px solid #315efb;outline-offset:2px}}.ci-stack{{display:flex;align-items:flex-start;gap:5px;flex-wrap:wrap;margin-top:8px}}.patch-actions{{width:min(720px,80vw)}}.patch-actions>summary{{cursor:pointer;display:inline-flex;align-items:center;border:1px solid #d0d5dd;border-radius:8px;padding:7px 11px;background:white;color:#344054;font-weight:700}}.quick-actions{{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}}.level-ladder{{margin:10px 0 4px;padding-left:18px;font-size:12px;color:#475467}}.level-ladder li{{margin:3px 0}}.level-ladder li.current{{color:#172033}}.level-ladder li.current strong{{background:#dbeafe;border-radius:4px;padding:0 4px}}.patch-run{{border:1px solid #d0d5dd;border-radius:10px;padding:10px 12px;margin-bottom:10px;background:#fff;max-width:520px}}.patch-run.live{{border-color:#93c5fd;background:#f5f9ff}}.patch-run .detail{{margin-top:4px}}.run-latest{{font-style:italic}}.run-controls-inline{{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:9px}}.run-controls-inline .button-link{{padding:6px 11px;font-size:12px}}.run-control{{margin:0}}.run-control button{{padding:6px 11px;font-size:12px;background:#fff;color:#344054;border:1px solid #d0d5dd}}.run-controls-inline .danger-link{{padding:6px 11px;font-size:12px;border:1px solid #fecdca;border-radius:8px;text-decoration:none}}.patch-now{{border:1px solid #d0d5dd;border-radius:10px;padding:10px 12px;margin:12px 0;background:#fff;font-size:13px}}.patch-now p{{margin:0}}.patch-now .detail{{margin-top:4px}}.manual-runs{{margin:12px 0}}.manual-runs>.policy-heading{{margin-bottom:2px}}.remove-patch{{margin-top:10px}}.run-now{{display:inline-block;margin:6px 0 0}}.run-now button{{padding:7px 12px}}.standing-policy form.run-now{{display:inline-block;grid-template-columns:none}}.action-policy-item .quick-action{{margin-top:8px}}.quick-action{{margin:0}}.standing-policy{{border:1px solid #b2ccff;border-radius:10px;padding:10px;background:#f5f8ff;margin:10px 0}}.standing-policy form{{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr)) auto;gap:7px;align-items:end;margin-top:8px}}.standing-policy label{{display:grid;gap:3px}}.standing-policy select{{min-width:0;width:100%;padding:7px}}.action-policy-grid{{display:grid;grid-template-columns:repeat(3,minmax(190px,1fr));gap:10px}}.action-policy-item{{border:1px solid #d0d5dd;border-radius:10px;padding:10px;background:#fff}}.action-policy-item.unavailable{{background:#f8fafc;color:#667085}}.policy-heading{{display:flex;justify-content:space-between;gap:8px;align-items:center}}.availability{{border:1px solid #d0d5dd;border-radius:999px;padding:2px 6px;font-size:10px;text-transform:uppercase;font-weight:700}}.available .availability{{background:#dcfce7;border-color:#86efac;color:#166534}}.retest-control,.research-controls{{width:auto;padding:6px 8px;border:1px solid #d0d5dd;border-radius:8px}}.agent-choice{{display:grid;grid-template-columns:repeat(2,minmax(140px,1fr));gap:7px;margin:10px 0;align-items:end}}.agent-choice label{{font-size:12px;color:#667085}}.agent-choice input,.agent-choice select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}@media(max-width:600px){{.agent-choice{{grid-template-columns:1fr}}}}.retest-control form{{display:grid;gap:7px;margin-top:9px}}.retest-control label{{display:grid;gap:4px}}.retest-control input,.retest-control select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.retest-decision,.retest-approval{{display:grid;gap:6px;margin-top:9px;padding:8px;background:#f8fafc;border-radius:7px}}.retest-approval{{background:#fffaeb}}.retest-timeline{{padding-left:18px}}.retest-global form{{margin-top:12px}}.runs .empty{{padding:18px}}.run-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;margin-top:16px}}.run-summary{{border:1px solid #eaecf0;border-radius:10px;padding:14px;background:#f8fafc}}.run-summary header{{display:flex;justify-content:space-between;align-items:center;gap:10px}}.run-summary h3{{margin:0;font-size:15px}}.run-summary p{{font-size:13px;word-break:break-word}}.run-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:12px 0}}.run-metrics dt{{font-size:11px;color:#667085}}.run-metrics dd{{margin:2px 0;font-size:13px;word-break:break-word}}.finished-runs{{margin-top:20px;font-size:15px;color:inherit}}.finished-runs>summary{{cursor:pointer;font-size:13px;color:#475467;font-weight:600}}.finished-runs table{{min-width:0}}.engineering-capabilities{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:10px 14px;margin-top:14px;font-size:13px}}.engineering-capabilities h3{{margin:0 0 6px;font-size:13px;text-transform:uppercase;color:#667085}}.engineering-capabilities ul{{margin:0;padding-left:18px}}.engineering-capabilities p{{color:#667085;margin-bottom:0}}.orphan-vms{{border:1px solid #fecdca;background:#fef3f2;border-radius:10px;padding:12px 14px;margin-top:14px}}.orphan-vms h3{{margin:0 0 6px;color:#b42318;font-size:15px}}.orphan-vms ul{{margin:0;padding-left:18px;font-size:13px}}.orphan-ok{{color:#027a48;font-size:13px;margin-top:12px}}.resource-toolbar{{display:flex;justify-content:flex-end;margin-top:20px}}.resource-dashboard{{display:grid;gap:18px}}.resource-card{{margin-top:0}}.resource-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}}.other-vms-headline{{font-size:15px;margin:6px 0 0;color:#344054}}.other-vms-detail{{margin-top:12px;font-size:15px;color:inherit}}.other-vms-detail>summary{{cursor:pointer;font-size:13px;color:#475467;font-weight:600}}.vm-controls{{white-space:nowrap}}.vm-controls form{{display:inline-block;margin:0 4px 0 0}}.vm-controls button{{font-size:12px;padding:5px 9px}}.host-memory-headline{{font-size:17px;margin:6px 0 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap}}.host-memory-detail{{margin-top:14px;font-size:15px;color:inherit}}.host-memory-detail>summary{{cursor:pointer;font-size:13px;color:#475467;font-weight:600}}.resource-metric{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:12px}}.resource-metric dt{{font-size:12px;color:#667085}}.resource-metric dd{{margin:5px 0 0;font-size:18px;font-weight:700}}.resource-errors{{color:#b42318}}.resource-ok{{color:#027a48}}.session-controls{{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-top:16px}}fieldset{{border:1px solid #fecdca;border-radius:8px}}.message-content{{white-space:pre-wrap;margin-top:3px}}.run-failure{{background:#fef3f2;border:1px solid #fecdca;border-radius:10px;padding:12px 14px}}.run-failure h3{{margin-top:0;color:#b42318}}.run-failure-line{{color:#b42318}}.control-note,.controls-unavailable{{color:#667085;font-size:12px}}.refresh-health{{color:#b42318}}@media(max-width:980px){{.action-policy-grid{{grid-template-columns:1fr}}.standing-policy form{{grid-template-columns:repeat(2,minmax(140px,1fr))}}}}@media(max-width:760px){{.session-controls{{grid-template-columns:1fr}}}}</style></head>
+background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1450px;margin:48px auto;padding:0 24px}}h1{{margin-bottom:6px}}.sub{{color:#667085;margin-top:0}}.card,.resource-card{{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:22px;margin-top:28px;box-shadow:0 4px 16px #1018280a;overflow-x:auto}}form.add{{display:flex;gap:10px;flex-wrap:wrap}}input,textarea,select{{border:1px solid #d0d5dd;border-radius:8px;padding:11px 12px;font-size:14px}}input,textarea{{flex:1;min-width:240px}}textarea{{display:block;width:min(620px,95%);min-height:70px;margin:7px 0 10px}}button,.button-link{{border:0;border-radius:8px;padding:11px 16px;background:#315efb;color:white;font-weight:600;cursor:pointer}}.button-link{{display:inline-block;text-decoration:none}}button:disabled{{cursor:not-allowed;opacity:.68}}button.danger,button.secondary,.button-link.danger-link{{background:#fff;padding:7px 11px}}button.danger,.button-link.danger-link{{color:#b42318;border:1px solid #fecdca}}button.secondary{{color:#344054;border:1px solid #d0d5dd}}table{{width:100%;border-collapse:collapse;margin-top:18px;min-width:1050px}}th,td{{text-align:left;padding:14px 10px;border-top:1px solid #eaecf0;vertical-align:top}}th{{font-size:12px;text-transform:uppercase;color:#667085}}.url,.detail{{color:#667085;font-size:12px;margin-top:4px;word-break:break-word}}.patch-meta{{display:flex;align-items:center;gap:6px;color:#667085;font-size:12px;margin-top:7px}}.ticket{{display:inline-block;margin-left:8px;font-size:12px}}.error{{color:#b42318;font-size:12px;margin-top:5px;max-width:340px}}.empty{{text-align:center;color:#667085;padding:35px}}.notice{{background:#fffaeb;color:#b54708;padding:10px 12px;border-radius:8px;margin-top:16px}}.section-title{{display:flex;justify-content:space-between;align-items:center;gap:16px}}small{{display:block;color:#667085;margin-top:4px}}details{{margin-top:7px;font-size:12px;color:#475467}}details ol{{padding-left:18px;max-height:140px;overflow:auto}}details li{{margin:5px 0}}details time{{font-variant-numeric:tabular-nums}}.history-state{{color:#667085}}.status-chip,.resource-status{{display:inline-block;border:1px solid transparent;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;line-height:1.35;white-space:nowrap}}.tone-good{{background:#dcfce7;border-color:#86efac;color:#166534}}.tone-bad{{background:#fee2e2;border-color:#fca5a5;color:#991b1b}}.tone-warn{{background:#fef3c7;border-color:#fcd34d;color:#78350f}}.tone-info{{background:#dbeafe;border-color:#93c5fd;color:#1e3a8a}}.tone-neutral{{background:#f2f4f7;border-color:#d0d5dd;color:#344054}}.status-link{{text-decoration:none}}.status-link:focus-visible .status-chip{{outline:3px solid #315efb;outline-offset:2px}}.ci-stack{{display:flex;align-items:flex-start;gap:5px;flex-wrap:wrap;margin-top:8px}}.patch-actions{{width:min(720px,80vw)}}.patch-actions>summary{{cursor:pointer;display:inline-flex;align-items:center;border:1px solid #d0d5dd;border-radius:8px;padding:7px 11px;background:white;color:#344054;font-weight:700}}.quick-actions{{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}}.level-ladder{{margin:10px 0 4px;padding-left:18px;font-size:12px;color:#475467}}.level-ladder li{{margin:3px 0}}.level-ladder li.current{{color:#172033}}.level-ladder li.current strong{{background:#dbeafe;border-radius:4px;padding:0 4px}}.patch-run{{border:1px solid #d0d5dd;border-radius:10px;padding:10px 12px;margin-bottom:10px;background:#fff;max-width:520px}}.patch-run.live{{border-color:#93c5fd;background:#f5f9ff}}.patch-run.watching{{border-color:#d0d5dd}}.watch-why{{color:#344054}}.patch-run .detail{{margin-top:4px}}.run-latest{{font-style:italic}}.run-controls-inline{{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:9px}}.run-controls-inline .button-link{{padding:6px 11px;font-size:12px}}.run-control{{margin:0}}.run-control button{{padding:6px 11px;font-size:12px;background:#fff;color:#344054;border:1px solid #d0d5dd}}.run-controls-inline .danger-link{{padding:6px 11px;font-size:12px;border:1px solid #fecdca;border-radius:8px;text-decoration:none}}.patch-now{{border:1px solid #d0d5dd;border-radius:10px;padding:10px 12px;margin:12px 0;background:#fff;font-size:13px}}.patch-now p{{margin:0}}.patch-now .detail{{margin-top:4px}}.manual-runs{{margin:12px 0}}.manual-runs>.policy-heading{{margin-bottom:2px}}.remove-patch{{margin-top:10px}}.run-now{{display:inline-block;margin:6px 0 0}}.run-now button{{padding:7px 12px}}.standing-policy form.run-now{{display:inline-block;grid-template-columns:none}}.action-policy-item .quick-action{{margin-top:8px}}.quick-action{{margin:0}}.standing-policy{{border:1px solid #b2ccff;border-radius:10px;padding:10px;background:#f5f8ff;margin:10px 0}}.standing-policy form{{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr)) auto;gap:7px;align-items:end;margin-top:8px}}.standing-policy label{{display:grid;gap:3px}}.standing-policy select{{min-width:0;width:100%;padding:7px}}.action-policy-grid{{display:grid;grid-template-columns:repeat(3,minmax(190px,1fr));gap:10px}}.action-policy-item{{border:1px solid #d0d5dd;border-radius:10px;padding:10px;background:#fff}}.action-policy-item.unavailable{{background:#f8fafc;color:#667085}}.policy-heading{{display:flex;justify-content:space-between;gap:8px;align-items:center}}.availability{{border:1px solid #d0d5dd;border-radius:999px;padding:2px 6px;font-size:10px;text-transform:uppercase;font-weight:700}}.available .availability{{background:#dcfce7;border-color:#86efac;color:#166534}}.retest-control,.research-controls{{width:auto;padding:6px 8px;border:1px solid #d0d5dd;border-radius:8px}}.agent-choice{{display:grid;grid-template-columns:repeat(2,minmax(140px,1fr));gap:7px;margin:10px 0;align-items:end}}.agent-choice label{{font-size:12px;color:#667085}}.agent-choice input,.agent-choice select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}@media(max-width:600px){{.agent-choice{{grid-template-columns:1fr}}}}.retest-control form{{display:grid;gap:7px;margin-top:9px}}.retest-control label{{display:grid;gap:4px}}.retest-control input,.retest-control select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.retest-decision,.retest-approval{{display:grid;gap:6px;margin-top:9px;padding:8px;background:#f8fafc;border-radius:7px}}.retest-approval{{background:#fffaeb}}.retest-timeline{{padding-left:18px}}.retest-global form{{margin-top:12px}}.runs .empty{{padding:18px}}.run-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;margin-top:16px}}.run-summary{{border:1px solid #eaecf0;border-radius:10px;padding:14px;background:#f8fafc}}.run-summary header{{display:flex;justify-content:space-between;align-items:center;gap:10px}}.run-summary h3{{margin:0;font-size:15px}}.run-summary p{{font-size:13px;word-break:break-word}}.run-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:12px 0}}.run-metrics dt{{font-size:11px;color:#667085}}.run-metrics dd{{margin:2px 0;font-size:13px;word-break:break-word}}.finished-runs{{margin-top:20px;font-size:15px;color:inherit}}.finished-runs>summary{{cursor:pointer;font-size:13px;color:#475467;font-weight:600}}.finished-runs table{{min-width:0}}.engineering-capabilities{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:10px 14px;margin-top:14px;font-size:13px}}.engineering-capabilities h3{{margin:0 0 6px;font-size:13px;text-transform:uppercase;color:#667085}}.engineering-capabilities ul{{margin:0;padding-left:18px}}.engineering-capabilities p{{color:#667085;margin-bottom:0}}.orphan-vms{{border:1px solid #fecdca;background:#fef3f2;border-radius:10px;padding:12px 14px;margin-top:14px}}.orphan-vms h3{{margin:0 0 6px;color:#b42318;font-size:15px}}.orphan-vms ul{{margin:0;padding-left:18px;font-size:13px}}.orphan-ok{{color:#027a48;font-size:13px;margin-top:12px}}.resource-toolbar{{display:flex;justify-content:flex-end;margin-top:20px}}.resource-dashboard{{display:grid;gap:18px}}.resource-card{{margin-top:0}}.resource-metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}}.other-vms-headline{{font-size:15px;margin:6px 0 0;color:#344054}}.other-vms-detail{{margin-top:12px;font-size:15px;color:inherit}}.other-vms-detail>summary{{cursor:pointer;font-size:13px;color:#475467;font-weight:600}}.vm-controls{{white-space:nowrap}}.vm-controls form{{display:inline-block;margin:0 4px 0 0}}.vm-controls button{{font-size:12px;padding:5px 9px}}.host-memory-headline{{font-size:17px;margin:6px 0 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap}}.host-memory-detail{{margin-top:14px;font-size:15px;color:inherit}}.host-memory-detail>summary{{cursor:pointer;font-size:13px;color:#475467;font-weight:600}}.resource-metric{{background:#f8fafc;border:1px solid #eaecf0;border-radius:10px;padding:12px}}.resource-metric dt{{font-size:12px;color:#667085}}.resource-metric dd{{margin:5px 0 0;font-size:18px;font-weight:700}}.resource-errors{{color:#b42318}}.resource-ok{{color:#027a48}}.session-controls{{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-top:16px}}fieldset{{border:1px solid #fecdca;border-radius:8px}}.message-content{{white-space:pre-wrap;margin-top:3px}}.run-failure{{background:#fef3f2;border:1px solid #fecdca;border-radius:10px;padding:12px 14px}}.run-failure h3{{margin-top:0;color:#b42318}}.run-failure-line{{color:#b42318}}.control-note,.controls-unavailable{{color:#667085;font-size:12px}}.refresh-health{{color:#b42318}}@media(max-width:980px){{.action-policy-grid{{grid-template-columns:1fr}}.standing-policy form{{grid-template-columns:repeat(2,minmax(140px,1fr))}}}}@media(max-width:760px){{.session-controls{{grid-template-columns:1fr}}}}</style></head>
 <body><style>.research-controls{{width:min(430px,88vw);
 border:1px solid #d0d5dd;border-radius:8px;padding:8px}}.research-controls>summary{{cursor:pointer;font-weight:700}}.research-controls section{{border-top:1px solid #eaecf0;margin-top:10px;padding-top:10px}}.research-controls form{{display:grid;gap:7px;margin-top:8px}}.research-controls input,.research-controls select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.research-controls dl{{display:grid;gap:6px}}.research-controls dd{{margin:2px 0 6px;word-break:break-word}}.action-approval-card{{background:#fffaeb;border:1px solid #fedf89;border-radius:8px;padding:10px}}</style><main><h1>Patch Watcher</h1><p class='sub'>Track Gerrit patches, managed sessions, and worker resources.</p>
 <section class='card'><div class='section-title'><div><h2>Watched patches <small>({len(patches)} · checks every {refresh_interval}s{needs_you_html})</small></h2><div class='detail'>Last successful check: {escape(overall_last_successful_check())}</div><div class='detail'>Last check attempt: {escape(overall_last_checked())}</div>{refresh_health_html}</div><div class='actions'><form method='post' action='/refresh-all'><input type='hidden' name='csrf_token' value='{CSRF_TOKEN}'><button class='secondary'>Refresh all</button></form><form method='post' action='/email'><input type='hidden' name='csrf_token' value='{CSRF_TOKEN}'><button class='secondary'>Send status email</button></form></div></div><table><thead><tr><th>Patch</th><th>Watch state / CI</th><th>Review</th><th>Latest change</th><th></th></tr></thead><tbody>{rows}</tbody></table></section>

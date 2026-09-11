@@ -586,7 +586,11 @@ class PatchWatcherTests(AppGlobalsIsolated):
             app.RUN_CONTROLLER = None
 
             idle = app._patch_run_html(patch_record)
-            self.assertIn("<strong>No run</strong> on this patch.", idle)
+            # "No run" alone reads as inert; the question being asked of a
+            # watcher is whether it is alive and what it is waiting for.
+            self.assertIn("Watching", idle)
+            self.assertIn("every 300s", idle)
+            self.assertIn("it reports what it sees and runs nothing", idle)
 
             store.register_pinned_session(
                 "pw-session-live", patch_id="35302", run_id="pw-engineer-35302-ps4-live",
@@ -619,9 +623,47 @@ class PatchWatcherTests(AppGlobalsIsolated):
             store.finish_session("pw-session-live", "failed",
                                  failure_code="runner_lost", failure_summary="host_process_missing")
             done = app._patch_run_html(patch_record)
-            self.assertIn("<strong>No run</strong> on this patch.", done)
+            self.assertIn("Watching", done)
+            self.assertIn("Last run:", done)
             self.assertIn("href='/runs/pw-engineer-35302-ps4-live'", done)
             self.assertIn("host_process_missing", done)
+
+    def test_the_row_says_what_the_watcher_is_waiting_for(self):
+        """Why nothing is running, from the conditions that decide it -- so
+        the answer cannot drift from what the dispatcher actually does."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app.initialize_session_store(root / "sessions.sqlite3")
+            automation = app.initialize_automation_store(root / "automation.sqlite3")
+            standing = app.initialize_standing_policy_store(root / "standing.json")
+            record, _ = app.add_patch("https://review.whamcloud.com/c/35302")
+            record.update(change_number=35302, patchset=5, revision_sha="e" * 40,
+                          jenkins="PASS", maloo="RUNNING", unresolved=0, rebase_needed=False,
+                          last_checked="2026-09-11T15:00:00+00:00")
+            app.RUN_CONTROLLER = None
+
+            quiet = app._patch_run_html(record)
+            self.assertIn("it reports what it sees and runs nothing", quiet)
+
+            standing.save(app.PatchAutomationPolicy.for_preset("35302", "own"))
+            live = app._patch_run_html(record)
+            self.assertIn("Nothing to act on", live)
+            self.assertIn("Jenkins passed", live)
+            self.assertIn("Waiting on Maloo", live)
+
+            record.update(rebase_needed=True, jenkins="FAIL",
+                          jenkins_url="https://build.whamcloud.com/job/x/4/", unresolved=2)
+            pending = app._patch_run_html(record)
+            self.assertIn("Ready to act on", pending)
+            for expected in ("cherry-pick veto to rebase", "failed Jenkins build to repair",
+                             "2 unresolved review comment(s)"):
+                self.assertIn(expected, pending)
+
+            automation.set_global_automation(False, changed_by="test", reason="pause")
+            gated = app._patch_run_html(record)
+            self.assertIn("kill switch has been turned off", gated)
+            self.assertIn("/automation/global/confirm-enable", gated)
 
     def test_the_panel_says_first_what_is_happening_now(self):
         """Is anything running?  What runs without asking?  When was it last
