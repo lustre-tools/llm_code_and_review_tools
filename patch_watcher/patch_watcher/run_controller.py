@@ -56,6 +56,7 @@ from patch_watcher.session_state import (
     TERMINAL_STATES,
     TRIAGE_PROFILE,
     TRIAGE_WALL_LIMIT,
+    InvalidSessionOperation,
     ManagedSession,
     SessionStateStore,
 )
@@ -3030,6 +3031,48 @@ class RunController:
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             return None
 
+    def _record_usage(
+        self, session: ManagedSession, payload: Mapping[str, Any], at: datetime
+    ) -> None:
+        """Keep what the CLI says a run cost, whenever it says it.
+
+        The CLI reports a running total on each result event, so the last one
+        wins.  Nothing here is computed: the cost is the figure the CLI
+        reported, and the token counts are its own.
+        """
+        if not isinstance(payload, Mapping) or "total_cost_usd" not in payload:
+            return
+        usage = payload.get("usage")
+        usage = usage if isinstance(usage, Mapping) else {}
+        models = payload.get("modelUsage")
+        model = ""
+        if isinstance(models, Mapping) and models:
+            model = str(next(iter(models)))
+
+        def count(*names: str) -> int:
+            for name in names:
+                value = usage.get(name)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    return int(value)
+            return 0
+
+        try:
+            self.store.record_usage(
+                session.session_id,
+                model=model or str(session.model or "unknown"),
+                cost_usd=float(payload.get("total_cost_usd") or 0.0),
+                input_tokens=count("input_tokens"),
+                output_tokens=count("output_tokens"),
+                cache_creation_tokens=count("cache_creation_input_tokens"),
+                cache_read_tokens=count("cache_read_input_tokens"),
+                turns=int(payload.get("num_turns") or 0),
+                duration_ms=int(payload.get("duration_ms") or 0),
+                at=at,
+            )
+        except (ValueError, TypeError, InvalidSessionOperation):
+            # Accounting must never be what stops a run being supervised.
+            return
+
     def _last_runner_cursor(self, session: ManagedSession) -> int:
         cursor = 0
         for event in self.store.list_events(
@@ -3200,6 +3243,7 @@ class RunController:
                         idempotency_key=key,
                         at=at,
                     )
+                    self._record_usage(session, event.payload, at)
                 except ValueError as exc:
                     # One unstorable payload must not wedge the stream. This
                     # used to propagate, so ingestion could never advance past

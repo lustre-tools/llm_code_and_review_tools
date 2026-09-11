@@ -181,6 +181,27 @@ class HumanQuestion:
 
 
 @dataclass(frozen=True)
+class RunUsage:
+    session_id: str
+    model: str
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+    cache_creation_tokens: int
+    cache_read_tokens: int
+    turns: int
+    duration_ms: int
+    recorded_at: datetime
+
+    @property
+    def total_tokens(self) -> int:
+        return (
+            self.input_tokens + self.output_tokens
+            + self.cache_creation_tokens + self.cache_read_tokens
+        )
+
+
+@dataclass(frozen=True)
 class TerminalResult:
     session_id: str
     state: str
@@ -268,7 +289,7 @@ def _json_text(name: str, value: Any, *, maximum_bytes: int = MAX_JSON_TEXT_BYTE
 class SessionStateStore:
     """SQLite-backed state and policy evaluation for managed sessions."""
 
-    SCHEMA_VERSION = 7
+    SCHEMA_VERSION = 8
 
     _MIGRATIONS: ClassVar[dict] = {
         1: (
@@ -705,6 +726,28 @@ class SessionStateStore:
             """
             CREATE INDEX pw_session_control_intent_session_idx_v7
             ON pw_session_control_intent(session_id, sequence)
+            """,
+        ),
+        # What a run cost, reported by the CLI itself.  Kept per session so a
+        # patch's total is a sum over its runs rather than a number nobody can
+        # audit; `cost_usd` is the list price the CLI reports, and what a
+        # subscription actually pays is derived at display time from a divisor
+        # the operator sets, never stored as though it were measured.
+        8: (
+            """
+            CREATE TABLE pw_run_usage (
+                session_id TEXT PRIMARY KEY REFERENCES pw_managed_session(session_id)
+                    ON DELETE CASCADE,
+                model TEXT NOT NULL,
+                cost_usd REAL NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                cache_creation_tokens INTEGER NOT NULL,
+                cache_read_tokens INTEGER NOT NULL,
+                turns INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                recorded_at REAL NOT NULL
+            )
             """,
         ),
     }
@@ -1969,6 +2012,95 @@ class SessionStateStore:
             at=corrected_at,
         )
         return self._terminal_from_row(row)
+
+    def record_usage(
+        self,
+        session_id: str,
+        *,
+        model: str,
+        cost_usd: float,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cache_creation_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        turns: int = 0,
+        duration_ms: int = 0,
+        at: datetime | None = None,
+    ) -> RunUsage:
+        """Record what one run cost, as the CLI reported it.
+
+        Last write wins: the CLI reports a running total per result event, so
+        a later report supersedes an earlier one for the same session rather
+        than adding to it.
+        """
+        session_id = _required_text("session_id", session_id)
+        values = (
+            str(model or "unknown")[:200], float(cost_usd),
+            int(input_tokens), int(output_tokens),
+            int(cache_creation_tokens), int(cache_read_tokens),
+            int(turns), int(duration_ms), _as_epoch(at or _utc_now()),
+        )
+        with self._connection() as connection, connection:
+            connection.execute(
+                """
+                INSERT INTO pw_run_usage(
+                    session_id, model, cost_usd, input_tokens, output_tokens,
+                    cache_creation_tokens, cache_read_tokens, turns,
+                    duration_ms, recorded_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    model = excluded.model, cost_usd = excluded.cost_usd,
+                    input_tokens = excluded.input_tokens,
+                    output_tokens = excluded.output_tokens,
+                    cache_creation_tokens = excluded.cache_creation_tokens,
+                    cache_read_tokens = excluded.cache_read_tokens,
+                    turns = excluded.turns, duration_ms = excluded.duration_ms,
+                    recorded_at = excluded.recorded_at
+                """,
+                (session_id, *values),
+            )
+            row = connection.execute(
+                "SELECT * FROM pw_run_usage WHERE session_id = ?", (session_id,),
+            ).fetchone()
+        return self._usage_from_row(row)
+
+    def get_usage(self, session_id: str) -> RunUsage | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM pw_run_usage WHERE session_id = ?",
+                (_required_text("session_id", session_id),),
+            ).fetchone()
+        return None if row is None else self._usage_from_row(row)
+
+    def list_usage(self, patch_id: str | None = None) -> list[RunUsage]:
+        """Every recorded run cost, newest first, optionally for one patch."""
+        query = "SELECT u.* FROM pw_run_usage u"
+        params: list[Any] = []
+        if patch_id is not None:
+            query += (
+                " JOIN pw_managed_session s ON s.session_id = u.session_id"
+                " WHERE s.patch_id = ?"
+            )
+            params.append(_required_text("patch_id", patch_id))
+        query += " ORDER BY u.recorded_at DESC"
+        with self._connection() as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [self._usage_from_row(row) for row in rows]
+
+    @staticmethod
+    def _usage_from_row(row: sqlite3.Row) -> RunUsage:
+        return RunUsage(
+            session_id=row["session_id"],
+            model=row["model"],
+            cost_usd=float(row["cost_usd"]),
+            input_tokens=int(row["input_tokens"]),
+            output_tokens=int(row["output_tokens"]),
+            cache_creation_tokens=int(row["cache_creation_tokens"]),
+            cache_read_tokens=int(row["cache_read_tokens"]),
+            turns=int(row["turns"]),
+            duration_ms=int(row["duration_ms"]),
+            recorded_at=_as_datetime(row["recorded_at"]),
+        )
 
     def finish_session(
         self,

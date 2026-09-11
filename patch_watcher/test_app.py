@@ -628,6 +628,65 @@ class PatchWatcherTests(AppGlobalsIsolated):
             self.assertIn("href='/runs/pw-engineer-35302-ps4-live'", done)
             self.assertIn("host_process_missing", done)
 
+    def test_usage_is_reported_per_run_per_patch_and_overall(self):
+        """List cost is what the CLI reported; the subscription figure is that
+        divided by a configured divisor, and says so wherever it appears."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = app.initialize_session_store(root / "sessions.sqlite3")
+            app.initialize_automation_store(root / "automation.sqlite3")
+            app.initialize_standing_policy_store(root / "standing.json")
+            record, _ = app.add_patch("https://review.whamcloud.com/c/35302")
+            record.update(change_number=35302, patchset=5, revision_sha="e" * 40,
+                          jenkins="PASS", unresolved=0)
+            app.RUN_CONTROLLER = None
+            for index, (run, cost) in enumerate(
+                (("pw-engineer-35302-ps5-a", 3.7461), ("pw-review-35302-ps5-b", 0.25)), start=1
+            ):
+                store.register_pinned_session(
+                    f"session-{index}", patch_id="35302", run_id=run, revision="e" * 40,
+                    patchset=5, profile="engineering", state="running",
+                )
+                store.finish_session(f"session-{index}", "succeeded")
+                store.record_usage(
+                    f"session-{index}", model="claude-opus-5", cost_usd=cost,
+                    input_tokens=1000, output_tokens=2000,
+                    cache_read_tokens=30000, cache_creation_tokens=4000,
+                    turns=63, duration_ms=400554,
+                )
+
+            row = app._patch_run_html(record)
+            self.assertIn("Spent on this patch:", row)
+            self.assertIn("$4.00", row)          # 3.7461 + 0.25, rounded
+            self.assertIn("on subscription (÷37)", row)
+            self.assertIn("$0.11", row)          # 3.9961 / 37
+            self.assertIn("74.0k tokens", row)   # (1000+2000+30000+4000) * 2
+
+            with patch("patch_watcher.app.refresh_resource_status",
+                       return_value={"ltvm": {"vms": []}}):
+                runs_card = app.runs_html()
+            self.assertIn("Spend across every run:", runs_card)
+            self.assertIn("$4.00", runs_card)
+
+            detail = app._run_usage_html(store.get_session("session-1"))
+            self.assertIn("What this run cost", detail)
+            self.assertIn("$3.75", detail)
+            self.assertIn("On subscription (÷37)", detail)
+            self.assertIn("$0.10", detail)
+            self.assertIn("37.0k", detail)       # this run's total tokens
+            self.assertIn("an estimate, not a measurement", detail)
+
+    def test_a_configured_divisor_overrides_the_default(self):
+        from types import SimpleNamespace
+
+        with patch("patch_watcher.app.GerritConfig") as config:
+            config.load.return_value = SimpleNamespace(subscription_divisor=10.0)
+            self.assertEqual(app._subscription_divisor(), 10.0)
+            # A nonsense divisor falls back rather than dividing by zero.
+            config.load.return_value = SimpleNamespace(subscription_divisor=0)
+            self.assertEqual(app._subscription_divisor(), app.SUBSCRIPTION_DIVISOR)
+
     def test_the_row_says_what_the_watcher_is_waiting_for(self):
         """Why nothing is running, from the conditions that decide it -- so
         the answer cannot drift from what the dispatcher actually does."""
@@ -749,6 +808,17 @@ class PatchWatcherTests(AppGlobalsIsolated):
 
                 def append_event(self, *args, **kwargs):
                     return None
+
+                # The page reports spend, so a stand-in store has to answer
+                # for it as the real one does.
+                def list_usage(self, patch_id=None):
+                    return []
+
+                def get_usage(self, session_id):
+                    return None
+
+                def recent_messages(self, session_id, limit=None):
+                    return []
 
             class FakeRuns:
                 def __init__(self):
@@ -1359,6 +1429,17 @@ class PatchWatcherTests(AppGlobalsIsolated):
 
                 def append_event(self, *args, **kwargs):
                     return None
+
+                # The page reports spend, so a stand-in store has to answer
+                # for it as the real one does.
+                def list_usage(self, patch_id=None):
+                    return []
+
+                def get_usage(self, session_id):
+                    return None
+
+                def recent_messages(self, session_id, limit=None):
+                    return []
 
             class FakeRuns:
                 def __init__(self):

@@ -89,6 +89,9 @@ class GerritConfig:
     password: str
     refresh_interval: int = 300
     email_enabled: bool = False
+    # What a subscription is worth against the list price the CLI reports.
+    # Displayed, never stored as though measured.
+    subscription_divisor: float = 37.0
     email_to: str = "paf@mulberrytree.us"
     sendmail_path: str = "/usr/sbin/sendmail"
 
@@ -135,7 +138,7 @@ class GerritConfig:
             if key in {
                 "GERRIT_URL", "GERRIT_USER", "GERRIT_PASS",
                 "REFRESH_INTERVAL_SECONDS", "EMAIL_ENABLED", "EMAIL_TO",
-                "SENDMAIL_PATH",
+                "SENDMAIL_PATH", "SUBSCRIPTION_DIVISOR",
             }:
                 values[key] = value
 
@@ -177,14 +180,24 @@ class GerritConfig:
         if not Path(sendmail_path).is_absolute():
             raise GerritConfigError("SENDMAIL_PATH must be an absolute path.")
 
+        try:
+            divisor = float(values.get("SUBSCRIPTION_DIVISOR", "") or 37.0)
+        except ValueError:
+            divisor = 37.0
+        if divisor <= 0:
+            divisor = 37.0
+        # Keyword arguments throughout: this call was positional, and adding a
+        # field anywhere but the end would have silently shifted every value
+        # after it into the wrong slot.
         return cls(
-            values["GERRIT_URL"].rstrip("/"),
-            values["GERRIT_USER"],
-            values["GERRIT_PASS"],
-            refresh_interval,
-            email_enabled in {"true", "yes", "1"},
-            email_to,
-            sendmail_path,
+            url=values["GERRIT_URL"].rstrip("/"),
+            username=values["GERRIT_USER"],
+            password=values["GERRIT_PASS"],
+            refresh_interval=refresh_interval,
+            email_enabled=email_enabled in {"true", "yes", "1"},
+            subscription_divisor=divisor,
+            email_to=email_to,
+            sendmail_path=sendmail_path,
         )
 
 

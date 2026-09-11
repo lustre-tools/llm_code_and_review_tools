@@ -939,6 +939,11 @@ def _user_message(text: str) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
 
 
+def _is_number(value: Any) -> bool:
+    """True for a real number; bool is an int subclass and is not one here."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _redact(value: Any, depth: int = 0) -> Any:
     if depth > 8:
         return "<depth-limited>"
@@ -946,7 +951,15 @@ def _redact(value: Any, depth: int = 0) -> Any:
         cleaned: dict[str, Any] = {}
         for raw_key, item in list(value.items())[:100]:
             key = str(raw_key)
-            if any(marker in key.lower() for marker in ("token", "password", "secret", "authorization")):
+            sensitive = any(
+                marker in key.lower()
+                for marker in ("token", "password", "secret", "authorization")
+            )
+            # A credential is a string.  "input_tokens": 7661 is a COUNT, and
+            # redacting it destroyed every usage record the CLI reported while
+            # protecting nothing -- the marker "token" matches input_tokens,
+            # cacheReadInputTokens and thinkingTokens as readily as auth_token.
+            if sensitive and not _is_number(item):
                 cleaned[key] = "<redacted>"
             else:
                 cleaned[key] = _redact(item, depth + 1)

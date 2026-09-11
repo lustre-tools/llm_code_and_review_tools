@@ -354,14 +354,15 @@ class SessionStateStoreTests(unittest.TestCase):
             }
 
         migrated = SessionStateStore(self.database)
-        self.assertEqual(migrated.SCHEMA_VERSION, 7)
+        # Whatever the current version is, a v6 database must reach it.
+        self.assertGreaterEqual(migrated.SCHEMA_VERSION, 7)
 
         with contextlib.closing(sqlite3.connect(self.database)) as connection:
             self.assertEqual(
                 connection.execute(
                     "SELECT version FROM pw_session_schema WHERE singleton = 1"
                 ).fetchone()[0],
-                7,
+                migrated.SCHEMA_VERSION,
             )
             after = {
                 table: connection.execute(
