@@ -10,6 +10,7 @@ and log files.
 
 from __future__ import annotations
 
+import json
 import re
 from html.parser import HTMLParser
 from typing import Any
@@ -222,21 +223,85 @@ class JanitorClient:
     def resolve_change(self, change: int) -> int | None:
         """Find the latest Janitor build for a Gerrit change number.
 
-        Walks backwards from recent builds checking the REF file.
+        The Janitor posts "Job output URL:
+        .../gerrit-janitor/<build>/results.html" as a comment on the
+        change, which names the build directly.  That is asked first;
+        scraping the build index is the fallback, since the index is
+        often unavailable and costs one request per build besides.
         Returns the build number or None.
+
+        Sets change_lookup_error only when the lookup could not be
+        performed at all.  Completing and finding no build leaves it
+        None: callers must be able to tell "no build" from "could not
+        tell", or an unreachable index silently turns into a wrong
+        answer.
         """
-        # Try to find by fetching recent builds.  The Janitor
-        # results page title contains the change number, and the
-        # REF file has the exact ref.  We'll try a range of recent
-        # build numbers.
-        #
-        # First, try to guess from the results page index.
-        # The simplest heuristic: fetch the parent directory listing
-        # and find builds that match.
-        # A failed lookup is not the same as "this change has no
-        # build": callers must be able to tell them apart, or an
-        # unreachable index silently turns into a wrong answer.
         self.change_lookup_error = None
+
+        build, gerrit_error = self._resolve_change_via_gerrit(change)
+        if build is not None:
+            return build
+        if gerrit_error is None:
+            # Gerrit answered: this change has no Janitor build.
+            return None
+
+        build, index_error = self._resolve_change_via_index(change)
+        if build is not None:
+            return build
+        if index_error:
+            self.change_lookup_error = f"{gerrit_error}; and {index_error}"
+        else:
+            # The index only covers recent builds, so not finding the
+            # change there does not settle what Gerrit could not answer.
+            self.change_lookup_error = gerrit_error
+        return None
+
+    def _resolve_change_via_gerrit(
+        self, change: int
+    ) -> tuple[int | None, str | None]:
+        """Read the Janitor build number off the change's comments.
+
+        Returns (build, error).  A (None, None) result means Gerrit
+        answered and the change has no Janitor build.
+        """
+        url = f"{self.config.gerrit_url}/changes/{change}/messages"
+        try:
+            resp = self.session.get(url, timeout=30)
+            if resp.status_code == 404:
+                return None, None  # Gerrit is sure: no such change
+            resp.raise_for_status()
+            # Gerrit prefixes JSON responses with an XSSI guard line.
+            body = resp.text
+            if body.startswith(")]}'"):
+                body = body.split("\n", 1)[1]
+            messages = json.loads(body)
+        except Exception as e:
+            return None, (
+                f"cannot read Gerrit change {change} at "
+                f"{self.config.gerrit_url} ({type(e).__name__})"
+            )
+
+        # Latest patchset wins, and within it the latest comment: a
+        # rerun on the same patchset gets a new build number.
+        best: tuple[int, int, int] | None = None
+        for i, msg in enumerate(messages):
+            found = re.findall(
+                r"gerrit-janitor/(\d+)/", msg.get("message", "")
+            )
+            if not found:
+                continue
+            key = (msg.get("_revision_number") or 0, i, int(found[-1]))
+            if best is None or key[:2] > best[:2]:
+                best = key
+
+        if best is None:
+            return None, None  # no Janitor run on this change
+        return best[2], None
+
+    def _resolve_change_via_index(
+        self, change: int
+    ) -> tuple[int | None, str | None]:
+        """Scan the Janitor build index for a build of this change."""
         try:
             resp = self.session.get(
                 f"{self.config.base_url}/",
@@ -244,11 +309,10 @@ class JanitorClient:
             )
             resp.raise_for_status()
         except Exception as e:
-            self.change_lookup_error = (
+            return None, (
                 "cannot read the Janitor build index at "
                 f"{self.config.base_url}/ ({type(e).__name__})"
             )
-            return None
 
         # Parse build numbers from directory listing
         builds = [
@@ -256,11 +320,10 @@ class JanitorClient:
             for m in re.finditer(r'href="(\d+)/"', resp.text)
         ]
         if not builds:
-            self.change_lookup_error = (
+            return None, (
                 "the Janitor build index at "
                 f"{self.config.base_url}/ listed no builds"
             )
-            return None
         builds.sort(reverse=True)
 
         # Check last 200 builds for our change
@@ -276,10 +339,10 @@ class JanitorClient:
                 # REF is like "refs/changes/40/64440/10"
                 m = re.search(r"/(\d+)/\d+$", ref)
                 if m and int(m.group(1)) == change:
-                    return build
+                    return build, None
             except Exception:
                 continue
-        return None
+        return None, None
 
     def get_ref(self, build: int) -> dict[str, Any] | None:
         """Get the REF info for a build."""

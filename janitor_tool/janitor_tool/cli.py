@@ -75,7 +75,8 @@ def _resolve_build(
 
     Accepts:
       - A Janitor build number (e.g. 61009)
-      - A Gerrit change number (e.g. 64440) -- resolved via REF files
+      - A Gerrit change number (e.g. 64440) -- resolved via the
+        Janitor build URL it comments on the change
       - A Gerrit URL (e.g. https://review.whamcloud.com/c/.../+/64440)
 
     Build numbers and Gerrit change numbers share an ID space (both

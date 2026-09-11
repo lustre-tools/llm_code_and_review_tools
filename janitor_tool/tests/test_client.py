@@ -1,5 +1,6 @@
 """Tests for janitor_tool.client module."""
 
+import json
 import re
 from unittest.mock import MagicMock, patch
 
@@ -175,44 +176,114 @@ class TestJanitorClientBuildUrl:
 class TestResolveChange:
     """Tests for JanitorClient.resolve_change()."""
 
-    def test_resolve_found(self):
-        client = _make_client()
+    @staticmethod
+    def _gerrit_resp(messages):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.raise_for_status = MagicMock()
+        resp.text = ")]}'\n" + json.dumps(messages)
+        return resp
 
-        dir_resp = MagicMock()
-        dir_resp.status_code = 200
-        dir_resp.text = '<a href="61009/">61009/</a> <a href="61008/">61008/</a>'
+    @staticmethod
+    def _index_resp(text):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.raise_for_status = MagicMock()
+        resp.text = text
+        return resp
+
+    def test_resolve_via_gerrit_comment(self):
+        client = _make_client()
+        client.session.get = MagicMock(return_value=self._gerrit_resp([
+            {"_revision_number": 1, "message": "Patch Set 1: build started"},
+            {"_revision_number": 1, "message":
+                "Job output URL: https://x/gerrit-janitor/61009/results.html"},
+        ]))
+
+        assert client.resolve_change(64440) == 61009
+        assert client.change_lookup_error is None
+        # The index is never touched when Gerrit answers.
+        assert client.session.get.call_count == 1
+
+    def test_resolve_prefers_latest_patchset(self):
+        client = _make_client()
+        client.session.get = MagicMock(return_value=self._gerrit_resp([
+            {"_revision_number": 1, "message": "gerrit-janitor/61009/"},
+            {"_revision_number": 3, "message": "gerrit-janitor/61200/"},
+            {"_revision_number": 2, "message": "gerrit-janitor/61100/"},
+        ]))
+
+        assert client.resolve_change(64440) == 61200
+
+    def test_resolve_prefers_latest_rerun_on_same_patchset(self):
+        client = _make_client()
+        client.session.get = MagicMock(return_value=self._gerrit_resp([
+            {"_revision_number": 2, "message": "gerrit-janitor/61100/"},
+            {"_revision_number": 2, "message": "gerrit-janitor/61150/"},
+        ]))
+
+        assert client.resolve_change(64440) == 61150
+
+    def test_resolve_no_janitor_run_is_conclusive(self):
+        client = _make_client()
+        client.session.get = MagicMock(return_value=self._gerrit_resp([
+            {"_revision_number": 1, "message": "Patch Set 1: Verified+1"},
+        ]))
+
+        assert client.resolve_change(64440) is None
+        # Gerrit answered, so this is "no build", not "could not tell".
+        assert client.change_lookup_error is None
+
+    def test_resolve_unknown_change_is_conclusive(self):
+        client = _make_client()
+        resp = MagicMock()
+        resp.status_code = 404
+        client.session.get = MagicMock(return_value=resp)
+
+        assert client.resolve_change(64440) is None
+        assert client.change_lookup_error is None
+
+    def test_resolve_falls_back_to_index(self):
+        client = _make_client()
 
         ref_resp = MagicMock()
         ref_resp.status_code = 200
         ref_resp.text = "refs/changes/40/64440/10"
 
-        client.session.get = MagicMock(side_effect=[dir_resp, ref_resp])
+        client.session.get = MagicMock(side_effect=[
+            Exception("gerrit down"),
+            self._index_resp('<a href="61009/">61009/</a>'),
+            ref_resp,
+        ])
 
-        result = client.resolve_change(64440)
-        assert result == 61009
+        assert client.resolve_change(64440) == 61009
+        assert client.change_lookup_error is None
 
-    def test_resolve_not_found(self):
+    def test_resolve_not_found_in_index_keeps_gerrit_error(self):
         client = _make_client()
-
-        dir_resp = MagicMock()
-        dir_resp.status_code = 200
-        dir_resp.text = '<a href="61009/">61009/</a>'
 
         ref_resp = MagicMock()
         ref_resp.status_code = 200
         ref_resp.text = "refs/changes/40/99999/1"
 
-        client.session.get = MagicMock(side_effect=[dir_resp, ref_resp])
+        client.session.get = MagicMock(side_effect=[
+            Exception("gerrit down"),
+            self._index_resp('<a href="61009/">61009/</a>'),
+            ref_resp,
+        ])
 
-        result = client.resolve_change(64440)
-        assert result is None
+        # The index covers only recent builds, so it cannot settle what
+        # Gerrit failed to answer.
+        assert client.resolve_change(64440) is None
+        assert "cannot read Gerrit change" in client.change_lookup_error
 
     def test_resolve_network_error(self):
         client = _make_client()
         client.session.get = MagicMock(side_effect=Exception("network error"))
 
-        result = client.resolve_change(64440)
-        assert result is None
+        assert client.resolve_change(64440) is None
+        assert "cannot read Gerrit change" in client.change_lookup_error
+        assert "Janitor build index" in client.change_lookup_error
 
 
 class TestGetRef:
