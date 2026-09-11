@@ -427,16 +427,39 @@ def _render_question(run, question, notices=()):
     )
 
 
+def _clock_time(value):
+    """The time of day from an ISO stamp: a chat wants 15:32:41, not the date
+    repeated on every line."""
+    text = _plain(value, "")
+    if "T" in text:
+        clock = text.split("T", 1)[1][:8]
+        if clock:
+            return clock
+    return text[:19]
+
+
 def _message_row(message):
     question = _get(message, "question_id", "target_question_id")
     question_html = f" · question <code>{escape(_plain(question))}</code>" if question else ""
+    author = _state(_get(message, "author", "role", "sender"))
+    operator = author in {"operator", "human", "user"}
+    side = "operator" if operator else "agent"
+    who = "You" if operator else _human(_get(message, "author", "role", "sender"))
+    delivery = _state(_get(message, "delivery_state", "state", "status"))
+    # "Delivery: Recorded" on every line the agent says is noise; a queued,
+    # pending or failed delivery is the operator's business and stays.
+    footer = ""
+    if question_html or (delivery and delivery not in {"recorded", "", UNKNOWN}):
+        label = _human(_get(message, "delivery_state", "state", "status"))
+        footer = (
+            f"<footer>Delivery: <strong>{escape(label)}</strong>{question_html}</footer>"
+        )
     return (
-        "<li class='run-message'><header><strong>"
-        f"{escape(_human(_get(message, 'author', 'role', 'sender')))}</strong> · "
-        f"<time>{escape(_plain(_get(message, 'created_at', 'timestamp', 'time')))}</time>"
+        f"<li class='run-message {side}'>"
+        f"<header><span class='who'>{escape(who)}</span>"
+        f"<time>{escape(_clock_time(_get(message, 'created_at', 'timestamp', 'time')))}</time>"
         f"</header><p>{escape(_plain(_get(message, 'body', 'text', 'message')))}</p>"
-        f"<footer>Delivery: <strong>{escape(_human(_get(message, 'delivery_state', 'state', 'status')))}</strong>"
-        f"{question_html}</footer></li>"
+        f"{footer}</li>"
     )
 
 
@@ -449,19 +472,25 @@ def _event_row(event):
     )
 
 
+def render_chat_messages(messages):
+    """The transcript alone, so the page can replace it without a reload."""
+    items = _items(messages)
+    if not items:
+        return "<p class='chat-empty'>Nothing said yet.</p>"
+    return "".join(_message_row(item) for item in items)
+
+
 def _render_history(messages, events):
-    message_items, event_items = _items(messages), _items(events)
-    message_html = (
-        "<ol class='run-conversation'>" + "".join(_message_row(i) for i in message_items) + "</ol>"
-        if message_items else "<p>No messages recorded.</p>"
-    )
+    """The timeline only.  The conversation moved into the chat panel, where
+    it sits directly above the box you answer it in -- reading a transcript in
+    one section and replying three sections further down was two halves of one
+    thing, and the operator had to scroll between them."""
+    event_items = _items(events)
     event_html = (
         "<ol class='run-timeline'>" + "".join(_event_row(i) for i in event_items) + "</ol>"
         if event_items else "<p>No events recorded.</p>"
     )
     return (
-        "<section aria-labelledby='conversation-title'><h3 id='conversation-title'>"
-        f"Conversation ({len(message_items)})</h3>{message_html}</section>"
         "<section aria-labelledby='timeline-title'><h3 id='timeline-title'>"
         f"Timeline ({len(event_items)})</h3>{event_html}</section>"
     )
@@ -524,7 +553,7 @@ def _render_controls(run, *, base_url, csrf_token, idempotency_token):
     )
 
 
-def _render_guidance(run, *, base_url, csrf_token, idempotency_token):
+def _render_guidance(run, *, base_url, csrf_token, idempotency_token, messages=()):
     state = _state(_get(run, "state", "status"))
     path = _run_path(run, base_url)
     question = _get(run, "question", "waiting_question")
@@ -554,9 +583,37 @@ def _render_guidance(run, *, base_url, csrf_token, idempotency_token):
         action = f"{path}/guidance"
         modes = ("<button type='submit' name='delivery_mode' value='safe_boundary'>Send guidance</button>"
                  "<button type='submit' name='delivery_mode' value='interrupt_and_send'>Interrupt and send</button>")
+    live = state not in TERMINAL_STATES
+    transcript = render_chat_messages(messages)
+    poll = (
+        "<script>(function(){"
+        "var log=document.getElementById('chat-log');"
+        "if(!log)return;"
+        "log.scrollTop=log.scrollHeight;"
+        "var url=log.getAttribute('data-poll');"
+        "if(!url)return;"
+        "setInterval(function(){"
+        "fetch(url,{headers:{'Accept':'text/html'}}).then(function(r){"
+        "return r.ok?r.text():null;}).then(function(html){"
+        "if(html===null||html===log.innerHTML)return;"
+        "var atEnd=log.scrollHeight-log.scrollTop-log.clientHeight<40;"
+        "log.innerHTML=html;"
+        "if(atEnd)log.scrollTop=log.scrollHeight;});"
+        "},5000);})();</script>"
+        if live else ""
+    )
     return (
-        "<section class='guidance-composer' aria-labelledby='guidance-title'>"
-        "<h3 id='guidance-title'>Send guidance</h3>"
+        "<section class='guidance-composer chat' aria-labelledby='guidance-title'>"
+        "<div class='chat-head'>"
+        "<h3 id='guidance-title'>Chat with this run</h3>"
+        + (
+            "<span class='chat-live' title='Updating every 5 seconds'>live</span>"
+            if live else "<span class='chat-done'>finished</span>"
+        )
+        + "</div>"
+        "<div class='chat-log' id='chat-log'"
+        + (f" data-poll='{escape(path, quote=True)}/messages'" if live else "")
+        + f">{transcript}</div>{poll}"
         f"<p id='guidance-help'>{escape(help_text)}</p>"
         f"<form method='post' action='{escape(action, quote=True)}'>"
         "<label for='guidance-message'>Message to the agent</label>"
@@ -611,8 +668,12 @@ def render_run_detail(
         + _field("Last qualifying activity", _get(run, "last_activity_at", "last_qualifying_activity"))
         + "</dl>" + _countdowns(run) + "</section>"
         + _render_question(run, question, notices=notices)
+        + _render_guidance(
+            run, base_url=base_url, csrf_token=csrf_token,
+            idempotency_token=idempotency_token,
+            messages=messages or _get(run, "messages"),
+        )
         + _render_history(messages or _get(run, "messages"), events or _get(run, "events"))
-        + _render_guidance(run, base_url=base_url, csrf_token=csrf_token, idempotency_token=idempotency_token)
         + _render_controls(run, base_url=base_url, csrf_token=csrf_token, idempotency_token=idempotency_token)
         + "</main>"
     )

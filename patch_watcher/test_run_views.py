@@ -189,11 +189,50 @@ class RunViewTests(unittest.TestCase):
                     "why": "Branches differ.", "tried": "Compared histories.",
                     "recommended": "Use master.", "choices": ["master", "maintenance"]}
         html = run_views.render_run_detail(self.sample_run(state="waiting_human", question=question))
-        self.assertLess(html.index("Waiting for your decision"), html.index("Conversation"))
+        self.assertLess(html.index("Waiting for your decision"), html.index("Chat with this run"))
         for expected in ("Which baseline?", "Compared histories.",
                          "name='question_id' value='q-42'", "Answer and resume"):
             self.assertIn(expected, html)
         self.assertNotIn("action='/runs/run-123/resume'", html)
+
+    def test_the_chat_panel_reads_as_a_conversation(self):
+        """Transcript above the box you answer it in, sides distinguished,
+        and no "Delivery: Recorded" on every line the agent says."""
+        messages = [
+            {"author": "agent", "body": "Build is compiling.",
+             "created_at": "2026-09-11T15:32:41+00:00", "delivery_state": "recorded"},
+            {"author": "operator", "body": "Stop after this one.",
+             "created_at": "2026-09-11T15:33:02+00:00", "delivery_state": "queued"},
+        ]
+        html = run_views.render_run_detail(self.sample_run(), messages=messages)
+        self.assertIn("Chat with this run", html)
+        self.assertIn("chat-live", html)                       # it says it is live
+        self.assertIn("run-message agent", html)
+        self.assertIn("run-message operator", html)
+        self.assertIn(">You</span>", html)                     # the operator is "You"
+        self.assertIn(">15:32:41</time>", html)                # clock, not a full stamp
+        self.assertIn("Delivery: <strong>Queued", html)        # a queued send still says so
+        self.assertEqual(html.count("Delivery: <strong>Recorded"), 0)
+        self.assertLess(html.index("Build is compiling."), html.index("<textarea"))
+        self.assertIn("data-poll='/runs/run-123/messages'", html)
+
+    def test_a_finished_run_is_not_polled(self):
+        html = run_views.render_run_detail(self.sample_run(state="succeeded"))
+        self.assertIn("chat-done", html)
+        self.assertNotIn("data-poll", html)
+        self.assertNotIn("setInterval", html)
+
+    def test_the_transcript_fragment_stands_alone(self):
+        """What the poll swaps in: rows only, no page furniture."""
+        fragment = run_views.render_chat_messages([
+            {"author": "agent", "body": "Rebase complete.",
+             "created_at": "2026-09-11T15:40:00+00:00", "delivery_state": "recorded"},
+        ])
+        self.assertIn("Rebase complete.", fragment)
+        self.assertIn("run-message agent", fragment)
+        self.assertNotIn("<section", fragment)
+        self.assertNotIn("<textarea", fragment)
+        self.assertIn("Nothing said yet", run_views.render_chat_messages([]))
 
     def test_conversation_shows_delivery_states_and_timeline(self):
         messages = [{"author": "operator", "body": "First", "delivery_state": "queued"},

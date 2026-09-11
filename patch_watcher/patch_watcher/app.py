@@ -127,6 +127,7 @@ from patch_watcher.run_controller import (
     unknown_failure_research_run_id,
 )
 from patch_watcher.run_views import (
+    render_chat_messages,
     render_destructive_confirmation,
     render_investigate_control,
     render_run_detail,
@@ -2878,7 +2879,7 @@ def _engineering_detail_html(session):
 def _standalone_document(title, body):
     return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>{escape(title)}</title><style>
 body{{margin:0;
-background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1100px;margin:42px auto;padding:24px;background:white;border:1px solid #e4e7ec;border-radius:14px}}section{{border-top:1px solid #eaecf0;padding-top:18px;margin-top:18px}}dl{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}}dt{{font-size:12px;color:#667085}}dd{{margin:4px 0;word-break:break-word}}textarea{{width:min(720px,95%);min-height:90px;display:block;margin:8px 0}}button{{border:0;border-radius:8px;padding:10px 14px;background:#315efb;color:white;font-weight:600}}form.inline-control{{display:inline-block;margin:5px}}.danger-link,.danger{{color:#b42318}}.run-state{{display:inline-block;border-radius:999px;padding:4px 8px;background:#f2f4f7;margin:3px}}.tone-good{{background:#dcfce7}}.tone-warn{{background:#fef3c7}}.tone-bad{{background:#fee2e2}}.run-conversation,.run-timeline{{max-height:400px;overflow:auto}}.safety-note{{padding:10px;background:#eff8ff;border-radius:8px}}.notice{{background:#fffaeb;color:#b54708;border:1px solid #fedf89;padding:10px 12px;border-radius:8px;margin:0 0 16px}}.run-failure{{border-top:0;background:#fef3f2;border:1px solid #fecdca;border-radius:10px;padding:14px 16px;margin-top:16px}}.run-failure h3{{margin-top:0;color:#b42318}}.failure-summary{{font-weight:600}}.run-failure-line{{color:#b42318}}.control-note,.controls-unavailable{{color:#667085;font-size:13px}}code{{word-break:break-all}}</style></head><body>{body}</body></html>"""
+background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width:1100px;margin:42px auto;padding:24px;background:white;border:1px solid #e4e7ec;border-radius:14px}}section{{border-top:1px solid #eaecf0;padding-top:18px;margin-top:18px}}dl{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}}dt{{font-size:12px;color:#667085}}dd{{margin:4px 0;word-break:break-word}}textarea{{width:min(720px,95%);min-height:90px;display:block;margin:8px 0}}button{{border:0;border-radius:8px;padding:10px 14px;background:#315efb;color:white;font-weight:600}}form.inline-control{{display:inline-block;margin:5px}}.danger-link,.danger{{color:#b42318}}.run-state{{display:inline-block;border-radius:999px;padding:4px 8px;background:#f2f4f7;margin:3px}}.tone-good{{background:#dcfce7}}.tone-warn{{background:#fef3c7}}.tone-bad{{background:#fee2e2}}.run-timeline{{max-height:400px;overflow:auto}}.guidance-composer.chat{{border:1px solid #e4e7ec;border-radius:14px;padding:16px;background:#fff}}.chat-head{{display:flex;align-items:center;gap:10px;margin-bottom:10px}}.chat-head h3{{margin:0;font-size:15px}}.chat-live{{font-size:11px;font-weight:700;color:#166534;background:#dcfce7;border:1px solid #86efac;border-radius:999px;padding:2px 9px;display:inline-flex;align-items:center;gap:5px}}.chat-live::before{{content:'';width:6px;height:6px;border-radius:50%;background:#16a34a;animation:chat-pulse 2s ease-in-out infinite}}@keyframes chat-pulse{{0%,100%{{opacity:1}}50%{{opacity:.25}}}}.chat-done{{font-size:11px;font-weight:700;color:#475467;background:#f2f4f7;border:1px solid #d0d5dd;border-radius:999px;padding:2px 9px}}.chat-log{{max-height:min(58vh,520px);overflow-y:auto;border:1px solid #eaecf0;border-radius:12px;padding:14px;background:#f8fafc;display:flex;flex-direction:column;gap:10px;margin:0 0 12px;scroll-behavior:smooth;overscroll-behavior:contain}}.run-message{{list-style:none;border-radius:12px;padding:10px 13px;max-width:76%;border:1px solid #e4e7ec;background:#fff;box-shadow:0 1px 2px #1018280d;line-height:1.5}}.run-message.agent{{align-self:flex-start;border-bottom-left-radius:4px}}.run-message.operator{{align-self:flex-end;background:#eff6ff;border-color:#bfdbfe;border-bottom-right-radius:4px}}.run-message header{{display:flex;align-items:baseline;gap:8px;font-size:11px;margin-bottom:4px}}.run-message .who{{font-weight:700;color:#344054}}.run-message.operator .who{{color:#1e3a8a}}.run-message time{{color:#98a2b3;font-variant-numeric:tabular-nums}}.run-message p{{margin:0;white-space:pre-wrap;word-break:break-word;font-size:13px;color:#172033}}.run-message footer{{font-size:11px;color:#667085;margin-top:5px}}.chat-empty{{color:#667085;margin:0;text-align:center;padding:22px 0}}.guidance-composer.chat textarea{{min-height:76px;width:100%;box-sizing:border-box;margin:0;border-radius:10px;font:inherit;font-size:13px}}.guidance-composer.chat form{{display:grid;gap:9px}}.guidance-composer.chat .guidance-actions{{display:flex;gap:8px;flex-wrap:wrap}}.guidance-composer.chat button{{border-radius:9px}}.guidance-composer.chat #guidance-help{{font-size:12px;color:#667085;margin:0 0 8px}}.safety-note{{padding:10px;background:#eff8ff;border-radius:8px}}.notice{{background:#fffaeb;color:#b54708;border:1px solid #fedf89;padding:10px 12px;border-radius:8px;margin:0 0 16px}}.run-failure{{border-top:0;background:#fef3f2;border:1px solid #fecdca;border-radius:10px;padding:14px 16px;margin-top:16px}}.run-failure h3{{margin-top:0;color:#b42318}}.failure-summary{{font-weight:600}}.run-failure-line{{color:#b42318}}.control-note,.controls-unavailable{{color:#667085;font-size:13px}}code{{word-break:break-all}}</style></head><body>{body}</body></html>"""
 
 
 def _standing_policy_html(patch):
@@ -4430,6 +4431,13 @@ class Handler(BaseHTTPRequestHandler):
             except SessionNotFound:
                 self.send_error(404)
                 return
+            if len(parts) == 3 and parts[2] == "messages":
+                # The chat panel polls this and swaps in the transcript, so a
+                # live run reads as a conversation without reloading the page
+                # and discarding whatever the operator is halfway through
+                # typing.
+                self.respond(render_chat_messages(_run_messages(session)))
+                return
             if len(parts) == 4 and parts[2] == "artifacts":
                 if RUN_CONTROLLER is None or not session.run_id.startswith(
                     ("pw-engineer-", "pw-review-", "pw-build-")
@@ -5941,6 +5949,14 @@ def main(argv=None):
     )
     initialize_retest_controller()
     print(f"Patch Watcher listening on http://127.0.0.1:{args.port}")
+    # It binds to loopback and has no authentication of its own, so the way to
+    # reach it from elsewhere is a tunnel, not a wider bind: over SSH the
+    # browser still talks to localhost, which is what the Host check wants.
+    print(
+        f"  From another machine:  ssh -N -L {args.port}:127.0.0.1:{args.port} "
+        f"{os.environ.get('USER', 'you')}@{platform.node()}"
+    )
+    print(f"  then open http://127.0.0.1:{args.port} there.")
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
 
 
