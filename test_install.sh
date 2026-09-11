@@ -318,6 +318,34 @@ else
     bad "uninstall leaves a real skill directory alone"
 fi
 
+# --- a tool whose credentials are optional ---------------------------------
+# jenkins reads are served anonymously, so the walkthrough must not push
+# someone without an account into configuring it, and not configuring it
+# is a normal outcome rather than a failure.
+fresh_home
+out=$(printf '\n' | env HOME="$HOME_DIR" VERIFY=0 \
+    bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; configure_tools 'jenkins'" 2>&1)
+contains "an optional tool says the tool works without it" \
+    "Optional -- the tool works without it" "$out"
+contains "  and does not default to yes" "(not needed for reads) [y/N]" "$out"
+contains "  and Enter leaves it anonymous" "Left anonymous" "$out"
+if [ -e "$HOME_DIR/.config/jenkins-tool/.env" ]; then
+    bad "  writing nothing when declined"
+else
+    ok "  writing nothing when declined"
+fi
+
+out=$(HOME="$HOME_DIR" bash "$INSTALL_SH" --status 2>&1)
+contains "--status calls an unconfigured optional tool workable" \
+    "reads work anonymously" "$out"
+
+# Saying yes and then giving nothing is also not a failure.
+fresh_home
+out=$(printf 'y\n\n\n\n' | env HOME="$HOME_DIR" VERIFY=0 \
+    bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; configure_tools 'jenkins'" 2>&1)
+contains "an unanswered optional credential leaves it anonymous" \
+    "leaving Jenkins anonymous" "$out"
+
 # --- the version-bump hook -------------------------------------------------
 # The list this hook used to carry had drifted: it named crash_tool, which
 # has no pyproject.toml, and not lreview, lustre_crash, gerrit_dashboard or

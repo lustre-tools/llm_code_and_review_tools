@@ -391,7 +391,7 @@ install_tools() {
     echo "  jira            - JIRA issue tracking"
     echo "  gerrit          - Gerrit code review (also: gc)"
     echo "  maloo           - Maloo test results"
-    echo "  jenkins         - Jenkins build server"
+    echo "  jenkins         - Jenkins build server (no credentials needed to read)"
     echo "  lustre-crash    - Non-interactive crash dump analysis"
     echo "  janitor         - Gerrit Janitor test results"
     echo "  lreview         - Parallel AI patch reviews (kreview)"
@@ -610,9 +610,10 @@ JENKINS_TOKEN|Jenkins API token|secret|"
     Configure > API Token > Add new Token.  Copy it before
     leaving the page; Jenkins shows it once."
             SPEC_OPTIONAL=1
-            SPEC_NOTE="Optional.  Every read -- jobs, builds, console --
-        works anonymously against build.whamcloud.com.  A token is
-        needed only to retrigger or abort a build."
+            SPEC_NOTE="Optional -- the tool works without it.  Reads
+        (jobs, builds, console, review) are served anonymously by
+        build.whamcloud.com.  A token adds what your Jenkins account
+        is permitted to do: retrigger and abort builds."
             ;;
         *)
             return 1
@@ -874,12 +875,27 @@ configure_one_tool() {
             fi
             ;;
         partial)
-            echo -e "  ${YELLOW}incomplete${NC} -- missing: $(tool_missing_keys "$tool")"
+            if [ -n "$SPEC_OPTIONAL" ]; then
+                echo "  partly set up -- missing: $(tool_missing_keys "$tool")"
+            else
+                echo -e "  ${YELLOW}incomplete${NC} -- missing: $(tool_missing_keys "$tool")"
+            fi
             ;;
     esac
 
-    if ! ask_yes "  Set up $SPEC_LABEL now?" y; then
-        echo "  Left for later:  ./install.sh --configure --only $tool"
+    local default_answer=y
+    local prompt="  Set up $SPEC_LABEL now?"
+    if [ -n "$SPEC_OPTIONAL" ]; then
+        default_answer=n
+        prompt="  Add $SPEC_LABEL credentials? (not needed for reads)"
+    fi
+    if ! ask_yes "$prompt" "$default_answer"; then
+        if [ -n "$SPEC_OPTIONAL" ]; then
+            echo "  Left anonymous -- reads still work."
+            echo "  Add them later:  ./install.sh --configure --only $tool"
+        else
+            echo "  Left for later:  ./install.sh --configure --only $tool"
+        fi
         return 0
     fi
 
@@ -923,8 +939,14 @@ configure_one_tool() {
             case " $SPEC_REQUIRED " in
                 *" $key "*)
                     if [ -z "$answer" ]; then
-                        echo -e "  ${YELLOW}$key is required${NC} -- leaving $SPEC_LABEL unconfigured."
-                        echo "  Later:  ./install.sh --configure --only $tool"
+                        if [ -n "$SPEC_OPTIONAL" ]; then
+                            echo "  No $key given -- leaving $SPEC_LABEL anonymous."
+                            echo "  Reads still work; credentials only add the"
+                            echo "  actions your account is permitted to take."
+                        else
+                            echo -e "  ${YELLOW}$key is required${NC} -- leaving $SPEC_LABEL unconfigured."
+                            echo "  Later:  ./install.sh --configure --only $tool"
+                        fi
                         return 0
                     fi
                     ;;
