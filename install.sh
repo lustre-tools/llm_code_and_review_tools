@@ -559,6 +559,7 @@ tool_spec() {
     SPEC_REQUIRED=""
     SPEC_WHERE=""
     SPEC_NOTE=""
+    SPEC_OPTIONAL=""
     case "$1" in
         gerrit)
             SPEC_LABEL="Gerrit"
@@ -608,6 +609,10 @@ JENKINS_TOKEN|Jenkins API token|secret|"
             SPEC_WHERE="Log in to Jenkins, then your name (top right) >
     Configure > API Token > Add new Token.  Copy it before
     leaving the page; Jenkins shows it once."
+            SPEC_OPTIONAL=1
+            SPEC_NOTE="Optional.  Every read -- jobs, builds, console --
+        works anonymously against build.whamcloud.com.  A token is
+        needed only to retrigger or abort a build."
             ;;
         *)
             return 1
@@ -982,6 +987,9 @@ configure_summary() {
                 elif [ "$status" = "partial" ]; then
                     echo -e "  ${YELLOW}part${NC}  $pad missing $(tool_missing_keys "$tool")" \
                         "-- ./install.sh --configure --only $tool"
+                elif [ -n "$SPEC_OPTIONAL" ]; then
+                    echo -e "  ${GREEN}ok${NC}    $pad no credentials" \
+                        "-- reads work anonymously"
                 else
                     echo -e "  ${YELLOW}--${NC}    $pad not configured" \
                         "-- ./install.sh --configure --only $tool"

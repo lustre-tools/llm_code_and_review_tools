@@ -605,14 +605,26 @@ class TestNoEnvelopeDefault:
 
 
 class TestConfigValidation:
-    def test_missing_credentials_raises(self):
+    def test_missing_credentials_are_allowed(self):
+        # Reads work anonymously against a Jenkins that permits it, so
+        # an unconfigured tool has to be usable rather than fatal.
         from jenkins_tool.config import JenkinsConfig
-        with pytest.raises(ValueError, match="credentials required"):
-            JenkinsConfig(
-                base_url="https://build.example.com",
-                user="",
-                token="",
-            )
+        config = JenkinsConfig(base_url="https://build.example.com")
+        assert config.authenticated is False
+
+    def test_half_a_credential_is_not_a_credential(self):
+        # A username with no token makes Jenkins reject the request,
+        # where sending nothing would have been served anonymously.
+        from jenkins_tool.config import JenkinsConfig
+        assert not JenkinsConfig(
+            base_url="https://build.example.com", user="alice"
+        ).authenticated
+        assert not JenkinsConfig(
+            base_url="https://build.example.com", token="t"
+        ).authenticated
+        assert JenkinsConfig(
+            base_url="https://build.example.com", user="alice", token="t"
+        ).authenticated
 
     def test_url_trailing_slash_stripped(self):
         from jenkins_tool.config import JenkinsConfig
@@ -622,3 +634,49 @@ class TestConfigValidation:
             token="test",
         )
         assert not config.base_url.endswith("/")
+
+
+class TestWritesRequireCredentials:
+    """Reads are anonymous; anything that changes a build is not.
+
+    The refusal happens before the request, names the fix, and exits 2
+    (the shared auth code) rather than 1, which a caller cannot tell
+    apart from a bad job name.
+    """
+
+    @patch("jenkins_tool.cli._make_client")
+    def test_abort_without_credentials_exits_2(self, mock_make, runner):
+        mock_make.return_value = _anonymous_client()
+        result = runner.invoke(
+            main, ["abort", "lustre-reviews", "121884"], env=_make_env()
+        )
+        assert result.exit_code == 2
+        assert "credentials are required" in result.output
+        assert "JENKINS_TOKEN" in result.output
+
+    @patch("jenkins_tool.cli._make_client")
+    def test_retrigger_without_credentials_exits_2(self, mock_make, runner):
+        mock_make.return_value = _anonymous_client()
+        result = runner.invoke(
+            main, ["retrigger", "lustre-reviews", "121880"], env=_make_env()
+        )
+        assert result.exit_code == 2
+        assert "credentials are required" in result.output
+
+    @patch("jenkins_tool.cli._make_client")
+    def test_the_build_is_never_touched(self, mock_make, runner):
+        client = _anonymous_client()
+        mock_make.return_value = client
+        runner.invoke(
+            main, ["retrigger", "lustre-reviews", "121880"], env=_make_env()
+        )
+        client.retrigger_build.assert_not_called()
+
+
+def _anonymous_client():
+    """A client mock whose config reports no credentials."""
+    from jenkins_tool.config import JenkinsConfig
+
+    client = MagicMock()
+    client.config = JenkinsConfig(base_url="https://build.example.com")
+    return client

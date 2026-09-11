@@ -3,6 +3,18 @@
 A thin, LLM-agent-focused CLI for the Jenkins build server. Query build status,
 console output, and Gerrit-triggered builds.
 
+## Credentials are optional
+
+Every read -- `jobs`, `builds`, `build`, `console`, `run-console`,
+`review` -- works against a Jenkins that allows anonymous read, which
+build.whamcloud.com does. `JENKINS_USER` and `JENKINS_TOKEN` are needed
+only by `abort` and `retrigger`, which refuse up front without them and
+exit 2.
+
+A username without a token is not a credential: Jenkins rejects such a
+request outright, where the same request with no Authorization header
+would have been served.
+
 ## Installation
 
 ```bash

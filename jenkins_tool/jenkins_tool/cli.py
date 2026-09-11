@@ -14,9 +14,10 @@ from llm_tool_common.envelope import (
     success_response,
 )
 from llm_tool_common.decorators import handle_errors
+from llm_tool_common.errors import ErrorCode, ExitCode
 
 from .client import JenkinsClient
-from .config import load_config
+from .config import CREDENTIAL_HINT, load_config
 
 TOOL_NAME = "jenkins"
 
@@ -40,11 +41,34 @@ def _output(envelope: dict[str, Any], pretty: bool) -> None:
 
 
 def _error(
-    code: str, message: str, command: str, pretty: bool
+    code: str,
+    message: str,
+    command: str,
+    pretty: bool,
+    exit_code: int = ExitCode.GENERAL_ERROR,
 ) -> None:
     env = error_response_from_dict(code, message, TOOL_NAME, command)
     _output(env, pretty)
-    sys.exit(1)
+    sys.exit(exit_code)
+
+
+def _require_auth(client: JenkinsClient, command: str, pretty: bool) -> None:
+    """Refuse a write before making it, with the fix in the message.
+
+    Reads work anonymously against a Jenkins that allows anonymous
+    read, so an unconfigured tool is useful and only writes need to
+    stop here.
+    """
+    if client.config.authenticated:
+        return
+    _error(
+        ErrorCode.AUTH_MISSING,
+        f"Jenkins credentials are required to {command} a build. "
+        f"{CREDENTIAL_HINT}",
+        command,
+        pretty,
+        ExitCode.AUTH_ERROR,
+    )
 
 
 def _ts_to_iso(timestamp_ms: int | None) -> str | None:
@@ -650,6 +674,7 @@ def abort(
       jenkins abort lustre-reviews 121884 --kill
     """
     client = _make_client(url, user, token)
+    _require_auth(client, "abort", pretty)
 
     # First check if the build is actually running
     data = client.get_build(job_name, build_number)
@@ -718,6 +743,7 @@ def retrigger(
       jenkins retrigger lustre-master 4699
     """
     client = _make_client(url, user, token)
+    _require_auth(client, "retrigger", pretty)
     location = client.retrigger_build(job_name, build_number)
 
     result = {

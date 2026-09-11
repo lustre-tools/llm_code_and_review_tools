@@ -328,3 +328,58 @@ class TestFindBuildsByGerritChange:
 
         matches = client.find_builds_by_gerrit_change("foo", 54225)
         assert len(matches) == 0
+
+
+class TestAnonymousAccess:
+    """Credentials are optional for everything this tool reads."""
+
+    @pytest.fixture
+    def anon_config(self):
+        return JenkinsConfig(base_url="https://build.example.com")
+
+    def test_no_authorization_header_when_unconfigured(self, anon_config):
+        # An empty credential is rejected; an absent one is served.
+        c = JenkinsClient(anon_config)
+        assert c.session.auth is None
+
+    def test_reads_work(self, anon_config):
+        c = JenkinsClient(anon_config)
+        c.session = MagicMock()
+        c.session.get.return_value = MagicMock(
+            status_code=200, json=lambda: {"jobs": []}
+        )
+        assert c.get_jobs() == []
+
+    def test_writes_refuse_before_the_request(self, anon_config):
+        from jenkins_tool.client import JenkinsAuthRequired
+
+        c = JenkinsClient(anon_config)
+        c.session = MagicMock()
+        for call in (
+            lambda: c.abort_build("job", 1),
+            lambda: c.kill_build("job", 1),
+            lambda: c.retrigger_build("job", 1),
+        ):
+            with pytest.raises(JenkinsAuthRequired, match="credentials"):
+                call()
+        c.session.post.assert_not_called()
+
+    def test_a_refused_read_says_credentials_are_the_fix(self, anon_config):
+        # A Jenkins that does not allow anonymous read otherwise fails
+        # with a bare 403 and no hint about what to do.
+        from jenkins_tool.client import JenkinsAuthRequired
+
+        c = JenkinsClient(anon_config)
+        c.session = MagicMock()
+        resp = MagicMock(status_code=403, url="https://build.example.com/api/json")
+        c.session.get.return_value = resp
+        with pytest.raises(JenkinsAuthRequired, match="anonymously"):
+            c.get_jobs()
+
+    def test_a_configured_client_still_sends_auth(self):
+        c = JenkinsClient(
+            JenkinsConfig(
+                base_url="https://build.example.com", user="u", token="t"
+            )
+        )
+        assert c.session.auth == ("u", "t")

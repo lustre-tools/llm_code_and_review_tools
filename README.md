@@ -238,6 +238,10 @@ Verify: `maloo queue`
 
 ### Jenkins
 
+Optional. Every read works anonymously against a Jenkins that allows
+anonymous read (build.whamcloud.com does); credentials are needed only
+by `jenkins abort` and `jenkins retrigger`.
+
 ```bash
 JENKINS_URL=https://build.whamcloud.com
 JENKINS_USER=your-username

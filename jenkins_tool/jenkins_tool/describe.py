@@ -11,8 +11,13 @@ def get_tool_description() -> ToolDescription:
                     "Query build status, console output, and Gerrit review builds.",
         env_vars=[
             {"name": "JENKINS_URL", "description": "Jenkins server URL (default: https://build.whamcloud.com)"},
-            {"name": "JENKINS_USER", "description": "Jenkins username"},
-            {"name": "JENKINS_TOKEN", "description": "Jenkins API token"},
+            {"name": "JENKINS_USER",
+             "description": "Jenkins username (only needed for abort/retrigger; "
+                            "reads work anonymously)",
+             "required": "false"},
+            {"name": "JENKINS_TOKEN",
+             "description": "Jenkins API token (only needed for abort/retrigger)",
+             "required": "false"},
         ],
         commands=[
             Command(

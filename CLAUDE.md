@@ -178,8 +178,9 @@ tool offers to clone review-prompts. See `lreview/README.md`.
 Also installed from this repo:
 - `maloo` — Lustre CI test results (testing.whamcloud.com);
   needs `MALOO_USER`/`MALOO_PASS`. See `maloo_tool/README.md`.
-- `jenkins` — Jenkins build server (build.whamcloud.com); needs
-  `JENKINS_USER`/`JENKINS_TOKEN`. See `jenkins_tool/README.md`.
+- `jenkins` — Jenkins build server (build.whamcloud.com). Reads need no
+  credentials; `JENKINS_USER`/`JENKINS_TOKEN` are only for `abort` and
+  `retrigger`. See `jenkins_tool/README.md`.
 - `janitor` — Gerrit Janitor test results; no auth, optional
   `JANITOR_URL` env var. See the top-level `README.md`.
 - `lustre-crash` — drgn-based crash-dump analysis; no auth.

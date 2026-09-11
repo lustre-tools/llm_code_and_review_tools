@@ -145,6 +145,8 @@ number), and which are the patch's own. Never describe a patch as "CI
 clean" on the strength of optional suites, and never claim a retest was
 requested without the command's result confirming it.
 
-Credentials for `maloo` and `jenkins` come from the tools installer:
-`./install.sh --status` shows what is configured, `./install.sh
---configure --only maloo` sets one up. Janitor needs none.
+`maloo` needs credentials; the tools installer writes them
+(`./install.sh --status` shows what is configured, `./install.sh
+--configure --only maloo` sets one up). Janitor needs none, and neither
+does reading from `jenkins` -- only `jenkins abort` and `jenkins
+retrigger` do, and they say so and exit 2 when unconfigured.

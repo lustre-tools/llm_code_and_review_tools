@@ -4,7 +4,11 @@ from typing import Any
 
 import requests
 
-from .config import JenkinsConfig
+from .config import CREDENTIAL_HINT, JenkinsConfig
+
+
+class JenkinsAuthRequired(RuntimeError):
+    """An operation needs credentials that are not configured."""
 
 
 class JenkinsClient:
@@ -14,7 +18,32 @@ class JenkinsClient:
         self.config = config
         self.timeout = timeout
         self.session = requests.Session()
-        self.session.auth = (config.user, config.token)
+        # No Authorization header at all when unconfigured: an empty
+        # credential is rejected, while an absent one is served
+        # anonymously by any Jenkins that allows anonymous read.
+        if config.authenticated:
+            self.session.auth = (config.user, config.token)
+
+    def _require_auth(self, action: str) -> None:
+        if self.config.authenticated:
+            return
+        raise JenkinsAuthRequired(
+            f"Jenkins credentials are required to {action}. "
+            f"{CREDENTIAL_HINT}"
+        )
+
+    def _raise_for_status(self, resp: requests.Response) -> None:
+        """Turn an anonymous refusal into an answerable message.
+
+        Otherwise a Jenkins that does not allow anonymous read fails
+        with a bare 403 and no hint that credentials are the fix.
+        """
+        if resp.status_code in (401, 403) and not self.config.authenticated:
+            raise JenkinsAuthRequired(
+                f"HTTP {resp.status_code} for {resp.url}: this Jenkins "
+                f"does not serve that anonymously. {CREDENTIAL_HINT}"
+            )
+        resp.raise_for_status()
 
     def _get_json(
         self, path: str, params: dict[str, Any] | None = None
@@ -24,14 +53,14 @@ class JenkinsClient:
         if not url.endswith("/api/json") and "/api/json" not in url:
             url = url.rstrip("/") + "/api/json"
         resp = self.session.get(url, params=params, timeout=self.timeout)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         return resp.json()
 
     def _get_text(self, path: str) -> str:
         """Make a GET request and return plain text."""
         url = f"{self.config.base_url}/{path.lstrip('/')}"
         resp = self.session.get(url, timeout=self.timeout)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         return resp.text
 
     # -- Jobs --
@@ -114,6 +143,7 @@ class JenkinsClient:
 
     def _post(self, path: str, data: dict[str, str] | None = None) -> int:
         """POST with CSRF crumb, return HTTP status code."""
+        self._require_auth("change a build")
         crumb = self.get_crumb()
         url = f"{self.config.base_url}/{path.lstrip('/')}"
         resp = self.session.post(
@@ -162,6 +192,7 @@ class JenkinsClient:
 
         Returns the redirect location or HTTP status.
         """
+        self._require_auth("retrigger a build")
         crumb = self.get_crumb()
         url = (
             f"{self.config.base_url}/job/{job_name}"

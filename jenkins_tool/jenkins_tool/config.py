@@ -8,25 +8,40 @@ from llm_tool_common.config import load_env_files
 load_env_files("jenkins-tool")
 
 
+CREDENTIAL_HINT = (
+    "Set JENKINS_USER and JENKINS_TOKEN, or run "
+    "`install.sh --configure --only jenkins`. The token comes from "
+    "Jenkins: your name (top right) > Configure > API Token."
+)
+
+
 @dataclass
 class JenkinsConfig:
-    """Jenkins tool configuration."""
+    """Jenkins tool configuration.
+
+    Credentials are optional.  A Jenkins that allows anonymous read --
+    build.whamcloud.com does -- serves jobs, builds, console output and
+    the CSRF crumb without them, which is everything this tool reads.
+    They are needed only to change something: abort, kill, retrigger.
+    """
 
     base_url: str
-    user: str
-    token: str
+    user: str = ""
+    token: str = ""
 
     def __post_init__(self) -> None:
         self.base_url = self.base_url.rstrip("/")
-        if not self.user or not self.token:
-            raise ValueError(
-                "Jenkins credentials required. Set JENKINS_USER and JENKINS_TOKEN "
-                "environment variables, or create "
-                "~/.config/jenkins-tool/.env with:\n"
-                "  JENKINS_URL=https://build.whamcloud.com\n"
-                "  JENKINS_USER=youruser\n"
-                "  JENKINS_TOKEN=your-api-token"
-            )
+
+    @property
+    def authenticated(self) -> bool:
+        """True when both halves of a credential are present.
+
+        Half a credential is worse than none: Jenkins rejects a request
+        carrying a username with no token outright, where the same
+        request with no Authorization header at all would have been
+        served anonymously.
+        """
+        return bool(self.user and self.token)
 
 
 def load_config(
