@@ -571,6 +571,58 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertNotIn("<article class='engineering-run'", index)
         self.assertIn("href='/runs/pw-engineer-68160-ps4-abc'", index)
 
+    def test_a_live_run_is_on_the_row_not_behind_a_disclosure(self):
+        """The one thing an operator most wants at a glance -- is something
+        running on this patch, and what is it doing -- took a click to find,
+        and the only live view was a card far down the page."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = app.initialize_session_store(root / "sessions.sqlite3")
+            app.initialize_automation_store(root / "automation.sqlite3")
+            app.initialize_standing_policy_store(root / "standing.json")
+            patch_record, _ = app.add_patch("https://review.whamcloud.com/c/35302")
+            patch_record.update(change_number=35302, patchset=4, revision_sha="d" * 40)
+            app.RUN_CONTROLLER = None
+
+            idle = app._patch_run_html(patch_record)
+            self.assertIn("<strong>No run</strong> on this patch.", idle)
+
+            store.register_pinned_session(
+                "pw-session-live", patch_id="35302", run_id="pw-engineer-35302-ps4-live",
+                revision="d" * 40, patchset=4, profile="engineering", state="running",
+            )
+            store.record_message("pw-session-live", "agent", "Build is compiling. Waiting for it to finish.")
+            live = app._patch_run_html(patch_record)
+            self.assertIn("Run: Running", live)
+            self.assertIn("engineering run", live)
+            self.assertIn("Build is compiling.", live)
+            for control in ("/runs/pw-engineer-35302-ps4-live/pause",
+                            "/runs/pw-engineer-35302-ps4-live/interrupt",
+                            "/runs/pw-engineer-35302-ps4-live/confirm?intent=cancel"):
+                self.assertIn(control, live)
+            self.assertEqual(live.count("name='csrf_token'"), live.count("<form"))
+
+            store.ask_human("pw-session-live", "Which resolution did you want?")
+            waiting = app._patch_run_html(patch_record)
+            self.assertIn("Waiting for your decision", waiting)
+
+            # On the row, outside the disclosure, and before it.
+            with patch("patch_watcher.app.refresh_resource_status",
+                       return_value={"ltvm": {"vms": []}}):
+                page = app.page()
+            row = page.split("<tbody>", 1)[1]
+            self.assertIn("class='patch-run live'", row)
+            self.assertLess(row.index("class='patch-run"),
+                            row.index("<details class='patch-actions'"))
+
+            store.finish_session("pw-session-live", "failed",
+                                 failure_code="runner_lost", failure_summary="host_process_missing")
+            done = app._patch_run_html(patch_record)
+            self.assertIn("<strong>No run</strong> on this patch.", done)
+            self.assertIn("href='/runs/pw-engineer-35302-ps4-live'", done)
+            self.assertIn("host_process_missing", done)
+
     def test_the_panel_says_first_what_is_happening_now(self):
         """Is anything running?  What runs without asking?  When was it last
         looked at?  The panel used to answer none of these; a run's absence
@@ -587,7 +639,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
             app.RUN_CONTROLLER = None
 
             quiet = app._patch_now_html(patch_record)
-            self.assertIn("<strong>No run</strong> on this patch", quiet)
+            # The run itself moved to the row; this line is about policy.
             self.assertIn("Level <strong>Watch only</strong>: nothing runs unattended", quiet)
             self.assertIn("last checked 2026-09-10 12:00:00", quiet)
             self.assertNotIn("Last run", quiet)
@@ -607,7 +659,6 @@ class PatchWatcherTests(AppGlobalsIsolated):
             )
             store.finish_session("pw-session-done", "succeeded")
             finished = app._patch_now_html(patch_record)
-            self.assertIn("<strong>No run</strong> on this patch", finished)
             self.assertIn("Last run: <a href='/runs/pw-review-35302-ps4-old'>", finished)
             self.assertIn("succeeded", finished)
 
@@ -616,14 +667,8 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 revision="b" * 40, patchset=4, profile="engineering", state="running",
             )
             running = app._patch_now_html(patch_record)
-            self.assertIn("<strong>A run is running:</strong>", running)
             self.assertIn("href='/runs/pw-engineer-35302-ps4-new'", running)
-            self.assertIn("(engineering)", running)
-            self.assertNotIn("waiting for you", running)
-            store.ask_human("pw-session-live", "Convert vvp_object.c too?")
-            waiting = app._patch_now_html(patch_record)
-            self.assertIn("A run is waiting human", waiting)
-            self.assertIn("<strong>It is waiting for you.</strong>", waiting)
+            self.assertIn("is running.", running)
 
     def test_run_now_applies_the_level_once_kill_switch_or_not(self):
         """The unattended gate is for what happens without anyone asking.  A
@@ -1035,8 +1080,9 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertIn("method='post' action='/engineering-runs/prepare'", rendered)
         # The panel leads with what is happening; the "Available" chips, which
         # meant "installed on this host" and read as "something to do", are gone.
-        self.assertLess(rendered.index("No run</strong> on this patch"),
-                        rendered.index("name='preset'"))
+        # Level, then the manual runs.  (The run block above them needs a
+        # session store, which this test has none of; its placement is
+        # asserted in test_a_live_run_is_on_the_row_not_behind_a_disclosure.)
         self.assertLess(rendered.index("name='preset'"), rendered.index("Start a run by hand"))
         # Every rung is described where it is chosen, not only once saved.
         for level in app.PRESET_LEVELS:

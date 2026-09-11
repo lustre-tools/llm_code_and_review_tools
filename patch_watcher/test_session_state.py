@@ -56,6 +56,50 @@ class SessionStateStoreTests(unittest.TestCase):
             patchset=patchset,
         )
 
+    def test_a_provably_wrong_outcome_can_be_corrected_but_never_silently(self):
+        """A run that rebased a patch, built it and uploaded a patchset was
+        recorded failed because a background build outlived its stop window.
+        Immutability is right as a default; a record the run's own evidence
+        contradicts still has to be fixable, and visibly."""
+
+        self.store.register_pinned_session(
+            "correct-me", patch_id="35302", run_id="run-correct", revision="a" * 40,
+            patchset=4, profile="engineering", started_at=START,
+        )
+        self.store.finish_session(
+            "correct-me", "failed", failure_code="worker_report_invalid",
+            failure_summary="runner did not stop before evidence capture",
+        )
+        with self.assertRaisesRegex(InvalidSessionOperation, "immutable"):
+            self.store.finish_session("correct-me", "succeeded")
+
+        corrected = self.store.correct_terminal_result(
+            "correct-me", state="succeeded",
+            reason="the agent reported complete; the stop timeout was cleanup",
+        )
+        self.assertEqual(corrected.state, "succeeded")
+        self.assertIsNone(corrected.failure_code)
+        self.assertEqual(self.store.get_session("correct-me").state, "succeeded")
+
+        events = [
+            event for event in self.store.list_events("correct-me")
+            if event.event_type == "terminal_result_corrected"
+        ]
+        self.assertEqual(len(events), 1, "the correction must be in the log")
+        self.assertEqual(events[0].payload["previous_state"], "failed")
+        self.assertEqual(events[0].payload["previous_failure_code"], "worker_report_invalid")
+        self.assertIn("the stop timeout was cleanup", events[0].payload["summary"])
+
+        # Idempotent, and a failed correction still needs a code.
+        again = self.store.correct_terminal_result(
+            "correct-me", state="succeeded", reason="same",
+        )
+        self.assertEqual(again.state, "succeeded")
+        with self.assertRaisesRegex(ValueError, "requires failure_code"):
+            self.store.correct_terminal_result(
+                "correct-me", state="failed", reason="no code given",
+            )
+
     def test_list_deliveries_filters_by_kind_oldest_first(self):
         from datetime import timedelta
 

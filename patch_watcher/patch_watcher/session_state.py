@@ -1899,6 +1899,77 @@ class SessionStateStore:
             ).fetchall()
         return [self._question_from_row(row) for row in rows]
 
+    def correct_terminal_result(
+        self,
+        session_id: str,
+        *,
+        state: str,
+        reason: str,
+        failure_code: str | None = None,
+        failure_summary: str | None = None,
+        at: datetime | None = None,
+    ) -> TerminalResult:
+        """Correct an outcome the run's own evidence contradicts.
+
+        `finish_session` holds a terminal result immutable, which is right as
+        a default: a controller must not quietly rewrite what happened.  But a
+        run whose agent reported `complete` -- having rebased a patch, built
+        it, and uploaded a patchset -- was recorded as failed because a
+        background build outlived its stop window, and that record then told
+        every reader, human and automatic, the opposite of the truth.
+
+        The correction is never silent.  It is appended to the event log,
+        which IS immutable, naming the old outcome, the new one, and why; so
+        the history reads as "recorded failed, corrected to succeeded, here is
+        the reason" rather than as though the failure never happened.
+        """
+        state = _required_text("state", state)
+        reason = _required_text("reason", reason)
+        if state not in TERMINAL_STATES:
+            raise ValueError("corrected state must be terminal")
+        if state in {"failed", "resource_exhausted", "stale"} and not failure_code:
+            raise ValueError(f"{state} result requires failure_code")
+        corrected_at = at or _utc_now()
+        with self._connection() as connection, connection:
+            existing = connection.execute(
+                "SELECT * FROM pw_terminal_result WHERE session_id = ?", (session_id,),
+            ).fetchone()
+            if existing is None:
+                raise InvalidSessionOperation("no terminal result to correct")
+            if existing["state"] == state:
+                return self._terminal_from_row(existing)
+            connection.execute(
+                """
+                UPDATE pw_terminal_result
+                SET state = ?, failure_code = ?, failure_summary = ?
+                WHERE session_id = ?
+                """,
+                (state, failure_code, failure_summary, session_id),
+            )
+            connection.execute(
+                "UPDATE pw_managed_session SET state = ? WHERE session_id = ?",
+                (state, session_id),
+            )
+            row = connection.execute(
+                "SELECT * FROM pw_terminal_result WHERE session_id = ?", (session_id,),
+            ).fetchone()
+        self.append_event(
+            session_id,
+            "terminal_result_corrected",
+            {
+                "summary": (
+                    f"Outcome corrected from {existing['state']} to {state}: {reason}"
+                ),
+                "previous_state": existing["state"],
+                "previous_failure_code": existing["failure_code"],
+                "state": state,
+                "reason": reason,
+            },
+            idempotency_key=f"terminal-correction:{session_id}:{state}",
+            at=corrected_at,
+        )
+        return self._terminal_from_row(row)
+
     def finish_session(
         self,
         session_id: str,
