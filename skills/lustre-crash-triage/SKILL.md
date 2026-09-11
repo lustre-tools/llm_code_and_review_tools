@@ -53,10 +53,12 @@ at a different build yields symbol offsets that are quietly wrong.
 
 ## When the recipes fail
 
-Recipes have been observed returning `could not find 'init_uts_ns'`,
+As of 2026-09 the recipes return `could not find 'init_uts_ns'`,
 `'runqueues'` or `'PIDTYPE_PID'` even with a version-matched vmlinux that
 has full DWARF -- the recipe is not handing the debug info to drgn. drgn
-itself works, so drive it directly rather than re-diagnosing the wrapper:
+itself works, so drive it directly rather than re-diagnosing the
+wrapper -- and check whether the recipe works before assuming it does
+not, since this is a bug someone may have fixed:
 
 ```bash
 drgn -c <vmcore> -s <vmlinux>
@@ -114,8 +116,21 @@ answers rather than an error.
   tasks into the handful of distinct stacks that matter. Read that before
   reading individual backtraces.
 
-For a hang on a live node rather than a dump, collect the Lustre debug log
-instead: `lctl dk /tmp/dk.log` after `lctl set_param debug=-1`.
+For a hang on a live node rather than a dump, collect the Lustre debug
+log instead. It is an in-kernel per-CPU ring buffer, ~5 MB/CPU by
+default, and everything CDEBUG/CERROR writes lands there:
+
+```bash
+lctl set_param debug=-1
+lctl set_param debug_mb=10000
+lctl clear
+lctl mark "before repro"
+# ... reproduce ...
+lctl dk /tmp/dk.log
+```
+
+`lctl` clamps `debug_mb` to its maximum, so asking for more than exists
+is harmless.
 
 ## Reporting
 

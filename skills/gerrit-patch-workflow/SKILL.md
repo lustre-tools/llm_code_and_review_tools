@@ -63,7 +63,7 @@ habit wrecks a patch).
 ## Posting a whole review from JSON
 
 ```bash
-gc review --post-comments findings.json <url> --prefix '[Marc Bot]' --dry-run
+gc review --post-comments findings.json <url> --prefix '[AI review]' --dry-run
 ```
 
 The file carries `message`, `vote`, `tag` and `comments` (Gerrit REST dict

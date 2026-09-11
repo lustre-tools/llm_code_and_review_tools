@@ -17,7 +17,7 @@ round trip on findings a local run already catches.
 ## Running a local pass before pushing
 
 ```bash
-lreview run --repo $CO/9 --last 2 -o /tmp/lreview1.txt
+lreview run --repo <tree> --last 2 -o /tmp/lreview1.txt
 ```
 
 - `--last N` reviews the newest N commits of `--repo`, each in its own
