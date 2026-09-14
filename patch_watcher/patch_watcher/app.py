@@ -2573,6 +2573,43 @@ def _run_failure(session):
     return terminal.failure_code, terminal.failure_summary
 
 
+def _change_url(session):
+    """The Gerrit page for the exact patchset this run is pinned to.
+
+    A run page names a change number, a patchset and a revision sha, and every
+    one of them is something you then have to go and paste somewhere.  The
+    review is the other half of every question this page raises, so it is a
+    link.
+
+    The patchset is appended deliberately: the run is pinned to one revision,
+    and the bare change URL shows whatever is current, which after an upload is
+    a different patchset from the one being described here.
+    """
+    change = str(session.patch_id or "").strip()
+    if not change:
+        return ""
+    url = ""
+    for patch in _patch_snapshot():
+        if str(patch.get("change_number") or "").strip() == change:
+            url = str(patch.get("url") or "").strip()
+            break
+    if not url:
+        # A run outlives the watch list: the patch may have been removed, and
+        # the page should still reach the review it is about.
+        try:
+            url = GerritConfig.load().url.rstrip("/") + "/c/" + change
+        except (GerritConfigError, OSError):
+            return ""
+    # Operator-entered text reaches this as an href, so only the two schemes
+    # that can be a Gerrit page are ever rendered as one.
+    if urlparse(url).scheme not in {"http", "https"}:
+        return ""
+    patchset = str(session.patchset or "").strip()
+    if patchset.isdigit():
+        url = url.rstrip("/") + "/" + patchset
+    return url
+
+
 def _run_projection(session, *, now=None):
     """Project durable state plus bounded live telemetry for run views."""
     observed_at = now or datetime.now(UTC)
@@ -2609,6 +2646,7 @@ def _run_projection(session, *, now=None):
         "failure_summary": failure_summary,
         "session_id": session.session_id,
         "change_number": session.patch_id,
+        "change_url": _change_url(session),
         "subject": session.patch_id,
         "patchset": session.patchset,
         "revision_sha": session.revision,

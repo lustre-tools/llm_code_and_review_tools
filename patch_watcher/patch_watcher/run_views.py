@@ -146,6 +146,22 @@ def _field(label, value, *, code=False):
     return f"<div><dt>{escape(label)}</dt><dd>{content}</dd></div>"
 
 
+def _link_field(label, value, href):
+    """A field whose value is also where you go to see it.
+
+    Falls back to plain text when there is no usable link, so a run whose patch
+    has been removed from the watch list still shows its change number.
+    """
+    if not href:
+        return _field(label, value)
+    safe = escape(_plain(href), quote=True)
+    return (
+        f"<div><dt>{escape(label)}</dt><dd>"
+        f"<a href='{safe}' rel='noreferrer noopener' target='_blank'>"
+        f"{escape(_plain(value))}</a></dd></div>"
+    )
+
+
 def _hidden(name, value):
     if value is None:
         return ""
@@ -656,7 +672,11 @@ def render_run_detail(
         + _render_failure(run)
         + "<section aria-labelledby='run-identity-title'><h3 id='run-identity-title'>Run identity</h3><dl>"
         + _field("Run", _get(run, "run_id", "id"), code=True)
-        + _field("Change", _get(run, "change_number", "change"))
+        + _link_field(
+            "Change on Gerrit",
+            _get(run, "change_number", "change"),
+            _get(run, "change_url", "gerrit_url"),
+        )
         + _field("Patchset", _get(run, "patchset", "patch_set"))
         + _field("Exact pinned revision", _revision(run), code=True)
         + _field("Current step", _get(run, "current_step", "step"))

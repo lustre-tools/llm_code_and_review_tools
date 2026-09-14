@@ -46,6 +46,32 @@ class RunViewTests(unittest.TestCase):
         value.update(changes)
         return value
 
+    def test_the_run_page_links_to_the_review_it_is_about(self):
+        """Every other identifier on this page is something you then have to
+        go and paste somewhere.  The patchset is part of the link because the
+        run is pinned to one revision, and the bare change URL shows whatever
+        is current -- a different patchset, as soon as the run uploads one."""
+
+        html = run_views.render_run_detail({
+            "run_id": "pw-review-68845-ps2-e01278c89e2e",
+            "change_number": "68845", "patchset": 2, "state": "running",
+            "change_url": "https://review.whamcloud.com/c/fs/lustre-release/+/68845/2",
+        })
+        self.assertIn(
+            "href='https://review.whamcloud.com/c/fs/lustre-release/+/68845/2'", html
+        )
+        self.assertIn("Change on Gerrit", html)
+
+    def test_a_run_whose_patch_is_gone_still_shows_its_change(self):
+        """A run outlives the watch list."""
+
+        html = run_views.render_run_detail({
+            "run_id": "pw-review-68845-ps2-e01278c89e2e",
+            "change_number": "68845", "patchset": 2, "state": "failed",
+        })
+        self.assertIn("68845", html)
+        self.assertNotIn("<a href=''", html)
+
     def test_boundary_statement_follows_capability_not_session_profile(self):
         """The safety text describes what the agent may do, nothing else.
 
