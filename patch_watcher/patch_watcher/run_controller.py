@@ -440,6 +440,21 @@ def unknown_failure_research_run_id(
 # rules are aspirational: `ltvm build` writes outside the checkout by design
 # and CLAUDE.md tells the agent to put logs in /tmp, so the boundary is drawn
 # around what must not be touched rather than around the checkout.
+# The agent publishes with the operator's own Gerrit account, so without this
+# every reply it writes appears on the change under a human's name, in the
+# first person, indistinguishable from something the patch owner said.
+# Reviewers are entitled to know which of the two they are answering.  Until
+# the bot has an account of its own, the label is how they can tell.
+GERRIT_IDENTITY_POLICY = (
+    "You post with the operator's own Gerrit account, but you are not the "
+    "operator. Begin every message you publish on Gerrit -- each inline reply "
+    "and each change message -- with \"Patrick-Bot:\" so a reviewer can tell "
+    "your words from the patch owner's. Write as the bot: do not claim the "
+    "owner's intent or speak for them. This applies to what you post on the "
+    "review, not to commit messages, which keep the usual trailers."
+)
+
+
 ENVIRONMENT_POLICY = (
     "You are working on this host in the same environment a developer has: a "
     "host shell, the installed LLM tools (gerrit, maloo, jenkins, jira), and "
@@ -464,7 +479,8 @@ ENVIRONMENT_POLICY = (
     "`maloo link-bug`, no other write, even where CLAUDE.md recommends one. On "
     "JIRA: no `jira comment`, `jira create`, `jira link`, or other write. On "
     "Jenkins: no build, retrigger, or cancel. Reading from all four is fine "
-    "and expected."
+    "and expected. "
+    + GERRIT_IDENTITY_POLICY
 )
 
 
@@ -4086,19 +4102,38 @@ class RunController:
                 now=self.clock(),
             )
         requests = list(report.get("validation_requests") or [])
-        if requests:
-            commands = tuple(
-                SafeCommand(
-                    step_id=f"validation-{index + 1}",
-                    argv=tuple(request["argv"]),
-                    cwd=".",
-                    timeout_seconds=3600,
-                    label=request["name"],
-                    execution_target=request["target"],
-                    evidence_role=request.get("evidence_role", "other"),
+        # These are a RECORD of what the agent says it ran; the controller
+        # never executes them.  So one it cannot represent must not void the
+        # run: a report declaring `sh -c "git diff | checkpatch.pl"` -- the
+        # pipeline this project's own commit policy prescribes -- failed a run
+        # that had already uploaded a patchset and posted five replies.
+        #
+        # The manifest keeps only what is executable by construction, because
+        # that is what makes it a manifest.  Anything else is still reported,
+        # so the evidence is not lost either.
+        commands = []
+        unrepresentable = []
+        for index, request in enumerate(requests):
+            try:
+                commands.append(
+                    SafeCommand(
+                        step_id=f"validation-{index + 1}",
+                        argv=tuple(request["argv"]),
+                        cwd=".",
+                        timeout_seconds=3600,
+                        label=request["name"],
+                        execution_target=request["target"],
+                        evidence_role=request.get("evidence_role", "other"),
+                    )
                 )
-                for index, request in enumerate(requests)
-            )
+            except (ValueError, TypeError, KeyError) as exc:
+                unrepresentable.append({
+                    "name": str(request.get("name", f"validation-{index + 1}"))[:200],
+                    "argv": [str(item)[:500] for item in (request.get("argv") or ())][:32],
+                    "reason": str(exc)[:200],
+                })
+        if commands:
+            commands = tuple(commands)
             self.engineering_store.save_manifest(
                 allocation.allocation_id,
                 ExecutionManifest(
@@ -4117,6 +4152,8 @@ class RunController:
                 "diff_bytes": len(diff_bytes),
                 "status_sha256": hashlib.sha256(status.stdout).hexdigest(),
                 "validation_request_count": len(requests),
+                "validation_manifest_count": len(commands),
+                "validation_unrepresentable": unrepresentable,
             },
             idempotency_key="engineering-evidence:" + session.run_id,
             at=self.clock(),

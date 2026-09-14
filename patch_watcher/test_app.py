@@ -1102,7 +1102,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
                     "API Error: 400 tools.9.custom.input_schema: input_schema does not support allOf",
                 )
                 self.assertTrue(
-                    app._run_did_nothing(sessions.get_session(f"session-{fourth.run_id}"))
+                    app._run_left_its_event_unhandled(sessions.get_session(f"session-{fourth.run_id}"))
                     if sessions.get_session(f"session-{fourth.run_id}").state == "failed"
                     else True
                 )
@@ -1139,7 +1139,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
             # host_process_missing is not a "start failed" code, but a host gone
             # the instant it attached did nothing either -- so it releases too.
             lost = runs.started[0]
-            self.assertTrue(app._run_did_nothing(sessions.get_session(f"session-{lost}")))
+            self.assertTrue(app._run_left_its_event_unhandled(sessions.get_session(f"session-{lost}")))
 
     def test_an_oauth_race_releases_its_event_but_a_real_run_keeps_it(self):
         """A transient host condition must not permanently consume work.
@@ -1176,7 +1176,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 "refreshing it or exited mid-refresh.",
             )
             self.assertTrue(
-                app._run_did_nothing(oauth),
+                app._run_left_its_event_unhandled(oauth),
                 "an unauthenticated run said nothing about the patch",
             )
 
@@ -1188,7 +1188,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 "Failed to refresh OAuth token: another Claude Code process is "
                 "refreshing it or exited mid-refresh.",
             )
-            self.assertTrue(app._run_did_nothing(legacy_oauth))
+            self.assertTrue(app._run_left_its_event_unhandled(legacy_oauth))
 
             # The prefix path still works, for rows written before the author
             # was recorded.
@@ -1196,7 +1196,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 "pw-review-35302-ps5-legacy", "agent",
                 "API Error: 400 tools.0.custom.input_schema",
             )
-            self.assertTrue(app._run_did_nothing(legacy))
+            self.assertTrue(app._run_left_its_event_unhandled(legacy))
 
             # A run that actually spoke keeps its event, or a genuinely bad
             # run would be retried forever.
@@ -1204,7 +1204,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 "pw-review-35302-ps5-spoke", "agent",
                 "I read the three threads and edited rw.c.",
             )
-            self.assertFalse(app._run_did_nothing(spoke))
+            self.assertFalse(app._run_left_its_event_unhandled(spoke))
 
     def test_the_card_stops_promising_a_run_whose_event_is_spent(self):
         """It said "ready to act at the next check" for two days on a patch
@@ -1251,6 +1251,101 @@ class PatchWatcherTests(AppGlobalsIsolated):
             record["last_changed"] = "2026-09-13T09:00:00+00:00"
             self.assertFalse(app._review_event_is_spent(record))
             self.assertIn("Ready to act", app._idle_explanation(record, policy))
+
+    def test_a_decline_is_not_recorded_as_a_run_that_started(self):
+        """This is what actually stranded change 68845 for two days.
+
+        `_consumed_standing_keys` reads an eligible decision's `outcome` as the
+        run it started, and a run id it cannot find means "still going, the
+        event is spoken for".  Recording the human-readable reason for a
+        DECLINE in that same field therefore consumed the event permanently,
+        against a run that never existed -- while the card went on saying
+        "ready to act at the next check", every check, forever.
+        """
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app.initialize_session_store(root / "s.sqlite3")
+            automation = app.initialize_automation_store(root / "a.sqlite3")
+            record, _ = app.add_patch("https://review.whamcloud.com/c/68845")
+            record.update(change_number=68845, patchset=2, revision_sha="c" * 40,
+                          project="fs/lustre-release", lifecycle="Open")
+            app.sync_automation_patch(record)
+            decision = SimpleNamespace(
+                to_dict=lambda: {
+                    "eligible": True, "coalescing_key": "key-1", "code": "eligible",
+                },
+            )
+
+            app._record_standing_decision(
+                record, decision,
+                note="no new review comments: 6 thread(s) already handled",
+            )
+            self.assertEqual(app._consumed_standing_keys(record), frozenset())
+
+            # And a sentence already written into `outcome` by an older build
+            # is still not mistaken for a run.
+            automation.record_observation(
+                "68845", revision="c" * 40, source="standing_policy",
+                kind="standing_policy_trigger_decision", fingerprint="f" * 64,
+                payload={
+                    "eligible": True, "coalescing_key": "key-1",
+                    "outcome": "no new review comments: 6 thread(s) already handled",
+                },
+            )
+            self.assertEqual(app._consumed_standing_keys(record), frozenset())
+
+            # A real run id in that field still consumes it.
+            automation.record_observation(
+                "68845", revision="c" * 40, source="standing_policy",
+                kind="standing_policy_trigger_decision", fingerprint="e" * 64,
+                payload={
+                    "eligible": True, "coalescing_key": "key-1",
+                    "outcome": "pw-review-68845-ps2-abc",
+                },
+            )
+            self.assertEqual(app._consumed_standing_keys(record), frozenset({"key-1"}))
+
+    def test_a_run_this_host_killed_releases_its_event(self):
+        """The run reached no verdict about the patch, so the work is pending.
+
+        Change 68763 sat unretried because a controller fault killed its run
+        mid-work; change 68845's runs all ended resource_exhausted for want of
+        a checkout pool, and each one held its event shut afterwards, so
+        fixing the pool changed nothing by itself.
+        """
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_session_store(Path(temp_dir) / "s.sqlite3")
+
+            def run(run_id, state, code, result=None):
+                store.register_pinned_session(
+                    f"session-{run_id}", patch_id="68763", run_id=run_id,
+                    revision="d" * 40, patchset=2, profile="engineering",
+                    state="running",
+                )
+                store.record_message(f"session-{run_id}", "agent", "Real work happened.")
+                store.finish_session(
+                    f"session-{run_id}", state, failure_code=code,
+                    failure_summary="summary", result=result,
+                )
+                return store.get_session(f"session-{run_id}")
+
+            for code in sorted(app.INFRASTRUCTURE_FAILURE_CODES):
+                self.assertTrue(
+                    app._run_left_its_event_unhandled(run(f"pw-x-{code}", "failed", code)),
+                    f"{code} is this host stopping the run, not a verdict on the patch",
+                )
+            self.assertTrue(app._run_left_its_event_unhandled(
+                run("pw-x-exhausted", "resource_exhausted", "ltvm_resource_exhausted")
+            ))
+            # A run that answered keeps its event, however badly it answered,
+            # or a genuinely broken run would retry forever.
+            self.assertFalse(app._run_left_its_event_unhandled(
+                run("pw-x-bad-report", "failed", "worker_report_invalid",
+                    result={"schema": "patch-watcher-engineering-report/v1",
+                            "state": "failed", "summary": "I could not do it."})
+            ))
 
     def test_a_run_waiting_on_you_is_labelled_counted_and_explained(self):
         """The in-console channel: a paused run shows on the patch row, links

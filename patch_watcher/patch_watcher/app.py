@@ -676,12 +676,37 @@ def _sync_standing_test_policy(patch, policy):
         )
 
 
-def _record_standing_decision(patch, decision, *, outcome=""):
+def _is_run_id(value):
+    """Whether a recorded outcome names a run rather than explains a decline.
+
+    A run id is a single token; an explanation is a sentence.  Rows written
+    before `note` existed put a sentence in `outcome`, and a sentence looked
+    exactly like a run id that could not be found -- which reads as "still
+    going", so the event stayed spoken for forever.  Testing for whitespace
+    rather than a name prefix keeps this true for any run-id scheme.
+    """
+    text = str(value or "").strip()
+    return bool(text) and not any(character.isspace() for character in text)
+
+
+def _record_standing_decision(patch, decision, *, outcome="", note=""):
+    """Record what was decided.  ``outcome`` is a RUN ID and nothing else.
+
+    `_consumed_standing_keys` reads `outcome` as the run an eligible decision
+    started, and treats a run id it cannot find as a run still going -- so the
+    event is spoken for, forever.  Putting a human-readable reason there
+    instead of a run id therefore did not merely mislabel the record, it
+    permanently consumed the event: change 68845 went quiet for two days
+    saying "ready to act at the next check" while every check declined it as a
+    duplicate of a run that never existed.  A reason goes in ``note``.
+    """
     if AUTOMATION_STORE is None:
         return
     payload = decision.to_dict()
     if outcome:
         payload["outcome"] = str(outcome)[:500]
+    if note:
+        payload["note"] = str(note)[:500]
     AUTOMATION_STORE.record_observation(
         str(patch.get("change_number") or ""),
         revision=str(patch.get("revision_sha") or ""),
@@ -694,17 +719,53 @@ def _record_standing_decision(patch, decision, *, outcome=""):
     )
 
 
-def _run_did_nothing(session):
-    """True when a failed run produced no agent output at all.
+# Failure codes that mean this host stopped the run, rather than the run
+# reaching any conclusion about the patch: our own bookkeeping tripped, or the
+# worker vanished from under us.
+INFRASTRUCTURE_FAILURE_CODES = frozenset({
+    "controller_error", "runner_lost", "runner_start_interrupted",
+})
 
-    Not a list of failure codes: the same code covers a host that died before
-    its socket bound and one that died after real work, and `runner_lost` --
-    "host_process_missing", the host gone the instant it attached -- is not in
-    any such list yet means exactly this.  A run whose agent never said a word
-    did nothing to the patch, whatever killed it.
+
+def _run_left_its_event_unhandled(session):
+    """True when a failed run reached no verdict, so its event is still open.
+
+    A run consumes the event that started it by ANSWERING it -- reporting,
+    however badly.  Two kinds of failure answer nothing.
+
+    The first is a run whose agent never said a word.  Not a list of failure
+    codes: the same code covers a host that died before its socket bound and
+    one that died after real work, and `runner_lost` -- the host gone the
+    instant it attached -- is in no such list yet means exactly this.
+
+    The second is a run this host killed.  A controller fault or a vanished
+    worker says nothing about the patch, however much the agent had already
+    done, and holding the event against it strands the work: change 68763 sat
+    unretried because a restart tripped the controller mid-run.  Retrying is
+    bounded by STANDING_DEAD_RUN_RETRY_LIMIT like any other never-answered
+    event.
+
+    A run that produced a report is not either kind, even if the report was
+    rejected.  It answered.
     """
-    if SESSION_STORE is None or session.state != "failed":
+    if SESSION_STORE is None:
         return False
+    # Resource exhaustion is a verdict on this HOST, not on the patch: the run
+    # is saying it could not be given what the work needed.  Every review run
+    # before the checkout pool existed ended this way, having read the threads
+    # and made real edits that were then discarded -- and each one held its
+    # event shut afterwards, so fixing the pool changed nothing by itself.
+    if session.state == "resource_exhausted":
+        return True
+    if session.state != "failed":
+        return False
+    terminal = SESSION_STORE.get_terminal_result(session.session_id)
+    result = getattr(terminal, "result", None) if terminal is not None else None
+    if result:
+        return False
+    code = str(getattr(terminal, "failure_code", "") or "")
+    if code in INFRASTRUCTURE_FAILURE_CODES:
+        return True
     # An API error is the CLI reporting that the model never ran; it is not
     # the agent saying anything about the patch.  A run whose only output was
     # "API Error: 400 ..." did nothing, and its event is still there to handle.
@@ -723,9 +784,7 @@ def _run_did_nothing(session):
         for message in SESSION_STORE.recent_messages(session.session_id, limit=20)
     ):
         return False
-    terminal = SESSION_STORE.get_terminal_result(session.session_id)
-    result = getattr(terminal, "result", None) if terminal is not None else None
-    return not result
+    return True
 # How many never-started runs an unattended trigger may burn on one exact
 # event before it stops and leaves the event to a human.  Without a bound, a
 # host that cannot launch agents would start one every poll, forever.
@@ -756,7 +815,7 @@ def _consumed_standing_keys(patch, *, attended=False):
             and item.kind == "standing_policy_trigger_decision"
             and item.revision == revision
             and item.payload.get("eligible") is True
-            and item.payload.get("outcome")
+            and _is_run_id(item.payload.get("outcome"))
             and item.payload.get("coalescing_key")
         ):
             runs_by_key.setdefault(str(item.payload["coalescing_key"]), []).append(
@@ -779,7 +838,7 @@ def _consumed_standing_keys(patch, *, attended=False):
                 # Unknown or still going: the event is spoken for.
                 consumed.add(key)
                 break
-            if _run_did_nothing(session):
+            if _run_left_its_event_unhandled(session):
                 dead += 1
                 continue
             # Finished and did something (or failed after starting): consumed.
@@ -847,7 +906,7 @@ def _standing_attempt_runs(patch, coalescing_key):
         and item.kind == "standing_policy_trigger_decision"
         and item.revision == revision
         and str(item.payload.get("coalescing_key")) == str(coalescing_key)
-        and item.payload.get("outcome")
+        and _is_run_id(item.payload.get("outcome"))
     ]
 
 
@@ -863,7 +922,7 @@ def _dead_standing_attempts(patch, coalescing_key):
     dead = 0
     for run_id in run_ids:
         session = sessions.get(run_id)
-        if session is not None and _run_did_nothing(session):
+        if session is not None and _run_left_its_event_unhandled(session):
             dead += 1
     return dead
 
@@ -1080,7 +1139,7 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
                         patch, policy, "review_comments",
                         snapshot["snapshot_sha256"], attended=attended,
                     ),
-                    outcome=(
+                    note=(
                         f"no new review comments: {len(settled)} thread(s) already "
                         "handled and left for a human"
                     ),
@@ -1099,7 +1158,7 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
                         skip_threads=settled,
                     )
                 except NoReviewTargets as exc:
-                    _record_standing_decision(patch, decision, outcome=str(exc))
+                    _record_standing_decision(patch, decision, note=str(exc))
                     return None
                 SESSION_STORE.append_event(
                     session.session_id, "standing_policy_triggered", decision.to_dict(),
@@ -3366,7 +3425,7 @@ def _review_event_is_spent(patch):
             continue
         if newest is None or session.state_changed_at > newest.state_changed_at:
             newest = session
-    if newest is None or _run_did_nothing(newest):
+    if newest is None or _run_left_its_event_unhandled(newest):
         return False
     changed_at = _parse_timestamp(patch.get("last_changed"))
     return changed_at is None or changed_at <= newest.state_changed_at

@@ -2935,6 +2935,34 @@ class PromptContractTests(unittest.TestCase):
                 self.assertIn(phrase, run.instructions)
                 self.assertIn("Name every VM you create 'co3-", run.instructions)
 
+    def test_every_run_is_told_to_sign_its_gerrit_posts_as_the_bot(self):
+        """It publishes with the operator's own account.
+
+        Without the label every reply lands on the change under a human's
+        name, in the first person, indistinguishable from something the patch
+        owner said -- and reviewers are answering the wrong party.  It belongs
+        in the shared policy, not one prompt, so no run kind can post unsigned.
+        """
+
+        for kind in ("engineering", "review", "build_failure"):
+            started = self.start(kind, name=f"identity-{kind}")
+            self.assertIn(
+                "Patrick-Bot:", started.instructions,
+                f"{kind} runs may post on Gerrit and must say who is speaking",
+            )
+            self.assertIn("you are not the operator", started.instructions)
+
+        # Commit messages keep their own convention and are not relabelled.
+        self.assertIn(
+            "not to commit messages",
+            self.start("review", name="identity-commit").instructions,
+        )
+
+        # A read-only run is granted no Gerrit write at all, so it is told it
+        # may not comment rather than how to sign one.
+        read_only = self.start("read_only", name="identity-readonly")
+        self.assertNotIn("Patrick-Bot:", read_only.instructions)
+
     def test_no_pool_review_and_build_prompts_offer_a_state_they_can_reach(self):
         review = self.start("review", pooled=False, name="review-nopool-state")
         self.assertIn("do not post replies and do not upload a patchset", review.instructions)
