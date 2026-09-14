@@ -109,11 +109,15 @@ The token is only needed to write. Against a public Jira, `get`,
 needs no account, while filing, commenting, linking and transitioning
 refuse up front with exit 2 until there is one.
 
+Cloud routing reads `JIRA_CLOUD_SERVER`, `JIRA_CLOUD_EMAIL`,
+`JIRA_CLOUD_TOKEN` and `JIRA_CLOUD_PROJECTS` from the environment, not
+from a config-file instance; `./install.sh --configure --only
+jira-cloud` writes them into the same `.env`. Cloud is basic auth, so
+the email is part of the credential, and nothing routes there until
+`JIRA_CLOUD_PROJECTS` names a project prefix.
+
 Multi-instance configuration lives in `~/.jira-tool.json`, with an
-`instances` map and a `default`. Cloud routing additionally reads
-`JIRA_CLOUD_SERVER`, `JIRA_CLOUD_EMAIL`, `JIRA_CLOUD_TOKEN` and
-`JIRA_CLOUD_PROJECTS` from the environment, not from a config-file
-instance.
+`instances` map and a `default`, reached by `-I`.
 
 Tokens: a Server personal access token comes from the JIRA profile menu
 (Profile > Personal Access Tokens); a Cloud API token from

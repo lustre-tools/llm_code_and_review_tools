@@ -77,8 +77,8 @@ usage() {
     echo "                 what each one is for, where to get it, and"
     echo "                 \"not now\" as an answer. Writes only"
     echo "                 ~/.config/<tool>/.env, mode 0600."
-    echo "  --only TOOL    Configure just one tool (gerrit, jira, maloo,"
-    echo "                 jenkins); repeatable"
+    echo "  --only TOOL    Configure just one tool (gerrit, jira,"
+    echo "                 jira-cloud, maloo, jenkins); repeatable"
     echo "  --reconfigure  Prompt for values that are already set too"
     echo "  --no-verify    Do not check entered credentials against the"
     echo "                 server"
@@ -547,7 +547,7 @@ run_doctor() {
 # first-class answer -- an unconfigured tool costs nothing until it is used.
 # ---------------------------------------------------------------------------
 
-CONFIG_TOOLS="gerrit jira maloo jenkins"
+CONFIG_TOOLS="gerrit jira jira-cloud maloo jenkins"
 
 # Per-tool metadata, returned in SPEC_* globals.  SPEC_FIELDS is one
 # "KEY|prompt|kind|default" record per line; kind is url, text or secret.
@@ -560,6 +560,8 @@ tool_spec() {
     SPEC_WHERE=""
     SPEC_NOTE=""
     SPEC_OPTIONAL=""
+    SPEC_OPT_PROMPT=""
+    SPEC_UNSET_OK=""
     SPEC_ANON_READS=""
     SPEC_READ_KEYS=""
     case "$1" in
@@ -581,21 +583,43 @@ GERRIT_PASS|Gerrit HTTP password|secret|"
         change a patch, which is most of what people use this for."
             ;;
         jira)
-            SPEC_LABEL="Jira"
+            SPEC_LABEL="Jira Server (Whamcloud)"
             SPEC_USED_BY="jira"
             SPEC_FILE="$HOME/.config/jira-tool/.env"
             SPEC_REQUIRED="JIRA_SERVER JIRA_TOKEN"
             SPEC_FIELDS="JIRA_SERVER|Jira URL|url|https://jira.whamcloud.com
 JIRA_TOKEN|Jira personal access token|secret|"
             SPEC_WHERE="Jira > your avatar > Profile > Personal Access Tokens >
-    Create token.  For Atlassian Cloud instead, an API token from
-    https://id.atlassian.com/manage-profile/security/api-tokens"
+    Create token."
             SPEC_ANON_READS=1
             SPEC_READ_KEYS="JIRA_SERVER"
-            SPEC_NOTE="No username: the token is the whole login.  Reading --
-        get, search, comments -- works without one; filing, commenting
-        and linking need it.  Several Jira instances at once go in
-        ~/.jira-tool.json -- see README.md."
+            SPEC_NOTE="This is the LU tickets one, and every Jira Server or
+        Data Center instance works the same way.  No username: the
+        token is the whole login.  Reading -- get, search, comments --
+        works without one; filing, commenting and linking need it.
+        Atlassian Cloud is the next question, not this one."
+            ;;
+        jira-cloud)
+            SPEC_LABEL="Jira Cloud (Atlassian)"
+            SPEC_USED_BY="jira, for the projects you name below"
+            SPEC_FILE="$HOME/.config/jira-tool/.env"
+            SPEC_REQUIRED="JIRA_CLOUD_SERVER JIRA_CLOUD_EMAIL JIRA_CLOUD_TOKEN"
+            SPEC_FIELDS="JIRA_CLOUD_SERVER|Cloud site URL|url|https://yourorg.atlassian.net
+JIRA_CLOUD_EMAIL|Atlassian account email|text|
+JIRA_CLOUD_TOKEN|Atlassian API token|secret|
+JIRA_CLOUD_PROJECTS|Project keys on this site, comma-separated|text|"
+            SPEC_WHERE="https://id.atlassian.com/manage-profile/security/api-tokens
+    > Create API token.  The site URL is your own organisation's --
+    https://<yourorg>.atlassian.net, the host you sign in to -- and
+    the email is the account the token was created under."
+            SPEC_OPTIONAL=1
+            SPEC_OPT_PROMPT="  Set up Jira Cloud as well? (skip if you only use Whamcloud Jira)"
+            SPEC_UNSET_OK="no Cloud site -- Whamcloud Jira is unaffected"
+            SPEC_NOTE="A second Jira alongside the one above, for an
+        organisation's own Atlassian Cloud site.  Cloud needs the email
+        as well as the token: together they are the credential.  The
+        project keys are how jira tells the two apart -- an issue in
+        one of them goes to Cloud, everything else to the server above."
             ;;
         maloo)
             SPEC_LABEL="Maloo"
@@ -621,6 +645,8 @@ JENKINS_TOKEN|Jenkins API token|secret|"
     Configure > API Token > Add new Token.  Copy it before
     leaving the page; Jenkins shows it once."
             SPEC_OPTIONAL=1
+            SPEC_OPT_PROMPT="  Add Jenkins credentials? (not needed for reads)"
+            SPEC_UNSET_OK="no credentials -- reads work anonymously"
             SPEC_ANON_READS=1
             SPEC_NOTE="Optional -- the tool works without it.  Reads
         (jobs, builds, console, review) are served anonymously by
@@ -784,7 +810,7 @@ curl_escape() {
 # (or no-curl), and succeeds only on 200.  The secret reaches curl through a
 # config file on stdin, never on the command line, where ps would show it.
 tool_probe() {
-    local tool="$1" url user pass token config code
+    local tool="$1" url user pass token email config code
     if ! command -v curl >/dev/null 2>&1; then
         echo "no-curl"
         return 2
@@ -803,6 +829,13 @@ user = \"$(curl_escape "$user:$pass")\""
             token=$(env_file_get "$SPEC_FILE" JIRA_TOKEN)
             config="url = \"$(curl_escape "${url%/}/rest/api/2/myself")\"
 header = \"Authorization: Bearer $(curl_escape "$token")\""
+            ;;
+        jira-cloud)
+            url=$(env_file_get "$SPEC_FILE" JIRA_CLOUD_SERVER)
+            email=$(env_file_get "$SPEC_FILE" JIRA_CLOUD_EMAIL)
+            token=$(env_file_get "$SPEC_FILE" JIRA_CLOUD_TOKEN)
+            config="url = \"$(curl_escape "${url%/}/rest/api/3/myself")\"
+user = \"$(curl_escape "$email:$token")\""
             ;;
         maloo)
             url=$(env_file_get "$SPEC_FILE" MALOO_URL)
@@ -892,6 +925,16 @@ EOF
     echo "  wrote $(tilde_path "$SPEC_FILE") with the server only"
 }
 
+# Cloud credentials with no project keys are never reached: jira picks the
+# Cloud site by the project prefix of the issue it was given, and by nothing
+# else, so an empty JIRA_CLOUD_PROJECTS leaves them inert.
+warn_unrouted_cloud() {
+    [ "$1" = "jira-cloud" ] || return 0
+    [ -z "$(env_file_get "$SPEC_FILE" JIRA_CLOUD_PROJECTS)" ] || return 0
+    echo -e "  ${YELLOW}no project keys given${NC} -- nothing reaches the Cloud"
+    echo "    site until JIRA_CLOUD_PROJECTS names some."
+}
+
 configure_one_tool() {
     local tool="$1" status key prompt kind default current shown answer rc
     local pairs code attempt=0 last_code="" from_env external
@@ -938,7 +981,7 @@ configure_one_tool() {
     local prompt="  Set up $SPEC_LABEL now?"
     if [ -n "$SPEC_OPTIONAL" ]; then
         default_answer=n
-        prompt="  Add $SPEC_LABEL credentials? (not needed for reads)"
+        prompt="${SPEC_OPT_PROMPT:-  Add $SPEC_LABEL credentials?}"
     fi
     if ! ask_yes "$prompt" "$default_answer"; then
         if [ -n "$SPEC_ANON_READS" ]; then
@@ -1015,6 +1058,7 @@ EOF
             return 0
         fi
         echo -e "  ${GREEN}wrote $(tilde_path "$SPEC_FILE")${NC} (mode 0600)"
+        warn_unrouted_cloud "$tool"
 
         [ "${VERIFY:-1}" = "1" ] || return 0
         printf '  checking against the server... '
@@ -1050,7 +1094,7 @@ configure_summary() {
     for tool in $CONFIG_TOOLS; do
         status=$(tool_status "$tool")
         tool_spec "$tool" || continue
-        pad=$(printf '%-8s' "$tool")
+        pad=$(printf '%-10s' "$tool")
         case "$status" in
             configured)
                 echo -e "  ${GREEN}ok${NC}    $pad $(tilde_path "$SPEC_FILE")"
@@ -1067,8 +1111,7 @@ configure_summary() {
                     echo -e "  ${YELLOW}part${NC}  $pad missing $(tool_missing_keys "$tool")" \
                         "-- ./install.sh --configure --only $tool"
                 elif [ -n "$SPEC_OPTIONAL" ]; then
-                    echo -e "  ${GREEN}ok${NC}    $pad no credentials" \
-                        "-- reads work anonymously"
+                    echo -e "  ${GREEN}ok${NC}    $pad ${SPEC_UNSET_OK:-not configured}"
                 else
                     echo -e "  ${YELLOW}--${NC}    $pad not configured" \
                         "-- ./install.sh --configure --only $tool"

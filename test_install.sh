@@ -78,6 +78,40 @@ check "answering no writes the server and nothing else" \
 contains "answering no names the command to come back with" \
     "--configure --only jira" "$out"
 
+# --- the two Jiras: Whamcloud first, Atlassian Cloud after -----------------
+# Both land in one .env, so Cloud's keys must sit beside the server's rather
+# than on top of them, and Cloud needs an email where the server needs none.
+fresh_home
+out=$(printf 'y\n\nwctoken\ny\nhttps://acme.atlassian.net\nme@acme.com\ncloudtoken\nACME,FOO\n' |
+    env HOME="$HOME_DIR" VERIFY=0 \
+    bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; configure_tools 'jira jira-cloud'" 2>&1)
+wc_line=$(printf '%s\n' "$out" | grep -n -m1 'Jira Server (Whamcloud)' | cut -d: -f1)
+cloud_line=$(printf '%s\n' "$out" | grep -n -m1 'Jira Cloud (Atlassian)' | cut -d: -f1)
+if [ -n "$wc_line" ] && [ -n "$cloud_line" ] && [ "$wc_line" -lt "$cloud_line" ]; then
+    ok "Whamcloud Jira is asked for before Atlassian Cloud"
+else
+    bad "Whamcloud Jira is asked for before Atlassian Cloud" "$out"
+fi
+check "  both Jiras land in one file, each under its own keys" \
+    "JIRA_SERVER=https://jira.whamcloud.com JIRA_TOKEN=wctoken JIRA_CLOUD_SERVER=https://acme.atlassian.net JIRA_CLOUD_EMAIL=me@acme.com JIRA_CLOUD_TOKEN=cloudtoken JIRA_CLOUD_PROJECTS=ACME,FOO" \
+    "$(tr '\n' ' ' < "$HOME_DIR/.config/jira-tool/.env" | sed 's/ $//')"
+
+fresh_home
+out=$(printf 'y\n\nwctoken\nn\n' | env HOME="$HOME_DIR" VERIFY=0 \
+    bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; configure_tools 'jira jira-cloud'" 2>&1)
+check "declining Cloud adds nothing to the Whamcloud file" \
+    "JIRA_SERVER=https://jira.whamcloud.com JIRA_TOKEN=wctoken" \
+    "$(tr '\n' ' ' < "$HOME_DIR/.config/jira-tool/.env" | sed 's/ $//')"
+
+# Cloud credentials are reached only through a project prefix, so without
+# one they are written and never used.
+fresh_home
+out=$(printf 'y\nhttps://acme.atlassian.net\nme@acme.com\ncloudtoken\n\n' |
+    env HOME="$HOME_DIR" VERIFY=0 \
+    bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; configure_tools 'jira-cloud'" 2>&1)
+contains "Cloud credentials with no project keys say they are inert" \
+    "no project keys given" "$out"
+
 # --- "skip" part-way through abandons the tool, writing nothing ------------
 fresh_home
 out=$(printf 'y\n\nskip\n' | env HOME="$HOME_DIR" VERIFY=0 \
@@ -131,6 +165,7 @@ key_source() {
     case "$1" in
         gerrit) echo "$SCRIPT_DIR/gerrit_cli/gerrit_cli/client.py" ;;
         jira) echo "$SCRIPT_DIR/jira_tool/jira_tool/config.py" ;;
+        jira-cloud) echo "$SCRIPT_DIR/jira_tool/jira_tool/commands/_helpers.py" ;;
         maloo) echo "$SCRIPT_DIR/maloo_tool/maloo_tool/config.py" ;;
         jenkins) echo "$SCRIPT_DIR/jenkins_tool/jenkins_tool/config.py" ;;
     esac
@@ -216,6 +251,8 @@ contains "jira's own JSON config counts as configured" ".jira-tool.json" "$out"
 fresh_home
 out=$(HOME="$HOME_DIR" bash "$INSTALL_SH" --status 2>&1)
 contains "--status reports an unconfigured host" "not configured" "$out"
+contains "--status does not nag about an unused Cloud site" \
+    "no Cloud site" "$out"
 
 out=$(HOME="$HOME_DIR" bash "$INSTALL_SH" --configure < /dev/null 2>&1)
 rc=$?
@@ -225,7 +262,7 @@ contains "--configure without a terminal says why" "needs a terminal" "$out"
 out=$(HOME="$HOME_DIR" bash "$INSTALL_SH" --only bogus < /dev/null 2>&1)
 rc=$?
 check "--only rejects an unknown tool" "1" "$rc"
-contains "--only lists the tools it knows" "gerrit jira maloo jenkins" "$out"
+contains "--only lists the tools it knows" "gerrit jira jira-cloud maloo jenkins" "$out"
 
 out=$(HOME="$HOME_DIR" bash "$INSTALL_SH" --only jira < /dev/null 2>&1)
 if echo "$out" | grep -q "Installing"; then

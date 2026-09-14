@@ -134,9 +134,10 @@ The installer sets all of this up for you, and offers to as soon as it
 finishes installing:
 
 ```bash
-./install.sh --configure                # every tool, one at a time
-./install.sh --configure --only jira    # just one
-./install.sh --status                   # what is set up, what is not
+./install.sh --configure                      # every tool, one at a time
+./install.sh --configure --only jira          # just one
+./install.sh --configure --only jira-cloud    # the Atlassian Cloud one
+./install.sh --status                         # what is set up, what is not
 ```
 
 It says what each tool needs and where that credential comes from, then
@@ -186,16 +187,40 @@ Verify: `gerrit info <any-change-url>`
 
 ### JIRA
 
-A token is optional for reading: `jira get`, `jira search` and
-`jira comments` work against a public Jira with only `JIRA_SERVER` set.
-Filing, commenting, linking and transitioning need `JIRA_TOKEN`.
+There are two of these, and the installer asks for both in turn:
+Whamcloud's Jira Server, where the LU tickets are, and then an
+organisation's own Atlassian Cloud site, which is optional. They share
+one `~/.config/jira-tool/.env` and differ in how they authenticate.
 
-**Single instance** -- environment variables:
+**Whamcloud (or any Jira Server / Data Center)** -- a bearer Personal
+Access Token, no username:
 
 ```bash
-JIRA_SERVER=https://jira.example.com
-JIRA_TOKEN=your-bearer-token
+JIRA_SERVER=https://jira.whamcloud.com
+JIRA_TOKEN=your-personal-access-token
 ```
+
+Create it under Jira > your avatar > Profile > Personal Access Tokens.
+The token is optional for reading: `jira get`, `jira search` and
+`jira comments` work against a public Jira with only `JIRA_SERVER` set.
+Filing, commenting, linking and transitioning need it.
+
+**Atlassian Cloud alongside it** -- basic auth, where the email is half
+the credential, and the project keys say which issues live there:
+
+```bash
+JIRA_CLOUD_SERVER=https://yourorg.atlassian.net
+JIRA_CLOUD_EMAIL=you@yourorg.com
+JIRA_CLOUD_TOKEN=your-api-token
+JIRA_CLOUD_PROJECTS=ACME,PROJ
+```
+
+Create the token at
+https://id.atlassian.com/manage-profile/security/api-tokens. `jira`
+picks the site from the project prefix of the issue key it is given:
+`jira get ACME-12` goes to the Cloud site, `jira get LU-19740` to the
+server above. Without `JIRA_CLOUD_PROJECTS` nothing ever routes and the
+other three are inert.
 
 **Multiple instances** -- `~/.jira-tool.json`:
 
@@ -221,15 +246,10 @@ Auth types:
 - **basic** -- for Atlassian Cloud. Uses your email + an API
   token created at https://id.atlassian.com/manage-profile/security/api-tokens
 
-Select instance with `jira -I cloud get EX-1234`. Projects
-listed in `JIRA_CLOUD_PROJECTS` (comma-separated env var) are
-automatically routed to a Cloud client built from the
-`JIRA_CLOUD_SERVER`, `JIRA_CLOUD_EMAIL`, and `JIRA_CLOUD_TOKEN`
-environment variables — not from a config-file instance.
-`JIRA_CLOUD_SERVER` and `JIRA_CLOUD_TOKEN` must be set or routed
-commands fail with a config error (`JIRA_CLOUD_EMAIL` is needed
-for Atlassian Cloud basic auth). An explicit `-I` always
-overrides auto-routing.
+Select instance with `jira -I cloud get EX-1234`, which always wins
+over the `JIRA_CLOUD_PROJECTS` routing above. The two mechanisms are
+separate: a project routed by prefix is served by a client built from
+the `JIRA_CLOUD_*` variables, never from an instance in this file.
 
 Verify: `jira get <any-issue-key>`
 
