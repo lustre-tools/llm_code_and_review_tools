@@ -61,6 +61,13 @@ class RunViewTests(unittest.TestCase):
             "href='https://review.whamcloud.com/c/fs/lustre-release/+/68845/2'", html
         )
         self.assertIn("Change on Gerrit", html)
+        # The heading is read first and is the identifier most often wanted
+        # next, so it is a link too.
+        self.assertIn(
+            "<a href='https://review.whamcloud.com/c/fs/lustre-release/+/68845/2' "
+            "rel='noreferrer noopener' target='_blank'>68845</a></h2>",
+            html,
+        )
 
     def test_a_run_whose_patch_is_gone_still_shows_its_change(self):
         """A run outlives the watch list."""
@@ -236,7 +243,12 @@ class RunViewTests(unittest.TestCase):
         self.assertIn("run-message agent", html)
         self.assertIn("run-message operator", html)
         self.assertIn(">You</span>", html)                     # the operator is "You"
-        self.assertIn(">15:32:41</time>", html)                # clock, not a full stamp
+        # Clock, not a full stamp, and on the reader's own clock rather than
+        # UTC -- computed, so the suite passes in any timezone.
+        self.assertIn(
+            ">" + run_views._clock_time("2026-09-11T15:32:41+00:00") + "</time>", html
+        )
+        self.assertNotIn("2026-09-11T15:32:41", html)
         self.assertIn("Delivery: <strong>Queued", html)        # a queued send still says so
         self.assertEqual(html.count("Delivery: <strong>Recorded"), 0)
         self.assertLess(html.index("Build is compiling."), html.index("<textarea"))

@@ -129,6 +129,7 @@ from patch_watcher.run_controller import (
     unknown_failure_research_run_id,
 )
 from patch_watcher.run_views import (
+    local_time,
     render_chat_messages,
     render_destructive_confirmation,
     render_investigate_control,
@@ -1770,7 +1771,7 @@ def _history_html(patch):
         return ""
     items = "".join(
         "<li>"
-        f"<time>{escape(event.get('changed_at', '') or event.get('checked_at', ''))}</time> "
+        f"<time>{escape(local_time(event.get('changed_at', '') or event.get('checked_at', '')))}</time> "
         f"{escape(event.get('summary', 'Status changed'))} "
         f"<span class='history-state'>[{escape(event.get('watch_state', ''))}]</span>"
         "</li>"
@@ -1792,7 +1793,7 @@ def overall_last_checked():
             for patch in PATCHES
             if patch.get("last_checked") not in {None, "", "—"}
         ]
-    return max(checked) if checked else "Never"
+    return local_time(max(checked), timespec="seconds") if checked else "Never"
 
 
 def overall_last_successful_check():
@@ -1808,7 +1809,7 @@ def overall_last_successful_check():
             for patch in PATCHES
             if patch.get("refreshed_at")
         ]
-    return max(checked) if checked else "Never"
+    return local_time(max(checked), timespec="seconds") if checked else "Never"
 
 
 def refresh_failure_summary():
@@ -1830,7 +1831,7 @@ def _refresh_errors_html(patch):
     if not errors:
         return f"<div class='detail'>Checks: {checks}</div>" if checks else ""
     items = "".join(
-        "<li><time>" + escape(str(item.get("checked_at", "") or "")) + "</time> "
+        "<li><time>" + escape(local_time(item.get("checked_at", "") or "")) + "</time> "
         + escape(str(item.get("message", "") or "")) + "</li>"
         for item in reversed(errors)
     )
@@ -2868,7 +2869,7 @@ def _finished_run_row(item):
         + "<td>" + escape(str(item.patch_id)) + "</td>"
         + "<td>" + _chip(item.state.replace("_", " ").capitalize(), tone,
                          title="Final run state")
-        + "</td><td>" + escape(item.state_changed_at.isoformat(timespec="seconds"))
+        + "</td><td>" + escape(local_time(item.state_changed_at, timespec="seconds"))
         + "</td><td>"
         + (f"<div class='error'>{escape(str(reason))}</div>" if reason else "\u2014")
         + "</td></tr>"
@@ -3593,7 +3594,7 @@ def _patch_run_html(patch):
                 "<div class='detail'>Last run: "
                 + _chip(last.state.replace("_", " ").capitalize(), tone)
                 + f" <a href='{href}'>{escape(last.run_id)}</a> "
-                + f"{escape(last.state_changed_at.isoformat(timespec='minutes'))}</div>"
+                + f"{escape(local_time(last.state_changed_at))}</div>"
                 + why
             )
         spend = _usage_line(_patch_usage_totals(patch), prefix="Spent on this patch: ")
@@ -3701,7 +3702,7 @@ def _patch_now_html(patch):
         last_html = (
             f" Last run: <a href='{href}'>{escape(last.run_id)}</a> "
             f"{escape(last.state.replace('_', ' '))} "
-            f"{escape(last.state_changed_at.isoformat(timespec='minutes'))}."
+            f"{escape(local_time(last.state_changed_at))}."
         )
         # A failure says why, here, not only on the run page: the first thing
         # an operator asks of a failed run is what happened.
@@ -3716,7 +3717,7 @@ def _patch_now_html(patch):
         interval = int(configured_refresh_interval())
     except Exception:
         interval = 300
-    checked = str(patch.get("last_checked") or "—")
+    checked = local_time(patch.get("last_checked") or "—", timespec="seconds")
     return (
         "<section class='patch-now' aria-label='What is happening now'>"
         f"<p>{run_html} {level_html}{last_html}</p>"
@@ -3919,7 +3920,7 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         f"<div class='detail'>{escape(_vote_summary(patch))} · "
         f"{escape(str(patch.get('unresolved', 0)))} unresolved</div></td>"
         f"<td>{escape(patch.get('change_summary', '—') or '—')}"
-        f"<div class='detail'>Changed: {escape(patch.get('last_changed', '—') or '—')}</div>"
+        f"<div class='detail'>Changed: {escape(local_time(patch.get('last_changed', '—') or '—'))}</div>"
         f"{_history_html(patch)}</td>"
         f"<td>{_patch_run_html(patch)}{action_policy_html}</td></tr>"
     )

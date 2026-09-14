@@ -8,6 +8,7 @@ views; every mutation uses POST.
 
 import math
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from html import escape
 from urllib.parse import quote, urlencode
 
@@ -144,6 +145,23 @@ def _field(label, value, *, code=False):
     if code:
         content = f"<code>{content}</code>"
     return f"<div><dt>{escape(label)}</dt><dd>{content}</dd></div>"
+
+
+def _heading_change(run):
+    """The change in the page heading, as a link to the review when we have one.
+
+    The heading is the first thing read and the change is the thing most often
+    wanted next, so it should not be the one identifier on the page you cannot
+    click.
+    """
+    label = escape(_plain(_get(run, "subject", "patch_subject", "change_number")))
+    href = _get(run, "change_url", "gerrit_url")
+    if not href:
+        return label
+    return (
+        f"<a href='{escape(_plain(href), quote=True)}' "
+        f"rel='noreferrer noopener' target='_blank'>{label}</a>"
+    )
 
 
 def _link_field(label, value, href):
@@ -443,9 +461,50 @@ def _render_question(run, question, notices=()):
     )
 
 
+def local_moment(value):
+    """Parse a stored moment into the reader's own timezone, or None.
+
+    Everything is stored and passed around in UTC, which is right.  Reading it
+    in UTC is not: "checked 22:18" against a wall clock saying 17:18 is five
+    hours of arithmetic on every glance, and the whole point of these pages is
+    to be glanced at.
+
+    A stamp with no zone is UTC, because that is what Gerrit reports and what
+    the session store writes; only the display changes here.
+    """
+    if isinstance(value, datetime):
+        moment = value
+    else:
+        text = _plain(value, "").strip()
+        if not text:
+            return None
+        try:
+            moment = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return moment.astimezone()
+
+
+def local_time(value, *, timespec="minutes", zone=True):
+    """A stored moment as local date and time, falling back to the raw text."""
+    moment = local_moment(value)
+    if moment is None:
+        return _plain(value, "")
+    text = moment.strftime(
+        "%Y-%m-%d %H:%M:%S" if timespec == "seconds" else "%Y-%m-%d %H:%M"
+    )
+    name = moment.strftime("%Z") if zone else ""
+    return f"{text} {name}".strip()
+
+
 def _clock_time(value):
-    """The time of day from an ISO stamp: a chat wants 15:32:41, not the date
-    repeated on every line."""
+    """The time of day from a stored stamp: a chat wants 15:32:41, not the
+    date repeated on every line -- and it wants the reader's own clock."""
+    moment = local_moment(value)
+    if moment is not None:
+        return moment.strftime("%H:%M:%S")
     text = _plain(value, "")
     if "T" in text:
         clock = text.split("T", 1)[1][:8]
@@ -482,7 +541,7 @@ def _message_row(message):
 def _event_row(event):
     return (
         "<li class='run-event'>"
-        f"<time>{escape(_plain(_get(event, 'created_at', 'timestamp', 'time')))}</time> "
+        f"<time>{escape(local_time(_get(event, 'created_at', 'timestamp', 'time'), timespec='seconds'))}</time> "
         f"<strong>{escape(_human(_get(event, 'event_type', 'type', 'kind')))}</strong>: "
         f"{escape(_plain(_get(event, 'summary', 'message', 'detail')))}</li>"
     )
@@ -666,7 +725,7 @@ def render_run_detail(
     )
     return (
         "<main class='run-detail'><header><p><a href='/'>← Patch Watcher</a></p>"
-        f"<h2>{heading} · {escape(_plain(_get(run, 'subject', 'patch_subject', 'change_number')))}</h2>"
+        f"<h2>{heading} · {_heading_change(run)}</h2>"
         f"{_status_badge(_get(run, 'state', 'status'))}"
         + boundary + "</header>"
         + _render_failure(run)
@@ -684,8 +743,14 @@ def render_run_detail(
         + _field("Model", _get(run, "model", "model_name"))
         + _field("Reasoning effort", _get(run, "effort", "reasoning_effort"))
         + _field("Process", f"PID {_plain(_get(run, 'process_pid', 'pid'))} · {_format_bytes(_get(run, 'process_memory_bytes', 'memory_bytes', 'rss_bytes'))}")
-        + _field("Started", _get(run, "started_at", "created_at"))
-        + _field("Last qualifying activity", _get(run, "last_activity_at", "last_qualifying_activity"))
+        + _field("Started", local_time(_get(run, "started_at", "created_at"), timespec="seconds"))
+        + _field(
+            "Last qualifying activity",
+            local_time(
+                _get(run, "last_activity_at", "last_qualifying_activity"),
+                timespec="seconds",
+            ),
+        )
         + "</dl>" + _countdowns(run) + "</section>"
         + _render_question(run, question, notices=notices)
         + _render_guidance(

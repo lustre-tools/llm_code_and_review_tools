@@ -18,7 +18,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
-from patch_watcher import app, reporting
+from patch_watcher import app, reporting, run_views
 from patch_watcher.engineering_views import render_engineering_start_control
 from patch_watcher.failure_actions import FailureActionController, FailurePatchRevision
 from patch_watcher.maloo_adapter import (
@@ -341,12 +341,15 @@ class PatchWatcherTests(AppGlobalsIsolated):
         patch_record["last_checked"] = "2026-08-29T21:00:00+00:00"
         patch_record["refreshed_at"] = "2026-08-29T21:00:00+00:00"
         rendered = app.page()
-        self.assertIn(
-            "Last successful check: 2026-08-29T21:00:00+00:00", rendered
+        # Shown on the reader's clock, not in UTC: "checked 21:00" against a
+        # wall clock saying 16:00 is arithmetic on every glance.  Computed
+        # rather than hardcoded so the suite passes in any timezone.
+        shown = run_views.local_time(
+            "2026-08-29T21:00:00+00:00", timespec="seconds"
         )
-        self.assertIn(
-            "Last check attempt: 2026-08-29T21:00:00+00:00", rendered
-        )
+        self.assertIn(f"Last successful check: {shown}", rendered)
+        self.assertIn(f"Last check attempt: {shown}", rendered)
+        self.assertNotIn("2026-08-29T21:00:00+00:00", rendered)
         self.assertEqual(rendered.count("action='/refresh-all'"), 1)
         self.assertNotIn("action='/refresh'", rendered)
         self.assertNotIn("<th>Last checked</th>", rendered)
@@ -366,21 +369,29 @@ class PatchWatcherTests(AppGlobalsIsolated):
             {"checked_at": "2026-08-30T09:00:00+00:00",
              "message": "Gerrit returned HTTP 502"},
         ]
+        # The max() that picks the newest still compares raw UTC; only the
+        # rendering is local, so the two cannot disagree about which is newer.
         self.assertEqual(
-            app.overall_last_successful_check(), "2026-08-29T21:00:00+00:00"
+            app.overall_last_successful_check(),
+            run_views.local_time("2026-08-29T21:00:00+00:00", timespec="seconds"),
         )
         self.assertEqual(
-            app.overall_last_checked(), "2026-08-30T09:00:00+00:00"
+            app.overall_last_checked(),
+            run_views.local_time("2026-08-30T09:00:00+00:00", timespec="seconds"),
         )
         self.assertEqual(
             app.refresh_failure_summary(), "1 of 2 patches failed to refresh."
         )
         rendered = app.page()
         self.assertIn(
-            "Last successful check: 2026-08-29T21:00:00+00:00", rendered
+            "Last successful check: "
+            + run_views.local_time("2026-08-29T21:00:00+00:00", timespec="seconds"),
+            rendered,
         )
         self.assertIn(
-            "Last check attempt: 2026-08-30T09:00:00+00:00", rendered
+            "Last check attempt: "
+            + run_views.local_time("2026-08-30T09:00:00+00:00", timespec="seconds"),
+            rendered,
         )
         self.assertIn("1 of 2 patches failed to refresh.", rendered)
         # check_count and the stored errors list were never rendered anywhere.
@@ -878,7 +889,11 @@ class PatchWatcherTests(AppGlobalsIsolated):
             quiet = app._patch_now_html(patch_record)
             # The run itself moved to the row; this line is about policy.
             self.assertIn("Level <strong>Watch only</strong>: nothing runs unattended", quiet)
-            self.assertIn("last checked 2026-09-10 12:00:00", quiet)
+            self.assertIn(
+                "last checked "
+                + run_views.local_time("2026-09-10 12:00:00", timespec="seconds"),
+                quiet,
+            )
             self.assertNotIn("Last run", quiet)
 
             standing.save(app.PatchAutomationPolicy.for_preset("35302", "retest"))
