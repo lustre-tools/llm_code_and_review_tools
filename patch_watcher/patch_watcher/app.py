@@ -867,6 +867,14 @@ def _concluded_review_threads(patch):
     for session in SESSION_STORE.list_sessions(include_terminal=True):
         if session.patch_id != patch_id or not session.run_id.startswith("pw-review-"):
             continue
+        # Only a run that SUCCEEDED concluded anything.  A resource_exhausted
+        # run reports "addressed" for edits it made in a working tree that was
+        # then thrown away, having posted nothing and uploaded nothing -- and
+        # taking those at face value marked fourteen threads across three
+        # patches as handled when the reviewer had heard nothing at all.
+        # complete and acknowledged both finish succeeded; nothing else does.
+        if session.state != "succeeded":
+            continue
         terminal = SESSION_STORE.get_terminal_result(session.session_id)
         report = getattr(terminal, "result", None) if terminal is not None else None
         if not isinstance(report, Mapping):

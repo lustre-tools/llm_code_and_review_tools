@@ -687,6 +687,20 @@ class PatchWatcherTests(AppGlobalsIsolated):
             # Readable with no run controller at all: it is a fact about
             # finished runs, not about anything currently running.
             self.assertIsNone(app.RUN_CONTROLLER)
+            # A run that did not succeed concluded nothing, however confident
+            # its dispositions are: a resource_exhausted run makes its edits in
+            # a tree that is then discarded, and the reviewer hears nothing.
+            store.correct_terminal_result(
+                "review-done", state="resource_exhausted",
+                failure_code="ltvm_resource_exhausted",
+                failure_summary="no guest capacity, so nothing was posted",
+                reason="test: the run ran out of resources",
+            )
+            self.assertEqual(app._concluded_review_threads(record), {})
+            store.correct_terminal_result(
+                "review-done", state="succeeded", reason="test: restore",
+            )
+
             concluded = app._concluded_review_threads(record)
             self.assertEqual(set(concluded), {"t1"})
             self.assertEqual(concluded["t1"][0], "not_attempted")
