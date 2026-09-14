@@ -783,6 +783,16 @@ def _consumed_standing_keys(patch, *, attended=False):
                 dead += 1
                 continue
             # Finished and did something (or failed after starting): consumed.
+            #
+            # Not for Run now.  Coalescing exists so one event does not start
+            # the same work twice on its own; an operator pressing the button
+            # is asking for it again, knowingly, and a finished run is not a
+            # reason to refuse.  Refusing anyway made the button dead on
+            # exactly the patches whose card points at it, silently.  The
+            # one-run-per-patch invariant above still holds: a run that is
+            # still going consumes its event for everyone.
+            if attended:
+                continue
             consumed.add(key)
             break
         else:
@@ -792,7 +802,7 @@ def _consumed_standing_keys(patch, *, attended=False):
     return frozenset(consumed)
 
 
-def _standing_request_id(patch, decision):
+def _standing_request_id(patch, decision, *, attended=False):
     """Name this ATTEMPT at a standing event, not just the event.
 
     A controller replays a request identity it has seen: same id, same run.
@@ -802,21 +812,35 @@ def _standing_request_id(patch, decision):
     one.  Prior never-started attempts are counted into the id, so each try
     is its own run while the event stays one event.
     """
+    if attended:
+        # A replayed request identity returns the RUN it already named, so an
+        # attended retry that reused the key would hand back the finished run
+        # it is trying to repeat.  Count every prior attempt, not just the
+        # dead ones, so each press is a new run of one unchanged event.
+        started = _standing_attempts(patch, decision.coalescing_key)
+        if started:
+            return f"{decision.coalescing_key}#run{started}"
+        return decision.coalescing_key
     dead = _dead_standing_attempts(patch, decision.coalescing_key)
     if not dead:
         return decision.coalescing_key
     return f"{decision.coalescing_key}#retry{dead}"
 
 
-def _dead_standing_attempts(patch, coalescing_key):
-    """Count runs started for this exact event that never reached an agent."""
+def _standing_attempts(patch, coalescing_key):
+    """Count every run this exact event has already started."""
+    return len(_standing_attempt_runs(patch, coalescing_key))
+
+
+def _standing_attempt_runs(patch, coalescing_key):
+    """Every run id this exact event has already named."""
     if AUTOMATION_STORE is None or SESSION_STORE is None:
-        return 0
+        return []
     patch_id = str(patch.get("change_number") or "")
     revision = str(patch.get("revision_sha") or "")
     if not patch_id:
-        return 0
-    run_ids = [
+        return []
+    return [
         str(item.payload.get("outcome"))
         for item in AUTOMATION_STORE.list_observations(patch_id)
         if item.source == "standing_policy"
@@ -825,6 +849,11 @@ def _dead_standing_attempts(patch, coalescing_key):
         and str(item.payload.get("coalescing_key")) == str(coalescing_key)
         and item.payload.get("outcome")
     ]
+
+
+def _dead_standing_attempts(patch, coalescing_key):
+    """Count runs started for this exact event that never reached an agent."""
+    run_ids = _standing_attempt_runs(patch, coalescing_key)
     if not run_ids:
         return 0
     sessions = {
@@ -1008,7 +1037,7 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
             )
             if decision.eligible:
                 session = RUN_CONTROLLER.request_engineering(
-                    patch, request_id=_standing_request_id(patch, decision), task="rebase",
+                    patch, request_id=_standing_request_id(patch, decision, attended=attended), task="rebase",
                 )
                 SESSION_STORE.append_event(
                     session.session_id, "standing_policy_triggered", decision.to_dict(),
@@ -1065,7 +1094,7 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
                 try:
                     session = RUN_CONTROLLER.request_review_comments(
                         patch, snapshot, mode=policy.review_comments,
-                        request_id=_standing_request_id(patch, decision),
+                        request_id=_standing_request_id(patch, decision, attended=attended),
                         design_audit=policy.design_audit,
                         skip_threads=settled,
                     )
@@ -1108,7 +1137,7 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
             )
             if decision.eligible:
                 session = RUN_CONTROLLER.request_build_failure(
-                    patch, snapshot, request_id=_standing_request_id(patch, decision),
+                    patch, snapshot, request_id=_standing_request_id(patch, decision, attended=attended),
                 )
                 SESSION_STORE.append_event(
                     session.session_id, "standing_policy_triggered", decision.to_dict(),

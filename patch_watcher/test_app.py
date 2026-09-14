@@ -1093,8 +1093,8 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 self.assertIsNone(app._apply_standing_policy(patch_record))
                 fourth = app._apply_standing_policy(patch_record, attended=True)
                 self.assertEqual(fourth.run_id, "pw-engineer-35302-ps4-try4")
-                # A run whose agent DID speak keeps the event consumed, whatever
-                # killed it afterwards.
+                # A run whose agent DID speak keeps the event consumed against
+                # the UNATTENDED path, whatever killed it afterwards.
                 # An API error is the CLI saying the model never ran, so it
                 # does not count as the agent having said anything.
                 sessions.record_message(
@@ -1113,8 +1113,17 @@ class PatchWatcherTests(AppGlobalsIsolated):
                     f"session-{fourth.run_id}", "failed", failure_code="worker_report_invalid",
                     failure_summary="bad report",
                 )
-                self.assertIsNone(app._apply_standing_policy(patch_record, attended=True))
-            self.assertEqual(len(runs.started), 4)
+                self.assertIsNone(app._apply_standing_policy(patch_record))
+                # Run now is not refused by it.  The button already overrides
+                # the global kill switch; coalescing exists to stop the
+                # automatic path repeating itself, and an operator pressing
+                # the button is asking for the work again, knowingly.  It used
+                # to be refused here, which made the button dead on exactly
+                # the patches whose card tells you to press it -- and silently,
+                # since a refusal renders as an unchanged page.
+                fifth = app._apply_standing_policy(patch_record, attended=True)
+                self.assertEqual(fifth.run_id, "pw-engineer-35302-ps4-try5")
+            self.assertEqual(len(runs.started), 5)
             # Each attempt recorded its own trigger event: the idempotency key
             # is the run, so retrying one event does not collide with itself.
             triggered = [
@@ -1123,9 +1132,9 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 for event in sessions.list_events(f"session-{run_id}")
                 if event.event_type == "standing_policy_triggered"
             ]
-            self.assertEqual(len(triggered), 4)
-            self.assertEqual(len(set(triggered)), 1, "all four retried one event")
-            self.assertEqual(len(set(runs.requests)), 4, "each attempt asked distinctly")
+            self.assertEqual(len(triggered), 5)
+            self.assertEqual(len(set(triggered)), 1, "all five retried one event")
+            self.assertEqual(len(set(runs.requests)), 5, "each attempt asked distinctly")
             self.assertTrue(all(r.startswith(triggered[0]) for r in runs.requests))
             # host_process_missing is not a "start failed" code, but a host gone
             # the instant it attached did nothing either -- so it releases too.
