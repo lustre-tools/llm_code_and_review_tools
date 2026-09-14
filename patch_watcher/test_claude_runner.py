@@ -120,6 +120,26 @@ class ClaudeArgvTests(unittest.TestCase):
         values.update(overrides)
         return ReadOnlyRunSpec(**values)
 
+    def test_a_subscription_token_survives_the_bounded_environment(self):
+        """`CLAUDE_CODE_OAUTH_TOKEN` ends in _TOKEN, and the sweep that strips
+        service secrets from a bounded run would take the agent's own
+        credential with them -- leaving it unable to authenticate at all."""
+
+        environment = claude_runner._safe_environment(
+            {
+                "PATH": "/usr/bin",
+                "CLAUDE_CODE_OAUTH_TOKEN": "sk-test-token",
+                "GERRIT_PASSWORD": "secret",
+                "MALOO_API_TOKEN": "secret",
+            },
+            capability_profile="read_only",
+            config_dir=Path("/tmp/pw-config"),
+        )
+        self.assertEqual(environment["CLAUDE_CODE_OAUTH_TOKEN"], "sk-test-token")
+        # The service secrets it sits next to are still removed.
+        self.assertNotIn("GERRIT_PASSWORD", environment)
+        self.assertNotIn("MALOO_API_TOKEN", environment)
+
     def test_a_result_that_never_reached_the_model_says_so(self):
         """The one failure that actually happened in production.
 

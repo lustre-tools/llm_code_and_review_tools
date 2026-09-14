@@ -543,6 +543,14 @@ def _safe_environment(
     protected_model_keys = {
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
+        # A subscription token from `claude setup-token`, which is how a run
+        # authenticates without sharing the operator's ~/.claude credentials
+        # file -- the sharing that made two runs lose an OAuth refresh race
+        # against the operator's own interactive sessions.  Its name ends in
+        # _TOKEN, so the sweep below would strip it from every bounded run and
+        # leave the agent unable to authenticate at all, which is the same
+        # silent death it is meant to prevent.
+        "CLAUDE_CODE_OAUTH_TOKEN",
         "AWS_ACCESS_KEY_ID",  # Claude may be configured through Bedrock.
         "AWS_SECRET_ACCESS_KEY",
         "AWS_SESSION_TOKEN",
