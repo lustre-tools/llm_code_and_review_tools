@@ -1033,6 +1033,51 @@ def _assistant_text(event: Mapping[str, Any]) -> str:
     return "\n".join(parts)[:8192]
 
 
+# Errors the CLI reports without ever reaching the model.  They are facts
+# about this host at that instant -- a token refresh that raced another Claude
+# Code process, an overloaded API -- and say nothing about the work, so the
+# standing event that started the run is still unhandled.  A run that ends this
+# way must release its event to be retried, not consume it.
+CLI_TRANSIENT_ERROR_PATTERNS = (
+    "failed to refresh oauth token",
+    "overloaded_error",
+    "api error: 429",
+    "api error: 500",
+    "api error: 502",
+    "api error: 503",
+    "api error: 504",
+)
+
+
+def classify_result_without_output(event: Mapping[str, Any]) -> dict[str, Any]:
+    """Explain a terminal result that carried no structured report.
+
+    "missing_structured_output" is a symptom, and it was the only thing
+    recorded: a run that died because it could not refresh its OAuth token
+    reported exactly the same string as one whose agent simply forgot the
+    report.  The CLI puts its own reason in the result, and that text is
+    already persisted verbatim in the `claude_event` beside this, so naming
+    it here reveals nothing new and is the difference between a console that
+    explains itself and one that does not.
+    """
+
+    payload: dict[str, Any] = {"reason": "missing_structured_output"}
+    if not event.get("is_error"):
+        return payload
+    text = event.get("result")
+    if not isinstance(text, str) or not text.strip():
+        return payload
+    detail = text.strip()[:MAX_CLI_ERROR_TEXT]
+    payload["text"] = detail
+    lowered = detail.casefold()
+    if any(pattern in lowered for pattern in CLI_TRANSIENT_ERROR_PATTERNS):
+        payload["transient"] = True
+        payload["reason"] = "the agent never reached the model: " + detail
+    else:
+        payload["reason"] = "no report, and the run ended in error: " + detail
+    return payload
+
+
 # An AF_UNIX address is 108 bytes including its NUL, so a socket path has 107
 # usable characters.
 _SUN_PATH_MAX = 107
@@ -1335,7 +1380,7 @@ class ClaudeHost:
             if raw.get("type") == "result":
                 if "structured_output" not in raw:
                     self._append_event(
-                        "worker_report_invalid", {"reason": "missing_structured_output"}
+                        "worker_report_invalid", classify_result_without_output(raw)
                     )
                 else:
                     try:

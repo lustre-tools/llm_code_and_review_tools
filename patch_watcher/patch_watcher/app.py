@@ -114,6 +114,7 @@ from patch_watcher.review_views import (
     render_review_start_control,
 )
 from patch_watcher.run_controller import (
+    AGENT_ERROR_AUTHOR,
     BUILD_FAILURE_REQUEST_EVENT,
     CHECKOUT_ALLOCATED_EVENT,
     ENGINEERING_REQUEST_EVENT,
@@ -706,8 +707,16 @@ def _run_did_nothing(session):
     # An API error is the CLI reporting that the model never ran; it is not
     # the agent saying anything about the patch.  A run whose only output was
     # "API Error: 400 ..." did nothing, and its event is still there to handle.
+    #
+    # The prefix alone was not enough.  A run that lost the OAuth token refresh
+    # race against another Claude Code process says "Failed to refresh OAuth
+    # token: ...", with no prefix, so it counted as the agent having spoken and
+    # permanently consumed the standing event that started it -- for an error
+    # the CLI itself calls transient.  The controller now marks these by author
+    # from the stream; the prefix stays for rows recorded before it did.
     if any(
-        not str(message.body or "").startswith("API Error:")
+        str(message.author or "") != AGENT_ERROR_AUTHOR
+        and not str(message.body or "").startswith("API Error:")
         for message in SESSION_STORE.recent_messages(session.session_id, limit=20)
     ):
         return False
@@ -3285,6 +3294,44 @@ def _relative_age(value):
     return f"{seconds // 86400}d ago"
 
 
+def _review_event_is_spent(patch):
+    """True when the current review comments will not start another run.
+
+    A standing event is consumed by the run it started, and a run that failed
+    after its agent spoke keeps it consumed -- deliberately, or a genuinely bad
+    run would be retried forever.  The card did not know that, so it went on
+    promising "ready to act at the next check" for a patch whose event was
+    already spent, indefinitely.  Nothing is wrong with the policy here; the
+    honest answer is that this one needs a person to press Run now.
+
+    The exact test needs the snapshot digest and belongs at poll time.  This is
+    the cheap local one: the newest finished review run on this very revision
+    consumed its event, and Gerrit has reported no change since it finished.
+    """
+
+    if SESSION_STORE is None:
+        return False
+    patch_id = str(patch.get("change_number") or "")
+    revision = str(patch.get("revision_sha") or "").lower()
+    if not patch_id or not revision:
+        return False
+    newest = None
+    for session in SESSION_STORE.list_sessions(include_terminal=True):
+        if (
+            session.patch_id != patch_id
+            or not session.run_id.startswith("pw-review-")
+            or str(session.revision or "").lower() != revision
+            or session.state not in SESSION_TERMINAL_STATES
+        ):
+            continue
+        if newest is None or session.state_changed_at > newest.state_changed_at:
+            newest = session
+    if newest is None or _run_did_nothing(newest):
+        return False
+    changed_at = _parse_timestamp(patch.get("last_changed"))
+    return changed_at is None or changed_at <= newest.state_changed_at
+
+
 def _idle_explanation(patch, policy):
     """Say why nothing is running, from the conditions that decide it.
 
@@ -3331,6 +3378,12 @@ def _idle_explanation(patch, policy):
                 f" {unresolved} unresolved review comment(s) are left open "
                 "deliberately: a run has already been through them and they are "
                 "waiting on a person, not on the watcher."
+            )
+        elif _review_event_is_spent(patch):
+            handled = (
+                f" {unresolved - concluded} unresolved review comment(s) are not "
+                "being retried: the last run on this revision used up their turn "
+                "and Gerrit has reported nothing new since. Run now starts one."
             )
         else:
             pending.append(f"{unresolved - concluded} unresolved review comment(s)")

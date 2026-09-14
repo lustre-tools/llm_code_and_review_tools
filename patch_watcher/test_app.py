@@ -1118,6 +1118,107 @@ class PatchWatcherTests(AppGlobalsIsolated):
             lost = runs.started[0]
             self.assertTrue(app._run_did_nothing(sessions.get_session(f"session-{lost}")))
 
+    def test_an_oauth_race_releases_its_event_but_a_real_run_keeps_it(self):
+        """A transient host condition must not permanently consume work.
+
+        Runs share ~/.claude/.credentials.json with any interactive Claude
+        Code session, and one that loses the token refresh race says so and
+        exits without ever reaching the model.  That message has no "API
+        Error:" prefix, so it counted as the agent having spoken: the standing
+        event was consumed and those review comments were never looked at
+        again, for an error the CLI itself calls transient.
+        """
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sessions = app.initialize_session_store(Path(temp_dir) / "s.sqlite3")
+
+            def dead_run(run_id, author, body):
+                sessions.register_pinned_session(
+                    f"session-{run_id}", patch_id="35302", run_id=run_id,
+                    revision="e" * 40, patchset=5, profile="engineering",
+                    state="running",
+                )
+                sessions.record_message(f"session-{run_id}", author, body)
+                sessions.finish_session(
+                    f"session-{run_id}", "failed",
+                    failure_code="worker_report_invalid",
+                    failure_summary="the agent never reached the model: "
+                                    "Failed to refresh OAuth token",
+                )
+                return sessions.get_session(f"session-{run_id}")
+
+            oauth = dead_run(
+                "pw-review-35302-ps5-oauth", app.AGENT_ERROR_AUTHOR,
+                "Failed to refresh OAuth token: another Claude Code process is "
+                "refreshing it or exited mid-refresh.",
+            )
+            self.assertTrue(
+                app._run_did_nothing(oauth),
+                "an unauthenticated run said nothing about the patch",
+            )
+
+            # The prefix path still works, for rows written before the author
+            # was recorded.
+            legacy = dead_run(
+                "pw-review-35302-ps5-legacy", "agent",
+                "API Error: 400 tools.0.custom.input_schema",
+            )
+            self.assertTrue(app._run_did_nothing(legacy))
+
+            # A run that actually spoke keeps its event, or a genuinely bad
+            # run would be retried forever.
+            spoke = dead_run(
+                "pw-review-35302-ps5-spoke", "agent",
+                "I read the three threads and edited rw.c.",
+            )
+            self.assertFalse(app._run_did_nothing(spoke))
+
+    def test_the_card_stops_promising_a_run_whose_event_is_spent(self):
+        """It said "ready to act at the next check" for two days on a patch
+        whose event had already been consumed by a failed run.  An operator
+        reading that has no way to learn the next check will do nothing."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            sessions = app.initialize_session_store(root / "s.sqlite3")
+            automation = app.initialize_automation_store(root / "a.sqlite3")
+            standing = app.initialize_standing_policy_store(root / "p.json")
+            automation.set_global_automation(True, changed_by="t", reason="t")
+            standing.save(app.PatchAutomationPolicy.for_preset("68763", "all"))
+            policy = standing.get("68763")
+            record = {
+                "change_number": 68763, "revision_sha": "a" * 40, "unresolved": 3,
+                "jenkins": "PASS", "url": "https://review.whamcloud.com/c/68763",
+                "last_changed": "2026-09-12T20:19:56+00:00",
+            }
+
+            # Nothing has run yet: the next check really will act.
+            self.assertFalse(app._review_event_is_spent(record))
+            self.assertIn("Ready to act", app._idle_explanation(record, policy))
+
+            sessions.register_pinned_session(
+                "s1", patch_id="68763", run_id="pw-review-68763-ps2-spent",
+                revision="a" * 40, patchset=2, profile="engineering",
+                state="running",
+            )
+            sessions.record_message("s1", "agent", "I read the threads.")
+            sessions.finish_session(
+                "s1", "failed", failure_code="worker_report_invalid",
+                failure_summary="review report does not match its snapshot",
+                finished_at=datetime(2026, 9, 12, 20, 30, tzinfo=UTC),
+            )
+
+            self.assertTrue(app._review_event_is_spent(record))
+            idle = app._idle_explanation(record, policy)
+            self.assertIn("not being retried", idle)
+            self.assertIn("Run now", idle)
+            self.assertNotIn("Ready to act", idle)
+
+            # A reviewer commenting after that run re-arms it for real.
+            record["last_changed"] = "2026-09-13T09:00:00+00:00"
+            self.assertFalse(app._review_event_is_spent(record))
+            self.assertIn("Ready to act", app._idle_explanation(record, policy))
+
     def test_a_run_waiting_on_you_is_labelled_counted_and_explained(self):
         """The in-console channel: a paused run shows on the patch row, links
         to itself, is counted in the header, and the run page says how you

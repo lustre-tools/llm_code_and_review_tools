@@ -120,6 +120,55 @@ class ClaudeArgvTests(unittest.TestCase):
         values.update(overrides)
         return ReadOnlyRunSpec(**values)
 
+    def test_a_result_that_never_reached_the_model_says_so(self):
+        """The one failure that actually happened in production.
+
+        A run launched while interactive Claude Code sessions were live lost
+        the shared OAuth token refresh, and the console reported exactly
+        "missing_structured_output" -- the same string it reports when an
+        agent simply omits its report.  The CLI's own text is the difference
+        between a transient host condition and a bad run, and it decides
+        whether the standing event may be retried.
+        """
+
+        oauth = {
+            "type": "result", "is_error": True, "num_turns": 1,
+            "result": (
+                "Failed to refresh OAuth token: another Claude Code process is "
+                "refreshing it or exited mid-refresh. This is usually transient; "
+                "retry in a minute, and if it persists close other Claude Code "
+                "processes."
+            ),
+        }
+        verdict = claude_runner.classify_result_without_output(oauth)
+        self.assertTrue(verdict["transient"])
+        self.assertIn("never reached the model", verdict["reason"])
+        self.assertIn("Failed to refresh OAuth token", verdict["reason"])
+
+    def test_a_report_the_agent_simply_omitted_is_not_transient(self):
+        """Retrying that one forever would be a loop, so it stays consumed."""
+
+        bare = {"type": "result", "num_turns": 40}
+        self.assertEqual(
+            claude_runner.classify_result_without_output(bare),
+            {"reason": "missing_structured_output"},
+        )
+
+        errored = {"type": "result", "is_error": True, "result": "Tool use failed."}
+        verdict = claude_runner.classify_result_without_output(errored)
+        self.assertNotIn("transient", verdict)
+        self.assertIn("Tool use failed.", verdict["reason"])
+
+    def test_the_quoted_reason_is_bounded(self):
+        """It reaches a failure_summary column and an HTML card."""
+
+        verdict = claude_runner.classify_result_without_output(
+            {"type": "result", "is_error": True, "result": "x" * 9000}
+        )
+        self.assertLessEqual(
+            len(verdict["text"]), claude_runner.MAX_CLI_ERROR_TEXT
+        )
+
     def test_stream_json_output_carries_verbose(self):
         from patch_watcher.claude_runner import build_read_only_claude_command
 

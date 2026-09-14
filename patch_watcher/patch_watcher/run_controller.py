@@ -116,6 +116,9 @@ RUNNER_EVENT_PREFIX = "runner-event:"
 RUNNER_HANDLE_EVENT = "runner_attached"
 UNKNOWN_FAILURE_EVIDENCE_SCHEMA = "patch-watcher-unknown-failure-evidence/v1"
 RESEARCH_REQUEST_EVENT = "unknown_failure_research_requested"
+# Author for a message that is the CLI reporting its own failure rather than
+# the agent saying anything about the patch.
+AGENT_ERROR_AUTHOR = "agent-error"
 ENGINEERING_REQUEST_EVENT = "engineering_run_requested"
 REVIEW_REQUEST_EVENT = "review_comment_run_requested"
 BUILD_FAILURE_REQUEST_EVENT = "jenkins_build_failure_run_requested"
@@ -3303,8 +3306,21 @@ class RunController:
                     if text:
                         # Messages are what a human reads; activity is merely
                         # proof of life. They are deliberately not the same.
+                        #
+                        # The CLI's own API errors arrive here looking like the
+                        # agent talking, and whether a run said anything about
+                        # the patch is what decides if its standing event may be
+                        # retried.  That test used to be the string prefix "API
+                        # Error:", which the OAuth refresh failure does not
+                        # carry, so a run that never reached the model counted
+                        # as having spoken and burned its event.  The stream
+                        # says which is which; record that rather than guess.
+                        api_error = bool(raw.get("is_api_error_message")) or (
+                            raw.get("type") == "result" and bool(raw.get("is_error"))
+                        )
                         self.store.record_message(
-                            session.session_id, "agent", text,
+                            session.session_id,
+                            AGENT_ERROR_AUTHOR if api_error else "agent", text,
                             at=datetime.fromtimestamp(event.timestamp, UTC),
                         )
                     # The transport validates result.structured_output and
