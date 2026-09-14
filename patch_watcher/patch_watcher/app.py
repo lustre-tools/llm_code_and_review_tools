@@ -41,6 +41,7 @@ from patch_watcher.build_views import (
     render_build_start_confirmation,
     render_build_start_control,
 )
+from patch_watcher.claude_runner import is_cli_transient_error
 from patch_watcher.engineering_views import (
     render_capability_status,
     render_engineering_confirmation,
@@ -713,10 +714,12 @@ def _run_did_nothing(session):
     # token: ...", with no prefix, so it counted as the agent having spoken and
     # permanently consumed the standing event that started it -- for an error
     # the CLI itself calls transient.  The controller now marks these by author
-    # from the stream; the prefix stays for rows recorded before it did.
+    # from the stream, and its own wording still identifies the rows written
+    # before it did -- including the very run this change exists to fix.
     if any(
         str(message.author or "") != AGENT_ERROR_AUTHOR
         and not str(message.body or "").startswith("API Error:")
+        and not is_cli_transient_error(message.body)
         for message in SESSION_STORE.recent_messages(session.session_id, limit=20)
     ):
         return False

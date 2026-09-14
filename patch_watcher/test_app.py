@@ -1171,6 +1171,16 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 "an unauthenticated run said nothing about the patch",
             )
 
+            # Rows recorded before the author existed are recognized by the
+            # CLI's own wording -- including the run this change exists to fix,
+            # which is already in the live database under author "agent".
+            legacy_oauth = dead_run(
+                "pw-review-35302-ps5-legacy-oauth", "agent",
+                "Failed to refresh OAuth token: another Claude Code process is "
+                "refreshing it or exited mid-refresh.",
+            )
+            self.assertTrue(app._run_did_nothing(legacy_oauth))
+
             # The prefix path still works, for rows written before the author
             # was recorded.
             legacy = dead_run(

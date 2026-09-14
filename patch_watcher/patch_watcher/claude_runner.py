@@ -1049,6 +1049,20 @@ CLI_TRANSIENT_ERROR_PATTERNS = (
 )
 
 
+def is_cli_transient_error(text: Any) -> bool:
+    """True when this text is the CLI reporting a passing host condition.
+
+    Used on a result payload to classify a run, and on a recorded message to
+    decide whether a finished run ever reached the model.  The author recorded
+    with a message answers that for anything written from now on, but rows
+    already stored carry the old author, and the run that this whole change
+    exists to fix is one of them.
+    """
+
+    lowered = str(text or "").casefold()
+    return any(pattern in lowered for pattern in CLI_TRANSIENT_ERROR_PATTERNS)
+
+
 def classify_result_without_output(event: Mapping[str, Any]) -> dict[str, Any]:
     """Explain a terminal result that carried no structured report.
 
@@ -1069,8 +1083,7 @@ def classify_result_without_output(event: Mapping[str, Any]) -> dict[str, Any]:
         return payload
     detail = text.strip()[:MAX_CLI_ERROR_TEXT]
     payload["text"] = detail
-    lowered = detail.casefold()
-    if any(pattern in lowered for pattern in CLI_TRANSIENT_ERROR_PATTERNS):
+    if is_cli_transient_error(detail):
         payload["transient"] = True
         payload["reason"] = "the agent never reached the model: " + detail
     else:
