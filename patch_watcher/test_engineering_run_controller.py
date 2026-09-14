@@ -1212,6 +1212,62 @@ class EngineeringRunControllerTests(unittest.TestCase):
         terminal = self.store.get_terminal_result(session.session_id)
         self.assertIn("defer at least one", terminal.failure_summary)
 
+    def test_our_own_stumble_does_not_kill_a_run_that_is_still_working(self):
+        """A restart re-adopted one live run and killed the other.
+
+        The second tripped a FileNotFoundError in the controller's own
+        bookkeeping and was terminalized on the spot, while its agent was
+        midway through building and testing a fix and its host process was
+        still there.  The probe already distinguishes a dead process (a
+        verdict) from an unreachable socket (only evidence); a fault in our
+        code is the second kind.
+        """
+
+        controller, session = self._review_run("review-fault")
+        alive = {"value": True}
+        controller._runner_is_alive = lambda _session: alive["value"]
+
+        boom = FileNotFoundError(2, "No such file or directory")
+        for _ in range(run_controller.CONTROLLER_FAULT_LIMIT - 1):
+            controller._record_controller_failure(
+                self.store.get_session(session.session_id), boom
+            )
+            self.assertNotIn(
+                self.store.get_session(session.session_id).state,
+                run_controller.TERMINAL_STATES,
+                "a live run outlives a controller-side fault",
+            )
+
+        # The traceback is recorded, or the operator has nothing to act on.
+        recorded = [
+            event for event in self.store.list_events(session.session_id)
+            if event.event_type == "controller_error"
+        ]
+        self.assertTrue(recorded)
+        self.assertIn("FileNotFoundError", recorded[0].payload["traceback"])
+
+        # A fault that will not clear is real, and does end the run.
+        controller._record_controller_failure(
+            self.store.get_session(session.session_id), boom
+        )
+        finished = self.store.get_session(session.session_id)
+        self.assertEqual(finished.state, "failed")
+        self.assertEqual(
+            self.store.get_terminal_result(session.session_id).failure_code,
+            "controller_error",
+        )
+
+    def test_a_fault_on_a_dead_run_is_terminal_at_once(self):
+        """Nothing is left to supervise, so waiting would only delay cleanup."""
+
+        controller, session = self._review_run("review-fault-dead")
+        controller._runner_is_alive = lambda _session: False
+        controller._record_controller_failure(
+            self.store.get_session(session.session_id),
+            RuntimeError("the checkout is gone"),
+        )
+        self.assertEqual(self.store.get_session(session.session_id).state, "failed")
+
     def test_automatic_runs_are_bounded_across_revisions(self):
         """Per-event coalescing cannot bound a loop that regenerates the event.
 

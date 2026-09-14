@@ -20,6 +20,23 @@ ExecStart=/usr/bin/python3.12 -m patch_watcher.app --port 8080
 # for a non-login shell; after a node upgrade, correct it here.
 Environment=PATH=%h/.nvm/versions/node/v22.22.0/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 
+# Kill only this process, never the agents it started.
+#
+# The default, control-group, makes every restart destructive: a run's Claude
+# host and the VMs it built live in this unit's cgroup, so `systemctl restart`
+# SIGKILLs them mid-work and their terminal cleanup never runs, leaking guests
+# that nothing then owns.  One code change cost a run that had already built
+# and tested a fix.
+#
+# Nothing else is needed to make this safe.  The hosts are spawned with
+# start_new_session, so no signal to this process reaches them; their control
+# sockets live under $XDG_RUNTIME_DIR, which this unit does not manage and
+# systemd therefore does not erase; and the controller re-probes and re-adopts
+# every live run from its durable handle on each tick, so a fresh instance
+# picks up exactly where the old one left off.  A report written while no
+# controller was running is applied when one returns.
+KillMode=process
+
 # Restart, but do not fight a boot-time fault forever: five tries in five
 # minutes and it stays down, where `systemctl --user status` will say so,
 # rather than respawning into the same failure every five seconds.

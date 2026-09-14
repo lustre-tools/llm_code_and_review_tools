@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import traceback
 import uuid
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
@@ -187,6 +188,11 @@ RUNNER_STOP_ATTEMPT_LIMIT = 5
 # socket before the run is declared lost. One is a blip; several in a row is a
 # wedged host.
 UNREACHABLE_PROBE_LIMIT = 5
+# How many consecutive ticks a controller-side fault may keep hitting one run
+# whose agent is still alive before the run is given up on.  A fault in our own
+# bookkeeping is not a verdict on the agent's work; a fault that will not clear
+# is.
+CONTROLLER_FAULT_LIMIT = 3
 # How far wall time may diverge from monotonic time between two ticks before
 # the difference is a clock step rather than a slow tick. The supervisor's
 # cadence is one second, and even a badly overloaded host does not take two
@@ -707,6 +713,7 @@ class RunController:
         # session_id -> consecutive probes that found a live worker whose
         # control socket would not answer. Cleared by any good probe.
         self._unreachable_probes: dict[str, int] = {}
+        self._controller_faults: dict[str, int] = {}
         # Wall and monotonic readings from the previous tick. Their divergence
         # is the only evidence available that the host clock stepped, and
         # every deadline in this tool is a wall-clock difference.
@@ -4731,6 +4738,15 @@ class RunController:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             yield
 
+    def _runner_is_alive(self, session: ManagedSession) -> bool:
+        """True when this run's host process is still there to be supervised."""
+        try:
+            handle = self._load_handle(session)
+            return handle is not None and self.runner.probe(handle).alive
+        except Exception:
+            # Asking cannot itself be a reason to kill the run.
+            return False
+
     def _record_controller_failure(
         self, session: ManagedSession, exc: Exception
     ) -> None:
@@ -4742,6 +4758,13 @@ class RunController:
             # into the literal string "RunControllerError", so the operator's
             # only route to the actual reason was sqlite3.
             summary = str(exc).strip() or type(exc).__name__
+            # Without the traceback the record is unusable: a bare
+            # "[Errno 2] No such file or directory" names neither the file nor
+            # the code that wanted it, and it terminated a run whose agent was
+            # still working.
+            detail = "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            )[-4000:]
             # Deduplicate on the fault itself. Without a key this appends one
             # row per tick for as long as the fault lasts: at the default 1s
             # poll that is 86,400 rows and ~30 MB a day from a single stuck
@@ -4753,18 +4776,36 @@ class RunController:
             self.store.append_event(
                 session.session_id,
                 "controller_error",
-                {"error_type": type(exc).__name__, "summary": summary[:2000]},
+                {
+                    "error_type": type(exc).__name__,
+                    "summary": summary[:2000],
+                    "traceback": detail,
+                },
                 idempotency_key=f"controller-error:{session.run_id}:{fault}",
                 at=self.clock(),
             )
-            if current.state not in TERMINAL_STATES:
-                self._finish_session(
-                    session,
-                    "failed",
-                    failure_code="controller_error",
-                    failure_summary=summary[:2000],
-                    finished_at=self.clock(),
-                )
+            if current.state in TERMINAL_STATES:
+                self._controller_faults.pop(session.session_id, None)
+                return
+            # A fault in OUR bookkeeping is not a verdict on a run whose agent
+            # is demonstrably alive -- the same distinction the probe already
+            # draws between a dead process and an unreachable socket.  Failing
+            # the session on the first one killed a run that was midway through
+            # building and testing a fix, and it was the controller that had
+            # tripped, not the run.  Give the next tick a chance; a fault that
+            # keeps recurring is real and does end the run.
+            faults = self._controller_faults.get(session.session_id, 0) + 1
+            self._controller_faults[session.session_id] = faults
+            if faults < CONTROLLER_FAULT_LIMIT and self._runner_is_alive(session):
+                return
+            self._controller_faults.pop(session.session_id, None)
+            self._finish_session(
+                session,
+                "failed",
+                failure_code="controller_error",
+                failure_summary=summary[:2000],
+                finished_at=self.clock(),
+            )
         except Exception as nested:
             # The session store could not even record the session's own
             # failure.  Losing it entirely is how a broken controller looks
