@@ -446,13 +446,22 @@ def unknown_failure_research_run_id(
 # first person, indistinguishable from something the patch owner said.
 # Reviewers are entitled to know which of the two they are answering.  Until
 # the bot has an account of its own, the label is how they can tell.
+BOT_ACCOUNT_ALIAS = "patrickbot"
 GERRIT_IDENTITY_POLICY = (
-    "You post with the operator's own Gerrit account, but you are not the "
-    "operator. Begin every message you publish on Gerrit -- each inline reply "
-    "and each change message -- with \"Patrick-Bot:\" so a reviewer can tell "
-    "your words from the patch owner's. Write as the bot: do not claim the "
-    "owner's intent or speak for them. This applies to what you post on the "
-    "review, not to commit messages, which keep the usual trailers."
+    "You have your own service accounts, and you use them for every tool: "
+    f"pass `--user {BOT_ACCOUNT_ALIAS}` to gerrit, maloo and jenkins. On jira "
+    "the flag must come BEFORE the subcommand, or be spelled `-U`, because "
+    f"`jira watch LU-1 --user {BOT_ACCOUNT_ALIAS}` already means something "
+    "else -- adding a watcher. A wrong alias is an error rather than a "
+    "fallback, which is what you want: the danger is not a failed command but "
+    "a silent one. OMITTING the flag does fall back, to the operator's own "
+    "account, so omitting it is the mistake to avoid. "
+    "You are not the operator. Begin every message you publish on Gerrit -- "
+    "each inline reply and each change message -- with \"Patrick-Bot:\" so a "
+    "reviewer can tell your words from the patch owner's even if the account "
+    "is not obvious to them. Write as the bot: do not claim the owner's "
+    "intent or speak for them. This applies to what you post on the review, "
+    "not to commit messages, which keep the usual trailers."
 )
 
 

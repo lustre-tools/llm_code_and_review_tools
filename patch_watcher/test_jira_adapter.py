@@ -83,6 +83,51 @@ class JiraAdapterTests(unittest.TestCase):
                 base, self.client(changed).fetch_issue("LU-20724").fingerprint()
             )
 
+    def test_the_inbox_asks_for_whoever_the_token_belongs_to(self):
+        """Assignment is how a ticket reaches Patch Watcher without anyone
+        declaring it.  The query names currentUser() rather than an account,
+        so it cannot drift from the token, and the account name never becomes
+        a second thing to keep in step."""
+
+        captured = {}
+        body = json.dumps({"issues": [
+            {"key": "LU-20724", "fields": {"summary": "fsx burst mode",
+                                           "status": {"name": "Open"},
+                                           "updated": "2026-09-15T15:06:06.000+0000"}},
+            {"key": "not-a-key", "fields": {}},
+            "nonsense",
+        ]}).encode("utf-8")
+
+        def transport(request, timeout):
+            captured["url"] = request.full_url
+            return body
+
+        client = jira_adapter.JiraClient(
+            jira_adapter.JiraConfig("https://jira.whamcloud.com", "t"),
+            transport=transport, timeout=3,
+        )
+        issues = client.assigned_issues()
+        self.assertEqual([item["key"] for item in issues], ["LU-20724"])
+        self.assertIn("currentUser%28%29", captured["url"])
+        # A finished ticket is not a to-do list; an agent handed one would
+        # look for work that no longer exists.
+        self.assertIn("resolution+%3D+Unresolved", captured["url"].replace("%20", "+"))
+
+    def test_whoami_states_the_account_plainly(self):
+        """A run posting as the wrong identity is the kind of thing nobody
+        notices until a reviewer asks why the owner is arguing with
+        themselves."""
+
+        body = json.dumps({
+            "name": "patrickbot", "displayName": "Patrick Bot",
+            "emailAddress": "Patrick-bot@mulberrytree.us",
+        }).encode("utf-8")
+        client = jira_adapter.JiraClient(
+            jira_adapter.JiraConfig("https://jira.whamcloud.com", "t"),
+            transport=lambda request, timeout: body, timeout=3,
+        )
+        self.assertEqual(client.whoami()["name"], "patrickbot")
+
     def test_a_substituted_issue_is_refused(self):
         """Every field is read from the body, so the body must first be proven
         to describe the issue that was asked for."""

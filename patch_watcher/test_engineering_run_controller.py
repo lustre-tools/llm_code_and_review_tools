@@ -3008,7 +3008,13 @@ class PromptContractTests(unittest.TestCase):
                 "Patrick-Bot:", started.instructions,
                 f"{kind} runs may post on Gerrit and must say who is speaking",
             )
-            self.assertIn("you are not the operator", started.instructions)
+            self.assertIn("You are not the operator", started.instructions)
+            # It has its own accounts now, and the failure mode that matters
+            # is the silent one: omitting the flag falls back to the operator.
+            self.assertIn("--user patrickbot", started.instructions)
+            self.assertIn("omitting it is the mistake to avoid", started.instructions)
+            # jira's flag is positional in a way the others are not.
+            self.assertIn("BEFORE the subcommand", started.instructions)
 
         # Commit messages keep their own convention and are not relabelled.
         self.assertIn(

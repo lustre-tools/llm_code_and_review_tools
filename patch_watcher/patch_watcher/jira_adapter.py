@@ -191,6 +191,61 @@ class JiraClient:
         except ValueError as exc:
             raise JiraRequestError("JIRA returned a body that is not JSON") from exc
 
+    def assigned_issues(self, *, limit: int = 50) -> list[dict[str, str]]:
+        """The issues assigned to whoever these credentials are.
+
+        This is how a ticket reaches Patch Watcher without anyone declaring
+        it: somebody assigns it to the bot.  The query is `currentUser()`
+        rather than a hardcoded name, so it cannot drift from the account the
+        token actually belongs to -- and it keeps the account name out of the
+        configuration, where it would be a second thing to keep in step.
+
+        Resolved issues are excluded.  An assignee is not a to-do list once
+        the work is finished, and an agent handed a closed ticket would look
+        for work that no longer exists.
+        """
+        jql = "assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC"
+        bounded = max(1, min(int(limit), 200))
+        endpoint = (
+            f"/rest/api/2/search?jql={quote(jql, safe='')}"
+            f"&maxResults={bounded}&fields=summary,status,updated"
+        )
+        body = self._fetch_json(endpoint)
+        if not isinstance(body, Mapping):
+            raise JiraRequestError("JIRA returned an unexpected response")
+        issues = []
+        for item in body.get("issues") or ():
+            if not isinstance(item, Mapping):
+                continue
+            key = _text(item.get("key"), 64).upper()
+            if not TICKET_KEY_RE.fullmatch(key):
+                continue
+            values = item.get("fields")
+            values = values if isinstance(values, Mapping) else {}
+            issues.append({
+                "key": key,
+                "summary": _text(values.get("summary"), 1000),
+                "status": _named(values.get("status"), "name"),
+                "updated": _text(values.get("updated"), 64),
+            })
+        return issues
+
+    def whoami(self) -> dict[str, str]:
+        """The account these credentials belong to.
+
+        Worth being able to state plainly: a run that posts as the wrong
+        identity is the kind of thing nobody notices until a reviewer asks
+        why the patch owner is arguing with themselves.
+        """
+        body = self._fetch_json("/rest/api/2/myself")
+        if not isinstance(body, Mapping):
+            raise JiraRequestError("JIRA returned an unexpected response")
+        return {
+            "name": _text(body.get("name"), 200),
+            "display_name": _text(body.get("displayName"), 200),
+            "email": _text(body.get("emailAddress"), 200),
+        }
+
     def fetch_issue(self, key: str) -> JiraIssue:
         """Observe one issue, or raise.
 
