@@ -404,6 +404,49 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(result["review"], "—")
         self.assertEqual(result["watch_state"], "abandoned")
 
+    def test_ticket_discovery_asks_by_message_and_keeps_only_subject_matches(self):
+        """The convention is the key at the START of the commit subject.  The
+        Gerrit query is by message text, which is broader than the convention,
+        so a change that merely cites the ticket in its body is not part of
+        the work and must not be adopted into the group."""
+
+        captured = {}
+        body = json.dumps([
+            {"_number": 68763, "subject": "LU-20724 tests: add fsx burst mode",
+             "project": "fs/lustre-release", "branch": "master", "status": "NEW"},
+            {"_number": 68764, "subject": "LU-20724 tests: drop client caches",
+             "project": "fs/lustre-release", "branch": "master", "status": "NEW"},
+            {"_number": 99999, "subject": "some other work (see LU-20724)",
+             "project": "fs/lustre-release", "branch": "master", "status": "NEW"},
+            {"subject": "LU-20724 malformed, no number"},
+        ])
+
+        def transport(request, timeout):
+            captured["url"] = request.full_url
+            return b")]}'\n" + body.encode("utf-8")
+
+        config = status.GerritConfig("https://review.whamcloud.com", "reader", "pw")
+        client = status.GerritStatusClient(config, transport=transport, timeout=3)
+        found = client.changes_for_ticket("lu-20724")
+
+        self.assertIn("message%3ALU-20724", captured["url"])
+        # An abandoned change is not work in progress; an agent handed one
+        # would reason about a patch nobody intends to land.
+        self.assertIn("-status%3Aabandoned", captured["url"])
+        self.assertEqual(
+            [item["change_number"] for item in found], [68763, 68764]
+        )
+
+    def test_ticket_discovery_refuses_something_that_is_not_a_key(self):
+        def transport(request, timeout):
+            raise AssertionError("no request may be made for a non-key")
+
+        config = status.GerritConfig("https://review.whamcloud.com", "reader", "pw")
+        client = status.GerritStatusClient(config, transport=transport, timeout=3)
+        for bad in ("", "LU", "20724", "https://jira.whamcloud.com/browse/LU-20724"):
+            with self.assertRaises(status.GerritRequestError, msg=bad):
+                client.changes_for_ticket(bad)
+
     def test_post_message_is_a_json_post_to_the_current_revision(self):
         captured = {}
 

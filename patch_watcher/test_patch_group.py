@@ -52,6 +52,53 @@ class PatchGroupTests(unittest.TestCase):
         self.assertTrue(flock.contains("68844"))
         self.assertFalse(flock.contains("35302"))
 
+    def test_a_ticket_group_is_rooted_in_the_issue_and_may_be_empty(self):
+        """The root is the ticket, so that is the handle, and a ticket with no
+        patches yet is a perfectly good thing to watch."""
+
+        group = PatchGroup("LU-20724", kind="ticket", label="fsx")
+        self.assertEqual(group.group_id, "LU-20724")
+        self.assertEqual(group.ticket, "LU-20724")
+        self.assertEqual(group.members, ())
+        self.assertTrue(group.discovered)
+        self.assertFalse(group.ordered)
+
+    def test_ticket_membership_is_discovered_and_may_grow(self):
+        """Patches appear on a ticket over time.  A declared group must not be
+        rewritten the same way: that would undo the one thing the operator
+        actually asserted."""
+
+        store = self.store()
+        saved = store.save(PatchGroup("LU-20724", kind="ticket"))
+        grown = store.save(
+            saved.with_members(["68764", "68763"]), expected_version=saved.version
+        )
+        # Sorted, because a ticket's patches have no order of their own.
+        self.assertEqual(grown.members, ("68763", "68764"))
+        self.assertEqual(store.for_change("68763").group_id, "LU-20724")
+
+        declared = PatchGroup("68844", ["68844", "68845"], kind="series")
+        with self.assertRaises(PatchGroupError) as caught:
+            declared.with_members(["68844"])
+        self.assertIn("declared, not discovered", str(caught.exception))
+
+    def test_a_ticket_key_must_look_like_one(self):
+        """So a stray subject line or URL cannot become a group id."""
+
+        for bad in ("", "LU", "lu-", "20724", "LU-0", "not a key",
+                    "https://jira.whamcloud.com/browse/LU-20724"):
+            with self.assertRaises(PatchGroupError, msg=bad):
+                PatchGroup(bad or "x", kind="ticket")
+        # Case is normalised rather than rejected.
+        self.assertEqual(PatchGroup("lu-20724", kind="ticket").ticket, "LU-20724")
+
+    def test_only_a_ticket_group_carries_a_ticket(self):
+        """A series with a ticket attached would have two roots and no rule
+        for which one decides membership."""
+
+        with self.assertRaises(PatchGroupError):
+            PatchGroup("68763", ["68763", "68764"], kind="series", ticket="LU-20724")
+
     def test_the_kind_must_be_one_we_know(self):
         with self.assertRaises(PatchGroupError):
             PatchGroup("68763", ["68763", "68764"], kind="pile")

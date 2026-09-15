@@ -303,6 +303,11 @@ def _default_transport(request: Request, timeout: float) -> bytes:
         return response.read(MAX_RESPONSE_BYTES + 1)
 
 
+# A JIRA key: project, a dash, a number.  Mirrors patch_group's rule so the
+# two cannot disagree about what a key is.
+_TICKET_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]{0,19}-[1-9][0-9]{0,9}")
+
+
 class GerritStatusClient:
     """Minimal read-only Gerrit REST client with injectable I/O for tests."""
 
@@ -420,6 +425,52 @@ class GerritStatusClient:
             revision_numbers.get(revision) or before.get("patchset") or 0
         )
         return normalize_review_snapshot(target_identity, direct, ported)
+
+    def changes_for_ticket(self, ticket_key: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Open changes whose commit message carries this JIRA key.
+
+        The key is in the commit subject on purpose and stays there, so this
+        is a stable answer rather than the guess a relation chain gives.  The
+        query is by message text, which is how the convention is actually
+        expressed; a change that merely mentions the ticket in a comment is
+        not part of the work and is not matched.
+
+        Abandoned changes are excluded: they are not work in progress, and an
+        agent handed one would reason about a patch nobody intends to land.
+        """
+
+        key = str(ticket_key or "").strip().upper()
+        if not _TICKET_KEY_RE.fullmatch(key):
+            raise GerritRequestError(f"not a JIRA issue key: {ticket_key!r}")
+        query = quote(f"message:{key} -status:abandoned", safe="")
+        bounded = max(1, min(int(limit), 200))
+        endpoint = f"/a/changes/?q={query}&n={bounded}&o=CURRENT_REVISION"
+        found = self._fetch_json(endpoint)
+        if not isinstance(found, list):
+            raise GerritRequestError("Gerrit returned an unexpected response.")
+        changes = []
+        for item in found:
+            if not isinstance(item, dict):
+                continue
+            number = item.get("_number")
+            if not isinstance(number, int) or number <= 0:
+                continue
+            # Only a subject match is the convention; the query is broader
+            # than the rule, so the rule is applied here.
+            subject = str(item.get("subject") or "")
+            if not subject.upper().startswith(key):
+                continue
+            changes.append({
+                "change_number": number,
+                "subject": subject,
+                "project": str(item.get("project") or ""),
+                "branch": str(item.get("branch") or ""),
+                "status": str(item.get("status") or ""),
+                "updated": str(item.get("updated") or ""),
+                "current_revision": str(item.get("current_revision") or ""),
+            })
+        changes.sort(key=lambda entry: entry["change_number"])
+        return changes
 
     def _fetch_detail(self, change_number: int, options: str) -> dict[str, Any]:
         endpoint = f"/a/changes/{quote(str(change_number), safe='')}/detail?{options}"

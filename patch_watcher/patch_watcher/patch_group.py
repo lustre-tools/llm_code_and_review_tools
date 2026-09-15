@@ -28,7 +28,19 @@ no tip, and an agent told otherwise would invent an ordering it then reasons
 from -- so a flock's members are held as a set, sorted for a stable
 representation, and asking one for its base is an error rather than a guess.
 
-What both share is that one agent is responsible for all of them at once.
+A TICKET group is rooted in a JIRA issue, and its changes are DISCOVERED
+rather than declared.  That is not a contradiction of the rule above: a
+relation chain is an accident of which patchset was pushed on top of which,
+and it drifts under a rebase, whereas the LU key in a commit subject is put
+there on purpose and stays put.  Searching Gerrit for the key is therefore a
+stable answer, not a guess.  The ticket may also have no changes yet, which is
+a perfectly good thing to watch.
+
+Membership is refreshed as patches appear, but a RUN pins the exact set it was
+given, so a change landing mid-run cannot move the ground under it.
+
+What all three share is that one agent is responsible for the whole set at
+once.
 """
 
 from __future__ import annotations
@@ -38,6 +50,7 @@ import dataclasses
 import fcntl
 import json
 import os
+import re
 import tempfile
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -47,7 +60,11 @@ MAX_GROUP_MEMBERS = 32
 MAX_LABEL_CHARS = 200
 # "series": stacked, order meaningful, base first.
 # "flock": related but independent, no order at all.
-GROUP_KINDS = ("series", "flock")
+# "ticket": rooted in a JIRA issue; its changes are discovered from the key.
+GROUP_KINDS = ("series", "flock", "ticket")
+# A JIRA key: project, a dash, a number.  "LU-20724" and nothing looser, so a
+# stray subject line or URL cannot become a group id.
+TICKET_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]{0,19}-[1-9][0-9]{0,9}")
 
 
 class PatchGroupError(RuntimeError):
@@ -65,7 +82,22 @@ def _change_id(value: object) -> str:
     return str(int(text))
 
 
-def _members(values: Sequence[object]) -> tuple[str, ...]:
+def _ticket_key(value: object) -> str:
+    text = str(value or "").strip().upper()
+    if not TICKET_KEY_RE.fullmatch(text):
+        raise PatchGroupError(f"not a JIRA issue key: {value!r}")
+    return text
+
+
+def _group_id(value: object) -> str:
+    """A group handle: a change number for a series or flock, a key for a ticket."""
+    text = str(value or "").strip()
+    if TICKET_KEY_RE.fullmatch(text.upper()):
+        return text.upper()
+    return _change_id(text)
+
+
+def _members(values: Sequence[object], *, minimum: int) -> tuple[str, ...]:
     if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
         raise PatchGroupError("members must be a list of change numbers")
     seen: list[str] = []
@@ -74,8 +106,8 @@ def _members(values: Sequence[object]) -> tuple[str, ...]:
         if change in seen:
             raise PatchGroupError(f"change {change} is listed twice in one group")
         seen.append(change)
-    if len(seen) < 2:
-        raise PatchGroupError("a group needs at least two changes")
+    if len(seen) < minimum:
+        raise PatchGroupError(f"a group of this kind needs at least {minimum} changes")
     if len(seen) > MAX_GROUP_MEMBERS:
         raise PatchGroupError(f"a group may hold at most {MAX_GROUP_MEMBERS} changes")
     return tuple(seen)
@@ -91,34 +123,66 @@ class PatchGroup:
     """
 
     group_id: str
-    members: tuple[str, ...]
+    members: tuple[str, ...] = ()
     kind: str = "series"
+    ticket: str = ""
     label: str = ""
     version: int = 0
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "group_id", _change_id(self.group_id))
         kind = str(self.kind or "").strip().casefold()
         if kind not in GROUP_KINDS:
             raise PatchGroupError(
                 f"kind must be one of {', '.join(GROUP_KINDS)}: {self.kind!r}"
             )
         object.__setattr__(self, "kind", kind)
-        members = _members(self.members)
-        if kind == "flock":
-            members = tuple(sorted(members, key=int))
+        if kind == "ticket":
+            # The root is the issue, so that is the handle.  A ticket with no
+            # patches yet is a perfectly good thing to watch, and the ones it
+            # acquires are discovered, so no minimum applies.
+            object.__setattr__(self, "ticket", _ticket_key(self.ticket or self.group_id))
+            object.__setattr__(self, "group_id", self.ticket)
+            members = tuple(sorted(_members(self.members, minimum=0), key=int))
+        else:
+            if self.ticket:
+                raise PatchGroupError(
+                    f"only a ticket group has a ticket; this one is a {kind}"
+                )
+            object.__setattr__(self, "group_id", _change_id(self.group_id))
+            # Two is the floor: a declared group of one is just a patch.
+            members = _members(self.members, minimum=2)
+            if kind == "flock":
+                members = tuple(sorted(members, key=int))
         object.__setattr__(self, "members", members)
         object.__setattr__(self, "label", str(self.label or "")[:MAX_LABEL_CHARS])
         if int(self.version) < 0:
             raise PatchGroupError("version must not be negative")
         object.__setattr__(self, "version", int(self.version))
-        if self.group_id not in self.members:
+        if self.kind != "ticket" and self.group_id not in self.members:
             raise PatchGroupError("a group's id must be one of its own changes")
 
     @property
     def ordered(self) -> bool:
         """Whether position in this group means anything."""
         return self.kind == "series"
+
+    @property
+    def discovered(self) -> bool:
+        """Whether membership is found rather than declared, and so may grow."""
+        return self.kind == "ticket"
+
+    def with_members(self, members: Sequence[object]) -> PatchGroup:
+        """The same group with a freshly discovered membership.
+
+        Only a discovered group may be rewritten this way.  Silently replacing
+        a declared series or flock would undo the operator's own statement of
+        what belongs together, which is the one thing they asserted.
+        """
+        if not self.discovered:
+            raise PatchGroupError(
+                f"a {self.kind} group's membership is declared, not discovered"
+            )
+        return dataclasses.replace(self, members=tuple(members))
 
     def _require_series(self, what: str) -> None:
         if not self.ordered:
@@ -163,6 +227,7 @@ class PatchGroup:
             "group_id": self.group_id,
             "members": list(self.members),
             "kind": self.kind,
+            "ticket": self.ticket,
             "label": self.label,
             "version": self.version,
         }
@@ -175,6 +240,7 @@ class PatchGroup:
             group_id=value.get("group_id", ""),
             members=value.get("members", ()),
             kind=value.get("kind", "series"),
+            ticket=value.get("ticket", ""),
             label=value.get("label", ""),
             version=value.get("version", 0),
         )
@@ -245,7 +311,7 @@ class PatchGroupStore:
 
     def get(self, group_id: object) -> PatchGroup | None:
         with self._locked(exclusive=False):
-            return self._read().get(_change_id(group_id))
+            return self._read().get(_group_id(group_id))
 
     def for_change(self, change_number: object) -> PatchGroup | None:
         """The group this change belongs to, or None.
@@ -294,7 +360,7 @@ class PatchGroupStore:
             return saved
 
     def delete(self, group_id: object, *, expected_version: int | None = None) -> bool:
-        target = _change_id(group_id)
+        target = _group_id(group_id)
         with self._locked(exclusive=True):
             groups = self._read()
             current = groups.get(target)
