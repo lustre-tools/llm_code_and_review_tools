@@ -3993,26 +3993,31 @@ def _idle_explanation(patch, policy):
             blocker = _review_event_blocker(patch)
             if blocker is not None:
                 _code, why = _run_failure(blocker)
+                # The consequence, not just the verdict.  "Rejected" alone
+                # leaves an operator asking what was rejected and what became
+                # of the work; the answer is that the report was refused and
+                # so nothing the run did was recorded.
                 because = (
-                    " and was rejected: " + escape(" ".join(str(why).split())[:120])
+                    ", but its report was refused, so none of what it did was "
+                    "recorded: " + escape(" ".join(str(why).split())[:140])
                     if blocker.state != "succeeded" and why
                     else ""
                 )
                 named = (
                     "<a href='/runs/" + escape(blocker.run_id, quote=True) + "'>"
-                    + escape(blocker.run_id) + "</a> already answered these exact "
-                    "comments on " + escape(local_time(blocker.state_changed_at))
+                    + escape(blocker.run_id) + "</a> answered these comments on "
+                    + escape(local_time(blocker.state_changed_at))
                     + because + "."
                 )
             else:
                 named = "A run has already answered these exact comments."
             handled = (
-                f" {unresolved - concluded} unresolved review comment(s), already "
-                f"attempted. {named} Gerrit has reported nothing new since, so "
-                "nothing starts by itself. Run now starts another attempt."
+                f" {outstanding} review comment thread(s), already attempted. "
+                f"{named} Gerrit has reported nothing new since, so nothing "
+                "starts by itself. Run now starts another attempt."
             )
         else:
-            pending.append(f"{unresolved - concluded} unresolved review comment(s)")
+            pending.append(f"{outstanding} review comment thread(s)")
     if pending:
         return (
             "Ready to act on " + ", and ".join(pending) + " at the next check." + handled

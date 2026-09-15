@@ -1095,6 +1095,85 @@ class EngineeringRunControllerTests(unittest.TestCase):
         self.assertIn("failed carrying", prompt)
         self.store.finish_session(build.session_id, "cancelled", finished_at=self.now)
 
+    def test_answering_more_comments_than_asked_is_not_an_error(self):
+        """A real run answered the three it was asked plus two an earlier run
+        had already concluded, and the whole report was thrown away for it.
+
+        The snapshot deliberately keeps concluded threads so the agent can
+        read them for context, so answering one is grounded in what the run
+        actually saw.  What must never be accepted is an id from nowhere.
+        """
+
+        controller, session = self._review_run("review-superset")
+        request = next(
+            event.payload for event in self.store.list_events(session.session_id)
+            if event.event_type == run_controller.REVIEW_REQUEST_EVENT
+        )
+        targets = list(request["target_comment_ids"])
+        snapshot_ids = [
+            comment["comment_id"]
+            for thread in request["review_snapshot"]["threads"]
+            for comment in thread["comments"]
+        ]
+        extra = [item for item in snapshot_ids if item not in targets]
+        self.assertTrue(targets, "the fixture must ask for at least one comment")
+
+        def report(ids):
+            return {
+                "schema": "patch-watcher-engineering-report/v1",
+                "state": "acknowledged", "summary": "Triaged them.",
+                "changed_files": [], "validation_requests": [],
+                "review_mode": request["review_mode"],
+                "review_snapshot_sha256": request["review_snapshot_sha256"],
+                "comment_results": [
+                    {"comment_id": identifier, "assessment": "ambiguous",
+                     "disposition": "not_attempted", "summary": "Left for a human.",
+                     "reply_draft": "", "changed_files": []}
+                    for identifier in ids
+                ],
+            }
+
+        self.runner.events_by_session[session.session_id] = [RunnerEvent(
+            1, self.now.timestamp(), "worker_report", report(targets + extra),
+        )]
+        controller.tick()
+        self.assertEqual(self.store.get_session(session.session_id).state, "succeeded")
+
+    def test_a_report_that_skips_or_invents_a_comment_is_still_refused(self):
+        """The rule that a superset relaxes is not the rule that matters."""
+
+        controller, session = self._review_run("review-missing")
+        request = next(
+            event.payload for event in self.store.list_events(session.session_id)
+            if event.event_type == run_controller.REVIEW_REQUEST_EVENT
+        )
+
+        def send(ids):
+            self.runner.events_by_session[session.session_id] = [RunnerEvent(
+                1, self.now.timestamp(), "worker_report", {
+                    "schema": "patch-watcher-engineering-report/v1",
+                    "state": "acknowledged", "summary": "s", "changed_files": [],
+                    "validation_requests": [],
+                    "review_mode": request["review_mode"],
+                    "review_snapshot_sha256": request["review_snapshot_sha256"],
+                    "comment_results": [
+                        {"comment_id": i, "assessment": "ambiguous",
+                         "disposition": "not_attempted", "summary": "s",
+                         "reply_draft": "", "changed_files": []} for i in ids
+                    ],
+                },
+            )]
+            controller.tick()
+
+        send(["comment-from-nowhere"])
+        failed = self.store.get_session(session.session_id)
+        self.assertEqual(failed.state, "failed")
+        summary = self.store.get_terminal_result(session.session_id).failure_summary
+        # It says which comment and why, not "does not match its snapshot".
+        self.assertTrue(
+            "unanswered" in summary or "not in the snapshot" in summary, summary
+        )
+
     def test_simple_review_rejects_nontrivial_comment_assessment(self):
         seed, revision = self.create_seed_repository()
 

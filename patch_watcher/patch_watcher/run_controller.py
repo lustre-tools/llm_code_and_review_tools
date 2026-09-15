@@ -3644,13 +3644,47 @@ class RunController:
                     str(item.get("comment_id") or "")
                     for item in (report.get("comment_results") or ())
                 }
-                if (
-                    report.get("review_mode") != expected_mode
-                    or report.get("review_snapshot_sha256") != expected_digest
-                    or result_ids != expected_ids
-                ):
+                # Every comment the snapshot holds, which is wider than the
+                # target set on purpose: threads an earlier run concluded stay
+                # in the snapshot so the agent can read them for context.
+                known_ids = set()
+                snapshot = payload.get("review_snapshot")
+                if isinstance(snapshot, Mapping):
+                    for thread in snapshot.get("threads") or ():
+                        if not isinstance(thread, Mapping):
+                            continue
+                        for comment in thread.get("comments") or ():
+                            if isinstance(comment, Mapping) and comment.get("comment_id"):
+                                known_ids.add(str(comment["comment_id"]))
+                missing = expected_ids - result_ids
+                invented = result_ids - (known_ids or expected_ids)
+                if report.get("review_mode") != expected_mode:
                     raise RunControllerError(
-                        "review report does not match its immutable comment snapshot"
+                        f"review report is for {report.get('review_mode')!r} mode, "
+                        f"but this run was started in {expected_mode!r}"
+                    )
+                if report.get("review_snapshot_sha256") != expected_digest:
+                    raise RunControllerError(
+                        "review report cites a different set of comments than the "
+                        "one this run was given"
+                    )
+                if missing:
+                    raise RunControllerError(
+                        "review report leaves "
+                        f"{len(missing)} of {len(expected_ids)} comment(s) "
+                        "unanswered: " + ", ".join(sorted(missing))
+                    )
+                # Answering MORE than was asked is not an error.  The extra
+                # threads are in the snapshot the run was given, so the answers
+                # are grounded in what it actually saw -- and a run was thrown
+                # away for being thorough: it answered the three it was asked
+                # plus two an earlier run had already concluded, and the whole
+                # report went with it.  What must never be accepted is an id
+                # from nowhere.
+                if invented:
+                    raise RunControllerError(
+                        "review report answers comment(s) that are not in the "
+                        "snapshot it was given: " + ", ".join(sorted(invented))
                     )
                 deferred = [
                     item for item in report.get("comment_results", ())

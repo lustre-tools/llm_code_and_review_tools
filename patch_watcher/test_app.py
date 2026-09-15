@@ -1267,7 +1267,8 @@ class PatchWatcherTests(AppGlobalsIsolated):
             # and the run named above this line on the row may be a later one
             # that released its turn.
             self.assertIn("pw-review-68763-ps2-spent", idle)
-            self.assertIn("already answered these exact comments", idle)
+            self.assertIn("answered these comments", idle)
+            self.assertIn("none of what it did was recorded", idle)
             self.assertIn("does not match its snapshot", idle)
             self.assertIn("Run now", idle)
             self.assertNotIn("Ready to act", idle)
@@ -1386,7 +1387,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
             # the line above, and naming it here explained the wrong thing.
             self.assertIn("pw-review-68763-ps2-answered", explanation)
             self.assertNotIn("pw-review-68763-ps2-dead", explanation)
-            self.assertIn("already answered these exact comments", explanation)
+            self.assertIn("answered these comments", explanation)
             self.assertIn("Run now", explanation)
             self.assertNotIn("Ready to act", explanation)
 
