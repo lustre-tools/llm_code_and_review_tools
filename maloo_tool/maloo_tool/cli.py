@@ -7,6 +7,11 @@ from typing import Any
 
 import click
 
+from llm_tool_common.config import (
+    CredentialSetError,
+    apply_credential_set,
+    hoist_args,
+)
 from llm_tool_common.envelope import (
     error_response_from_dict,
     format_json,
@@ -56,14 +61,41 @@ def _error(
     sys.exit(1)
 
 
-@click.group()
+class MalooGroup(click.Group):
+    """Click group whose global options work in any position.
+
+    Click reads a group's own options only before the subcommand name,
+    so `maloo session <url> --user bob` would otherwise be a usage
+    error while `maloo --user bob session <url>` works.
+    """
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        return super().parse_args(
+            ctx, hoist_args(args, flags=("--envelope",), options=("--user", "-U"))
+        )
+
+
+@click.group(cls=MalooGroup)
 @click.version_option(package_name="maloo-tool", prog_name="maloo")
 @click.option("--envelope", is_flag=True, help="Include full response envelope (ok/data/meta wrapper)")
+@click.option(
+    "--user",
+    "-U",
+    default=None,
+    help="Credential set to use: a [section] alias or a MALOO_USER from "
+         "~/.config/maloo-tool/.env",
+)
 @click.pass_context
-def main(ctx: click.Context, envelope: bool) -> None:
+def main(ctx: click.Context, envelope: bool, user: str | None) -> None:
     """Maloo test results CLI - query Lustre CI test results."""
     global _FULL_ENVELOPE
     _FULL_ENVELOPE = envelope
+
+    if user:
+        try:
+            apply_credential_set("maloo-tool", user)
+        except CredentialSetError as e:
+            _error(ErrorCode.CONFIG_ERROR, str(e), "cli", False)
 
 
 @main.command()

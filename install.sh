@@ -562,12 +562,16 @@ tool_spec() {
     SPEC_OPTIONAL=""
     SPEC_OPT_PROMPT=""
     SPEC_UNSET_OK=""
+    SPEC_CMD=""
+    SPEC_USER_KEY=""
     SPEC_ANON_READS=""
     SPEC_READ_KEYS=""
     case "$1" in
         gerrit)
             SPEC_LABEL="Gerrit"
             SPEC_USED_BY="gerrit (gc), lreview"
+            SPEC_CMD="gerrit"
+            SPEC_USER_KEY="GERRIT_USER"
             SPEC_FILE="$HOME/.config/gerrit-cli/.env"
             SPEC_REQUIRED="GERRIT_URL GERRIT_USER GERRIT_PASS"
             SPEC_FIELDS="GERRIT_URL|Gerrit URL|url|https://review.whamcloud.com
@@ -585,6 +589,8 @@ GERRIT_PASS|Gerrit HTTP password|secret|"
         jira)
             SPEC_LABEL="Jira Server (Whamcloud)"
             SPEC_USED_BY="jira"
+            SPEC_CMD="jira"
+            SPEC_USER_KEY="JIRA_USER"
             SPEC_FILE="$HOME/.config/jira-tool/.env"
             SPEC_REQUIRED="JIRA_SERVER JIRA_TOKEN"
             SPEC_FIELDS="JIRA_SERVER|Jira URL|url|https://jira.whamcloud.com
@@ -602,6 +608,8 @@ JIRA_TOKEN|Jira personal access token|secret|"
         jira-cloud)
             SPEC_LABEL="Jira Cloud (Atlassian)"
             SPEC_USED_BY="jira, for the projects you name below"
+            SPEC_CMD="jira"
+            SPEC_USER_KEY="JIRA_CLOUD_EMAIL"
             SPEC_FILE="$HOME/.config/jira-tool/.env"
             SPEC_REQUIRED="JIRA_CLOUD_SERVER JIRA_CLOUD_EMAIL JIRA_CLOUD_TOKEN"
             SPEC_FIELDS="JIRA_CLOUD_SERVER|Cloud site URL|url|https://yourorg.atlassian.net
@@ -624,6 +632,8 @@ JIRA_CLOUD_PROJECTS|Project keys on this site, comma-separated|text|"
         maloo)
             SPEC_LABEL="Maloo"
             SPEC_USED_BY="maloo"
+            SPEC_CMD="maloo"
+            SPEC_USER_KEY="MALOO_USER"
             SPEC_FILE="$HOME/.config/maloo-tool/.env"
             SPEC_REQUIRED="MALOO_USER MALOO_PASS"
             SPEC_FIELDS="MALOO_URL|Maloo URL|url|https://testing.whamcloud.com
@@ -636,6 +646,8 @@ MALOO_PASS|Maloo password|secret|"
         jenkins)
             SPEC_LABEL="Jenkins"
             SPEC_USED_BY="jenkins"
+            SPEC_CMD="jenkins"
+            SPEC_USER_KEY="JENKINS_USER"
             SPEC_FILE="$HOME/.config/jenkins-tool/.env"
             SPEC_REQUIRED="JENKINS_USER JENKINS_TOKEN"
             SPEC_FIELDS="JENKINS_URL|Jenkins URL|url|https://build.whamcloud.com
@@ -668,17 +680,70 @@ tilde_path() {
     esac
 }
 
-# Print the value of KEY in a KEY=VALUE file, or nothing.  Always succeeds:
-# under `set -e` a failing command substitution in an assignment would end
-# the script.
+# The credential set being worked on: empty for the default one, an alias
+# for a [section].  Every read and write below goes through it, so a second
+# account is prompted for, written and checked exactly like the first.
+CONFIG_SECTION=""
+
+# Print the value of KEY in the current credential set, or nothing.
+#
+# A named set inherits the default one, so a key it does not define falls
+# back -- the same merge the tools do at runtime.  Without it tool_probe
+# builds its URL from a section that only carries a login, and checks a
+# second account against no server at all.
 env_file_get() {
-    local file="$1" key="$2" line value
+    local file="$1" key="$2" value
+    value=$(env_file_get_raw "$file" "$key" "${CONFIG_SECTION:-}")
+    if [ -z "$value" ] && [ -n "${CONFIG_SECTION:-}" ]; then
+        value=$(env_file_get_raw "$file" "$key" "")
+    fi
+    printf '%s' "$value"
+}
+
+# Print the value of KEY inside exactly one section, with no inheritance.
+# Always succeeds: under `set -e` a failing command substitution in an
+# assignment would end the script.
+env_file_get_raw() {
+    local file="$1" key="$2" section="$3" value
     [ -f "$file" ] || return 0
-    line=$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$file" 2>/dev/null | tail -n 1) || true
-    [ -n "$line" ] || return 0
-    value="${line#*=}"
+    value=$(awk -v key="$key" -v want="$section" '
+        function name_of(line,   s) {
+            s = line
+            sub(/^[[:space:]]*\[[[:space:]]*/, "", s)
+            sub(/[[:space:]]*\][[:space:]]*$/, "", s)
+            if (tolower(s) == "default")
+                return ""
+            return s
+        }
+        /^[[:space:]]*\[[^]]*\][[:space:]]*$/ { section = name_of($0); next }
+        {
+            line = $0
+            sub(/^[[:space:]]*/, "", line)
+            if (section == want && line ~ "^" key "[[:space:]]*=")
+                found = substr(line, index(line, "=") + 1)
+        }
+        END { if (length(found)) print found }
+    ' "$file" 2>/dev/null) || true
+    [ -n "$value" ] || return 0
     printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
         -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
+
+# The aliases of every named set in a file, one per line.
+env_file_sections() {
+    local file="$1"
+    [ -f "$file" ] || return 0
+    awk '
+        /^[[:space:]]*\[[^]]*\][[:space:]]*$/ {
+            s = $0
+            sub(/^[[:space:]]*\[[[:space:]]*/, "", s)
+            sub(/[[:space:]]*\][[:space:]]*$/, "", s)
+            if (tolower(s) != "default" && !(s in seen)) {
+                seen[s] = 1
+                print s
+            }
+        }
+    ' "$file" 2>/dev/null || true
 }
 
 # Merge the KEY=VALUE lines in $2 into the file at $1, leaving comments and
@@ -697,7 +762,26 @@ env_file_write() {
     chmod 600 "$tmp"
     source="$file"
     [ -f "$source" ] || source="/dev/null"
-    awk '
+    # Keys are merged into $CONFIG_SECTION only: the default set is
+    # everything before the first [alias] header, a named set is the run of
+    # lines under its own.  A named set that is not there yet is appended.
+    awk -v want="${CONFIG_SECTION:-}" '
+        function name_of(line,   s) {
+            s = line
+            sub(/^[[:space:]]*\[[[:space:]]*/, "", s)
+            sub(/[[:space:]]*\][[:space:]]*$/, "", s)
+            if (tolower(s) == "default")
+                return ""
+            return s
+        }
+        function flush(   i) {
+            for (i = 1; i <= n; i++)
+                if (!(order[i] in done)) {
+                    print value[order[i]]
+                    done[order[i]] = 1
+                }
+        }
+        BEGIN { insection = (want == "") }
         NR == FNR {
             if (match($0, /^[A-Za-z_][A-Za-z0-9_]*=/)) {
                 k = substr($0, 1, RLENGTH - 1)
@@ -706,23 +790,36 @@ env_file_write() {
             }
             next
         }
+        /^[[:space:]]*\[[^]]*\][[:space:]]*$/ {
+            if (insection)
+                flush()
+            insection = (name_of($0) == want)
+            if (insection)
+                seen = 1
+            print $0
+            next
+        }
         {
-            k = $0
-            sub(/[[:space:]]*=.*$/, "", k)
-            sub(/^[[:space:]]*/, "", k)
-            if (k in value) {
-                if (!(k in done)) {
-                    print value[k]
-                    done[k] = 1
+            if (insection) {
+                k = $0
+                sub(/[[:space:]]*=.*$/, "", k)
+                sub(/^[[:space:]]*/, "", k)
+                if (k in value) {
+                    if (!(k in done)) {
+                        print value[k]
+                        done[k] = 1
+                    }
+                    next
                 }
-                next
             }
             print $0
         }
         END {
-            for (i = 1; i <= n; i++)
-                if (!(order[i] in done))
-                    print value[order[i]]
+            if (want != "" && !seen) {
+                print ""
+                print "[" want "]"
+            }
+            flush()
         }
     ' "$pairfile" "$source" > "$tmp" || { rm -f "$pairfile" "$tmp"; return 1; }
     rm -f "$pairfile"
@@ -1087,6 +1184,202 @@ EOF
     done
 }
 
+# Walk one tool's fields again, writing them into [alias] rather than the
+# default set.  Deliberately not configure_one_tool: that one is about a
+# host's first credential, where "not now" and read-only are real answers.
+# A second account is asked for on purpose, and every field matters.
+configure_named_set() {
+    local tool="$1" alias="$2" key prompt kind default current shown answer rc
+    local pairs code last_code="" inherited
+
+    tool_spec "$tool" || return 0
+    CONFIG_SECTION="$alias"
+
+    echo ""
+    echo "  $SPEC_LABEL, credential set [$alias]"
+    echo "  Enter accepts the value in [brackets].  A key left blank is left"
+    echo "  out of the set, which then inherits it from the default one --"
+    echo "  so a second account on the same server needs only the login."
+
+    while :; do
+        pairs=""
+        while IFS='|' read -r key prompt kind default <&3; do
+            [ -n "$key" ] || continue
+            # Raw reads here: the prompt has to tell a value this set owns
+            # from one it would inherit, which the merging reader cannot.
+            current=$(env_file_get_raw "$SPEC_FILE" "$key" "$alias")
+            inherited=""
+            if [ -z "$current" ]; then
+                inherited=$(env_file_get_raw "$SPEC_FILE" "$key" "")
+            fi
+            if [ -n "$current" ]; then
+                shown="$current"
+            elif [ -n "$inherited" ]; then
+                # Enter here writes nothing and lets the default set
+                # supply it, which is the point of the suffix.
+                shown="$inherited -- inherited"
+            else
+                shown="$default"
+                current="$default"
+            fi
+            # Mask before showing, in every branch.  The inherited value of
+            # a secret is still a secret: printing the default account's
+            # password to explain what Enter would do would be worse than
+            # explaining nothing.
+            if [ "$kind" = "secret" ]; then
+                if [ -n "$current" ]; then
+                    case "$last_code" in
+                        401|403) shown="**** rejected" ;;
+                        *) shown="****" ;;
+                    esac
+                elif [ -n "$inherited" ]; then
+                    shown="**** -- inherited"
+                else
+                    shown=""
+                fi
+            fi
+            answer=$(prompt_field "    $prompt" "$kind" "$shown") && rc=0 || rc=$?
+            if [ "$rc" = "2" ]; then
+                echo "  Skipped [$alias] -- nothing written."
+                CONFIG_SECTION=""
+                return 0
+            fi
+            [ -n "$answer" ] || answer="$current"
+            [ -z "$answer" ] || pairs="$pairs$key=$answer
+"
+        done 3<<EOF
+$SPEC_FIELDS
+EOF
+
+        if [ -z "$pairs" ]; then
+            echo "  Nothing entered -- [$alias] not created."
+            CONFIG_SECTION=""
+            return 0
+        fi
+
+        if ! env_file_write "$SPEC_FILE" "$pairs"; then
+            echo -e "  ${RED}could not write $(tilde_path "$SPEC_FILE")${NC}"
+            CONFIG_SECTION=""
+            return 0
+        fi
+        echo -e "  ${GREEN}wrote [$alias] into $(tilde_path "$SPEC_FILE")${NC}"
+        echo "  Use it with:  $SPEC_CMD --user $alias ..."
+
+        [ "${VERIFY:-1}" = "1" ] || break
+        printf '  checking against the server... '
+        if code=$(tool_probe "$tool"); then
+            echo -e "${GREEN}ok${NC}"
+            break
+        fi
+        last_code="$code"
+        case "$code" in
+            no-curl|no-probe)
+                echo "skipped (curl not installed)"
+                break
+                ;;
+            000)
+                echo -e "${YELLOW}could not reach the server${NC} -- saved either way."
+                ;;
+            401|403)
+                echo -e "${RED}rejected (HTTP $code)${NC} -- the username or secret is wrong."
+                ;;
+            *)
+                echo -e "${YELLOW}unexpected HTTP $code${NC} -- saved, but unverified."
+                ;;
+        esac
+        ask_yes "  Enter [$alias] again?" n || break
+    done
+    CONFIG_SECTION=""
+}
+
+# Offered once, at the end, because almost nobody needs it: the tools take
+# one account each and that is the whole story for most hosts.
+configure_extra_users() {
+    local tool alias
+
+    echo ""
+    echo "--------------------------------------------------------------"
+    echo " A second account"
+    echo "--------------------------------------------------------------"
+    echo "  Each tool above holds one set of credentials.  A second set --"
+    echo "  another Gerrit login, a bot account, a Jira somewhere else --"
+    echo "  goes in the same file under an [alias], and every tool reaches"
+    echo "  it the same way:"
+    echo ""
+    echo "      gerrit --user bot comments 12345"
+    echo "      jira --user bot get LU-1"
+    echo "      maloo --user bot queue"
+    echo ""
+    echo "  --user takes the alias or the username in the set.  Most hosts"
+    echo "  never need this."
+
+    while ask_yes "  Add another credential set?" n; do
+        printf '    Which tool? (%s) [none]: ' "$CONFIG_TOOLS" >&2
+        read -r tool || tool=""
+        tool=$(printf '%s' "$tool" | tr -d '[:space:]')
+        [ -n "$tool" ] || break
+        case " $CONFIG_TOOLS " in
+            *" $tool "*) ;;
+            *)
+                echo -e "    ${YELLOW}unknown tool: $tool${NC} (known: $CONFIG_TOOLS)"
+                continue
+                ;;
+        esac
+
+        alias=$(prompt_field "    Alias for this set (e.g. bot, exa)" text "") || continue
+        alias=$(printf '%s' "$alias" | tr -d '[:space:]')
+        case "$alias" in
+            "")
+                echo "    No alias given -- nothing written."
+                continue
+                ;;
+            default|DEFAULT|Default)
+                echo -e "    ${YELLOW}'default' is the set configured above${NC}"
+                continue
+                ;;
+            *[!A-Za-z0-9._@+-]*)
+                echo -e "    ${YELLOW}alias may use letters, digits and . _ @ + -${NC}"
+                continue
+                ;;
+        esac
+        configure_named_set "$tool" "$alias"
+    done
+}
+
+# List a tool's extra credential sets under its row.  They are invisible
+# otherwise: the status line reports the default set, and a second account
+# written into the same file would go unmentioned.
+summarize_named_sets() {
+    local tool="$1" alias username key owns
+    tool_spec "$tool" || return 0
+    while read -r alias; do
+        [ -n "$alias" ] || continue
+        # jira and jira-cloud share one file, so a section has to be
+        # attributed by the keys it actually carries; without this a
+        # Jira Server account is reported as a second Cloud site.
+        owns=""
+        for key in $SPEC_REQUIRED; do
+            [ -n "$(env_file_get_raw "$SPEC_FILE" "$key" "$alias")" ] || continue
+            owns=1
+            break
+        done
+        [ -n "$owns" ] || continue
+        username=""
+        if [ -n "$SPEC_USER_KEY" ]; then
+            CONFIG_SECTION="$alias"
+            username=$(env_file_get "$SPEC_FILE" "$SPEC_USER_KEY")
+            CONFIG_SECTION=""
+        fi
+        if [ -n "$username" ]; then
+            echo "          --user $alias  ($username)"
+        else
+            echo "          --user $alias"
+        fi
+    done <<EOF
+$(env_file_sections "$SPEC_FILE")
+EOF
+}
+
 configure_summary() {
     local tool status pad external
     echo ""
@@ -1118,6 +1411,7 @@ configure_summary() {
                 fi
                 ;;
         esac
+        summarize_named_sets "$tool"
     done
     echo ""
     echo "  janitor and lustre-crash need no credentials."
@@ -1148,6 +1442,7 @@ configure_tools() {
         fi
         configure_one_tool "$tool" || true
     done
+    configure_extra_users || true
     configure_summary
 }
 

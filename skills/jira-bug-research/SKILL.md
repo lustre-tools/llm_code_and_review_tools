@@ -119,6 +119,20 @@ the email is part of the credential, and nothing routes there until
 Multi-instance configuration lives in `~/.jira-tool.json`, with an
 `instances` map and a `default`, reached by `-I`.
 
+A second account -- a bot, another Jira -- is an `[alias]` section in
+the same `.env`, selected with `jira --user <alias>`. `--user` searches
+the `.env` sections and the `instances` map both, so one flag reaches
+either store; `-I` still selects an instance only. A Server set has no
+username, so reach it by its alias unless it carries a `JIRA_USER=`
+line, which exists only for this matching; Cloud sets also match on
+`JIRA_CLOUD_EMAIL`.
+
+Position matters on this tool alone: `jira watch LU-1 --user alice`
+already means "add alice as a watcher", so the credential flag goes
+*before* the subcommand, or is spelled `-U`, which works anywhere.
+`./install.sh --status` lists the sets a host has; a wrong alias is an
+error, not a fallback, so do not guess one.
+
 Tokens: a Server personal access token comes from the JIRA profile menu
 (Profile > Personal Access Tokens); a Cloud API token from
 `id.atlassian.com/manage-profile/security/api-tokens`.

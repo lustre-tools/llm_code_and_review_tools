@@ -153,6 +153,54 @@ Values you already have exported in your shell are offered as the
 defaults, so pressing Enter writes down what you are already using --
 which is what an agent, running without your shell, needs.
 
+### More than one account
+
+Each tool normally holds one set of credentials. A second set -- another
+Gerrit login, a bot account, a Jira somewhere else -- goes in the same
+file under an `[alias]` header, and `--user` selects it:
+
+```bash
+gerrit --user bot comments 12345
+jira --user bot get LU-20002
+maloo --user bot queue --status FAIL
+jenkins --user bot jobs
+```
+
+`--user` takes either the alias or the account name inside the set, and
+works before or after the subcommand. The installer offers to add one at
+the end of `--configure`; `--status` lists what each tool has.
+
+```ini
+# ~/.config/gerrit-cli/.env
+
+# the default set: what every command uses unless --user says otherwise
+GERRIT_URL=https://review.whamcloud.com
+GERRIT_USER=alice
+GERRIT_PASS=her-http-password
+
+[bot]
+GERRIT_USER=lustre-bot
+GERRIT_PASS=its-http-password
+```
+
+A named set inherits every key it does not repeat, so a second account on
+the same server needs only the login -- `[bot]` above reaches the same
+Gerrit as the default set. Files without any `[alias]` header are read
+exactly as before.
+
+Two details worth knowing:
+
+- **jira** has no username of its own on a Server instance: the token is
+  the whole login. Reach such a set by its alias, or give it a
+  `JIRA_USER=` line, which is read only to make `--user` match. Cloud
+  sets also match on `JIRA_CLOUD_EMAIL`. `--user` searches the
+  `~/.jira-tool.json` instances too, so it reaches both stores; `-I` is
+  unchanged.
+- **jira** already used `--user` after a subcommand to mean something
+  else -- `jira watch LU-1 --user alice` adds alice as a watcher -- so on
+  that tool the credential flag must come before the subcommand, or be
+  spelled `-U`, which works anywhere.
+
 The rest of this section is the same configuration by hand.
 
 ### Gerrit

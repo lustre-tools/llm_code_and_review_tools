@@ -27,7 +27,21 @@ from .describe import (
     Command,
     ToolDescription,
 )
-from .config import env_file_variable, load_env_files
+from .config import (
+    CredentialSetError,
+    DEFAULT_SET,
+    USERNAME_KEYS,
+    apply_credential_set,
+    argv_option_value,
+    credential_sets,
+    env_file_locations,
+    env_file_variable,
+    hoist_args,
+    load_env_files,
+    parse_env_file,
+    resolve_credential_set,
+    resolve_env_file,
+)
 from .decorators import handle_errors
 
 __all__ = [
@@ -52,6 +66,18 @@ __all__ = [
     # Config
     "env_file_variable",
     "load_env_files",
+    # Credential sets
+    "CredentialSetError",
+    "DEFAULT_SET",
+    "USERNAME_KEYS",
+    "apply_credential_set",
+    "argv_option_value",
+    "credential_sets",
+    "env_file_locations",
+    "hoist_args",
+    "parse_env_file",
+    "resolve_credential_set",
+    "resolve_env_file",
     # Decorators
     "handle_errors",
 ]

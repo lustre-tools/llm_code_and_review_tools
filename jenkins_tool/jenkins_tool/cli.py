@@ -8,6 +8,11 @@ from typing import Any
 import click
 import requests
 
+from llm_tool_common.config import (
+    CredentialSetError,
+    apply_credential_set,
+    hoist_args,
+)
 from llm_tool_common.envelope import (
     error_response_from_dict,
     format_json,
@@ -27,12 +32,9 @@ _FULL_ENVELOPE = False
 
 def _make_client(
     url: str | None = None,
-    user: str | None = None,
     token: str | None = None,
 ) -> JenkinsClient:
-    config = load_config(
-        url_override=url, user_override=user, token_override=token
-    )
+    config = load_config(url_override=url, token_override=token)
     return JenkinsClient(config)
 
 
@@ -243,26 +245,51 @@ def _normalize_build(
 
 # ---- Commands ----
 
-@click.group()
+class JenkinsGroup(click.Group):
+    """Click group whose global options work in any position.
+
+    Click reads a group's own options only before the subcommand
+    name, so `jenkins jobs --user bot` would otherwise be a usage
+    error while `jenkins --user bot jobs` works.
+    """
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        return super().parse_args(
+            ctx, hoist_args(args, flags=("--envelope",), options=("--user", "-U"))
+        )
+
+
+@click.group(cls=JenkinsGroup)
 @click.version_option(package_name="jenkins-tool", prog_name="jenkins")
 @click.option("--envelope", is_flag=True, help="Include full response envelope (ok/data/meta wrapper)")
+@click.option(
+    "--user",
+    "-U",
+    default=None,
+    help="Credential set to use: a [section] alias or a JENKINS_USER from "
+         "~/.config/jenkins-tool/.env",
+)
 @click.pass_context
-def main(ctx: click.Context, envelope: bool) -> None:
+def main(ctx: click.Context, envelope: bool, user: str | None) -> None:
     """Jenkins build server CLI - query Lustre CI builds."""
     global _FULL_ENVELOPE
     _FULL_ENVELOPE = envelope
 
+    if user:
+        try:
+            apply_credential_set("jenkins-tool", user)
+        except CredentialSetError as e:
+            _error(ErrorCode.CONFIG_ERROR, str(e), "cli", False)
+
 
 @main.command()
 @click.option("--url", envvar="JENKINS_URL", default=None, help="Jenkins server URL")
-@click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--view", "view_name", default=None, help="Filter by view name")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
 @handle_errors(TOOL_NAME, "jobs")
 def jobs(
     url: str | None,
-    user: str | None,
     token: str | None,
     view_name: str | None,
     pretty: bool,
@@ -275,7 +302,7 @@ def jobs(
       jenkins jobs --view lustre
       jenkins jobs --pretty
     """
-    client = _make_client(url, user, token)
+    client = _make_client(url, token)
     if view_name:
         view_data = client.get_view(view_name)
         raw_jobs = view_data.get("jobs", [])
@@ -306,7 +333,6 @@ def jobs(
 @click.argument("job_name")
 @click.option("--limit", type=int, default=10, help="Number of builds to show (default: 10)")
 @click.option("--url", envvar="JENKINS_URL", default=None, help="Jenkins server URL")
-@click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
 @handle_errors(TOOL_NAME, "builds")
@@ -314,7 +340,6 @@ def builds(
     job_name: str,
     limit: int,
     url: str | None,
-    user: str | None,
     token: str | None,
     pretty: bool,
 ) -> None:
@@ -325,7 +350,7 @@ def builds(
       jenkins builds lustre-master
       jenkins builds lustre-reviews --limit 20
     """
-    client = _make_client(url, user, token)
+    client = _make_client(url, token)
     raw_builds = client.get_builds(job_name, limit=limit)
 
     items = []
@@ -358,7 +383,6 @@ def builds(
 @click.argument("job_name")
 @click.argument("build_number", default="lastBuild")
 @click.option("--url", envvar="JENKINS_URL", default=None, help="Jenkins server URL")
-@click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
 @handle_errors(TOOL_NAME, "build")
@@ -366,7 +390,6 @@ def build(
     job_name: str,
     build_number: str,
     url: str | None,
-    user: str | None,
     token: str | None,
     pretty: bool,
 ) -> None:
@@ -381,7 +404,7 @@ def build(
       jenkins build lustre-reviews lastBuild
       jenkins build lustre-master lastFailedBuild
     """
-    client = _make_client(url, user, token)
+    client = _make_client(url, token)
     data = client.get_build(job_name, build_number)
 
     result = _normalize_build(data, job_name=job_name)
@@ -429,7 +452,6 @@ def build(
 @click.option("--head", type=int, default=None, help="Number of lines from start")
 @click.option("--grep", "grep_pattern", default=None, help="Filter lines matching pattern")
 @click.option("--url", envvar="JENKINS_URL", default=None, help="Jenkins server URL")
-@click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
 @handle_errors(TOOL_NAME, "console")
@@ -440,7 +462,6 @@ def console(
     head: int | None,
     grep_pattern: str | None,
     url: str | None,
-    user: str | None,
     token: str | None,
     pretty: bool,
 ) -> None:
@@ -456,7 +477,7 @@ def console(
       jenkins console lustre-master lastFailedBuild --grep "error"
       jenkins console lustre-master 4704 --head 100
     """
-    client = _make_client(url, user, token)
+    client = _make_client(url, token)
     text = client.get_console_text(job_name, build_number)
 
     lines = text.splitlines()
@@ -504,7 +525,6 @@ def console(
 @click.option("--job", default=None, help="Specific job to search (default: all *-reviews jobs)")
 @click.option("--limit", type=int, default=20, help="Max builds to search per job (default: 20)")
 @click.option("--url", envvar="JENKINS_URL", default=None, help="Jenkins server URL")
-@click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
 @handle_errors(TOOL_NAME, "review")
@@ -513,7 +533,6 @@ def review(
     job: str | None,
     limit: int,
     url: str | None,
-    user: str | None,
     token: str | None,
     pretty: bool,
 ) -> None:
@@ -527,7 +546,7 @@ def review(
       jenkins review 54225
       jenkins review 54225 --job lustre-reviews
     """
-    client = _make_client(url, user, token)
+    client = _make_client(url, token)
     if job:
         matches = client.find_builds_by_gerrit_change(
             job, change_number, max_builds=limit
@@ -569,7 +588,6 @@ def review(
 @click.option("--head", type=int, default=None, help="Number of lines from start")
 @click.option("--grep", "grep_pattern", default=None, help="Filter lines matching pattern")
 @click.option("--url", envvar="JENKINS_URL", default=None, help="Jenkins server URL")
-@click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
 @handle_errors(TOOL_NAME, "run-console")
@@ -581,7 +599,6 @@ def run_console(
     head: int | None,
     grep_pattern: str | None,
     url: str | None,
-    user: str | None,
     token: str | None,
     pretty: bool,
 ) -> None:
@@ -598,7 +615,7 @@ def run_console(
       jenkins run-console lustre-reviews 121880 "arch=x86_64,build_type=client,distro=el8.9,ib_stack=inkernel" --tail 50
       jenkins run-console lustre-reviews 121880 "arch=x86_64,build_type=client,distro=el8.9,ib_stack=inkernel" --grep "error"
     """
-    client = _make_client(url, user, token)
+    client = _make_client(url, token)
     run_url = f"{client.config.base_url}/job/{job_name}/{config}/{build_number}"
     text = client.get_run_console_text(run_url)
 
@@ -648,7 +665,6 @@ def run_console(
 @click.option("--kill", "force_kill", is_flag=True, default=False,
               help="Hard-kill instead of graceful stop")
 @click.option("--url", envvar="JENKINS_URL", default=None, help="Jenkins server URL")
-@click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
 @handle_errors(TOOL_NAME, "abort")
@@ -657,7 +673,6 @@ def abort(
     build_number: int,
     force_kill: bool,
     url: str | None,
-    user: str | None,
     token: str | None,
     pretty: bool,
 ) -> None:
@@ -673,7 +688,7 @@ def abort(
       jenkins abort lustre-reviews 121884
       jenkins abort lustre-reviews 121884 --kill
     """
-    client = _make_client(url, user, token)
+    client = _make_client(url, token)
     _require_auth(client, "abort", pretty)
 
     # First check if the build is actually running
@@ -719,7 +734,6 @@ def abort(
 @click.argument("job_name")
 @click.argument("build_number", type=int)
 @click.option("--url", envvar="JENKINS_URL", default=None, help="Jenkins server URL")
-@click.option("--user", envvar="JENKINS_USER", default=None, help="Jenkins username")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
 @handle_errors(TOOL_NAME, "retrigger")
@@ -727,7 +741,6 @@ def retrigger(
     job_name: str,
     build_number: int,
     url: str | None,
-    user: str | None,
     token: str | None,
     pretty: bool,
 ) -> None:
@@ -742,7 +755,7 @@ def retrigger(
       jenkins retrigger lustre-reviews 121880
       jenkins retrigger lustre-master 4699
     """
-    client = _make_client(url, user, token)
+    client = _make_client(url, token)
     _require_auth(client, "retrigger", pretty)
     location = client.retrigger_build(job_name, build_number)
 

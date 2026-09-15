@@ -247,6 +247,107 @@ printf '{"server": "https://jira.example", "auth": {"token": "t"}}\n' \
 out=$(HOME="$HOME_DIR" bash "$INSTALL_SH" --status 2>&1)
 contains "jira's own JSON config counts as configured" ".jira-tool.json" "$out"
 
+# --- a second credential set ------------------------------------------------
+# Extra accounts live in the same file under an [alias].  The default set has
+# to survive that untouched, since it is what every command uses.
+fresh_home
+mkdir -p "$HOME_DIR/.config/gerrit-cli"
+printf '# notes\nGERRIT_URL=https://review.example\nGERRIT_USER=alice\nGERRIT_PASS=main\nUNRELATED=keep-me\n' \
+    > "$HOME_DIR/.config/gerrit-cli/.env"
+out=$(printf 'y\ngerrit\nbot\n\nbotuser\nbotsecret\nn\n' | env HOME="$HOME_DIR" VERIFY=0 \
+    bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; configure_tools 'gerrit'" 2>&1)
+check "a second set is appended, leaving the first alone" \
+    "# notes GERRIT_URL=https://review.example GERRIT_USER=alice GERRIT_PASS=main UNRELATED=keep-me  [bot] GERRIT_USER=botuser GERRIT_PASS=botsecret" \
+    "$(tr '\n' ' ' < "$HOME_DIR/.config/gerrit-cli/.env" | sed 's/ $//')"
+contains "and says how to reach it" "gerrit --user bot" "$out"
+contains "and the status list names it with its account" "--user bot  (botuser)" "$out"
+
+# A key left blank is inherited from the default set rather than written
+# empty -- the common case is a second login on the same server.
+if grep -A3 '^\[bot\]' "$HOME_DIR/.config/gerrit-cli/.env" | grep -q GERRIT_URL; then
+    bad "a blank field is inherited, not written into the section"
+else
+    ok "a blank field is inherited, not written into the section"
+fi
+
+# Editing an existing set replaces its keys instead of appending a
+# second [bot] block.
+out=$(printf 'y\ngerrit\nbot\n\n\nnewsecret\nn\n' | env HOME="$HOME_DIR" VERIFY=0 \
+    bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; configure_tools 'gerrit'" 2>&1)
+check "editing a set rewrites it in place" "1" \
+    "$(grep -c '^\[bot\]' "$HOME_DIR/.config/gerrit-cli/.env")"
+check "  and keeps the value that was not retyped" "botuser" \
+    "$(sed -n '/^\[bot\]/,$p' "$HOME_DIR/.config/gerrit-cli/.env" | sed -n 's/^GERRIT_USER=//p')"
+check "  while taking the one that was" "newsecret" \
+    "$(sed -n '/^\[bot\]/,$p' "$HOME_DIR/.config/gerrit-cli/.env" | sed -n 's/^GERRIT_PASS=//p')"
+
+# The bug this guards: a reader that greps the whole file for GERRIT_USER
+# picks up the one under [bot] and reports the wrong default account.
+INSTALL_SH_NO_MAIN=1 source "$INSTALL_SH"
+set +e
+CONFIG_SECTION=""
+check "the default set is read from before the first header" "alice" \
+    "$(env_file_get "$HOME_DIR/.config/gerrit-cli/.env" GERRIT_USER)"
+CONFIG_SECTION="bot"
+check "and a named set from inside its own" "botuser" \
+    "$(env_file_get "$HOME_DIR/.config/gerrit-cli/.env" GERRIT_USER)"
+# The bug this guards: [bot] carries only a login, so a reader without
+# inheritance hands tool_probe an empty URL and the credential check
+# reports "could not reach the server" for a credential the server would
+# have rejected outright.
+check "a named set inherits what it does not define" "https://review.example" \
+    "$(env_file_get "$HOME_DIR/.config/gerrit-cli/.env" GERRIT_URL)"
+check "  and the raw read still sees only its own keys" "" \
+    "$(env_file_get_raw "$HOME_DIR/.config/gerrit-cli/.env" GERRIT_URL bot)"
+CONFIG_SECTION=""
+
+# A named set shows what a blank answer would inherit, so the choice is
+# visible.  For a secret that hint must be masked: printing the default
+# account's password to explain Enter is worse than explaining nothing.
+fresh_home
+mkdir -p "$HOME_DIR/.config/gerrit-cli"
+printf 'GERRIT_URL=https://review.example\nGERRIT_USER=alice\nGERRIT_PASS=SUPERSECRETVALUE\n' \
+    > "$HOME_DIR/.config/gerrit-cli/.env"
+out=$(printf 'y\ngerrit\nbot\n\nbotuser\n\nn\n' | env HOME="$HOME_DIR" VERIFY=0 \
+    bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; configure_extra_users" 2>&1)
+contains "an inherited value is shown, so a blank answer is informed" \
+    "alice -- inherited" "$out"
+case "$out" in
+    *SUPERSECRETVALUE*) bad "an inherited secret is never printed" ;;
+    *) ok "an inherited secret is never printed" ;;
+esac
+contains "  it is masked instead" "**** -- inherited" "$out"
+
+fresh_home
+mkdir -p "$HOME_DIR/.config/gerrit-cli"
+printf 'GERRIT_URL=https://review.example\nGERRIT_USER=alice\nGERRIT_PASS=main\n' \
+    > "$HOME_DIR/.config/gerrit-cli/.env"
+out=$(printf 'y\ngerrit\ndefault\nn\n' | env HOME="$HOME_DIR" VERIFY=0 \
+    bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; configure_tools 'gerrit'" 2>&1)
+contains "'default' is refused as an alias" "is the set configured above" "$out"
+
+out=$(printf 'y\ngerrit\nbad name!\nn\n' | env HOME="$HOME_DIR" VERIFY=0 \
+    bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; configure_tools 'gerrit'" 2>&1)
+contains "an alias with odd characters is refused" "alias may use letters" "$out"
+
+# jira and jira-cloud share one file, so a section belongs to whichever of
+# them its keys are for.  Reporting a Jira Server account as a second Cloud
+# site would send someone looking for an Atlassian site that is not there.
+fresh_home
+mkdir -p "$HOME_DIR/.config/jira-tool"
+printf 'JIRA_SERVER=https://jira.whamcloud.com\nJIRA_TOKEN=t\n\n[bot]\nJIRA_SERVER=https://jira.whamcloud.com\nJIRA_TOKEN=bot-token\n' \
+    > "$HOME_DIR/.config/jira-tool/.env"
+out=$(HOME="$HOME_DIR" bash "$INSTALL_SH" --status 2>&1)
+jira_row=$(printf '%s\n' "$out" | grep -n -m1 '^  ok    jira  ' | cut -d: -f1)
+cloud_row=$(printf '%s\n' "$out" | grep -n -m1 'jira-cloud' | cut -d: -f1)
+set_row=$(printf '%s\n' "$out" | grep -n -m1 -- '--user bot' | cut -d: -f1)
+if [ -n "$set_row" ] && [ -n "$jira_row" ] && [ -n "$cloud_row" ] &&
+    [ "$set_row" -gt "$jira_row" ] && [ "$set_row" -lt "$cloud_row" ]; then
+    ok "a shared file's set is listed under the tool whose keys it holds"
+else
+    bad "a shared file's set is listed under the tool whose keys it holds" "$out"
+fi
+
 # --- the command line ------------------------------------------------------
 fresh_home
 out=$(HOME="$HOME_DIR" bash "$INSTALL_SH" --status 2>&1)

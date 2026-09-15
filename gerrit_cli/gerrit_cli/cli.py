@@ -29,10 +29,54 @@ Examples:
 """
 
 import argparse
+import os
 import sys
+
+from llm_tool_common.config import (
+    CredentialSetError,
+    apply_credential_set,
+    argv_option_value,
+    hoist_args,
+)
 
 from .envelope import error_response_from_dict, format_json
 from .errors import ErrorCode, ExitCode
+
+# ---------------------------------------------------------------------------
+# --user is resolved here, before main() ever runs, because argparse is not
+# the only thing that reads the environment: client.py captures GERRIT_URL
+# into DEFAULT_GERRIT_URL as it is imported, which the package __init__ does
+# before this module's body.  Selecting the set in main() would leave that
+# constant on the previous server, so a bare change number would resolve
+# against the wrong Gerrit.  argparse still declares --user, for --help and
+# so the parser consumes it.
+# ---------------------------------------------------------------------------
+def _preselect_credential_set() -> None:
+    args = sys.argv[1:]
+    # argparse gives the top-level parser these two, so they are a usage
+    # error after the subcommand name unless they are moved back to the
+    # front.  The Click tools hoist the same way.
+    sys.argv[1:] = hoist_args(
+        args, flags=("--envelope",), options=("--user", "-U")
+    )
+    user = argv_option_value(args, ("--user", "-U"))
+    if not user:
+        return
+    try:
+        apply_credential_set("gerrit-cli", user)
+    except CredentialSetError as e:
+        envelope = error_response_from_dict(
+            ErrorCode.CONFIG_ERROR, str(e), "cli"
+        )
+        print(format_json(envelope, pretty=False, full_envelope=False))
+        sys.exit(ExitCode.GENERAL_ERROR)
+
+    from . import client as _client
+
+    _client.DEFAULT_GERRIT_URL = os.environ.get("GERRIT_URL")
+
+
+_preselect_credential_set()
 
 # ---------------------------------------------------------------------------
 # Import names that tests patch via patch('gerrit_cli.cli.X').
@@ -361,6 +405,15 @@ def main():
         "--envelope",
         action="store_true",
         help="Include full response envelope (ok/data/meta wrapper)",
+    )
+    parser.add_argument(
+        "--user",
+        "-U",
+        default=None,
+        metavar="SET",
+        help="Credential set to use: a [section] alias or a GERRIT_USER "
+             "from ~/.config/gerrit-cli/.env. Applied at startup; see "
+             "--help output of install.sh --configure to add one.",
     )
     # Use _JsonErrorParser for subparsers so argument errors from
     # subcommands also produce JSON output. The top-level parser is

@@ -150,3 +150,9 @@ requested without the command's result confirming it.
 --configure --only maloo` sets one up). Janitor needs none, and neither
 does reading from `jenkins` -- only `jenkins abort` and `jenkins
 retrigger` do, and they say so and exit 2 when unconfigured.
+
+Both take `--user <alias-or-username>` when a host holds more than one
+account, in any argument position. On `jenkins` that flag names a stored
+credential set, not a bare username: `--token` is still the way to pass
+a token by hand. Leave `--user` off unless the task names an account --
+`./install.sh --status` lists what a host has.
