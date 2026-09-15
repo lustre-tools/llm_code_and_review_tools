@@ -3915,6 +3915,33 @@ def _review_event_is_spent(patch):
     return bool(key) and key in _consumed_standing_keys(patch)
 
 
+def _review_event_blocker(patch):
+    """The run that answered these comments, and so stopped anything else.
+
+    The card used to name the most recent run and explain a different one:
+    "a run used up their turn", printed above a run that had in fact released
+    its turn, while the run actually holding it went unnamed and three days
+    old.  A reason an operator cannot trace to a thing is not a reason.
+    """
+    if SESSION_STORE is None:
+        return None
+    patch_id = str(patch.get("change_number") or "")
+    revision = str(patch.get("revision_sha") or "").lower()
+    if not patch_id or not revision:
+        return None
+    answered = [
+        session for session in SESSION_STORE.list_sessions(include_terminal=True)
+        if session.patch_id == patch_id
+        and session.run_id.startswith("pw-review-")
+        and str(session.revision or "").lower() == revision
+        and session.state in SESSION_TERMINAL_STATES
+        and not _run_left_its_event_unhandled(session)
+    ]
+    if not answered:
+        return None
+    return max(answered, key=lambda session: session.state_changed_at)
+
+
 def _idle_explanation(patch, policy):
     """Say why nothing is running, from the conditions that decide it.
 
@@ -3963,10 +3990,26 @@ def _idle_explanation(patch, policy):
                 "waiting on a person, not on the watcher."
             )
         elif _review_event_is_spent(patch):
+            blocker = _review_event_blocker(patch)
+            if blocker is not None:
+                _code, why = _run_failure(blocker)
+                because = (
+                    " and was rejected: " + escape(" ".join(str(why).split())[:120])
+                    if blocker.state != "succeeded" and why
+                    else ""
+                )
+                named = (
+                    "<a href='/runs/" + escape(blocker.run_id, quote=True) + "'>"
+                    + escape(blocker.run_id) + "</a> already answered these exact "
+                    "comments on " + escape(local_time(blocker.state_changed_at))
+                    + because + "."
+                )
+            else:
+                named = "A run has already answered these exact comments."
             handled = (
-                f" {unresolved - concluded} unresolved review comment(s) are not "
-                "being retried: a run on this revision used up their turn and "
-                "Gerrit has reported nothing new since. Run now starts one."
+                f" {unresolved - concluded} unresolved review comment(s), already "
+                f"attempted. {named} Gerrit has reported nothing new since, so "
+                "nothing starts by itself. Run now starts another attempt."
             )
         else:
             pending.append(f"{unresolved - concluded} unresolved review comment(s)")

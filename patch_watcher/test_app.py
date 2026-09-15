@@ -1262,9 +1262,16 @@ class PatchWatcherTests(AppGlobalsIsolated):
 
             self.assertTrue(app._review_event_is_spent(record))
             idle = app._idle_explanation(record, policy)
-            self.assertIn("not being retried", idle)
+            # It names the run that is actually holding the work, because a
+            # reason an operator cannot trace to a thing is not a reason --
+            # and the run named above this line on the row may be a later one
+            # that released its turn.
+            self.assertIn("pw-review-68763-ps2-spent", idle)
+            self.assertIn("already answered these exact comments", idle)
+            self.assertIn("does not match its snapshot", idle)
             self.assertIn("Run now", idle)
             self.assertNotIn("Ready to act", idle)
+            self.assertNotIn("used up their turn", idle)
 
             # A reviewer commenting after that run re-arms it for real.
             record["last_changed"] = "2026-09-13T09:00:00+00:00"
@@ -1374,7 +1381,12 @@ class PatchWatcherTests(AppGlobalsIsolated):
             self.assertTrue(app._review_event_is_spent(record))
             policy = app._standing_policy(record)
             explanation = app._idle_explanation(record, policy)
-            self.assertIn("not being retried", explanation)
+            # The run that ANSWERED is the one named, not the later one that
+            # died and released its turn -- the card shows that later run on
+            # the line above, and naming it here explained the wrong thing.
+            self.assertIn("pw-review-68763-ps2-answered", explanation)
+            self.assertNotIn("pw-review-68763-ps2-dead", explanation)
+            self.assertIn("already answered these exact comments", explanation)
             self.assertIn("Run now", explanation)
             self.assertNotIn("Ready to act", explanation)
 
