@@ -125,6 +125,14 @@ marker = os.path.join(sysconfig.get_path("stdlib"), "EXTERNALLY-MANAGED")
 sys.exit(0 if (not in_venv and os.path.exists(marker)) else 1)'
 }
 
+# True when this interpreter can run pip. Rocky/RHEL ship pip as a
+# separate package (python3.11-pip), so a new-enough python3.11 can have
+# no pip at all; `python3.11 -m venv` still works and gives the venv a
+# pip from the pip-wheel package python3.11-libs already depends on.
+has_pip() {
+    "$1" -m pip --version > /dev/null 2>&1
+}
+
 # Pick the interpreter for --configure and --doctor. Sets PYTHON.
 #
 # Those two called resolve_python with the still-unset $PYTHON, so the PEP 668
@@ -165,12 +173,24 @@ resolve_python() {
         return 0
     fi
 
-    if [ "$VENV_FLAG" -eq 0 ] && ! is_externally_managed "$base_py"; then
+    local needs_venv=""
+    if ! has_pip "$base_py"; then
+        needs_venv=nopip
+    elif is_externally_managed "$base_py"; then
+        needs_venv=pep668
+    fi
+
+    if [ "$VENV_FLAG" -eq 0 ] && [ -z "$needs_venv" ]; then
         PYTHON="$base_py"
         return 0
     fi
 
-    if [ "$VENV_FLAG" -eq 0 ]; then
+    if [ "$VENV_FLAG" -eq 0 ] && [ "$needs_venv" = nopip ]; then
+        echo ""
+        echo -e "${YELLOW}$base_py has no pip module${NC} (Rocky and RHEL ship it"
+        echo "as a separate package). Installing into a virtual environment,"
+        echo "which gets a pip of its own."
+    elif [ "$VENV_FLAG" -eq 0 ]; then
         echo ""
         echo -e "${YELLOW}This Python is externally managed (PEP 668):${NC} pip refuses to"
         echo "install packages outside a virtual environment (typical for"
@@ -202,6 +222,12 @@ resolve_python() {
     echo "Creating virtual environment: $venv"
     "$base_py" -m venv "$venv" || {
         echo -e "${RED}Failed to create virtual environment at $venv${NC}"
+        if [ "$needs_venv" = nopip ]; then
+            local pkg
+            pkg=$(basename "$base_py")
+            echo "Give this Python a pip first, then re-run:"
+            echo "  dnf install $pkg-pip    # or: apt install $pkg-venv"
+        fi
         return 1
     }
     PYTHON="$venv/bin/python"

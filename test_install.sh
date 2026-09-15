@@ -372,6 +372,24 @@ else
     ok "--only on its own configures rather than installs"
 fi
 
+# --- a Python without pip ---------------------------------------------------
+# Rocky/RHEL ship pip as its own package, so python3.11 can be new enough
+# and still have no pip; the venv it can build has one.
+venv_dir="$WORK/nopip-venv"
+out=$(bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'
+    has_pip() { return 1; }
+    VENV_FLAG=0 VENV_PATH='$venv_dir' resolve_python python3 < /dev/null
+    echo \"PYTHON=\$PYTHON\"" 2>&1)
+contains "a pip-less Python says so rather than failing on pip" \
+    "has no pip module" "$out"
+contains "  and installs into a venv instead" "PYTHON=$venv_dir/bin/python" "$out"
+if "$venv_dir/bin/python" -m pip --version > /dev/null 2>&1; then
+    ok "  which has a pip of its own"
+else
+    bad "  which has a pip of its own" "$out"
+fi
+rm -rf "$venv_dir"
+
 # --- the skills ------------------------------------------------------------
 # They are linked, not copied, so a git pull updates them in place.
 SKILLS_DIR="$SCRIPT_DIR/skills"
