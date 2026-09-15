@@ -1366,6 +1366,47 @@ class PatchWatcherTests(AppGlobalsIsolated):
                             "state": "failed", "summary": "I could not do it."})
             ))
 
+    def test_a_run_reaped_for_going_quiet_leaves_the_work_to_be_retried(self):
+        """Change 68845's run was mid-Bash when the machine slept, and was
+        killed for inactivity fifteen hours later on waking.  It had spoken --
+        three messages -- so the event counted as answered, and six unresolved
+        comments sat with "the last run used up their turn", waiting on a
+        person to press a button.  A stall is not an answer."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = app.initialize_session_store(Path(temp_dir) / "s.sqlite3")
+            store.register_pinned_session(
+                "reaped", patch_id="68845", run_id="pw-review-68845-ps2-reaped",
+                revision="d" * 40, patchset=2, profile="engineering",
+                state="running",
+            )
+            store.record_message(
+                "reaped", "agent", "Let me write the source changes.")
+            store.finish_session(
+                "reaped", "failed", failure_code="agent_inactivity_timeout",
+                failure_summary="Session exceeded policy deadline 2026-09-14T23:46:39+00:00",
+            )
+            session = store.get_session("reaped")
+            self.assertTrue(app._run_left_its_event_unhandled(session))
+
+            record = {"change_number": 68845, "revision_sha": "d" * 40,
+                      "patchset": 2, "unresolved": 6}
+            self.assertFalse(app._review_event_is_spent(record))
+
+            # A run that answered still keeps its event, stall or no stall.
+            store.register_pinned_session(
+                "answered", patch_id="68845",
+                run_id="pw-review-68845-ps2-answered", revision="d" * 40,
+                patchset=2, profile="engineering", state="running",
+            )
+            store.finish_session(
+                "answered", "failed", failure_code="worker_report_failed",
+                failure_summary="I could not do it.",
+                result={"schema": "patch-watcher-engineering-report/v1",
+                        "state": "failed", "summary": "I could not do it."},
+            )
+            self.assertTrue(app._review_event_is_spent(record))
+
     def test_a_run_on_one_change_owns_its_whole_declared_group(self):
         """A group is handled as a whole, so a run started for any member
         speaks for all of them: it may edit a different patch of the series

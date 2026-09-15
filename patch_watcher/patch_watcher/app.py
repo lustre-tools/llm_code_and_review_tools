@@ -781,10 +781,15 @@ def _record_standing_decision(patch, decision, *, outcome="", note=""):
 
 
 # Failure codes that mean this host stopped the run, rather than the run
-# reaching any conclusion about the patch: our own bookkeeping tripped, or the
-# worker vanished from under us.
+# reaching any conclusion about the patch: our own bookkeeping tripped, the
+# worker vanished from under us, or we reaped it for going quiet.
+#
+# The wall-clock caps are deliberately not here.  A run that used its whole
+# budget spent something; one that stalled spent nothing, and the difference
+# is whether starting it again is a retry or a second bill.
 INFRASTRUCTURE_FAILURE_CODES = frozenset({
     "controller_error", "runner_lost", "runner_start_interrupted",
+    "agent_inactivity_timeout",
 })
 
 
@@ -799,12 +804,13 @@ def _run_left_its_event_unhandled(session):
     one that died after real work, and `runner_lost` -- the host gone the
     instant it attached -- is in no such list yet means exactly this.
 
-    The second is a run this host killed.  A controller fault or a vanished
-    worker says nothing about the patch, however much the agent had already
-    done, and holding the event against it strands the work: change 68763 sat
-    unretried because a restart tripped the controller mid-run.  Retrying is
-    bounded by STANDING_DEAD_RUN_RETRY_LIMIT like any other never-answered
-    event.
+    The second is a run this host killed.  A controller fault, a vanished
+    worker or an agent reaped for going quiet says nothing about the patch,
+    however much the agent had already done, and holding the event against it
+    strands the work: change 68763 sat unretried because a restart tripped the
+    controller mid-run, and change 68845 because its run was mid-Bash when the
+    machine slept and was killed for inactivity on waking.  Retrying is bounded
+    by STANDING_DEAD_RUN_RETRY_LIMIT like any other never-answered event.
 
     A run that produced a report is not either kind, even if the report was
     rejected.  It answered.
