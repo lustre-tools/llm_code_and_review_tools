@@ -1593,6 +1593,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 revision="f" * 40, patchset=6, profile="engineering",
                 state="running",
             )
+            store.record_message("s1", "agent", "Patchset uploaded, replies posted.")
             store.finish_session(
                 "s1", "failed", failure_code="worker_report_invalid",
                 failure_summary="shell interpreters are not permitted in safe commands",
@@ -1634,6 +1635,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 revision="e" * 40, patchset=5, profile="engineering",
                 state="running",
             )
+            store.record_message("ps5", "agent", "Patchset uploaded, replies posted.")
             store.finish_session(
                 "ps5", "failed", failure_code="worker_report_invalid",
                 failure_summary="shell interpreters are not permitted in safe commands",
@@ -1698,6 +1700,61 @@ class PatchWatcherTests(AppGlobalsIsolated):
 
             # Nothing is hidden: the abandoned run is in the failure listing.
             self.assertIn("pw-review-35302-ps5-left", app.failed_runs_html())
+
+    def test_a_run_that_answered_nothing_is_not_a_red_verdict_on_the_row(self):
+        """The row said "ready to act on 6 unresolved comment(s) at the next
+        check" directly above a red "Failed -- session exceeded policy
+        deadline", from a run reaped while the host slept.  A run whose event
+        is released answered nothing about the patch, which is the same
+        non-statement as a verdict on a replaced patchset."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = app.initialize_session_store(root / "s.sqlite3")
+            app.initialize_automation_store(root / "a.sqlite3")
+            standing = app.initialize_standing_policy_store(root / "p.json")
+            standing.save(app.PatchAutomationPolicy.for_preset("68845", "own"))
+            record, _ = app.add_patch("https://review.whamcloud.com/c/68845")
+            record.update(change_number=68845, patchset=2, revision_sha="d" * 40,
+                          jenkins="PASS", maloo="PASS", unresolved=6)
+            app.sync_automation_patch(record)
+
+            store.register_pinned_session(
+                "reaped", patch_id="68845", run_id="pw-review-68845-ps2-reaped",
+                revision="d" * 40, patchset=2, profile="engineering",
+                state="running",
+            )
+            store.record_message("reaped", "agent", "Let me write the changes.")
+            store.finish_session(
+                "reaped", "failed", failure_code="agent_inactivity_timeout",
+                failure_summary="Session exceeded policy deadline 2026-09-14T23:46:39+00:00",
+            )
+
+            row = app._patch_run_html(record)
+            self.assertIn("pw-review-68845-ps2-reaped", row)
+            self.assertIn("tone-neutral", row)
+            self.assertNotIn("tone-bad", row)
+            # Still said, so a host that cannot start agents does not go quiet
+            # on every row at once -- just not in the red reserved for a
+            # verdict on the patch.
+            self.assertIn("policy deadline", row)
+            self.assertNotIn("run-failure-line", row)
+
+            # A run that answered is a verdict, and still looks like one.
+            store.register_pinned_session(
+                "answered", patch_id="68845",
+                run_id="pw-review-68845-ps2-answered", revision="d" * 40,
+                patchset=2, profile="engineering", state="running",
+            )
+            store.finish_session(
+                "answered", "failed", failure_code="worker_report_failed",
+                failure_summary="checkpatch rejected every attempt",
+                result={"schema": "patch-watcher-engineering-report/v1",
+                        "state": "failed", "summary": "I could not do it."},
+            )
+            answered = app._patch_run_html(record)
+            self.assertIn("tone-bad", answered)
+            self.assertIn("checkpatch rejected every attempt", answered)
 
     def test_a_run_waiting_on_you_is_labelled_counted_and_explained(self):
         """The in-console channel: a paused run shows on the patch row, links

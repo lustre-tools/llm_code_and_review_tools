@@ -3933,9 +3933,18 @@ def _patch_run_html(patch):
             # red Failed from a patchset 5 run that had in fact uploaded that
             # very patchset.
             superseded = not _run_is_for_current_patchset(patch, last)
+            # A run that answered nothing about the patch is the same kind of
+            # non-statement.  That is precisely why its event is released, and
+            # the line above this one then says the work is queued -- a red
+            # Failed underneath contradicts it.  Change 68845 read "ready to
+            # act on 6 unresolved comments" over "Failed: session exceeded
+            # policy deadline", from a run reaped while the host slept.
+            unanswered = _run_left_its_event_unhandled(last)
             if superseded:
                 tone = "neutral"
                 outcome += f" on PS {int(last.patchset)}"
+            elif unanswered:
+                tone = "neutral"
             else:
                 tone = "good" if last.state == "succeeded" else "bad"
             why = ""
@@ -3953,8 +3962,12 @@ def _patch_run_html(patch):
                 and not superseded
             ):
                 text = " ".join(str(failure_summary or failure_code).split())
+                # Kept, because a host that cannot start agents must not go
+                # quiet on every row at once -- but not in red, which is the
+                # part that read as a broken patch.
+                style = "detail" if unanswered else "detail run-failure-line"
                 why = (
-                    f"<div class='detail run-failure-line'>{escape(text[:160])}"
+                    f"<div class='{style}'>{escape(text[:160])}"
                     + ("…" if len(text) > 160 else "") + "</div>"
                 )
             last_html = (
