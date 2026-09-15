@@ -51,15 +51,23 @@ def metric_values(rendered):
 
 
 def owned_vms_by_session(rendered):
-    """Map each rendered session to the list of VMs it is shown as owning.
+    """Map each owning run to the guests its rows claim.
 
-    Structural markers only, so display copy can change freely.
+    One flat table now, so ownership is read off each guest's own row rather
+    than out of a nested block.  Structural markers only, so display copy can
+    change freely.
     """
     owned = {}
-    for block in re.findall(r"<details id='session-detail-\d+'>(.*?)</details>", rendered):
-        session = re.search(r"<strong>Session:</strong> (.*?) ·", block).group(1)
-        section = re.search(r"<section class='owned-vms'.*?</section>", block).group(0)
-        owned[session] = re.findall(r"<th scope='row'>(.*?)</th>", section)
+    for row in re.findall(r"<tr>(?:(?!</tr>).)*</tr>", rendered, flags=re.S):
+        name = re.search(r"<th scope='row'>(.*?)</th>", row)
+        if not name:
+            continue
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row, flags=re.S)
+        if not cells:
+            continue
+        owner = cells[-1].strip()
+        if owner and "no owner" not in owner:
+            owned.setdefault(owner, []).append(name.group(1))
     return owned
 
 
@@ -151,88 +159,22 @@ class ResourceViewTests(unittest.TestCase):
         self.assertEqual(values["Configured LTVM guest memory"], "2 GiB")
         self.assertIn(">projected-vm<", rendered)
 
-    def test_dataclass_session_row_is_labelled_and_all_dynamic_text_is_escaped(self):
-        session = Session(
-            id="session<&'\"",
-            patch={"title": "LU-1 <unsafe>"},
-            run_id="run&1",
-            profile="engineering<script>",
-            state="waiting_human",
-            elapsed_seconds=3661,
-            current_step="test <suite>",
-            process_tree_rss_bytes=512 * MIB,
-            messages=[{"role": "agent", "content": "last & <message>"}],
-        )
-        rendered = resource_views.render_resource_dashboard({}, [session], [])
-        for unsafe in ("<unsafe>", "<script>", "<suite>", "<message>"):
-            self.assertNotIn(unsafe, rendered)
-        self.assertIn("LU-1 &lt;unsafe&gt;", rendered)
-        self.assertIn("run&amp;1", rendered)
-        self.assertIn("State: Waiting human", rendered)
-        self.assertIn("1h 1m 1s", rendered)
-        self.assertIn("512 MiB", rendered)
-        self.assertIn("last &amp; &lt;message&gt;", rendered)
-        self.assertIn("tone-warn", rendered)
+    def test_a_guests_owner_label_is_escaped(self):
+        """Run ids and session ids reach the page as text.
 
-    def test_recent_messages_are_tail_bounded(self):
-        session = {
-            "id": "s1",
-            "messages": [
-                {"role": "user", "content": "first"},
-                {"role": "agent", "content": "second"},
-                {"role": "agent", "content": "third"},
-                {"role": "agent", "content": "fourth"},
-            ],
-        }
-        rendered = resource_views.render_resource_dashboard(
-            {}, [session], [], max_messages=2
-        )
-        recent = rendered.split("<section class='recent-messages'", 1)[1].split(
-            "</section>", 1
-        )[0]
-        self.assertNotIn("first", recent)
-        self.assertNotIn("second", recent)
-        self.assertIn("third", recent)
-        self.assertIn("fourth", recent)
-        self.assertIn("2 older message(s) omitted", recent)
-        self.assertEqual(recent.count("<li>"), 2)
+        This replaced three tests of the session-row card: two covered the
+        recent-message list, which now lives on the run's own page and is
+        tested there, and the third covered escaping in a row that no longer
+        exists.  The escaping invariant does still apply, to the one place a
+        session's own text now reaches the guest table.
+        """
 
-    def test_messages_mapping_supports_session_and_message_dataclasses(self):
-        @dataclass
-        class StoredSession:
-            session_id: str
-            patch_id: str
-            run_id: str
-            profile: str
-            state: str
-            started_at: str
-            last_qualifying_activity_at: str
-
-        @dataclass
-        class StoredMessage:
-            author: str
-            body: str
-            created_at: str
-
-        session = StoredSession(
-            session_id="stored-1",
-            patch_id="LU-77",
-            run_id="run-77",
-            profile="triage",
-            state="running",
-            started_at="2026-08-30T12:00:00+00:00",
-            last_qualifying_activity_at="2026-08-30T12:05:00+00:00",
-        )
-        messages = {
-            "stored-1": [StoredMessage("human", "please <check>", "12:05")]
-        }
-        rendered = resource_views.render_resource_dashboard(
-            {}, [session], [], messages_by_session=messages
-        )
-        self.assertIn("LU-77", rendered)
-        self.assertIn("human", rendered)
-        self.assertIn("please &lt;check&gt;", rendered)
-        self.assertIn("2026-08-30T12:05:00+00:00", rendered)
+        sessions = [{"id": "s1 <unsafe>", "owner_id": "patch-watcher:s1"}]
+        vms = [{"name": "co1-<script>", "owner_id": "patch-watcher:s1"}]
+        rendered = resource_views.render_resource_dashboard({}, sessions, vms)
+        self.assertIn("s1 &lt;unsafe&gt;", rendered)
+        self.assertIn("co1-&lt;script&gt;", rendered)
+        self.assertNotIn("<script>", rendered)
 
     def test_vms_associate_by_exact_owner_and_unmatched_vms_stay_other(self):
         sessions = [
@@ -250,9 +192,12 @@ class ResourceViewTests(unittest.TestCase):
             owned_vms_by_session(rendered),
             {"s1": ["owned-one"], "s2": ["owned-two"]},
         )
-        other = rendered.split("<section class='other-vms", 1)[1]
-        self.assertIn("legacy", other)
-        self.assertIn("similar-but-external", other)
+        # Every guest is in the one table, owned or not; the unmatched ones
+        # say so rather than living in a second card whose heading only made
+        # sense once you had read the first.
+        self.assertIn("legacy", rendered)
+        self.assertIn("similar-but-external", rendered)
+        self.assertEqual(rendered.count("class='vm-unowned'"), 2)
         for name in ("owned-one", "owned-two", "legacy", "similar-but-external"):
             self.assertEqual(rendered.count(f">{name}<"), 1, name)
 
@@ -265,11 +210,11 @@ class ResourceViewTests(unittest.TestCase):
             {}, sessions, [{"name": "ambiguous", "owner_id": "duplicate"}]
         )
         self.assertEqual(rendered.count(">ambiguous<"), 1)
-        other = rendered.split("<section class='other-vms", 1)[1]
-        self.assertIn(">ambiguous<", other)
-        # Neither candidate adopts the VM: both sessions are rendered, and
-        # neither one owns anything.
-        self.assertEqual(owned_vms_by_session(rendered), {"s1": [], "s2": []})
+        # Neither candidate adopts it.  In one flat table that reads as the
+        # guest saying it has no owner, which is the fact worth surfacing:
+        # nothing will clean it up automatically.
+        self.assertEqual(owned_vms_by_session(rendered), {})
+        self.assertIn("vm-unowned", rendered)
 
     def test_guest_capacity_and_actual_host_rss_are_separate(self):
         vm = {
@@ -319,12 +264,12 @@ class ResourceViewTests(unittest.TestCase):
             "quality": "good",
             "errors": [],
         }
-        rendered = resource_views.render_other_vms([vm])
+        rendered = resource_views.render_ltvm_guests((), [vm])
         body = rendered.split("<tbody>", 1)[1]
         for expected in (
             ">co1-diotests<", "State: Running", ">2<", ">192.168.100.204<",
             ">4 GiB<", "2.4 GiB", "/proc/2520875/status VmRSS", ">2520875<",
-            ">pid:2520851<",
+            "class='vm-unowned'",  # no running run matches, so it says so
         ):
             self.assertIn(expected, body)
         self.assertNotIn("unknown", body)
@@ -342,7 +287,7 @@ class ResourceViewTests(unittest.TestCase):
             "process_id": 47338, "vcpus": 2, "ip": "192.168.100.32",
             "host_memory_source": None, "quality": "good", "errors": [],
         }
-        rendered = resource_views.render_other_vms([vm])
+        rendered = resource_views.render_ltvm_guests((), [vm])
         self.assertIn("Sample quality: good", rendered)
         self.assertNotIn("Sample age unknown", rendered)
 
@@ -351,7 +296,7 @@ class ResourceViewTests(unittest.TestCase):
         self.assertIn("Host:</strong> unknown", rendered)
         self.assertIn("Sample age unknown", rendered)
         self.assertNotIn("Running now", rendered)
-        self.assertIn("Other LTVM VMs (0)", rendered)
+        self.assertIn("LTVM guests (0)", rendered)
         self.assertNotIn("None", rendered)
 
 

@@ -3958,10 +3958,13 @@ class PatchWatcherTests(AppGlobalsIsolated):
             app._RESOURCE_SNAPSHOT = {"host_memory": {}, "ltvm": {"vms": []}}
             app._RESOURCE_SNAPSHOT_MONOTONIC = app.time.monotonic()
             rendered = app.resource_dashboard_html()
-        self.assertIn("Running now (1) and the guests they hold", rendered)
-        self.assertIn("LU-12345", rendered)
-        self.assertIn("Need a human decision", rendered)
-        self.assertIn("State: Waiting human", rendered)
+        # The dashboard is about resources now, not about runs: what a run is
+        # doing, and what it last said, is the Runs card's job and the run
+        # page's, and saying it twice in different words is what made the old
+        # session card impossible to explain.
+        self.assertIn("LTVM guests", rendered)
+        self.assertNotIn("Need a human decision", rendered)
+        self.assertNotIn("Active managed sessions", rendered)
         # Resource inventory is observation-only. Phase 0C controls live on
         # the revision-pinned run detail page with token confirmation.
         self.assertNotIn("action='/sessions/guidance'", rendered)

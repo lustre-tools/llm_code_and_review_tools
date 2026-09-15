@@ -1800,7 +1800,7 @@ def _time_notices_html():
 def resource_dashboard_html(*, force=False):
     """Render current host, managed-session, and LTVM resource status."""
     snapshot = refresh_resource_status(force=force)
-    sessions, messages = _session_dashboard_records()
+    sessions, _messages = _session_dashboard_records()
     if hasattr(snapshot, "to_dict"):
         snapshot = snapshot.to_dict()
     if isinstance(snapshot, dict):
@@ -1814,12 +1814,7 @@ def resource_dashboard_html(*, force=False):
         ]
         host_memory["session_process_rss_bytes"] = sum(measured_session_memory)
         snapshot["host_memory"] = host_memory
-    return render_resource_dashboard(
-        snapshot,
-        sessions,
-        messages_by_session=messages,
-        csrf_token=CSRF_TOKEN,
-    )
+    return render_resource_dashboard(snapshot, sessions, csrf_token=CSRF_TOKEN)
 
 
 def send_status_email(config=None, *, runner=subprocess.run):

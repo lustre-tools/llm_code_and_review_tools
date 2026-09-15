@@ -361,29 +361,6 @@ def _message_summary(session, messages):
     return UNKNOWN
 
 
-def _render_messages(messages, limit):
-    bounded = messages[-limit:] if limit else []
-    omitted = len(messages) - len(bounded)
-    if not bounded:
-        return "<p class='empty'>No recent messages available.</p>"
-    rows = []
-    for message in bounded:
-        role = _plain(_get(message, "role", "author", "kind", "type"), "Message")
-        timestamp = _plain(_get(message, "created_at", "timestamp", "time"), "")
-        time_html = f" <time>{escape(timestamp)}</time>" if timestamp else ""
-        rows.append(
-            "<li>"
-            f"<strong>{escape(role)}</strong>{time_html}"
-            f"<div class='message-content'>{escape(_message_content(message))}</div>"
-            "</li>"
-        )
-    omitted_html = (
-        f"<p class='bounded-note'>{omitted} older message(s) omitted.</p>"
-        if omitted else ""
-    )
-    return omitted_html + "<ol class='session-messages'>" + "".join(rows) + "</ol>"
-
-
 def _vm_name(vm):
     return _plain(_get(vm, "name"))
 
@@ -437,7 +414,7 @@ def _vm_totals(vms):
     return running, configured, measured
 
 
-def _render_vm_table(vms, *, show_owner, csrf_token=None):
+def _render_vm_table(vms, *, show_owner, csrf_token=None, owner_labels=None):
     """Render one LTVM guest table from the fields the sampler really writes.
 
     ``LTVMVMStatus.to_dict`` supplies name, state, owner_id, vcpus, ip,
@@ -454,7 +431,15 @@ def _render_vm_table(vms, *, show_owner, csrf_token=None):
         detail = measurement or (f"Sample quality: {quality}" if quality else "Not measured")
         owner_cell = ""
         if show_owner:
-            owner_cell = f"<td>{escape(_plain(_get(vm, 'owner_id')))}</td>"
+            # The run that owns it, when one does.  A raw owner id names a
+            # session nobody can look up from here; a run id is the thing the
+            # rest of the console is keyed on, and "no owner" is the word for
+            # a guest that outlived whatever made it.
+            named = (owner_labels or {}).get(_vm_name(vm))
+            owner_cell = (
+                f"<td>{escape(named)}</td>" if named
+                else "<td class='vm-unowned'>no owner</td>"
+            )
         control_cell = _vm_controls(vm, csrf_token) if csrf_token else ""
         rows.append(
             "<tr>"
@@ -521,173 +506,70 @@ def _associate_vms(sessions, vms):
     return owned, other
 
 
-def render_active_sessions(
-    sessions,
-    vms=(),
-    *,
-    max_messages=DEFAULT_MESSAGE_LIMIT,
-    csrf_token=None,
-    messages_by_session=None,
-):
-    """Render active managed-session rows and return ``(html, other_vms)``.
+def render_ltvm_guests(sessions, vms=(), *, csrf_token=None):
+    """Every LTVM guest on this host, in one table, with the run that owns it.
 
-    ``sessions`` should already be the caller's active-session selection.  VM
-    ownership is resolved only from exact durable owner identifiers; name
-    similarity is never used.  Ambiguous and unmatched VMs are returned in the
-    second tuple item for the separate Other LTVM VMs group.
+    This replaced two cards.  "Active managed sessions" listed the runs that
+    were going, in the Runs card's own columns, with each run's guests folded
+    inside it; "Other LTVM VMs" listed the guests that matched no run, under a
+    heading that only made sense if you had read the first card.  Between them
+    a guest appeared in one place or the other depending on a matching rule,
+    which is exactly the thing a reader cannot see.
+
+    One table, every guest, and a column saying which run owns it.  Ownership
+    is still resolved only from exact durable owner identifiers -- never name
+    similarity -- and a guest that matches no live run says "no owner", which
+    is the thing actually worth noticing: it outlived whatever made it.
     """
     session_items = _items(sessions)
     vm_items = _items(vms)
-    try:
-        limit = int(max_messages)
-    except (TypeError, ValueError):
-        limit = DEFAULT_MESSAGE_LIMIT
-    limit = max(0, min(limit, MAX_MESSAGE_LIMIT))
-    owned, other = _associate_vms(session_items, vm_items)
-
-    rows = []
+    owned, _other = _associate_vms(session_items, vm_items)
+    labels = {}
     for index, session in enumerate(session_items):
-        attached_messages = _get(session, "messages", "recent_messages")
-        if attached_messages is None and messages_by_session is not None:
-            session_key = _session_id(session)
-            if isinstance(messages_by_session, Mapping):
-                attached_messages = messages_by_session.get(session_key)
-        messages = _items(attached_messages)
-        patch = _record_label(
-            session,
-            ("patch", "patch_title", "patch_id", "change"),
-            ("title", "subject", "change_id", "url"),
-        )
-        run = _record_label(session, ("run", "run_id"), ("id", "run_id", "name"))
-        profile = _plain(_get(session, "profile", "run_profile"))
-        elapsed = _duration(
-            session,
-            ("elapsed",),
-            ("elapsed_seconds", "runtime_seconds"),
-            ("started_at", "started"),
-        )
-        current_step = _plain(_get(session, "current_step", "step"))
-        last_message = _message_summary(session, messages)
-        process_memory = format_bytes(
-            _get(
-                session,
-                "process_tree_rss_bytes",
-                "process_tree_memory_bytes",
-                "process_rss_bytes",
-            )
-        )
-        memory_freshness = _sample_freshness(
-            session,
-            age_names=("memory_sample_age_seconds", "resource_sample_age_seconds"),
-        )
-        activity = _plain(
-            _get(
-                session,
-                "last_qualifying_activity",
-                "last_qualifying_activity_at",
-                "last_activity_at",
-            ),
-        )
-        session_id = _session_id(session)
-        detail_id = f"session-detail-{index}"
-        rows.append(
-            "<tr class='session-row'>"
-            f"<th scope='row'>{escape(patch)}</th><td>{escape(run)}</td>"
-            f"<td>{escape(profile)}</td><td>{_status_badge(_get(session, 'state', 'status'))}</td>"
-            f"<td>{escape(elapsed)}</td><td>{escape(current_step)}</td>"
-            f"<td>{escape(last_message)}</td>"
-            f"<td>{escape(process_memory)}<small>{escape(memory_freshness)}</small></td></tr>"
-            "<tr class='session-detail-row'><td colspan='8'>"
-            f"<details id='{detail_id}'><summary>Session details · "
-            f"{len(owned[index])} owned VM(s) · recent messages</summary>"
-            f"<p><strong>Session:</strong> {escape(session_id)} · "
-            f"<strong>Last qualifying activity:</strong> {escape(activity)}</p>"
-            "<section class='recent-messages' aria-label='Recent session messages'>"
-            f"<h4>Recent messages (showing at most {limit})</h4>"
-            f"{_render_messages(messages, limit)}</section>"
-            "<section class='owned-vms' aria-label='Owned LTVM VMs'>"
-            f"<h4>Owned LTVM VMs ({len(owned[index])})</h4>"
-            f"{_render_vm_table(owned[index], show_owner=False)}</section>"
-            "</details></td></tr>"
-        )
+        raw = _get(session, "run", "run_id")
+        run = str(raw) if raw not in (None, "") else _session_id(session)
+        for vm in owned[index]:
+            labels[_vm_name(vm)] = run or "a running run"
 
-    if not rows:
-        # Nothing is running, so there is nothing for this to say.  It used to
-        # say it in a card of its own, restating the Runs card's own columns --
-        # patch, run, state, elapsed, last message -- under a heading nobody
-        # could explain.  What it uniquely knows is which guests a LIVE run
-        # owns, which is how an orphan is spotted, and that is worth a card
-        # exactly while there is a live run.  The matching above still happens
-        # either way: it is what decides which guests are unowned.
-        return "", other
-    html = (
-        "<section class='active-sessions resource-card' aria-labelledby='active-sessions-title'>"
-        f"<h2 id='active-sessions-title'>Running now ({len(session_items)}) and the "
-        "guests they hold</h2>"
-        "<table class='session-table'><thead><tr>"
-        "<th scope='col'>Patch</th><th scope='col'>Run</th>"
-        "<th scope='col'>Profile</th><th scope='col'>State</th>"
-        "<th scope='col'>Elapsed</th><th scope='col'>Current step</th>"
-        "<th scope='col'>Last message</th><th scope='col'>Process-tree memory</th>"
-        f"</tr></thead><tbody>{''.join(rows)}</tbody></table></section>"
-    )
-    return html, other
-
-
-def render_other_vms(vms, *, csrf_token=None):
-    """Render inventoried LTVM VMs that are not owned by a shown session.
-
-    Folded by default: on a working host this is a dozen long-lived guests
-    that the operator already knows about, and a full table of them pushes
-    everything else off the screen. What does not fold is the cost -- how many
-    are running and what they are holding -- because that is the number that
-    decides whether there is room to start anything else.
-    """
-
-    vm_items = _items(vms)
     running, configured, measured = _vm_totals(vm_items)
+    unowned = [vm for vm in vm_items if _vm_name(vm) not in labels]
     summary = (
-        f"Other LTVM guests ({len(vm_items)}) · {running} running · "
+        f"{len(vm_items)} guest(s) · {running} running · "
         f"{format_bytes(measured)} measured host RSS · "
         f"{format_bytes(configured)} configured guest memory"
     )
+    if unowned:
+        summary += f" · {len(unowned)} with no owner"
     return (
         "<section class='other-vms resource-card' aria-labelledby='other-vms-title'>"
-        f"<h2 id='other-vms-title'>Other LTVM VMs ({len(vm_items)})</h2>"
+        f"<h2 id='other-vms-title'>LTVM guests ({len(vm_items)})</h2>"
         f"<p class='other-vms-headline'>{escape(summary)}</p>"
         "<details class='other-vms-detail'><summary>Show each guest</summary>"
-        "<p>These VMs have no unambiguous owner match among the managed sessions "
-        "shown above. Patch Watcher never adopts them for automatic cleanup; the "
-        "controls below are yours, and act immediately on this host.</p>"
-        f"{_render_vm_table(vm_items, show_owner=True, csrf_token=csrf_token)}"
-        "</details></section>"
+        "<p>A guest with no owner matched no running run. Patch Watcher never "
+        "adopts one for automatic cleanup, so the controls here are yours and "
+        "act immediately on this host.</p>"
+        + _render_vm_table(
+            vm_items, show_owner=True, csrf_token=csrf_token, owner_labels=labels
+        )
+        + "</details></section>"
     )
 
 
-def render_resource_dashboard(
-    host,
-    sessions=(),
-    vms=None,
-    *,
-    max_messages=DEFAULT_MESSAGE_LIMIT,
-    csrf_token=None,
-    messages_by_session=None,
-):
-    """Render host memory, active sessions with owned VMs, and other LTVM VMs."""
+def render_resource_dashboard(host, sessions=(), vms=None, *, csrf_token=None):
+    """Render host memory and every LTVM guest, with the run that owns it.
+
+    ``sessions`` is still taken, and still only to resolve guest ownership.
+    It no longer produces a card of its own: what a run is doing and what it
+    last said is the Runs card's job, and the two message parameters this used
+    to accept were feeding a display that has moved to the run's own page.
+    """
     host = _project(host)
     if vms is None:
         inventory = _get(host, "ltvm")
         vms = _get(inventory, "vms", default=[])
-    sessions_html, other = render_active_sessions(
-        sessions,
-        vms,
-        max_messages=max_messages,
-        csrf_token=csrf_token,
-        messages_by_session=messages_by_session,
-    )
     return (
         "<div class='resource-dashboard'>"
-        f"{render_host_memory_summary(host)}{sessions_html}"
-        f"{render_other_vms(other, csrf_token=csrf_token)}"
+        f"{render_host_memory_summary(host)}"
+        f"{render_ltvm_guests(sessions, vms, csrf_token=csrf_token)}"
         "</div>"
     )
