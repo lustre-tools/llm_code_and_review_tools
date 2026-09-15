@@ -145,6 +145,7 @@ class MalooReviewSessions:
     change_number: int
     patchset: int
     sessions: tuple[MalooSession, ...]
+    revision: str = ""
 
     @property
     def enforced_failed(self) -> tuple[MalooSession, ...]:
@@ -157,6 +158,7 @@ class MalooReviewSessions:
         return {
             "change_number": self.change_number,
             "patchset": self.patchset,
+            "revision": self.revision,
             "sessions": [session.to_dict() for session in self.sessions],
             "enforced_failed": [session.to_dict() for session in self.enforced_failed],
         }
@@ -635,6 +637,7 @@ def normalize_review_sessions(data: Mapping[str, Any]) -> MalooReviewSessions:
     data = _mapping(data, operation)
     change = _positive_int(data.get("review_id"), "Gerrit change number")
     patchset = _positive_int(data.get("patch"), "patchset number")
+    revision = _revision_sha(_text(data.get("commit", "")))
     sessions = []
     for raw_session in _sequence(data.get("sessions", ()), operation):
         session = dict(_mapping(raw_session, operation))
@@ -642,7 +645,7 @@ def normalize_review_sessions(data: Mapping[str, Any]) -> MalooReviewSessions:
         # session, except it has no suite list.
         session.setdefault("suites", [])
         sessions.append(normalize_session(session))
-    return MalooReviewSessions(change, patchset, tuple(sessions))
+    return MalooReviewSessions(change, patchset, tuple(sessions), revision)
 
 
 def normalize_failures(data: Mapping[str, Any]) -> MalooFailures:
@@ -969,23 +972,40 @@ class MalooAdapter:
         return normalize_session(self._invoke("session", [sid]))
 
     def get_review_sessions(
-        self, change_number: int, patchset: int
+        self, change_number: int, patchset: int, revision_sha: str
     ) -> MalooReviewSessions:
+        """Read the test sessions for one exact revision.
+
+        Asked for by revision, not by change and patchset, because Maloo
+        stores no change number: it is not a column, and the API answered a
+        query naming one by ignoring it and matching everything.  The change
+        and patchset are still passed and still checked -- they label the
+        answer, and the caller knows them -- but the revision is what selects.
+        """
         change = _positive_int(change_number, "Gerrit change number")
         patch = _positive_int(patchset, "patchset number")
+        revision = _revision_sha(revision_sha)
         review = normalize_review_sessions(
-            self._invoke("review", [str(change), "--patch", str(patch)])
+            self._invoke(
+                "review",
+                [str(change), "--patch", str(patch), "--commit", revision],
+            )
         )
-        # Verify Maloo answered about the change and patchset that were asked
-        # for.  Without this, another change's failed sessions and their bug
-        # links were written into this patch's durable observation ledger and
+        # Verify Maloo answered about the revision that was asked for.
+        # Without this, another change's failed sessions and their bug links
+        # were written into this patch's durable observation ledger and
         # rendered as its failures; only reconcile_remote_retest's much later
         # check stopped the remote write.  The same shape as get_bug_links.
-        if review.change_number != change or review.patchset != patch:
+        if (
+            review.change_number != change
+            or review.patchset != patch
+            or review.revision != revision
+        ):
             raise MalooAdapterError(
                 MalooErrorCode.INVALID_RESPONSE, "review",
-                "Maloo answered about a different review: asked "
-                f"{change}/{patch}, got {review.change_number}/{review.patchset}",
+                "Maloo answered about a different revision: asked "
+                f"{change}/{patch} at {revision}, got "
+                f"{review.change_number}/{review.patchset} at {review.revision}",
             )
         return review
 
@@ -1019,7 +1039,7 @@ class MalooAdapter:
         )
 
     def get_enforced_failures(
-        self, change_number: int, patchset: int
+        self, change_number: int, patchset: int, revision_sha: str
     ) -> tuple[MalooEnforcedSessionFailure, ...]:
         """Read all evidence, grouped once per enforced session/test group.
 
@@ -1027,7 +1047,7 @@ class MalooAdapter:
         unique enforcing failed session and ``bugs --related`` once per failed
         suite, producing the unit on which a later retest decision is made.
         """
-        review = self.get_review_sessions(change_number, patchset)
+        review = self.get_review_sessions(change_number, patchset, revision_sha)
         grouped = []
         seen = set()
         for session in review.enforced_failed:
@@ -1167,8 +1187,8 @@ class MalooAdapter:
     ) -> MalooRetestReconciliation:
         """Reconcile an uncertain request using exact remote read evidence.
 
-        The queue lookup is pinned to the full revision SHA and the review
-        lookup to the exact change/patchset.  A matching queued/running group
+        Both lookups are pinned to the full revision SHA.  A matching
+        queued/running group
         proves a pending retest.  A different, newer session in the same
         test-group proves the request was already fulfilled.  Absence of both
         remains ``not_observed`` and does not authorize an automatic retry.
@@ -1177,7 +1197,9 @@ class MalooAdapter:
         revision = _revision_sha(revision_sha)
         group = _identifier(test_group, "test group")
         queue = queue_evidence or self.get_queue(revision)
-        review = review_evidence or self.get_review_sessions(change_number, patchset)
+        review = review_evidence or self.get_review_sessions(
+            change_number, patchset, revision
+        )
         if queue.requested_revision != revision:
             raise MalooAdapterError(
                 MalooErrorCode.INVALID_INPUT, "reconcile_retest",
@@ -1192,6 +1214,11 @@ class MalooAdapter:
             raise MalooAdapterError(
                 MalooErrorCode.INVALID_INPUT, "reconcile_retest",
                 "Review evidence is for a different patchset",
+            )
+        if review.revision and review.revision != revision:
+            raise MalooAdapterError(
+                MalooErrorCode.INVALID_INPUT, "reconcile_retest",
+                "Review evidence is for a different revision",
             )
 
         pending_entries = [

@@ -432,7 +432,7 @@ class RetestController:
         notice = None
         try:
             groups = self.maloo.get_enforced_failures(
-                patch.change_number, patch.patchset_number
+                patch.change_number, patch.patchset_number, patch.revision_sha
             )
             queue = self.maloo.get_queue(patch.revision_sha)
             for group in groups:

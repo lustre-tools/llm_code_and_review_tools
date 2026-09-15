@@ -99,9 +99,11 @@ class FakeMaloo:
         self.reads = 0
         self.read_error = None
 
-    def get_enforced_failures(self, change_number, patchset):
+    def get_enforced_failures(self, change_number, patchset, revision_sha):
         self.reads += 1
-        assert (change_number, patchset) == (101, 3)
+        # The revision is what selects the sessions: Maloo stores no change
+        # number, so a lookup that did not carry one matched every patch.
+        assert (change_number, patchset, revision_sha) == (101, 3, SHA)
         if self.read_error is not None:
             raise self.read_error
         return self.groups

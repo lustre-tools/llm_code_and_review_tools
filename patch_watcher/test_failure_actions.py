@@ -57,8 +57,10 @@ class FakeMaloo:
         self.failure_target_present = True
         self.enforced_failure_calls = []
 
-    def get_enforced_failures(self, change_number, patchset):
-        self.enforced_failure_calls.append((change_number, patchset))
+    def get_enforced_failures(self, change_number, patchset, revision_sha):
+        self.enforced_failure_calls.append(
+            (change_number, patchset, revision_sha)
+        )
         if not self.failure_target_present:
             return ()
         return (
@@ -234,7 +236,7 @@ class FailureActionControllerTests(unittest.TestCase):
         self.assertEqual(len(self.maloo.retest_calls), 1)
         self.assertEqual(
             self.maloo.enforced_failure_calls,
-            [(68160, 13), (68160, 13)],
+            [(68160, 13, REVISION), (68160, 13, REVISION)],
         )
 
     def test_link_is_suppressed_when_exact_failure_target_is_stale(self):

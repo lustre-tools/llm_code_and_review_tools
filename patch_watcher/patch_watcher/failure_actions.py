@@ -404,7 +404,8 @@ class FailureActionController:
     def _failure_target_current(self, request: Mapping[str, Any]) -> bool:
         """Require the exact planned session/group/suite to still be enforced."""
         failures = self.maloo.get_enforced_failures(
-            int(request["change_number"]), int(request["patchset"])
+            int(request["change_number"]), int(request["patchset"]),
+            str(request["revision_sha"]),
         )
         for unit in failures:
             session = unit.session

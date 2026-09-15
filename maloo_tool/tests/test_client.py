@@ -132,12 +132,36 @@ class TestGet:
 
 class TestGetPaginated:
     def test_single_page(self, client):
-        """When page has < 200 records, no second request."""
+        """A page smaller than the first one ends the walk.
+
+        This asserted that a 50-record page proved the end, on the belief that
+        pages hold 200.  They hold 1500, so the test that never fired sent
+        every unbounded call to the end of the table.  The size is whatever
+        the first page turns out to be, and only a short or empty page after
+        it means there is no more.
+        """
         page = [{"id": str(i)} for i in range(50)]
-        client._get = MagicMock(return_value=page)
+        client._get = MagicMock(side_effect=[page, []])
         result = client._get_paginated("test_sessions", {})
         assert len(result) == 50
-        assert client._get.call_count == 1
+        assert client._get.call_count == 2
+        assert client._get.call_args_list[1][0][1]["offset"] == 50
+
+    def test_page_size_is_not_assumed_to_be_two_hundred(self, client):
+        """The server's page is 1500; a full one is never the last."""
+        page1 = [{"id": str(i)} for i in range(1500)]
+        page2 = [{"id": str(i)} for i in range(1500, 1600)]
+        client._get = MagicMock(side_effect=[page1, page2])
+        result = client._get_paginated("code_reviews", {})
+        assert len(result) == 1600
+        assert client._get.call_count == 2
+        # Advanced by what was returned, not by a guessed 200, or most of
+        # each page is read again and the offset never reaches the end.
+        assert client._get.call_args_list[1][0][1]["offset"] == 1500
+
+    def test_empty_page_ends_the_walk(self, client):
+        client._get = MagicMock(side_effect=[[{"id": "1"}] * 10, []])
+        assert len(client._get_paginated("test_sessions", {})) == 10
 
     def test_multiple_pages(self, client):
         """Should fetch multiple pages until a short page."""
@@ -232,61 +256,55 @@ class TestGetSessions:
 
 
 # ---------------------------------------------------------------------------
-# find_sessions_by_review
+# find_sessions_by_commit
 # ---------------------------------------------------------------------------
 
-class TestFindSessionsByReview:
-    def test_via_code_reviews(self, client):
-        """Should find sessions through code_reviews endpoint."""
+class TestFindSessionsByCommit:
+    def test_queries_the_commit_column(self, client):
+        """A revision is a real column; a change number is not.
+
+        code_reviews carries commit_id and test_session_id, and the project,
+        branch and patch number sit inside its ``data`` blob.  The API ignores
+        an unknown parameter rather than rejecting it, so the old query by
+        review_id matched every row in the table.
+        """
         reviews = [
             {"test_session_id": "s1"},
             {"test_session_id": "s2"},
         ]
-        session_1 = {"id": "s1", "test_group": "full"}
-        session_2 = {"id": "s2", "test_group": "full"}
-
         client._get_paginated = MagicMock(return_value=reviews)
-        client.get_session = MagicMock(side_effect=[session_1, session_2])
-
-        result = client.find_sessions_by_review(64266)
-        assert len(result) == 2
-        client._get_paginated.assert_called_once_with(
-            "code_reviews", {"review_id": 64266}
+        client.get_session = MagicMock(
+            side_effect=[{"id": "s1"}, {"id": "s2"}]
         )
 
-    def test_fallback_to_test_queues(self, client):
-        """When code_reviews returns nothing, fall back to test_queues."""
-        queue_data = [{"id": "q1", "test_group": "full"}]
-        client._get_paginated = MagicMock(side_effect=[[], queue_data])
+        result = client.find_sessions_by_commit("A" * 40)
+        assert len(result) == 2
+        client._get_paginated.assert_called_once_with(
+            "code_reviews", {"commit_id": "a" * 40}
+        )
 
-        result = client.find_sessions_by_review(64266)
-        assert result == queue_data
-        calls = client._get_paginated.call_args_list
-        assert calls[0][0][0] == "code_reviews"
-        assert calls[1][0][0] == "test_queues"
-
-    def test_with_patch_number(self, client):
-        """Should pass patch number to the query."""
-        client._get_paginated = MagicMock(return_value=[])
-        client.find_sessions_by_review(64266, patch=3)
-        params = client._get_paginated.call_args[0][1]
-        assert params["review_id"] == 64266
-        assert params["review_patch"] == 3
-
-    def test_deduplicates_sessions(self, client):
-        """When multiple reviews point to same session, should deduplicate."""
-        reviews = [
-            {"test_session_id": "s1"},
-            {"test_session_id": "s1"},
-        ]
-        session = {"id": "s1", "test_group": "full"}
+    def test_deduplicates_and_orders_sessions(self, client):
+        reviews = [{"test_session_id": "s1"}, {"test_session_id": "s1"}]
         client._get_paginated = MagicMock(return_value=reviews)
-        client.get_session = MagicMock(return_value=session)
+        client.get_session = MagicMock(return_value={"id": "s1"})
 
-        result = client.find_sessions_by_review(64266)
+        result = client.find_sessions_by_commit("b" * 40)
         assert len(result) == 1
-        # get_session called once because set deduplicates
         client.get_session.assert_called_once_with("s1")
+
+    def test_rows_without_a_session_are_skipped(self, client):
+        client._get_paginated = MagicMock(
+            return_value=[{"test_session_id": ""}, {}]
+        )
+        client.get_session = MagicMock()
+        assert client.find_sessions_by_commit("c" * 40) == []
+        client.get_session.assert_not_called()
+
+    def test_an_empty_commit_is_refused(self, client):
+        client._get_paginated = MagicMock()
+        with pytest.raises(ValueError):
+            client.find_sessions_by_commit("")
+        client._get_paginated.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

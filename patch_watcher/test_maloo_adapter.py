@@ -154,6 +154,7 @@ class MalooAdapterTests(unittest.TestCase):
         review_data = {
             "review_id": 68160,
             "patch": 13,
+            "commit": revision,
             "sessions": [self.session_payload()],
         }
         queue_data = {
@@ -166,12 +167,13 @@ class MalooAdapterTests(unittest.TestCase):
         }
         runner = FakeRunner([result("review", review_data), result("queue", queue_data)])
         adapter = maloo_adapter.MalooAdapter(runner=runner)
-        review = adapter.get_review_sessions(68160, 13)
+        review = adapter.get_review_sessions(68160, 13, revision)
         queue = adapter.get_queue(revision)
         self.assertEqual(review.enforced_failed[0].session_id, SID)
         self.assertTrue(queue.entries[0].pending)
         self.assertEqual(runner.calls, [
-            ("maloo", "--envelope", "review", "68160", "--patch", "13"),
+            ("maloo", "--envelope", "review", "68160", "--patch", "13",
+             "--commit", revision),
             ("maloo", "--envelope", "queue", "--review", revision),
         ])
 
@@ -181,6 +183,7 @@ class MalooAdapterTests(unittest.TestCase):
         review_data = {
             "review_id": 68160,
             "patch": 13,
+            "commit": "7b77eeb0190d6d93880951533c2e1d1145780375",
             "sessions": [self.session_payload(), duplicate_session,
                          self.session_payload(session_id="99999999-2222-3333-4444-555555555555",
                                               enforcing=False)],
@@ -200,7 +203,8 @@ class MalooAdapterTests(unittest.TestCase):
             result("review", review_data), result("failures", failure_data),
             result("bugs", empty_bugs(SUITE)), result("bugs", empty_bugs(second_suite)),
         ])
-        grouped = maloo_adapter.MalooAdapter(runner=runner).get_enforced_failures(68160, 13)
+        grouped = maloo_adapter.MalooAdapter(runner=runner).get_enforced_failures(
+            68160, 13, "7b77eeb0190d6d93880951533c2e1d1145780375")
         self.assertEqual(len(grouped), 1)
         self.assertEqual(grouped[0].decision_key, (SID, "review-dne-part-1"))
         self.assertEqual(len(grouped[0].suite_bugs), 2)
@@ -564,7 +568,7 @@ class MalooAdapterTests(unittest.TestCase):
     def test_remote_reconciliation_fetches_only_queue_and_review_never_retest(self):
         revision = "7b77eeb0190d6d93880951533c2e1d1145780375"
         queue_data = {"filters": {"review_id": revision}, "queue_entries": []}
-        review_data = {"review_id": 68160, "patch": 13,
+        review_data = {"review_id": 68160, "patch": 13, "commit": revision,
                        "sessions": [self.session_payload()]}
         runner = FakeRunner([result("queue", queue_data), result("review", review_data)])
         outcome = maloo_adapter.MalooAdapter(runner=runner).reconcile_remote_retest(
@@ -681,10 +685,11 @@ class ExternalDataTests(unittest.TestCase):
         self.assertFalse(caught.exception.ambiguous)
 
     # ------------------------------------------------------ review identity
-    def review_payload(self, change, patch):
+    def review_payload(self, change, patch, commit="c" * 40):
         return {
             "review_id": change,
             "patch": patch,
+            "commit": commit,
             "sessions": [{
                 "session_id": SID, "test_group": "review-dne-part-1",
                 "test_name": "t", "test_host": "h", "submission": "2026-01-01",
@@ -697,22 +702,36 @@ class ExternalDataTests(unittest.TestCase):
         runner = FakeRunner([result("review", self.review_payload(99999, 7))])
         adapter = maloo_adapter.MalooAdapter(runner=runner)
         with self.assertRaises(maloo_adapter.MalooAdapterError) as caught:
-            adapter.get_review_sessions(101, 7)
+            adapter.get_review_sessions(101, 7, "c" * 40)
         self.assertEqual(
             caught.exception.code, maloo_adapter.MalooErrorCode.INVALID_RESPONSE
         )
-        self.assertIn("different review", caught.exception.message)
+        self.assertIn("different revision", caught.exception.message)
+
+    def test_review_answer_about_another_revision_is_rejected(self):
+        """The revision is what selected the sessions, so it is what has to
+        come back.  Maloo stores no change number: the change and patchset in
+        the answer are only the labels this tool passed in."""
+        runner = FakeRunner([
+            result("review", self.review_payload(101, 7, "d" * 40))
+        ])
+        adapter = maloo_adapter.MalooAdapter(runner=runner)
+        with self.assertRaises(maloo_adapter.MalooAdapterError) as caught:
+            adapter.get_review_sessions(101, 7, "c" * 40)
+        self.assertEqual(
+            caught.exception.code, maloo_adapter.MalooErrorCode.INVALID_RESPONSE
+        )
 
     def test_review_answer_about_another_patchset_is_rejected(self):
         runner = FakeRunner([result("review", self.review_payload(101, 9))])
         adapter = maloo_adapter.MalooAdapter(runner=runner)
         with self.assertRaises(maloo_adapter.MalooAdapterError):
-            adapter.get_review_sessions(101, 7)
+            adapter.get_review_sessions(101, 7, "c" * 40)
 
     def test_matching_review_answer_is_accepted(self):
         runner = FakeRunner([result("review", self.review_payload(101, 7))])
         adapter = maloo_adapter.MalooAdapter(runner=runner)
-        review = adapter.get_review_sessions(101, 7)
+        review = adapter.get_review_sessions(101, 7, "c" * 40)
         self.assertEqual((review.change_number, review.patchset), (101, 7))
 
     # ---------------------------------------------------------- identifiers

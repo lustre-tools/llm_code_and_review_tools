@@ -2805,7 +2805,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
             def get_bug_links(self, suite_id, related=False):
                 return MalooBugLinks(suite_id, ())
 
-            def get_enforced_failures(self, change_number, patchset):
+            def get_enforced_failures(self, change_number, patchset, revision_sha):
                 return (SimpleNamespace(
                     session=SimpleNamespace(
                         session_id="11111111-2222-3333-4444-555555555555",

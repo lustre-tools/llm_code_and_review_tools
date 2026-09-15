@@ -38,7 +38,18 @@ class MalooClient:
         params: dict[str, Any] | None = None,
         max_records: int = 0,
     ) -> list[dict[str, Any]]:
-        """GET with automatic pagination (200-record pages).
+        """GET every page of a result, whatever page size the server uses.
+
+        The page size was assumed to be 200 and is in fact 1500, so the
+        short-page test never fired and the offset advanced by less than each
+        page returned: every unbounded call re-read most of what it had
+        already collected and walked to the end of the table, holding all of
+        it.  One such call reached 1.4 GB.
+
+        The size is learned from the first page instead, and the offset
+        advances by what was actually returned.  The API has no page-size
+        parameter -- limit, per_page and page_size are all ignored -- so it
+        cannot be pinned from this end.
 
         Args:
             endpoint: API endpoint name.
@@ -48,15 +59,20 @@ class MalooClient:
         params = dict(params) if params else {}
         results: list[dict[str, Any]] = []
         offset = 0
+        page_size: int | None = None
         while True:
             if max_records > 0 and len(results) >= max_records:
                 break
             params["offset"] = offset
             page = self._get(endpoint, params)
-            results.extend(page)
-            if len(page) < 200:
+            if not page:
                 break
-            offset += 200
+            results.extend(page)
+            offset += len(page)
+            if page_size is None:
+                page_size = len(page)
+            if len(page) < page_size:
+                break
         if max_records > 0:
             return results[:max_records]
         return results
@@ -83,25 +99,30 @@ class MalooClient:
         rows = self._get("test_sessions", {"id": session_id})
         return rows[0] if rows else None
 
-    def find_sessions_by_review(
-        self, review_id: int, patch: int | None = None
+    def find_sessions_by_commit(
+        self, commit_id: str
     ) -> list[dict[str, Any]]:
-        """Find test sessions for a Gerrit review via code_reviews."""
-        params: dict[str, Any] = {"review_id": review_id}
-        if patch is not None:
-            params["review_patch"] = patch
-        # First get the code reviews to find session IDs
-        reviews = self._get_paginated("code_reviews", params)
-        if not reviews:
-            # Try via test_queues as fallback
-            qparams: dict[str, Any] = {"review_id": review_id}
-            if patch is not None:
-                qparams["review_patch"] = patch
-            return self._get_paginated("test_queues", qparams)
-        # Fetch the actual sessions
-        session_ids = {r["test_session_id"] for r in reviews}
+        """Find test sessions for one exact Gerrit revision.
+
+        Looked up by commit rather than by change number because the change
+        number is not a column: ``code_reviews`` carries commit_id and
+        test_session_id, and the project, branch and patch number live inside
+        its ``data`` blob.  The API ignores a parameter it does not recognise,
+        so the old query by review_id and review_patch filtered nothing and
+        matched the whole table -- for change 35302 it answered with a
+        different project's patch.  A revision identifies a patchset exactly,
+        which is also what the caller wants to verify the answer against.
+        """
+        commit = str(commit_id or "").strip().lower()
+        if not commit:
+            raise ValueError("a commit id is required to find test sessions")
+        reviews = self._get_paginated("code_reviews", {"commit_id": commit})
+        session_ids = {
+            str(review.get("test_session_id") or "").strip()
+            for review in reviews
+        }
         sessions = []
-        for sid in session_ids:
+        for sid in sorted(session_ids - {""}):
             s = self.get_session(sid)
             if s:
                 sessions.append(s)

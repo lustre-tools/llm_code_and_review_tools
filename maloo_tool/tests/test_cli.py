@@ -231,7 +231,7 @@ class TestSubtests:
 
 class TestReview:
     def test_review_found(self, runner, mock_client):
-        mock_client.find_sessions_by_review.return_value = [
+        mock_client.find_sessions_by_commit.return_value = [
             {
                 "id": SID_1,
                 "test_group": "full",
@@ -246,18 +246,37 @@ class TestReview:
             },
         ]
 
-        result = runner.invoke(main, ["--envelope", "review", "54321"])
+        result = runner.invoke(
+            main, ["--envelope", "review", "54321", "--commit", "a" * 40]
+        )
         env = _parse_output(result)
         assert env["ok"] is True
         assert env["data"]["review_id"] == 54321
+        assert env["data"]["commit"] == "a" * 40
         assert env["data"]["session_count"] == 1
+        mock_client.find_sessions_by_commit.assert_called_once_with("a" * 40)
 
     def test_review_not_found(self, runner, mock_client):
-        mock_client.find_sessions_by_review.return_value = []
-        result = runner.invoke(main, ["--envelope", "review", "99999"])
+        mock_client.find_sessions_by_commit.return_value = []
+        result = runner.invoke(
+            main, ["--envelope", "review", "99999", "--commit", "b" * 40]
+        )
         env = _parse_output(result)
         assert env["ok"] is True
         assert env["data"]["sessions"] == []
+
+    def test_review_without_a_commit_says_so_instead_of_guessing(
+        self, runner, mock_client
+    ):
+        """Maloo stores no change number to query, so there is nothing to
+        fall back to: a review id on its own selected the whole table."""
+        result = runner.invoke(main, ["--envelope", "review", "54321"])
+        assert result.exit_code == 1
+        env = json.loads(result.output)
+        assert env["ok"] is False
+        assert env["error"]["code"] == "MISSING_FILTER"
+        assert "gerrit info 54321" in env["error"]["message"]
+        mock_client.find_sessions_by_commit.assert_not_called()
 
 
 # -- bugs command --
@@ -985,7 +1004,7 @@ class TestNoEnvelopeDefault:
 
     def test_success_outputs_data_only(self, runner, mock_client):
         """Without --envelope, success output should be the data dict directly."""
-        mock_client.find_sessions_by_review.return_value = [
+        mock_client.find_sessions_by_commit.return_value = [
             {
                 "id": SID_1,
                 "test_group": "full",
@@ -1000,7 +1019,9 @@ class TestNoEnvelopeDefault:
             },
         ]
 
-        result = runner.invoke(main, ["review", "54321"])
+        result = runner.invoke(
+            main, ["review", "54321", "--commit", "a" * 40]
+        )
         out = json.loads(result.output)
         # Should NOT have envelope keys
         assert "ok" not in out
@@ -1026,8 +1047,10 @@ class TestNoEnvelopeDefault:
 
     def test_envelope_flag_preserves_wrapper(self, runner, mock_client):
         """With --envelope, output should have the full ok/data/meta wrapper."""
-        mock_client.find_sessions_by_review.return_value = []
-        result = runner.invoke(main, ["--envelope", "review", "99999"])
+        mock_client.find_sessions_by_commit.return_value = []
+        result = runner.invoke(
+            main, ["--envelope", "review", "99999", "--commit", "a" * 40]
+        )
         out = json.loads(result.output)
         assert out["ok"] is True
         assert "data" in out

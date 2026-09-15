@@ -304,18 +304,34 @@ def subtests(test_set_id: str, status: str | None, show_all: bool, pretty: bool)
 @main.command()
 @click.argument("review_id", type=int)
 @click.option("--patch", type=int, default=None, help="Patchset number")
+@click.option(
+    "--commit", "commit_id", default=None,
+    help="Revision SHA of the patchset to look up (required)",
+)
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON")
-def review(review_id: int, patch: int | None, pretty: bool) -> None:
+def review(
+    review_id: int, patch: int | None, commit_id: str | None, pretty: bool
+) -> None:
     """Find test sessions for a Gerrit review.
 
-    REVIEW_ID is the Gerrit change number.
+    REVIEW_ID is the Gerrit change number, and --commit is the revision SHA
+    of the patchset to look up.  The change number cannot be queried: it is
+    not a column, so it is carried through only to label the answer.
     """
+    if not commit_id:
+        _error(
+            ErrorCode.MISSING_FILTER,
+            "--commit <sha> is required: Maloo stores no change number to "
+            "query, so the patchset has to be named by its revision. Get it "
+            "with `gerrit info " + str(review_id) + "`.",
+            "review", pretty,
+        )
     client = _make_client()
-    sessions = client.find_sessions_by_review(review_id, patch)
+    sessions = client.find_sessions_by_commit(commit_id)
 
     if not sessions:
         env = success_response(
-            {"review_id": review_id, "patch": patch,
+            {"review_id": review_id, "patch": patch, "commit": commit_id,
              "message": "No test sessions found", "sessions": []},
             TOOL_NAME, "review",
         )
@@ -341,6 +357,7 @@ def review(review_id: int, patch: int | None, pretty: bool) -> None:
     result = {
         "review_id": review_id,
         "patch": patch,
+        "commit": commit_id,
         "session_count": len(items),
         "sessions": items,
     }
