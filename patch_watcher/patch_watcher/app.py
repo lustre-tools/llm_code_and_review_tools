@@ -3817,6 +3817,26 @@ def _relative_age(value):
     return f"{seconds // 86400}d ago"
 
 
+def _standing_key_for_run(patch, run_id):
+    """The exact standing event a run was dispatched under, if it was one."""
+    if AUTOMATION_STORE is None:
+        return ""
+    patch_id = str(patch.get("change_number") or "")
+    revision = str(patch.get("revision_sha") or "")
+    if not patch_id or not run_id:
+        return ""
+    for item in AUTOMATION_STORE.list_observations(patch_id):
+        if (
+            item.source == "standing_policy"
+            and item.kind == "standing_policy_trigger_decision"
+            and item.revision == revision
+            and str(item.payload.get("outcome") or "") == str(run_id)
+            and item.payload.get("coalescing_key")
+        ):
+            return str(item.payload["coalescing_key"])
+    return ""
+
+
 def _review_event_is_spent(patch):
     """True when the current review comments will not start another run.
 
@@ -3849,10 +3869,20 @@ def _review_event_is_spent(patch):
             continue
         if newest is None or session.state_changed_at > newest.state_changed_at:
             newest = session
-    if newest is None or _run_left_its_event_unhandled(newest):
+    if newest is None:
         return False
     changed_at = _parse_timestamp(patch.get("last_changed"))
-    return changed_at is None or changed_at <= newest.state_changed_at
+    if changed_at is not None and changed_at > newest.state_changed_at:
+        return False
+    if not _run_left_its_event_unhandled(newest):
+        return True
+    # The newest run answered nothing, but an earlier one on the same event
+    # may have.  Dispatch stops at the first run that answered, however old,
+    # so asking only about the newest promised work that no check would do:
+    # change 68763 offered "ready to act at the next check" for three days
+    # after a rejected report closed the event and a hand-started retry died.
+    key = _standing_key_for_run(patch, newest.run_id)
+    return bool(key) and key in _consumed_standing_keys(patch)
 
 
 def _idle_explanation(patch, policy):
@@ -3905,8 +3935,8 @@ def _idle_explanation(patch, policy):
         elif _review_event_is_spent(patch):
             handled = (
                 f" {unresolved - concluded} unresolved review comment(s) are not "
-                "being retried: the last run on this revision used up their turn "
-                "and Gerrit has reported nothing new since. Run now starts one."
+                "being retried: a run on this revision used up their turn and "
+                "Gerrit has reported nothing new since. Run now starts one."
             )
         else:
             pending.append(f"{unresolved - concluded} unresolved review comment(s)")

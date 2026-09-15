@@ -1325,6 +1325,64 @@ class PatchWatcherTests(AppGlobalsIsolated):
             )
             self.assertEqual(app._consumed_standing_keys(record), frozenset({"key-1"}))
 
+    def test_the_card_does_not_promise_a_check_that_will_decline(self):
+        """Change 68763 offered "ready to act on 5 unresolved review
+        comment(s) at the next check" for three days while every check
+        declined.  A rejected report had closed the event; a hand-started
+        retry then died without answering, and the card looked only at that
+        newest run.  Dispatch stops at the first run that answered, however
+        old, so the card has to ask the same question."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = app.initialize_session_store(root / "s.sqlite3")
+            automation = app.initialize_automation_store(root / "a.sqlite3")
+            standing = app.initialize_standing_policy_store(root / "p.json")
+            standing.save(app.PatchAutomationPolicy.for_preset("68763", "own"))
+            record, _ = app.add_patch("https://review.whamcloud.com/c/68763")
+            record.update(change_number=68763, patchset=2, revision_sha="a" * 40,
+                          project="fs/lustre-release", lifecycle="Open",
+                          jenkins="PASS", maloo="PASS", unresolved=5)
+            app.sync_automation_patch(record)
+
+            def run(run_id, state, code, *, spoke=True, result=None):
+                store.register_pinned_session(
+                    run_id, patch_id="68763", run_id=run_id, revision="a" * 40,
+                    patchset=2, profile="engineering", state="running",
+                )
+                if spoke:
+                    store.record_message(run_id, "agent", "Read the threads.")
+                store.finish_session(
+                    run_id, state, failure_code=code, result=result
+                )
+                automation.record_observation(
+                    "68763", revision="a" * 40, source="standing_policy",
+                    kind="standing_policy_trigger_decision",
+                    fingerprint=run_id.ljust(64, "0")[:64],
+                    payload={"eligible": True, "coalescing_key": "review-key",
+                             "outcome": run_id},
+                )
+
+            # It answered, badly: the report did not match its snapshot.
+            run("pw-review-68763-ps2-answered", "failed", "worker_report_invalid")
+            # Then a hand-started retry died before reaching any verdict.
+            run("pw-review-68763-ps2-dead", "failed", "controller_error")
+
+            self.assertEqual(
+                app._consumed_standing_keys(record), frozenset({"review-key"})
+            )
+            self.assertTrue(app._review_event_is_spent(record))
+            policy = app._standing_policy(record)
+            explanation = app._idle_explanation(record, policy)
+            self.assertIn("not being retried", explanation)
+            self.assertIn("Run now", explanation)
+            self.assertNotIn("Ready to act", explanation)
+
+            # Run now is not refused, which is what the card points at.
+            self.assertEqual(
+                app._consumed_standing_keys(record, attended=True), frozenset()
+            )
+
     def test_a_run_this_host_killed_releases_its_event(self):
         """The run reached no verdict about the patch, so the work is pending.
 
