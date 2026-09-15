@@ -625,11 +625,8 @@ JIRA_TOKEN|Jira personal access token|secret|"
     Create token."
             SPEC_ANON_READS=1
             SPEC_READ_KEYS="JIRA_SERVER"
-            SPEC_NOTE="This is the LU tickets one, and every Jira Server or
-        Data Center instance works the same way.  No username: the
-        token is the whole login.  Reading -- get, search, comments --
-        works without one; filing, commenting and linking need it.
-        Atlassian Cloud is the next question, not this one."
+            SPEC_NOTE="This is the Whamcloud JIRA for LU tickets.
+        Reading works without credentials, writing requires them."
             ;;
         jira-cloud)
             SPEC_LABEL="Jira Cloud (Atlassian)"
