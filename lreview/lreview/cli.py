@@ -107,7 +107,7 @@ def ensure_prompts(args):
     explicit = args.prompts_dir
     status = check_prompts(explicit=explicit, agent=args.agent)
     if status.available:
-        return status.prompts_dir
+        return status
 
     print(f"review prompts are not ready for {args.agent}:")
     for problem in status.problems:
@@ -118,11 +118,86 @@ def ensure_prompts(args):
         status = check_prompts(explicit=explicit, agent=args.agent)
         if status.available:
             print(f"review prompts ready: {status.prompts_dir}")
-            return status.prompts_dir
+            return status
         print("Clone done but the check still fails:")
         for problem in status.problems:
             print(f"  - {problem}")
     return None
+
+
+# Maintainers of the bundled review-prompts submodule pin, by git
+# identity: their checkouts warn + offer instead of auto-updating,
+# because they are the ones who commit the submodule bump everyone
+# else's pin comes from.
+PROMPTS_MAINTAINERS = ("mvef@whamcloud.com", "vefmarc@gmail.com")
+
+
+def _checkout_user_email():
+    from .prompts import _REPO_ROOT, _git_out
+    return _git_out(_REPO_ROOT, "config", "user.email")
+
+
+def prompts_update_mode() -> str:
+    """auto | warn | off for the prompts-freshness handling.
+
+    An explicit $LREVIEW_PROMPTS_UPDATE always wins. Otherwise the
+    git identity of the tools checkout decides: a submodule-pin
+    maintainer gets "warn", everyone else the transparent "auto".
+    """
+    env = os.environ.get("LREVIEW_PROMPTS_UPDATE")
+    if env:
+        return env.lower()
+    email = _checkout_user_email()
+    if email and email.lower() in PROMPTS_MAINTAINERS:
+        return "warn"
+    return "auto"
+
+
+def check_prompts_freshness(prompts_dir: Path, allow_update: bool = True):
+    """Keep the resolved prompts checkout current before a run.
+
+    When it is behind its upstream: "auto" (the default for tool
+    users, who have no say over the submodule pin and just want
+    current prompts) fast-forwards transparently with a one-line
+    notice; "warn" (maintainers by git identity, see
+    prompts_update_mode) reports and offers instead; "off" skips the
+    check. Silent when freshness cannot be determined (offline, not
+    a checkout); `check` passes allow_update=False and only ever
+    reports.
+    """
+    mode = prompts_update_mode()
+    if mode == "off":
+        return
+    from .prompts import prompts_freshness, update_prompts_checkout
+    fresh = prompts_freshness(prompts_dir)
+    if not fresh or fresh[0] == 0:
+        return
+    behind, root, ref = fresh
+
+    if not allow_update or mode == "warn":
+        print(f"note: the review prompts at {root} are {behind} "
+              f"commit(s) behind {ref}")
+        if not allow_update:
+            return
+        if sys.stdin.isatty():
+            answer = input(
+                "  fast-forward them now? [Y/n] ").strip().lower()
+            if answer not in ("n", "no"):
+                _ok, detail = update_prompts_checkout(
+                    root, ref, submodule_note=True)
+                print(f"  {detail}")
+                return
+        print(f"  (git -C {root} pull to update; "
+              "LREVIEW_PROMPTS_UPDATE=off silences this check)")
+        return
+
+    ok, detail = update_prompts_checkout(root, ref)
+    if ok:
+        print(f"note: {detail} ({behind} commit(s) behind {ref}; "
+              "LREVIEW_PROMPTS_UPDATE=warn|off to change)")
+    else:
+        print(f"note: the review prompts at {root} are {behind} "
+              f"commit(s) behind {ref} — {detail}")
 
 
 def cmd_check(args) -> int:
@@ -142,6 +217,7 @@ def cmd_check(args) -> int:
         print(f"  prompts:   {status.prompts_dir}")
         print(f"  found via: {status.source}")
         print(f"  {provider_name}:    {gerrit_detail}")
+        check_prompts_freshness(status.prompts_dir, allow_update=False)
         return 0
     print(f"lreview is NOT ready for {args.agent}:")
     for problem in status.problems:
@@ -192,9 +268,11 @@ def cmd_run(args) -> int:
               "it takes no change arguments")
         return 1
 
-    prompts_dir = ensure_prompts(args)
-    if prompts_dir is None:
+    prompts_status = ensure_prompts(args)
+    if prompts_status is None:
         return 2
+    prompts_dir = prompts_status.prompts_dir
+    check_prompts_freshness(prompts_dir)
 
     from .agents import get_agent
     if not get_agent(args.agent).verified:
@@ -331,6 +409,8 @@ def cmd_run(args) -> int:
 
     print(f"\nReviewing {len(changes)} change(s), "
           f"{args.jobs} in parallel, timeout {args.timeout}s each")
+    print(f"  prompts:   {prompts_dir}")
+    print(f"             (via {prompts_status.source})")
     print(f"  results:   {results_dir}")
     if memory_db is not None:
         print(f"  memory db: {memory_db}")

@@ -54,6 +54,12 @@ exact instructions for anything missing:
 `lreview check` runs the same checks non-interactively (for scripts
 and CI).
 
+**Prompt freshness:** before a run, lreview checks the prompts
+checkout against its upstream and fast-forwards it automatically
+when it is behind (one-line notice; local edits are never touched;
+silent offline). `LREVIEW_PROMPTS_UPDATE=off` disables the check,
+`warn` asks instead of updating.
+
 ## Agents
 
 > **Disclaimer:** **claude** and **codex** are verified end-to-end.
@@ -518,6 +524,7 @@ already-posted review.
 | `LREVIEW_EFFORT` | Default for `--effort` (else the agent's own) |
 | `LREVIEW_DB` | Default for `--db` (memory database directory) |
 | `LREVIEW_RESULTS_DIR` | Default for `--results-dir` |
+| `LREVIEW_PROMPTS_UPDATE` | Prompts auto-update: `auto` (default), `warn` (ask first), `off` |
 | `LREVIEW_PREFIX` | Default for `--prefix`; `<model>` substituted |
 | `REVIEW_PROMPTS_DIR` | Path to the review-prompts clone |
 | `NO_COLOR` | Disable colored output |
