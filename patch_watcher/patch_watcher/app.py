@@ -1708,6 +1708,48 @@ def controller_failures_html():
     )
 
 
+def failed_runs_html(limit=25):
+    """Every run that did not succeed, newest first, off the patch rows.
+
+    A failure belongs on the row while it is the answer to "what do I do about
+    this patch", and nowhere near it afterwards.  It still has to be somewhere:
+    a failure that vanishes when the patch recovers is how a recurring fault
+    goes unnoticed for a week.
+    """
+    if SESSION_STORE is None:
+        return ""
+    rows = []
+    sessions = [
+        session for session in SESSION_STORE.list_sessions(include_terminal=True)
+        if session.state in SESSION_TERMINAL_STATES and session.state != "succeeded"
+    ]
+    for session in sorted(sessions, key=lambda item: item.state_changed_at, reverse=True)[:limit]:
+        code, summary = _run_failure(session)
+        text = " ".join(str(summary or code or "").split())
+        href = "/runs/" + escape(session.run_id, quote=True)
+        rows.append(
+            "<tr><td>" + escape(local_time(session.state_changed_at))
+            + "</td><td>" + escape(str(session.patch_id))
+            + "</td><td>" + _chip(session.state.replace("_", " ").capitalize(), "bad")
+            + "</td><td><a href='" + href + "'>" + escape(session.run_id) + "</a>"
+            + "</td><td>" + escape(text[:200]) + ("…" if len(text) > 200 else "")
+            + "</td></tr>"
+        )
+    if not rows:
+        return ""
+    return (
+        "<section class='card failed-runs' aria-labelledby='failed-runs-title'>"
+        "<details><summary id='failed-runs-title'>Failed runs ("
+        + str(len(rows)) + ")</summary>"
+        "<p class='detail'>Kept here rather than on the patch row, where a "
+        "failure stops being the answer once the patch itself is settled. A "
+        "fault that keeps recurring shows up as a pattern in this list.</p>"
+        "<table><thead><tr><th>When</th><th>Patch</th><th>Outcome</th>"
+        "<th>Run</th><th>Why</th></tr></thead><tbody>"
+        + "".join(rows) + "</tbody></table></details></section>"
+    )
+
+
 def _time_notices_html():
     """Handled gaps in time, kept well away from the word "failure".
 
@@ -3797,13 +3839,28 @@ def _patch_run_html(patch):
             else f"checks every {interval}s"
         )
         last_html = ""
+        # "Nothing to act on" is the console's own judgement that this patch
+        # needs no work, and it is computed from the current Gerrit state.
+        settled = explanation.startswith("Nothing to act on")
         last = _last_finished_session_for_patch(patch)
         if last is not None:
             href = "/runs/" + escape(last.run_id, quote=True)
             tone = "good" if last.state == "succeeded" else "bad"
             why = ""
             failure_code, failure_summary = _run_failure(last)
-            if last.state != "succeeded" and (failure_summary or failure_code):
+            # A failure reason earns its place on the row only while it is
+            # still the answer to "what should I do about this patch".  Once
+            # the patch is settled -- the work landed, nothing is outstanding
+            # -- repeating why some earlier attempt died says nothing about
+            # the patch and is read as "still broken".  Change 35302 sat at
+            # patchset 6 with no unresolved comments and Jenkins passing,
+            # under a red line about shell interpreters.  The run is still one
+            # click away, and every failure is listed further down the page.
+            if (
+                last.state != "succeeded"
+                and (failure_summary or failure_code)
+                and not settled
+            ):
                 text = " ".join(str(failure_summary or failure_code).split())
                 why = (
                     f"<div class='detail run-failure-line'>{escape(text[:160])}"
@@ -4346,6 +4403,7 @@ background:#f5f7fb;color:#172033;font:15px system-ui,sans-serif}}main{{max-width
 border:1px solid #d0d5dd;border-radius:8px;padding:8px}}.research-controls>summary{{cursor:pointer;font-weight:700}}.research-controls section{{border-top:1px solid #eaecf0;margin-top:10px;padding-top:10px}}.research-controls form{{display:grid;gap:7px;margin-top:8px}}.research-controls input,.research-controls select{{box-sizing:border-box;min-width:0;width:100%;padding:7px 8px}}.research-controls dl{{display:grid;gap:6px}}.research-controls dd{{margin:2px 0 6px;word-break:break-word}}.action-approval-card{{background:#fffaeb;border:1px solid #fedf89;border-radius:8px;padding:10px}}</style><main><h1>Patch Watcher</h1><p class='sub'>Track Gerrit patches, managed sessions, and worker resources.</p>
 <section class='card'><div class='section-title'><div><h2>Watched patches <small>({len(patches)} · checks every {refresh_interval}s{needs_you_html})</small></h2><div class='detail'>Last successful check: {escape(overall_last_successful_check())}</div><div class='detail'>Last check attempt: {escape(overall_last_checked())}</div>{spend_total_html}{refresh_health_html}</div><div class='actions'><form method='post' action='/refresh-all'><input type='hidden' name='csrf_token' value='{CSRF_TOKEN}'><button class='secondary'>Refresh all</button></form><form method='post' action='/email'><input type='hidden' name='csrf_token' value='{CSRF_TOKEN}'><button class='secondary'>Send status email</button></form></div></div><table><thead><tr><th>Patch</th><th>Watch state / CI</th><th>Review</th><th>Latest change</th><th></th></tr></thead><tbody>{rows}</tbody></table></section>
 <section class='card'><h2>Add patches or a ticket</h2><form class='add' method='post' action='/add'><input type='hidden' name='csrf_token' value='{CSRF_TOKEN}'><input name='url' required placeholder='Gerrit URLs or change numbers, or one JIRA key (LU-12345)'><label class='add-kind'>Several changes are<select name='group_kind'><option value='series'>a series (stacked, order matters)</option><option value='flock'>a flock (related, independent)</option></select></label><input name='label' placeholder='label (optional)' class='add-label'><button>Add</button></form><p class='detail'>One change is watched on its own. Several are watched as one group that a single agent handles together. A JIRA key is watched with whatever changes carry it, and picks up new ones as they appear.</p>{f"<div class='notice'>{escape(message)}</div>" if message else ''}</section>
+{failed_runs_html()}
 <div class='resource-toolbar'><form method='post' action='/resources/refresh'><input type='hidden' name='csrf_token' value='{CSRF_TOKEN}'><button class='secondary'>Refresh resource status</button></form></div>{resources}
 {runs_html()}{automation_html()}
 

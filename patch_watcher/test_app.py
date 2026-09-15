@@ -1526,6 +1526,46 @@ class PatchWatcherTests(AppGlobalsIsolated):
         self.assertEqual([change.key for change in announced], ["LU-1"])
         self.assertEqual(len(sent), 1)
 
+    def test_a_settled_patch_stops_showing_why_an_old_run_died(self):
+        """A failure reason answers "what do I do about this patch", and once
+        the patch is settled it answers nothing.  Change 35302 sat at patchset
+        6 with no unresolved comments and Jenkins passing, under a red line
+        about shell interpreters, which reads as "still broken"."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = app.initialize_session_store(root / "s.sqlite3")
+            app.initialize_automation_store(root / "a.sqlite3")
+            standing = app.initialize_standing_policy_store(root / "p.json")
+            standing.save(app.PatchAutomationPolicy.for_preset("35302", "own"))
+            record, _ = app.add_patch("https://review.whamcloud.com/c/35302")
+            record.update(change_number=35302, patchset=6, revision_sha="f" * 40,
+                          jenkins="PASS", unresolved=0, maloo="PASS")
+            app.sync_automation_patch(record)
+
+            store.register_pinned_session(
+                "s1", patch_id="35302", run_id="pw-review-35302-ps5-old",
+                revision="e" * 40, patchset=5, profile="engineering",
+                state="running",
+            )
+            store.finish_session(
+                "s1", "failed", failure_code="worker_report_invalid",
+                failure_summary="shell interpreters are not permitted in safe commands",
+            )
+
+            row = app._patch_run_html(record)
+            self.assertIn("Last run:", row)
+            self.assertNotIn("shell interpreters", row)
+
+            # It is not lost: the listing further down the page has it.
+            listing = app.failed_runs_html()
+            self.assertIn("shell interpreters", listing)
+            self.assertIn("pw-review-35302-ps5-old", listing)
+
+            # And while the patch still needs something, the reason stays put.
+            record.update(unresolved=3)
+            self.assertIn("shell interpreters", app._patch_run_html(record))
+
     def test_a_run_waiting_on_you_is_labelled_counted_and_explained(self):
         """The in-console channel: a paused run shows on the patch row, links
         to itself, is counted in the header, and the run page says how you
