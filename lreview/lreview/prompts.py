@@ -206,3 +206,82 @@ def offer_setup(dest: Optional[Path] = None) -> bool:
         print(setup_instructions(dest))
         return False
     return True
+
+
+def _git_out(root: Path, *args: str, timeout: int = 10):
+    """stdout of a git command in root, or None on any failure."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), *args],
+            capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def prompts_freshness(prompts_dir: Path, fetch_timeout: int = 10):
+    """How far the resolved prompts checkout lags its upstream.
+
+    Fetches, then counts commits between HEAD and the upstream ref
+    (the tracking branch; for a detached checkout such as the bundled
+    submodule, origin/lustre-dev or origin/HEAD). Returns
+    (behind, root, ref) with behind == 0 when current, or None when
+    it cannot be determined (not a git checkout, offline, no
+    upstream) — staleness checking must never break a review run.
+    """
+    root_out = _git_out(prompts_dir, "rev-parse", "--show-toplevel")
+    if not root_out:
+        return None
+    root = Path(root_out)
+    if _git_out(root, "fetch", "--quiet",
+                timeout=fetch_timeout) is None:
+        return None
+
+    ref = None
+    upstream = _git_out(root, "rev-parse", "--abbrev-ref",
+                        "--symbolic-full-name", "@{u}")
+    if upstream:
+        ref = upstream
+    else:
+        for candidate in ("origin/lustre-dev", "origin/HEAD"):
+            if _git_out(root, "rev-parse", "--verify", "--quiet",
+                        candidate) is not None:
+                ref = candidate
+                break
+    if not ref:
+        return None
+
+    behind = _git_out(root, "rev-list", "--count", f"HEAD..{ref}")
+    if behind is None:
+        return None
+    return int(behind), root, ref
+
+
+def update_prompts_checkout(root: Path, ref: str,
+                            submodule_note: bool = False):
+    """Fast-forward the prompts checkout to its already-fetched
+    upstream ref; returns (ok, detail).
+
+    A checkout on a branch is ff-merged; a detached one (the bundled
+    submodule) has its detached HEAD moved to the ref. Local edits
+    make the ff fail rather than being touched. submodule_note adds
+    the commit-the-bump reminder when the bundled submodule moved —
+    meaningful only for someone who can push this repository.
+    """
+    detached = _git_out(root, "symbolic-ref", "-q", "HEAD") is None
+    if detached:
+        ok = _git_out(root, "checkout", "--detach", ref) is not None
+    else:
+        ok = _git_out(root, "merge", "--ff-only", ref) is not None
+    if not ok:
+        return False, (f"could not fast-forward {root} to {ref} — "
+                       "local changes? update it manually")
+    head = _git_out(root, "log", "-1", "--format=%h %s") or ""
+    detail = f"review prompts updated to {head}"
+    if submodule_note and root == _REPO_ROOT / "review-prompts":
+        detail += ("\n  (the bundled submodule now points past the "
+                   "commit recorded in this checkout — commit the "
+                   "bump to share it)")
+    return True, detail

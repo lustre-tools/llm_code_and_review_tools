@@ -137,6 +137,69 @@ class TestParser:
         from lreview.cli import default_results_dir
         assert args.results_dir == default_results_dir()
 
+    def test_prompts_freshness_modes(self, tmp_path, monkeypatch,
+                                     capsys):
+        """auto (default) fast-forwards transparently; warn only
+        reports in non-tty; off does nothing; `check` never
+        updates."""
+        from lreview import cli as cli_mod
+        calls = []
+        monkeypatch.setattr(
+            "lreview.prompts.prompts_freshness",
+            lambda d: (2, tmp_path, "origin/lustre-dev"))
+        monkeypatch.setattr(
+            "lreview.prompts.update_prompts_checkout",
+            lambda root, ref, submodule_note=False: (
+                calls.append((root, ref)) or (True, "review prompts "
+                                              "updated to abc s")))
+        monkeypatch.setattr("sys.stdin", type("T", (), {
+            "isatty": staticmethod(lambda: False)})())
+
+        monkeypatch.delenv("LREVIEW_PROMPTS_UPDATE", raising=False)
+        # neutralize the maintainer identity — this test machine's
+        # checkout belongs to a maintainer
+        monkeypatch.setattr("lreview.cli._checkout_user_email",
+                            lambda: "someone@example.com")
+        cli_mod.check_prompts_freshness(tmp_path / "kernel")
+        assert calls == [(tmp_path, "origin/lustre-dev")]
+        assert "updated to" in capsys.readouterr().out
+
+        calls.clear()
+        monkeypatch.setenv("LREVIEW_PROMPTS_UPDATE", "warn")
+        cli_mod.check_prompts_freshness(tmp_path / "kernel")
+        assert calls == []  # non-tty warn: report only
+        assert "2 commit(s) behind" in capsys.readouterr().out
+
+        monkeypatch.setenv("LREVIEW_PROMPTS_UPDATE", "off")
+        cli_mod.check_prompts_freshness(tmp_path / "kernel")
+        assert capsys.readouterr().out == ""
+
+        monkeypatch.delenv("LREVIEW_PROMPTS_UPDATE", raising=False)
+        calls.clear()
+        cli_mod.check_prompts_freshness(tmp_path / "kernel",
+                                        allow_update=False)
+        assert calls == []  # `check` reports, never mutates
+        assert "behind" in capsys.readouterr().out
+
+    def test_prompts_update_mode_by_identity(self, monkeypatch):
+        """Maintainers (by the checkout's git identity) get warn;
+        everyone else auto; the env var overrides both."""
+        from lreview.cli import prompts_update_mode
+        monkeypatch.delenv("LREVIEW_PROMPTS_UPDATE", raising=False)
+        monkeypatch.setattr("lreview.cli._checkout_user_email",
+                            lambda: "mvef@whamcloud.com")
+        assert prompts_update_mode() == "warn"
+        monkeypatch.setattr("lreview.cli._checkout_user_email",
+                            lambda: "colleague@example.com")
+        assert prompts_update_mode() == "auto"
+        monkeypatch.setattr("lreview.cli._checkout_user_email",
+                            lambda: None)  # no git / no identity
+        assert prompts_update_mode() == "auto"
+        monkeypatch.setenv("LREVIEW_PROMPTS_UPDATE", "off")
+        monkeypatch.setattr("lreview.cli._checkout_user_email",
+                            lambda: "mvef@whamcloud.com")
+        assert prompts_update_mode() == "off"
+
     def test_check_parses(self):
         args = build_parser().parse_args(["check"])
         assert args.func.__name__ == "cmd_check"
@@ -174,8 +237,12 @@ class TestParser:
             captured["in_place"] = in_place
             return []
 
-        monkeypatch.setattr("lreview.cli.ensure_prompts",
-                            lambda args: Path("/p/kernel"))
+        from lreview.prompts import PromptsStatus
+        monkeypatch.setattr(
+            "lreview.cli.ensure_prompts",
+            lambda args: PromptsStatus(
+                available=True, prompts_dir=Path("/p/kernel"),
+                source="test"))
         monkeypatch.setattr("lreview.cli.run_batch", fake_run_batch)
 
         args = build_parser().parse_args(["run", "--repo", str(repo)])
@@ -301,8 +368,11 @@ class TestLastAndOutput:
         subprocess.run(["git", "-C", str(tmp_path), "add", "f"], check=True)
         subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "one"],
                        check=True)
-        monkeypatch.setattr("lreview.cli.ensure_prompts",
-                            lambda args: tmp_path)
+        from lreview.prompts import PromptsStatus
+        monkeypatch.setattr(
+            "lreview.cli.ensure_prompts",
+            lambda args: PromptsStatus(
+                available=True, prompts_dir=tmp_path, source="test"))
         args = build_parser().parse_args(
             ["run", "--last", "5", "--repo", str(tmp_path)])
         assert cmd_run(args) == 1

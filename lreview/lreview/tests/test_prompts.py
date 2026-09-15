@@ -148,3 +148,87 @@ class TestSetupInstructions:
         text = setup_instructions()
         assert "submodule update --init review-prompts" in text
         assert "git clone" in text  # fallback still listed
+
+
+class TestPromptsFreshness:
+
+    @pytest.fixture
+    def clone_pair(self, tmp_path):
+        """An 'upstream' repo and a clone of it, upstream one ahead."""
+        import subprocess
+
+        def git(cwd, *args):
+            subprocess.run(["git", "-C", str(cwd), *args], check=True,
+                           capture_output=True)
+
+        upstream = tmp_path / "upstream"
+        upstream.mkdir()
+        git(upstream, "init", "-q")
+        git(upstream, "config", "user.email", "t@example.com")
+        git(upstream, "config", "user.name", "T")
+        (upstream / "kernel").mkdir()
+        (upstream / "kernel" / "review-core.md").write_text("core")
+        git(upstream, "add", ".")
+        git(upstream, "commit", "-qm", "c1")
+        clone = tmp_path / "clone"
+        subprocess.run(["git", "clone", "-q", str(upstream), str(clone)],
+                       check=True, capture_output=True)
+        (upstream / "kernel" / "new.md").write_text("new knowledge")
+        git(upstream, "add", ".")
+        git(upstream, "commit", "-qm", "c2 newer prompts")
+        return upstream, clone
+
+    def test_detects_behind_and_updates(self, clone_pair):
+        from lreview.prompts import (prompts_freshness,
+                                     update_prompts_checkout)
+        _upstream, clone = clone_pair
+        fresh = prompts_freshness(clone / "kernel")
+        assert fresh is not None
+        behind, root, ref = fresh
+        assert behind == 1
+        assert root == clone
+
+        ok, detail = update_prompts_checkout(root, ref)
+        assert ok, detail
+        assert (clone / "kernel" / "new.md").is_file()
+        assert prompts_freshness(clone / "kernel")[0] == 0
+
+    def test_detached_checkout_updates(self, clone_pair):
+        """The bundled submodule is a detached checkout — the update
+        moves its detached HEAD rather than needing a branch."""
+        import subprocess
+        from lreview.prompts import (prompts_freshness,
+                                     update_prompts_checkout)
+        _upstream, clone = clone_pair
+        subprocess.run(["git", "-C", str(clone), "checkout", "-q",
+                        "--detach", "HEAD"], check=True)
+        behind, root, ref = prompts_freshness(clone / "kernel")
+        assert behind == 1
+        ok, detail = update_prompts_checkout(root, ref)
+        assert ok, detail
+        assert (clone / "kernel" / "new.md").is_file()
+
+    def test_not_a_checkout_is_none(self, tmp_path):
+        from lreview.prompts import prompts_freshness
+        plain = tmp_path / "plain"
+        (plain / "kernel").mkdir(parents=True)
+        assert prompts_freshness(plain / "kernel") is None
+
+    def test_local_changes_fail_ff_gracefully(self, clone_pair):
+        from lreview.prompts import (prompts_freshness,
+                                     update_prompts_checkout)
+        _upstream, clone = clone_pair
+        import subprocess
+        # diverge the clone with its own commit
+        (clone / "local.md").write_text("mine")
+        subprocess.run(["git", "-C", str(clone), "add", "."],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(clone), "-c",
+                        "user.email=t@example.com", "-c", "user.name=T",
+                        "commit", "-qm", "local"], check=True,
+                       capture_output=True)
+        behind, root, ref = prompts_freshness(clone / "kernel")
+        assert behind == 1
+        ok, detail = update_prompts_checkout(root, ref)
+        assert not ok
+        assert "manually" in detail
