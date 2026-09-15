@@ -3860,7 +3860,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
             app._RESOURCE_SNAPSHOT = {"host_memory": {}, "ltvm": {"vms": []}}
             app._RESOURCE_SNAPSHOT_MONOTONIC = app.time.monotonic()
             rendered = app.resource_dashboard_html()
-        self.assertIn("Active managed sessions (1)", rendered)
+        self.assertIn("Running now (1) and the guests they hold", rendered)
         self.assertIn("LU-12345", rendered)
         self.assertIn("Need a human decision", rendered)
         self.assertIn("State: Waiting human", rendered)

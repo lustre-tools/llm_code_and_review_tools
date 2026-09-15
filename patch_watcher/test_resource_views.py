@@ -350,7 +350,7 @@ class ResourceViewTests(unittest.TestCase):
         rendered = resource_views.render_resource_dashboard(None)
         self.assertIn("Host:</strong> unknown", rendered)
         self.assertIn("Sample age unknown", rendered)
-        self.assertIn("No active managed sessions.", rendered)
+        self.assertNotIn("Running now", rendered)
         self.assertIn("Other LTVM VMs (0)", rendered)
         self.assertNotIn("None", rendered)
 

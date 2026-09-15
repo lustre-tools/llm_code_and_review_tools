@@ -612,12 +612,18 @@ def render_active_sessions(
         )
 
     if not rows:
-        rows.append(
-            "<tr><td class='empty' colspan='8'>No active managed sessions.</td></tr>"
-        )
+        # Nothing is running, so there is nothing for this to say.  It used to
+        # say it in a card of its own, restating the Runs card's own columns --
+        # patch, run, state, elapsed, last message -- under a heading nobody
+        # could explain.  What it uniquely knows is which guests a LIVE run
+        # owns, which is how an orphan is spotted, and that is worth a card
+        # exactly while there is a live run.  The matching above still happens
+        # either way: it is what decides which guests are unowned.
+        return "", other
     html = (
         "<section class='active-sessions resource-card' aria-labelledby='active-sessions-title'>"
-        f"<h2 id='active-sessions-title'>Active managed sessions ({len(session_items)})</h2>"
+        f"<h2 id='active-sessions-title'>Running now ({len(session_items)}) and the "
+        "guests they hold</h2>"
         "<table class='session-table'><thead><tr>"
         "<th scope='col'>Patch</th><th scope='col'>Run</th>"
         "<th scope='col'>Profile</th><th scope='col'>State</th>"
