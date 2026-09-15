@@ -112,6 +112,11 @@ class AppGlobalsIsolated(unittest.TestCase):
 
     def run(self, result=None):
         saved = {name: getattr(app, name, None) for name in self._SERVICE_GLOBALS}
+        # The cached review readings are keyed by patch and revision, which
+        # tests reuse freely; one left behind answers a later test about a
+        # patch it never set up.
+        app.REVIEW_SNAPSHOTS.clear()
+        self.addCleanup(app.REVIEW_SNAPSHOTS.clear)
         try:
             return super().run(result)
         finally:
@@ -754,6 +759,8 @@ class PatchWatcherTests(AppGlobalsIsolated):
                     return self.snap
 
             # The card must not promise a run the next check will decline.
+            # It explains the reading the last check took, so give it one.
+            app._remember_review_snapshot(record, snapshot())
             idle = app._idle_explanation(record, standing.get("35302"))
             self.assertIn("left open deliberately", idle)
             self.assertNotIn("Ready to act", idle)
@@ -770,6 +777,80 @@ class PatchWatcherTests(AppGlobalsIsolated):
                 started = app._apply_standing_policy(record)
             self.assertIsNotNone(started)
             self.assertEqual(runs.calls[0]["skip_threads"], [])
+
+    def test_a_comment_posted_resolved_is_still_something_to_act_on(self):
+        """"OK, bot -- take a crack at that" sat on change 68845 for an hour
+        while the console reported three handled threads and nothing new.
+        Gerrit posts a new top-level comment resolved unless you say
+        otherwise, and the snapshot held unresolved threads alone, so the one
+        comment that was an instruction was the one nobody could see.
+
+        The resolved flag says whether a reviewer wants an answer.  It does
+        not say whether anything has happened since we last looked.
+        """
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = app.initialize_session_store(root / "s.sqlite3")
+            app.initialize_automation_store(root / "a.sqlite3")
+            record, _ = app.add_patch("https://review.whamcloud.com/c/68845")
+            record.update(change_number=68845, patchset=3, revision_sha="d" * 40,
+                          unresolved=1)
+            app.sync_automation_patch(record)
+
+            store.register_pinned_session(
+                "review-done", patch_id="68845",
+                run_id="pw-review-68845-ps3-done", revision="d" * 40,
+                patchset=3, profile="engineering", state="running",
+            )
+            store.append_event(
+                "review-done", app.REVIEW_REQUEST_EVENT,
+                {"review_snapshot": {"threads": [
+                    {"thread_id": "t1", "comments": [{"comment_id": "c1"}]},
+                ]}},
+            )
+            store.finish_session("review-done", "succeeded", finished_at=datetime(
+                2026, 9, 15, 18, 59, tzinfo=UTC), result={
+                    "schema": "patch-watcher-engineering-report/v1",
+                    "state": "complete", "summary": "answered",
+                    "comment_results": [
+                        {"comment_id": "c1", "disposition": "addressed"},
+                    ],
+                })
+
+            def snapshot(threads):
+                return {"schema": "patch-watcher-review-snapshot/v1",
+                        "complete": True, "snapshot_sha256": "a" * 64,
+                        "threads": threads}
+
+            answered = {"thread_id": "t1", "unresolved": True, "comments": [
+                {"comment_id": "c1", "updated": "2026-09-12T07:50:19+00:00"},
+                # The agent's own reply, before its report landed.
+                {"comment_id": "c2", "updated": "2026-09-15T18:57:49+00:00"},
+            ]}
+            instruction = {"thread_id": "t2", "unresolved": False, "comments": [
+                {"comment_id": "c3", "updated": "2026-09-15T20:36:06+00:00"},
+            ]}
+
+            # Without the instruction: handled, and the agent's own reply does
+            # not re-arm anything.
+            pending, settled = app._pending_review_threads(
+                record, snapshot([answered]))
+            self.assertEqual((pending, settled), ([], ["t1"]))
+
+            # With it: work, even though the thread is resolved.
+            pending, settled = app._pending_review_threads(
+                record, snapshot([answered, instruction]))
+            self.assertEqual((pending, settled), (["t2"], ["t1"]))
+
+            # A resolved thread from before the run stays history: a first
+            # pass must not treat every settled argument as work.
+            old = {"thread_id": "t0", "unresolved": False, "comments": [
+                {"comment_id": "c0", "updated": "2026-09-13T06:09:45+00:00"},
+            ]}
+            pending, settled = app._pending_review_threads(
+                record, snapshot([answered, old]))
+            self.assertEqual((pending, settled), ([], ["t1", "t0"]))
 
     def test_usage_is_reported_per_run_per_patch_and_overall(self):
         """List cost is what the CLI reported; the subscription figure is that
@@ -867,7 +948,7 @@ class PatchWatcherTests(AppGlobalsIsolated):
             pending = app._patch_run_html(record)
             self.assertIn("Ready to act on", pending)
             for expected in ("cherry-pick veto to rebase", "failed Jenkins build to repair",
-                             "2 unresolved review comment(s)"):
+                             "2 review comment thread(s)"):
                 self.assertIn(expected, pending)
 
             automation.set_global_automation(False, changed_by="test", reason="pause")

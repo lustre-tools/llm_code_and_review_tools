@@ -673,13 +673,23 @@ def normalize_review_snapshot(
     threads: dict[str, list[dict[str, Any]]] = {}
     for record in records.values():
         threads.setdefault(record["thread_id"], []).append(record)
-    unresolved_threads = []
+    # Every thread, not only the unresolved ones.  A person telling the bot
+    # what to do next posts a comment, and Gerrit's resolved box defaults to
+    # ticked on a new top-level one -- so "OK, bot, take a crack at that" on
+    # change 68845 was invisible to a snapshot that held unresolved threads
+    # alone, and the console reported three handled threads and nothing new.
+    # Which threads are WORK is decided against what past runs concluded, not
+    # here; this is the record of what was said.
+    all_threads = []
     for thread_id, comments in threads.items():
         ordered = sorted(comments, key=lambda item: (item["updated"], item["comment_id"]))
-        latest = ordered[-1]
-        if latest["unresolved"]:
-            unresolved_threads.append({"thread_id": thread_id, "comments": ordered})
-    unresolved_threads.sort(key=lambda item: item["thread_id"])
+        all_threads.append({
+            "thread_id": thread_id,
+            "unresolved": bool(ordered[-1]["unresolved"]),
+            "comments": ordered,
+        })
+    all_threads.sort(key=lambda item: item["thread_id"])
+    unresolved_threads = [item for item in all_threads if item["unresolved"]]
     reported = int(identity.get("unresolved_comment_count") or 0)
     if len(unresolved_threads) != reported:
         reasons.append(
@@ -701,7 +711,7 @@ def normalize_review_snapshot(
         "reported_unresolved_count": reported,
         "complete": not reasons,
         "incompleteness_reasons": sorted(set(reasons)),
-        "threads": unresolved_threads,
+        "threads": all_threads,
     }
     canonical = json.dumps(base, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     base["snapshot_sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()

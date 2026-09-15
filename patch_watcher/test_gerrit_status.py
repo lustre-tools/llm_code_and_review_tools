@@ -234,7 +234,10 @@ class StatusTests(unittest.TestCase):
             identity, {"file.c": [comment]}, {}
         )
 
-        self.assertEqual(result["threads"], [])
+        # The thread is captured -- a person can say something in a resolved
+        # one, and the bot has to see it -- and carries what it is.
+        self.assertEqual(len(result["threads"]), 1)
+        self.assertFalse(result["threads"][0]["unresolved"])
         self.assertEqual(result["reported_unresolved_count"], 0)
         self.assertEqual(result["incompleteness_reasons"], [])
         self.assertTrue(result["complete"])

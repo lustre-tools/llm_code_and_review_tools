@@ -193,6 +193,11 @@ ACTIVE_SESSION_DATABASE = DEFAULT_SESSION_DATABASE
 ACTIVE_AUTOMATION_DATABASE = DEFAULT_AUTOMATION_DATABASE
 JIRA_BASE_URL = "https://jira.whamcloud.com/browse"
 SESSION_STORE = None
+# The last review snapshot taken of each exact revision, so the card can
+# answer from the same reading the dispatcher decided on rather than from a
+# cheaper stand-in.  In memory only: after a restart the card says it has not
+# looked yet, which is true, and the next poll fills it in.
+REVIEW_SNAPSHOTS = {}
 RUN_CONTROLLER = None
 AUTOMATION_STORE = None
 RETEST_CONTROLLER = None
@@ -1068,8 +1073,49 @@ def _concluded_review_threads(patch):
     return concluded
 
 
+def _newest_comment_moment(thread):
+    """When anything was last said in a thread."""
+    moments = [
+        _parse_timestamp(comment.get("updated"))
+        for comment in thread.get("comments") or ()
+        if isinstance(comment, Mapping)
+    ]
+    moments = [moment for moment in moments if moment is not None]
+    return max(moments) if moments else None
+
+
+def _remember_review_snapshot(patch, snapshot):
+    """Keep the reading a check just took, for whoever has to explain it."""
+    revision = str(patch.get("revision_sha") or "").lower()
+    patch_id = str(patch.get("change_number") or "")
+    if not revision or not patch_id or not isinstance(snapshot, Mapping):
+        return
+    # One reading per patch: a revision that has been replaced is never asked
+    # about again, and keeping every one would grow without bound.
+    for key in [item for item in REVIEW_SNAPSHOTS if item[0] == patch_id]:
+        del REVIEW_SNAPSHOTS[key]
+    REVIEW_SNAPSHOTS[(patch_id, revision)] = snapshot
+
+
+def _review_work(patch):
+    """What the next check would find in this patch's comments, or None.
+
+    The card and the dispatcher have now disagreed three times, each time
+    because the card re-derived, more cheaply, a decision the dispatcher makes
+    properly.  They read the same snapshot through the same function instead.
+    The card gets the one the last check took; None means no check has looked
+    at this revision yet, which is a different thing from finding nothing.
+    """
+    revision = str(patch.get("revision_sha") or "").lower()
+    patch_id = str(patch.get("change_number") or "")
+    snapshot = REVIEW_SNAPSHOTS.get((patch_id, revision))
+    if snapshot is None:
+        return None
+    return _pending_review_threads(patch, snapshot)
+
+
 def _pending_review_threads(patch, snapshot):
-    """Split a snapshot's unresolved threads into what is new and what is not.
+    """Split a snapshot's threads into what is work and what is not.
 
     A concluded thread comes back only if someone has said something in it
     SINCE the run that concluded it -- which is how a reviewer's genuine
@@ -1082,26 +1128,41 @@ def _pending_review_threads(patch, snapshot):
     as, which is not derivable from the snapshot.  Skew large enough to invert
     the order costs one extra run, not a loop: the per-patch run ceiling is
     still underneath this.
+
+    Anything said since the last run concluded is work, resolved or not.  A
+    person instructing the bot writes a comment, and Gerrit posts a new
+    top-level one resolved unless you say otherwise, so "OK, bot, take a crack
+    at that" sat on change 68845 for an hour while the console reported that
+    every thread had been handled.  The resolved flag says whether a reviewer
+    wants an answer, which is not the same question as whether anything has
+    happened here since we last looked.
+
+    Threads older than that line stay history.  Without the watermark a first
+    run on any patch would treat every resolved thread it had never seen --
+    every settled argument in the review -- as work waiting to be done.
     """
     concluded = _concluded_review_threads(patch)
+    # The last time any run concluded anything here: the line between what is
+    # history and what has happened since.
+    watermark = max((when for _disposition, when in concluded.values()), default=None)
     pending, settled = [], []
     for thread in snapshot.get("threads") or ():
         if not isinstance(thread, Mapping):
             continue
         thread_id = str(thread.get("thread_id") or "")
+        # A snapshot from before threads carried the flag held only unresolved
+        # ones, so absence means unresolved.
+        unresolved = bool(thread.get("unresolved", True))
+        newest = _newest_comment_moment(thread)
         record = concluded.get(thread_id)
         if record is None:
-            pending.append(thread_id)
+            spoken_since = (
+                watermark is not None and newest is not None and newest > watermark
+            )
+            (pending if unresolved or spoken_since else settled).append(thread_id)
             continue
         _disposition, concluded_at = record
-        newer = False
-        for comment in thread.get("comments") or ():
-            moment = _parse_timestamp(
-                comment.get("updated") if isinstance(comment, Mapping) else None
-            )
-            if moment is not None and moment > concluded_at:
-                newer = True
-                break
+        newer = newest is not None and newest > concluded_at
         (pending if newer else settled).append(thread_id)
     return pending, settled
 
@@ -1188,6 +1249,7 @@ def _apply_standing_policy(patch, *, policy=None, attended=False):
             snapshot = GerritStatusClient.configured().fetch_review_snapshot(
                 patch["url"], expected_revision=str(patch.get("revision_sha") or "")
             )
+            _remember_review_snapshot(patch, snapshot)
             pending, settled = _pending_review_threads(patch, snapshot)
             # Only "every thread was already concluded" short-circuits.  A
             # snapshot with no threads at all is not handled work -- it is an
@@ -3976,14 +4038,28 @@ def _idle_explanation(patch, policy):
     handled = ""
     if policy.review_comments != "off" and int(patch.get("unresolved") or 0) > 0:
         unresolved = int(patch["unresolved"])
-        # Threads a run already concluded stay unresolved on Gerrit on purpose,
-        # so "unresolved > 0" alone would promise a run that the next check
-        # will correctly decline to start.  The exact test needs the snapshot
-        # and happens at poll time; this is the cheap local read of how many
-        # threads have been concluded, which is enough to stop the card
-        # claiming work it is not going to do.
-        concluded = len(_concluded_review_threads(patch))
-        if concluded >= unresolved:
+        # The same reading the last check decided on, through the same
+        # function.  A cheaper stand-in here is what made the card promise
+        # work no check would do, three separate times.
+        work = _review_work(patch)
+        if work is not None:
+            outstanding = len(work[0])
+        elif not _concluded_review_threads(patch):
+            # No check has read this revision yet, but nothing has ever been
+            # concluded on it either, and a settled thread can only be one a
+            # run concluded.  So every thread is work -- not an estimate.
+            outstanding = unresolved
+        else:
+            # Something was concluded here and no check has read the comments
+            # since this process started.  Which threads are still work is the
+            # next check's answer to give, not this one's to guess.
+            outstanding = None
+        if outstanding is None:
+            handled = (
+                f" {unresolved} unresolved review comment(s): the next check "
+                "reads them and decides which are still work."
+            )
+        elif not outstanding:
             handled = (
                 f" {unresolved} unresolved review comment(s) are left open "
                 "deliberately: a run has already been through them and they are "
@@ -4455,7 +4531,7 @@ def _patch_row(patch, jira_base=JIRA_BASE_URL):
         f"<input type='hidden' name='csrf_token' value='{CSRF_TOKEN}'>"
         f"<input type='hidden' name='url' value='{escape(patch['url'], quote=True)}'>"
         "<button class='danger' type='submit'>Remove…</button></form>"
-        "</details>"
+        "</details></div>"
     )
     return (
         "<tr><td>"
@@ -5073,6 +5149,7 @@ class Handler(BaseHTTPRequestHandler):
                 snapshot = GerritStatusClient.configured().fetch_review_snapshot(
                     patch["url"], expected_revision=revision
                 )
+                _remember_review_snapshot(patch, snapshot)
             except (GerritConfigError, GerritRequestError, ValueError) as exc:
                 self.respond(page("Could not capture exact review comments: " + str(exc)))
                 return
@@ -5764,6 +5841,7 @@ class Handler(BaseHTTPRequestHandler):
                 snapshot = GerritStatusClient.configured().fetch_review_snapshot(
                     patch["url"], expected_revision=revision
                 )
+                _remember_review_snapshot(patch, snapshot)
             except (GerritConfigError, GerritRequestError, ValueError) as exc:
                 self.respond(page("Could not capture exact review comments: " + str(exc)))
                 return
