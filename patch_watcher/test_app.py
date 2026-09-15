@@ -1826,6 +1826,37 @@ class PatchWatcherTests(AppGlobalsIsolated):
             self.assertIn("tone-bad", answered)
             self.assertIn("checkpatch rejected every attempt", answered)
 
+    def test_check_now_sits_beside_the_actions_disclosure_not_inside_it(self):
+        """Asking for a fresh read should not be behind a disclosure: the row
+        is as of the last check, and the next thing you want after reading a
+        stale row is a current one."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app.initialize_session_store(root / "s.sqlite3")
+            app.initialize_automation_store(root / "a.sqlite3")
+            app.initialize_standing_policy_store(root / "p.json")
+            record, _ = app.add_patch("https://review.whamcloud.com/c/68763")
+            record.update(change_number=68763, patchset=2, revision_sha="a" * 40)
+            app.sync_automation_patch(record)
+
+            row = app._patch_row(record)
+            self.assertIn("action='/check-now'", row)
+            self.assertIn(">Check now</button>", row)
+            # To its left, and outside the disclosure it sits next to.
+            self.assertLess(
+                row.index("action='/check-now'"),
+                row.index("<details class='patch-actions'"),
+            )
+            self.assertLess(
+                row.index("<div class='patch-controls'>"),
+                row.index("action='/check-now'"),
+            )
+            self.assertIn(
+                str(record["change_number"]),
+                row[row.index("action='/check-now'"):row.index("Check now</button>")],
+            )
+
     def test_a_run_waiting_on_you_is_labelled_counted_and_explained(self):
         """The in-console channel: a paused run shows on the patch row, links
         to itself, is counted in the header, and the run page says how you
@@ -5549,6 +5580,63 @@ class HandlerFaultGuardTests(AppGlobalsIsolated):
         self.assertEqual(caught.exception.code, 500)
         body = caught.exception.read().decode()
         self.assertIn("ltvm is unreadable", body)
+
+    def test_check_now_polls_one_patch_the_way_a_scheduled_check_would(self):
+        """The row says what the next check will do; this button is that
+        check, for one patch, now.  So it reads Gerrit and then applies the
+        patch's level -- doing only the first would make the button mean
+        something different from the sentence above it."""
+
+        port = self._serve()
+        payload = urlencode(
+            {"csrf_token": app.CSRF_TOKEN, "change_number": "68763"}
+        ).encode()
+        request = Request(f"http://127.0.0.1:{port}/check-now", data=payload)
+        request.add_header("Content-Type", "application/x-www-form-urlencoded")
+        watched = {"url": "https://review.whamcloud.com/c/68763",
+                   "change_number": 68763, "patchset": 2}
+        refreshed, observed = [], []
+        with patch.object(app, "PATCHES", [watched]), \
+                patch.object(app, "refresh_watched_patch",
+                             side_effect=lambda item: refreshed.append(item)), \
+                patch.object(app, "_observe_patch_automation",
+                             side_effect=lambda item: observed.append(item)):
+            with urlopen(request, timeout=10) as answer:
+                self.assertEqual(answer.status, 200)
+        self.assertEqual(refreshed, [watched])
+        self.assertEqual(observed, [watched])
+
+    def test_check_now_does_not_act_on_a_patch_it_could_not_read(self):
+        port = self._serve()
+        payload = urlencode(
+            {"csrf_token": app.CSRF_TOKEN, "change_number": "68763"}
+        ).encode()
+        request = Request(f"http://127.0.0.1:{port}/check-now", data=payload)
+        request.add_header("Content-Type", "application/x-www-form-urlencoded")
+        watched = {"url": "https://review.whamcloud.com/c/68763",
+                   "change_number": 68763, "patchset": 2}
+        observed = []
+        with patch.object(app, "PATCHES", [watched]), \
+                patch.object(app, "refresh_watched_patch",
+                             return_value="gerrit said no"), \
+                patch.object(app, "_observe_patch_automation",
+                             side_effect=lambda item: observed.append(item)):
+            with urlopen(request, timeout=10) as answer:
+                body = answer.read().decode()
+        self.assertIn("Could not check 68763", body)
+        self.assertEqual(observed, [])
+
+    def test_check_now_refuses_a_patch_that_is_no_longer_watched(self):
+        port = self._serve()
+        payload = urlencode(
+            {"csrf_token": app.CSRF_TOKEN, "change_number": "99999"}
+        ).encode()
+        request = Request(f"http://127.0.0.1:{port}/check-now", data=payload)
+        request.add_header("Content-Type", "application/x-www-form-urlencoded")
+        with patch.object(app, "PATCHES", []):
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(request, timeout=10)
+        self.assertEqual(caught.exception.code, 409)
 
     def test_a_failing_post_answers_500_rather_than_closing_the_connection(self):
         port = self._serve()
