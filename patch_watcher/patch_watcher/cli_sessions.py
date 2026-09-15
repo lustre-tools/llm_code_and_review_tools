@@ -33,6 +33,8 @@ import json
 import os
 import re
 import subprocess
+
+from patch_watcher import childproc
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -141,7 +143,7 @@ class ClaudeCli:
         self,
         *,
         binary: str = "claude",
-        runner: Runner = subprocess.run,
+        runner: Runner = childproc.run,
         projects_root: Path = DEFAULT_PROJECTS_ROOT,
         timeout: float = 120.0,
     ) -> None:

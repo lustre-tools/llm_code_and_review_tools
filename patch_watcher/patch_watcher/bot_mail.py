@@ -36,6 +36,8 @@ import argparse
 import json
 import os
 import subprocess
+
+from patch_watcher import childproc
 import sys
 import time
 from collections.abc import Callable
@@ -155,7 +157,7 @@ def send(
     subject: str,
     body: str,
     *,
-    runner: Runner = subprocess.run,
+    runner: Runner = childproc.run,
     limit: RateLimit | None = None,
     sendmail_path: str = SENDMAIL_PATH,
 ) -> MailOutcome:

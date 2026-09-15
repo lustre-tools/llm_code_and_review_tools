@@ -13,6 +13,8 @@ import json
 import re
 import selectors
 import subprocess
+
+from patch_watcher import childproc
 import tempfile
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -452,7 +454,7 @@ def _default_runner(argv: Sequence[str]) -> CommandResult:
 
     deadline = time.monotonic() + COMMAND_TIMEOUT
     with tempfile.TemporaryFile() as error_file:
-        with subprocess.Popen(
+        with childproc.popen(
             list(argv),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,

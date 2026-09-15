@@ -25,6 +25,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from patch_watcher import childproc
 from patch_watcher.claude_runner import (
     ClaudeRunner,
     ReadOnlyRunSpec,
@@ -3036,7 +3037,7 @@ class RunController:
         """True when there is a repository here at all to interrogate."""
 
         try:
-            probe = subprocess.run(
+            probe = childproc.run(
                 [
                     "git", "-c", "credential.helper=",
                     "-c", "core.hooksPath=/dev/null",
@@ -3870,7 +3871,7 @@ class RunController:
                     environment["GIT_INDEX_FILE"] = str(
                         Path(index_dir) / f"index-{next(index_counter)}"
                     )
-                    staged = subprocess.run(
+                    staged = childproc.run(
                         [*common, *argv],
                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL, check=False, timeout=120,
@@ -3878,7 +3879,7 @@ class RunController:
                     )
                     if staged.returncode:
                         return None
-                    captured = subprocess.run(
+                    captured = childproc.run(
                         [*common, "diff", "--binary", "--no-ext-diff", "--cached", "HEAD"],
                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                         stderr=subprocess.DEVNULL, check=False, timeout=60,
@@ -3897,7 +3898,7 @@ class RunController:
                     # Staging it into a fresh index is worse still: an empty
                     # index has nothing for "--update" to update, so every
                     # tracked file reads as deleted.
-                    captured = subprocess.run(
+                    captured = childproc.run(
                         [*common, "diff", "--binary", "--no-ext-diff", "HEAD"],
                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                         stderr=subprocess.DEVNULL, check=False, timeout=60,
@@ -4015,22 +4016,22 @@ class RunController:
             "-c", "protocol.file.allow=never", "-C", str(allocation.checkout_path),
         ]
         try:
-            status = subprocess.run(
+            status = childproc.run(
                 [*common, "status", "--porcelain", "--untracked-files=all"],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 check=False, timeout=30,
             )
-            diff = subprocess.run(
+            diff = childproc.run(
                 [*common, "diff", "--binary", "--no-ext-diff", "HEAD"],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 check=False, timeout=60,
             )
-            untracked = subprocess.run(
+            untracked = childproc.run(
                 [*common, "ls-files", "--others", "--exclude-standard", "-z"],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 check=False, timeout=30,
             )
-            changed_names = subprocess.run(
+            changed_names = childproc.run(
                 [*common, "diff", "--name-only", "-z", "HEAD"],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, check=False, timeout=30,
@@ -4094,7 +4095,7 @@ class RunController:
                 raise RunControllerError("untracked source path escapes checkout") from exc
             if not candidate.is_file() or candidate.is_symlink():
                 raise RunControllerError("untracked engineering artifact is not a regular file")
-            addition = subprocess.run(
+            addition = childproc.run(
                 [
                     "git", "-c", "core.hooksPath=/dev/null", "diff", "--binary",
                     # `--` or git parses a leading-dash filename as an option.

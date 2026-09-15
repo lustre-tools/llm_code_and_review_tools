@@ -17,6 +17,8 @@ import platform
 import re
 import shlex
 import subprocess
+
+from patch_watcher import childproc
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -625,7 +627,7 @@ def _collect_macos_memory(
 def collect_host_memory(
     *,
     system: str | None = None,
-    runner: Runner = subprocess.run,
+    runner: Runner = childproc.run,
     reader: Reader = _default_reader,
     clock: Clock = _utc_now,
     timeout: float = 5.0,
@@ -1002,7 +1004,7 @@ def _parse_vm_row(
 def collect_ltvm_inventory(
     *,
     system: str | None = None,
-    runner: Runner = subprocess.run,
+    runner: Runner = childproc.run,
     reader: Reader = _default_reader,
     clock: Clock = _utc_now,
     timeout: float = 10.0,
@@ -1169,7 +1171,7 @@ def collect_process_tree_rss(
     pid: int,
     *,
     expected_command: str | None = None,
-    runner: Runner = subprocess.run,
+    runner: Runner = childproc.run,
     clock: Clock = _utc_now,
     timeout: float = 5.0,
 ) -> ProcessTreeMemoryStatus:
@@ -1290,7 +1292,7 @@ def collect_process_tree_rss(
 def collect_resource_snapshot(
     *,
     system: str | None = None,
-    runner: Runner = subprocess.run,
+    runner: Runner = childproc.run,
     reader: Reader = _default_reader,
     clock: Clock = _utc_now,
     host_timeout: float = 5.0,

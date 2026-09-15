@@ -6,6 +6,8 @@ import json
 import os
 import re
 import subprocess
+
+from patch_watcher import childproc
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -225,7 +227,7 @@ Runner = Callable[..., subprocess.CompletedProcess]
 class SendmailMailer:
     """Small sendmail adapter; never invokes a shell."""
 
-    def __init__(self, path: str, *, runner: Runner = subprocess.run) -> None:
+    def __init__(self, path: str, *, runner: Runner = childproc.run) -> None:
         self.path = path
         self.runner = runner
 
@@ -267,7 +269,7 @@ def send_daily_summary(
     patches: list[dict[str, Any]],
     config: Any,
     *,
-    runner: Runner = subprocess.run,
+    runner: Runner = childproc.run,
     error_log: Path = DEFAULT_ERROR_LOG,
     automation_events: list[dict[str, Any]] | None = None,
 ) -> MailResult:
@@ -342,7 +344,7 @@ def send_automation_alert(
     state: str,
     summary: str,
     timeline: list[Any] | None = None,
-    runner: Runner = subprocess.run,
+    runner: Runner = childproc.run,
 ) -> MailResult:
     """Send one immediate deterministic-retest notice through sendmail."""
 
@@ -465,7 +467,7 @@ def send_human_notice(
     run_id: str,
     question: str,
     run_url: str = "",
-    runner: Runner = subprocess.run,
+    runner: Runner = childproc.run,
 ) -> MailResult:
     """Email the operator that a run is waiting on them, if email is configured."""
 
@@ -491,7 +493,7 @@ def send_session_alert(
     reason: str,
     messages: list[Any],
     confirmation_url: str = "",
-    runner: Runner = subprocess.run,
+    runner: Runner = childproc.run,
 ) -> MailResult:
     """Send one managed-session alert through the configured host sendmail."""
 

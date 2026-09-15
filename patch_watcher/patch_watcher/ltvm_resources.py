@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+
+from patch_watcher import childproc
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -597,7 +599,7 @@ def reconcile_session_resources(
 class LTVMAdapter:
     """Narrow, injected, shell-free adapter for inventory and cleanup."""
 
-    def __init__(self, runner: Runner = subprocess.run, *, timeout: float = 30.0):
+    def __init__(self, runner: Runner = childproc.run, *, timeout: float = 30.0):
         self.runner = runner
         self.timeout = timeout
 

@@ -20,6 +20,8 @@ import json
 import shutil
 import sqlite3
 import subprocess
+
+from patch_watcher import childproc
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -180,7 +182,7 @@ def check_bypass_disclaimer(
     *,
     config_path: Path | None = None,
     probe: bool = False,
-    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    runner: Callable[..., subprocess.CompletedProcess] = childproc.run,
     binary: str = "claude",
 ) -> Check:
     """Report whether `--bg` will accept bypassPermissions.
@@ -218,7 +220,7 @@ def check_bypass_disclaimer(
 
 def _probe_bypass_disclaimer(
     *,
-    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    runner: Callable[..., subprocess.CompletedProcess] = childproc.run,
     binary: str = "claude",
 ) -> Check:
     """Actively test the flag combination.  May start a session; see caller."""
@@ -425,7 +427,7 @@ def check_agent_instructions(pool=None, *, home: Path | None = None) -> list[Che
 
 
 def run_checks(
-    *, runner=subprocess.run, which=_which, pool=None, probe: bool = False
+    *, runner=childproc.run, which=_which, pool=None, probe: bool = False
 ) -> list[Check]:
     checks: list[Check] = []
     checks += check_binaries(which)

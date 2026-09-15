@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 import subprocess
+
+from patch_watcher import childproc
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -101,7 +103,7 @@ def prepare_revision_checkout(
     destination: Path,
     revision: GerritRevision,
     *,
-    runner: Runner = subprocess.run,
+    runner: Runner = childproc.run,
 ) -> Path:
     """Create one private detached checkout at exactly ``revision``.
 
@@ -156,7 +158,7 @@ def prepare_pooled_revision(
     revision: GerritRevision,
     *,
     pool,
-    runner: Runner = subprocess.run,
+    runner: Runner = childproc.run,
 ) -> Path:
     """Pin a declared pool checkout to exactly ``revision``.
 
@@ -347,7 +349,7 @@ def revision_touches_agent_instructions(
     checkout: Path,
     revision_sha: str,
     *,
-    runner: Runner = subprocess.run,
+    runner: Runner = childproc.run,
 ) -> tuple[str, ...]:
     """Return agent-instruction files this revision adds or modifies.
 
@@ -400,7 +402,7 @@ def tree_agent_instructions(
     checkout: Path,
     revision_sha: str,
     *,
-    runner: Runner = subprocess.run,
+    runner: Runner = childproc.run,
 ) -> tuple[str, ...]:
     """Return agent-instruction files PRESENT in the pinned tree.
 

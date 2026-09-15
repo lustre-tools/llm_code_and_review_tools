@@ -22,6 +22,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from patch_watcher import bot_inbox
+from patch_watcher import childproc
 from patch_watcher.automation_state import (
     AutomationConflict,
     AutomationNotFound,
@@ -1819,7 +1820,7 @@ def resource_dashboard_html(*, force=False):
     return render_resource_dashboard(snapshot, sessions, csrf_token=CSRF_TOKEN)
 
 
-def send_status_email(config=None, *, runner=subprocess.run):
+def send_status_email(config=None, *, runner=childproc.run):
     """Send (or dry-run) the current bounded status summary."""
     with PATCHES_LOCK:
         patches = [dict(patch) for patch in PATCHES]
