@@ -3918,21 +3918,33 @@ def _patch_run_html(patch):
         last = _last_finished_session_for_patch(patch)
         if last is not None:
             href = "/runs/" + escape(last.run_id, quote=True)
-            tone = "good" if last.state == "succeeded" else "bad"
+            outcome = last.state.replace("_", " ").capitalize()
+            # A run judges the revision it was pinned to.  Once the patch has
+            # a newer patchset that verdict is history: it is named by the
+            # patchset it judged and carries no colour, because red here is
+            # read as "this patch is broken" and it says nothing about this
+            # patch.  Change 35302 sat at patchset 6, Jenkins passing, under a
+            # red Failed from a patchset 5 run that had in fact uploaded that
+            # very patchset.
+            superseded = not _run_is_for_current_patchset(patch, last)
+            if superseded:
+                tone = "neutral"
+                outcome += f" on PS {int(last.patchset)}"
+            else:
+                tone = "good" if last.state == "succeeded" else "bad"
             why = ""
             failure_code, failure_summary = _run_failure(last)
             # A failure reason earns its place on the row only while it is
             # still the answer to "what should I do about this patch".  Once
             # the patch is settled -- the work landed, nothing is outstanding
             # -- repeating why some earlier attempt died says nothing about
-            # the patch and is read as "still broken".  Change 35302 sat at
-            # patchset 6 with no unresolved comments and Jenkins passing,
-            # under a red line about shell interpreters.  The run is still one
+            # the patch and is read as "still broken".  The run is still one
             # click away, and every failure is listed further down the page.
             if (
                 last.state != "succeeded"
                 and (failure_summary or failure_code)
                 and not settled
+                and not superseded
             ):
                 text = " ".join(str(failure_summary or failure_code).split())
                 why = (
@@ -3941,7 +3953,7 @@ def _patch_run_html(patch):
                 )
             last_html = (
                 "<div class='detail'>Last run: "
-                + _chip(last.state.replace("_", " ").capitalize(), tone)
+                + _chip(outcome, tone)
                 + f" <a href='{href}'>{escape(last.run_id)}</a> "
                 + f"{escape(local_time(last.state_changed_at))}</div>"
                 + why
@@ -4048,9 +4060,16 @@ def _patch_now_html(patch):
     last_html = ""
     if last is not None:
         href = "/runs/" + escape(last.run_id, quote=True)
+        # This panel is the detail, so it says which patchset the verdict is
+        # about rather than dropping it: "failed" reads as the patch's state
+        # unless the revision it judged is on the same line.
+        on_patchset = (
+            f" on patchset {int(last.patchset)}"
+            if not _run_is_for_current_patchset(patch, last) else ""
+        )
         last_html = (
             f" Last run: <a href='{href}'>{escape(last.run_id)}</a> "
-            f"{escape(last.state.replace('_', ' '))} "
+            f"{escape(last.state.replace('_', ' '))}{escape(on_patchset)} "
             f"{escape(local_time(last.state_changed_at))}."
         )
         # A failure says why, here, not only on the run page: the first thing
