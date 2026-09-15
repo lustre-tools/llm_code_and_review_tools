@@ -1,7 +1,5 @@
 import json
 import unittest
-from unittest.mock import patch as mock_patch
-from urllib.request import Request
 
 from patch_watcher import jira_adapter
 
