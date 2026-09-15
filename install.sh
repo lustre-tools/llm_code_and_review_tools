@@ -648,9 +648,9 @@ JIRA_CLOUD_PROJECTS|Project keys on this site, comma-separated|text|"
             SPEC_UNSET_OK="no Cloud site -- Whamcloud Jira is unaffected"
             SPEC_NOTE="A second Jira alongside the one above, for an
         organisation's own Atlassian Cloud site.  Cloud needs the email
-        as well as the token: together they are the credential.  The
-        project keys are how jira tells the two apart -- an issue in
-        one of them goes to Cloud, everything else to the server above."
+        as well as the token: together they are the credential.  jira
+        routes by project key: a ticket in one of the projects you list
+        here goes to this Cloud site, anything else to Whamcloud Jira."
             ;;
         maloo)
             SPEC_LABEL="Maloo"
