@@ -4751,6 +4751,32 @@ class RunController:
             document["notices"] = rows[-CONTROLLER_FAILURE_ROW_LIMIT:]
             self._write_controller_failures(document)
 
+    def clear_time_discontinuities(self) -> int:
+        """Forget the interruptions, and say how many were forgotten.
+
+        They exist to explain an odd-looking run clock, which is a question
+        with a shelf life: once an operator has read them they are a list of
+        times the machine slept, and a panel that only ever grows stops being
+        read at all.  Only the handled gaps go -- anything that is a real
+        fault is left exactly where it is.
+        """
+        with self._controller_failure_lock():
+            document = self._read_controller_failures()
+            failures = [
+                item for item in document.get("failures", [])
+                if isinstance(item, dict)
+            ]
+            legacy = [item for item in failures if item.get("scope") == "clock"]
+            removed = len(legacy) + len(
+                [item for item in document.get("notices", []) if isinstance(item, dict)]
+            )
+            document["failures"] = [
+                item for item in failures if item.get("scope") != "clock"
+            ]
+            document["notices"] = []
+            self._write_controller_failures(document)
+        return removed
+
     def record_controller_failure(
         self, exc: BaseException, *, scope: str, detail: str | None = None
     ) -> None:
@@ -4802,9 +4828,15 @@ class RunController:
             existing["detail"] = row["detail"]
         # Newest last, so the cap drops the stalest distinct faults first.
         rows.sort(key=lambda item: str(item.get("last_seen", "")))
+        # Rebuilt from the schema and the failures alone, this dropped every
+        # interruption the moment any fault was recorded -- the two share one
+        # file, and one of them was writing the other out of it.
         document = {
             "schema": CONTROLLER_FAILURE_SCHEMA,
             "failures": rows[-CONTROLLER_FAILURE_ROW_LIMIT:],
+            "notices": [
+                item for item in document.get("notices", []) if isinstance(item, dict)
+            ],
         }
         self._write_controller_failures(document)
 

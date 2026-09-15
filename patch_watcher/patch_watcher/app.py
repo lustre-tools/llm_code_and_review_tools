@@ -1783,7 +1783,11 @@ def _time_notices_html():
         "clock jumped. Each one was handled: deadlines were re-anchored and no "
         "run was judged idle across the gap. Here so an odd-looking run clock "
         "has an explanation.</p>"
-        "<ol>" + "".join(rows) + "</ol></section>"
+        "<ol>" + "".join(rows) + "</ol>"
+        "<form method='post' action='/interruptions/clear'>"
+        f"<input type='hidden' name='csrf_token' value='{CSRF_TOKEN}'>"
+        "<button class='secondary' type='submit'>Clear these</button></form>"
+        "</section>"
     )
 
 
@@ -6414,6 +6418,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             refresh_resource_status(force=True)
             self.respond(page(outcome))
+            return
+        elif path == "/interruptions/clear":
+            if RUN_CONTROLLER is None:
+                self.respond(page("The controller is not running."))
+                return
+            removed = RUN_CONTROLLER.clear_time_discontinuities()
+            self.respond(page(
+                f"Cleared {removed} interruption(s). Real controller failures "
+                "are untouched."
+            ))
             return
         elif path == "/add":
             message, added = add_watch_request(

@@ -363,6 +363,25 @@ class RunControllerTests(unittest.TestCase):
         # wedged run immortal.
         self.assertEqual(self.controller._supervision_gap, 0.0)
 
+    def test_clearing_interruptions_leaves_real_failures_alone(self):
+        """They explain an odd-looking run clock, which is a question with a
+        shelf life.  A panel that only ever grows stops being read, and the
+        rows it would then bury are the ones that matter."""
+
+        self.controller.record_time_discontinuity("the host slept for 55209s")
+        self.controller.record_controller_failure(
+            RunControllerError("the LTVM inventory is unreadable"), scope="ltvm"
+        )
+        self.assertEqual(len(self.controller.controller_notices()), 1)
+        self.assertEqual(len(self.controller.controller_failures()), 1)
+
+        self.assertEqual(self.controller.clear_time_discontinuities(), 1)
+        self.assertEqual(self.controller.controller_notices(), [])
+        self.assertEqual(
+            [row["summary"] for row in self.controller.controller_failures()],
+            ["the LTVM inventory is unreadable"],
+        )
+
     def test_ticking_on_demand_is_never_mistaken_for_an_interruption(self):
         """A browser or a test ticks whenever it likes; only the supervisor's
         own cadence says anything about whether the host was running."""
