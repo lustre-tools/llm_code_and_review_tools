@@ -188,15 +188,18 @@ class PatchWatcherTests(AppGlobalsIsolated):
 
     def test_autonomous_lane_dashboard_is_disabled_by_default(self):
         with tempfile.TemporaryDirectory() as directory:
-            app.initialize_autonomous_lanes(
+            runtime = app.initialize_autonomous_lanes(
                 Path(directory) / "lanes.json",
                 Path(directory) / "history.jsonl",
             )
             rendered = app.page()
-        self.assertIn("Unattended actions", rendered)
-        self.assertIn("Unattended actions: Disabled", rendered)
-        self.assertIn("deterministic-test-retest", rendered)
-        self.assertIn("Remote writes per exact revision", rendered)
+            controls = runtime.controls.load()
+        # The invariant is the default, not the card that used to describe it:
+        # a lane that may act without being asked starts off.  The card was
+        # removed because it explained two global switches at the length of an
+        # essay above a per-patch ladder that already says what may happen.
+        self.assertFalse(getattr(controls, "global_enabled", True))
+        self.assertNotIn("Acting without being asked", rendered)
 
     def test_post_parser_rejects_unsupported_oversized_and_invalid_forms(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
@@ -1793,7 +1796,11 @@ class PatchWatcherTests(AppGlobalsIsolated):
         # its level starts at Watch only.
         self.assertTrue(global_enabled)
         self.assertEqual(policy_mode, "disabled")
-        self.assertIn("Global execution: Enabled", rendered)
+        # The switch is a button among the fleet actions now, not an essay:
+        # what an operator needs is the switch, plus -- when it is off -- an
+        # unmissable reason nothing is happening, which every patch row gives.
+        self.assertIn("Pause automation", rendered)
+        self.assertNotIn("Acting without being asked", rendered)
         self.assertIn("Test failure handling: <strong>Disabled", rendered)
         self.assertIn("<strong>Build failures</strong>", rendered)
         self.assertIn("<strong>Review comments</strong>", rendered)
