@@ -1455,10 +1455,7 @@ configure_tools() {
     echo "Credentials"
     echo "========================================"
     echo ""
-    echo "One tool at a time.  Enter accepts the value in [brackets], 'n' at"
-    echo "the first question leaves a tool for later, and 'skip' at any prompt"
-    echo "abandons just that tool.  Files are written 0600 under ~/.config and"
-    echo "nothing is sent anywhere except the server the credential is for."
+    echo "Credentials are stored under ~/.config"
     for tool in $CONFIG_TOOLS; do
         if [ -n "$only" ]; then
             case " $only " in
