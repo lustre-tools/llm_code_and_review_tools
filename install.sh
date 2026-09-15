@@ -610,7 +610,7 @@ GERRIT_PASS|Gerrit HTTP password|secret|"
             SPEC_READ_KEYS="GERRIT_URL"
             SPEC_NOTE="Reading -- comments, info, search, diff -- works
         without credentials.  They are needed to reply, vote, push or
-        change a patch, which is most of what people use this for."
+        change a patch."
             ;;
         jira)
             SPEC_LABEL="Jira Server (Whamcloud)"
