@@ -21,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
+from patch_watcher import bot_inbox
 from patch_watcher.automation_state import (
     AutomationConflict,
     AutomationNotFound,
@@ -69,6 +70,7 @@ from patch_watcher.gerrit_status import (
     refresh_patch,
 )
 from patch_watcher.jenkins_adapter import JenkinsSnapshotClient, JenkinsSnapshotError
+from patch_watcher.jira_adapter import JiraClient, JiraConfigError, JiraRequestError
 from patch_watcher.lane_views import render_autonomous_lane_summary
 from patch_watcher.ltvm_resources import (
     LTVMAdapter,
@@ -494,6 +496,7 @@ def initialize_retest_controller(*, start_observer=True, maloo=None):
         _observe_patch_automation,
         interval_seconds=configured_refresh_interval(),
         error_handler=_automation_error,
+        cycle_task=poll_bot_inbox,
     )
     if start_observer:
         AUTOMATION_OBSERVER.start()
@@ -521,6 +524,29 @@ def _advance_failure_action_runs(patch_id=None):
         if _is_failure_action_run(run):
             results.append(FAILURE_ACTION_CONTROLLER.advance(run.run_id))
     return results
+
+
+def poll_bot_inbox():
+    """Notice tickets somebody assigned to the bot, once per cycle.
+
+    Not per patch: an assignment is how work arrives that no watched patch
+    knows about yet, which is the whole point of it.
+    """
+    try:
+        client = JiraClient.configured()
+    except (JiraConfigError, JiraRequestError) as exc:
+        log_structured_error("bot_inbox", str(exc), "")
+        return []
+    announced = bot_inbox.poll(client)
+    for change in announced:
+        if not change.notified:
+            # Expected until the bot has its own Unix account and a working
+            # sendmail.  Recorded so it is findable, and deliberately not
+            # raised: the watching matters more than the announcement of it.
+            log_structured_error(
+                "bot_inbox_notify", f"{change.key}: {change.detail}", ""
+            )
+    return announced
 
 
 def _observe_patch_automation(patch):

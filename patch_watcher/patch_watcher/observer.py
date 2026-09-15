@@ -24,6 +24,7 @@ class BackgroundObserver:
         *,
         interval_seconds: float,
         error_handler: Callable[[dict[str, Any], Exception], Any] | None = None,
+        cycle_task: Callable[[], Any] | None = None,
     ) -> None:
         if interval_seconds <= 0:
             raise ValueError("interval_seconds must be positive")
@@ -32,6 +33,9 @@ class BackgroundObserver:
         self.evaluate_patch = evaluate_patch
         self.interval_seconds = float(interval_seconds)
         self.error_handler = error_handler or (lambda patch, error: None)
+        # Work that belongs to the cycle rather than to any one patch -- the
+        # bot's own inbox, which no patch knows about.
+        self.cycle_task = cycle_task
         self._tick_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -56,6 +60,14 @@ class BackgroundObserver:
                         self.evaluate_patch(patch)
                 except Exception as exc:  # isolate one patch from the rest
                     self.error_handler(patch, exc)
+            if self.cycle_task is not None:
+                try:
+                    self.cycle_task()
+                except Exception as exc:
+                    # Guarded like a patch, and for the same reason: work that
+                    # is nobody's patch must not be able to end the polling of
+                    # everybody's.
+                    self.error_handler({}, exc)
             return True
         finally:
             self._tick_lock.release()

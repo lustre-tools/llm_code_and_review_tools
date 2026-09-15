@@ -79,6 +79,60 @@ if __name__ == "__main__":
     unittest.main()
 
 
+
+class CycleTaskTests(unittest.TestCase):
+    """Work that belongs to the cycle rather than to any one patch."""
+
+    def observer(self, cycle_task, patches=(), refresh=None):
+        errors = []
+        watcher = BackgroundObserver(
+            lambda: list(patches),
+            refresh or (lambda patch: None),
+            lambda patch: None,
+            interval_seconds=60,
+            error_handler=lambda patch, error: errors.append(error),
+            cycle_task=cycle_task,
+        )
+        return watcher, errors
+
+    def test_it_runs_once_per_tick_not_once_per_patch(self):
+        """An assignment is how work arrives that no watched patch knows
+        about, so it cannot be discovered by looking at patches."""
+
+        calls = []
+        watcher, _ = self.observer(lambda: calls.append(1),
+                                   patches=[{"url": "a"}, {"url": "b"}])
+        watcher.tick()
+        watcher.tick()
+        self.assertEqual(len(calls), 2)
+
+    def test_a_failing_cycle_task_does_not_end_the_polling(self):
+        """Guarded like a patch, and for the same reason: work that is
+        nobody's patch must not be able to end the polling of everybody's."""
+
+        def boom():
+            raise RuntimeError("no sendmail on this host")
+
+        watcher, errors = self.observer(boom, patches=[{"url": "a"}])
+        self.assertTrue(watcher.tick())
+        self.assertTrue(watcher.tick())
+        self.assertEqual(len(errors), 2)
+        self.assertIn("no sendmail", str(errors[0]))
+
+    def test_it_still_runs_when_a_patch_refresh_failed(self):
+        """A broken patch must not hide an assignment."""
+
+        calls = []
+        def refresh(patch):
+            raise RuntimeError("gerrit is down")
+
+        watcher, errors = self.observer(lambda: calls.append(1),
+                                        patches=[{"url": "a"}], refresh=refresh)
+        watcher.tick()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(errors), 1)
+
+
 class ObserverSurvivalTests(unittest.TestCase):
     """The polling thread must outlive any single failure.
 
