@@ -78,6 +78,13 @@ from patch_watcher.ltvm_resources import (
 )
 from patch_watcher.maloo_adapter import MalooAdapter
 from patch_watcher.observer import BackgroundObserver
+from patch_watcher.patch_group import (
+    DEFAULT_GROUP_CONFIG as DEFAULT_PATCH_GROUP_FILE,
+)
+from patch_watcher.patch_group import (
+    PatchGroupError,
+    PatchGroupStore,
+)
 from patch_watcher.reporting import (
     compose_gerrit_help_message,
     log_structured_error,
@@ -187,6 +194,7 @@ AUTOMATION_STORE = None
 RETEST_CONTROLLER = None
 FAILURE_ACTION_CONTROLLER = None
 STANDING_POLICY_STORE = None
+PATCH_GROUP_STORE = None
 AUTONOMOUS_LANE_STORE = None
 AUTONOMOUS_LANE_HISTORY = None
 AUTONOMOUS_LANE_RUNTIME = None
@@ -264,6 +272,14 @@ def initialize_standing_policy_store(path=DEFAULT_STANDING_POLICY_FILE):
     global STANDING_POLICY_STORE
     STANDING_POLICY_STORE = StandingPolicyStore(path)
     return STANDING_POLICY_STORE
+
+
+def initialize_patch_group_store(path=DEFAULT_PATCH_GROUP_FILE):
+    """Open the private document of declared change groups."""
+
+    global PATCH_GROUP_STORE
+    PATCH_GROUP_STORE = PatchGroupStore(path)
+    return PATCH_GROUP_STORE
 
 
 def initialize_autonomous_lanes(
@@ -1841,11 +1857,31 @@ def _refresh_errors_html(patch):
     )
 
 
+def _owning_change_numbers(change_number):
+    """Every change a run on this one also speaks for.
+
+    A declared group is handled as a whole, so a run started for any member
+    is responsible for all of them -- it may edit a different patch of the
+    series than the one that triggered it, and it decides whether the chain
+    needs a rebase.  Ownership therefore has to cover the set: two agents in
+    one series would rebase and upload over each other.
+    """
+    change = str(change_number)
+    if PATCH_GROUP_STORE is None:
+        return {change}
+    try:
+        group = PATCH_GROUP_STORE.for_change(change)
+    except PatchGroupError:
+        return {change}
+    return set(group.members) if group is not None else {change}
+
+
 def _active_session_for_patch(change_number):
+    owned = _owning_change_numbers(change_number)
     if SESSION_STORE is None:
         return None
     for session in SESSION_STORE.list_sessions(include_terminal=False):
-        if session.patch_id == str(change_number):
+        if session.patch_id in owned:
             return session
     return None
 
@@ -1873,15 +1909,18 @@ def _revision_owner_session(patch):
     active = _active_session_for_patch(change_number)
     if active is not None:
         return active
+    owned = _owning_change_numbers(change_number)
     revision = str(patch.get("revision_sha") or "").lower()
     if not revision:
         return None
     checked_at = _parse_timestamp(patch.get("last_checked"))
     for session in SESSION_STORE.list_sessions(include_terminal=True):
-        if (
-            session.patch_id != str(change_number)
-            or session.state != "succeeded"
-            or str(session.revision or "").lower() != revision
+        if session.patch_id not in owned or session.state != "succeeded":
+            continue
+        # The revision test only applies to the change the run was pinned to;
+        # a sibling's run held no revision of THIS change to compare against.
+        if session.patch_id == str(change_number) and (
+            str(session.revision or "").lower() != revision
         ):
             continue
         finished_at = session.state_changed_at
@@ -6274,6 +6313,7 @@ def main(argv=None):
     initialize_session_store(args.session_database)
     initialize_automation_store(args.automation_database)
     initialize_standing_policy_store(args.standing_policy_file)
+    initialize_patch_group_store()
     initialize_autonomous_lanes(
         args.autonomous_lane_file, args.autonomous_lane_history,
     )

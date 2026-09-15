@@ -25,6 +25,7 @@ from patch_watcher.maloo_adapter import (
     MalooBugLinks,
     MalooLinkBugResult,
 )
+from patch_watcher.patch_group import PatchGroup
 from patch_watcher.run_views import render_investigate_control, render_run_detail
 
 _HIDDEN_INPUT_RE = re.compile(
@@ -1361,6 +1362,62 @@ class PatchWatcherTests(AppGlobalsIsolated):
                     result={"schema": "patch-watcher-engineering-report/v1",
                             "state": "failed", "summary": "I could not do it."})
             ))
+
+    def test_a_run_on_one_change_owns_its_whole_declared_group(self):
+        """A group is handled as a whole, so a run started for any member
+        speaks for all of them: it may edit a different patch of the series
+        than the one that triggered it, and it decides whether the chain needs
+        a rebase.  Two agents loose in one series would rebase and upload over
+        each other."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = app.initialize_session_store(root / "s.sqlite3")
+            groups = app.initialize_patch_group_store(root / "groups.json")
+            groups.save(PatchGroup("68763", ["68763", "68764", "68845"]))
+
+            store.register_pinned_session(
+                "s1", patch_id="68764", run_id="pw-review-68764-ps2-live",
+                revision="a" * 40, patchset=2, profile="engineering",
+                state="running",
+            )
+
+            # Every sibling is spoken for, not just the change that ran.
+            for member in ("68763", "68764", "68845"):
+                owner = app._active_session_for_patch(member)
+                self.assertIsNotNone(owner, f"{member} must be owned by the live run")
+                self.assertEqual(owner.run_id, "pw-review-68764-ps2-live")
+
+            # A change outside the group is unaffected.
+            self.assertIsNone(app._active_session_for_patch("35302"))
+
+            # And the revision-owner window follows the group too, without
+            # comparing a sibling's revision against this change's.
+            store.finish_session("s1", "succeeded", result={
+                "schema": "patch-watcher-engineering-report/v1",
+                "state": "complete", "summary": "done", "changed_files": [],
+            })
+            held = app._revision_owner_session(
+                {"change_number": 68845, "revision_sha": "b" * 40}
+            )
+            self.assertIsNotNone(held)
+            self.assertEqual(held.run_id, "pw-review-68764-ps2-live")
+
+    def test_without_a_group_ownership_is_still_one_change(self):
+        """The group store is optional; nothing may widen ownership by
+        accident when no group is declared."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = app.initialize_session_store(root / "s.sqlite3")
+            app.initialize_patch_group_store(root / "groups.json")
+            store.register_pinned_session(
+                "s1", patch_id="68764", run_id="pw-review-68764-ps2-live",
+                revision="a" * 40, patchset=2, profile="engineering",
+                state="running",
+            )
+            self.assertIsNotNone(app._active_session_for_patch("68764"))
+            self.assertIsNone(app._active_session_for_patch("68763"))
 
     def test_a_run_waiting_on_you_is_labelled_counted_and_explained(self):
         """The in-console channel: a paused run shows on the patch row, links
