@@ -707,6 +707,17 @@ def _render_instructions(
     return "\n".join(sections)
 
 
+def _controller_recoveries(document: Mapping[str, Any]) -> dict[str, str]:
+    """When each scope last worked, from a document written by any version."""
+    raw = document.get("recoveries")
+    if not isinstance(raw, Mapping):
+        return {}
+    return {
+        str(key): str(value) for key, value in raw.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+
 class RunController:
     """Durable dispatcher; browser requests only enqueue controller intent."""
 
@@ -798,6 +809,7 @@ class RunController:
         # tell "blipped once" from "has been down all afternoon" in the durable
         # record, and a restart legitimately starts that count over.
         self._ltvm_inventory_failures = 0
+        self._recovered_scopes: set[str] = set()
 
     def _reconcile_engineering_state_after_restart(self) -> None:
         """Reconnect open checkout allocations to their durable sessions.
@@ -1768,6 +1780,8 @@ class RunController:
             # controller record instead -- deduplicated and counted, so a fault
             # that recurs every tick stays one loud row rather than flooding.
             self.record_controller_failure(exc, scope="tick")
+        else:
+            self.record_controller_recovery("tick")
         finally:
             self._tick_lock.release()
 
@@ -1931,6 +1945,7 @@ class RunController:
                 )
             else:
                 available = True
+                self.record_controller_recovery("ltvm_baseline")
                 vm_names = sorted({
                     vm.name
                     for vm in inventory.vms_named_for_checkout(checkout_index)
@@ -2439,6 +2454,7 @@ class RunController:
             )
             return
         self._ltvm_inventory_failures = 0
+        self.record_controller_recovery("ltvm_inventory")
         for session in self._engineering_sessions():
             if session.state not in TERMINAL_STATES:
                 self._register_ltvm_observations(session, inventory)
@@ -4858,6 +4874,7 @@ class RunController:
         if detail:
             row["detail"] = str(detail)[:CONTROLLER_FAILURE_SUMMARY_CHARS]
         now = self.clock().isoformat()
+        self._recovered_scopes.discard(str(scope))
         with self._controller_failure_lock():
             self._merge_controller_failure(row, now)
 
@@ -4888,14 +4905,51 @@ class RunController:
         # Rebuilt from the schema and the failures alone, this dropped every
         # interruption the moment any fault was recorded -- the two share one
         # file, and one of them was writing the other out of it.
+        recoveries = _controller_recoveries(document)
+        # Faulting again makes the scope live again, whatever it did before.
+        recoveries.pop(row["scope"], None)
         document = {
             "schema": CONTROLLER_FAILURE_SCHEMA,
             "failures": rows[-CONTROLLER_FAILURE_ROW_LIMIT:],
             "notices": [
                 item for item in document.get("notices", []) if isinstance(item, dict)
             ],
+            "recoveries": recoveries,
         }
         self._write_controller_failures(document)
+
+    def record_controller_recovery(self, scope: str) -> None:
+        """Note that a scope worked, so its last fault stops reading as live.
+
+        The panel says runs may not start and finished runs may not be cleaned
+        up.  That is true while a fault holds and false the moment it clears,
+        and nothing recorded the clearing: one `ltvm list --json` timeout sat
+        under that sentence for an hour, across a restart, while every
+        inventory since had answered in under a tenth of a second.
+
+        The row is moved, not deleted.  A fault that recurs weekly is only
+        visible as a pattern if the record outlives its own recovery.
+
+        At most one write per scope per process: a healthy tick reads nothing
+        and writes nothing once it has said so.
+        """
+
+        scope = str(scope)
+        if scope in self._recovered_scopes:
+            return
+        self._recovered_scopes.add(scope)
+        now = self.clock().isoformat()
+        with self._controller_failure_lock():
+            document = self._read_controller_failures()
+            if not any(
+                isinstance(item, dict) and item.get("scope") == scope
+                for item in document.get("failures", [])
+            ):
+                return
+            recoveries = _controller_recoveries(document)
+            recoveries[scope] = now
+            document["recoveries"] = recoveries
+            self._write_controller_failures(document)
 
     def controller_failures(self) -> list[dict[str, Any]]:
         """Return the durable session-independent failure rows, newest last."""
@@ -4903,10 +4957,17 @@ class RunController:
         # Clock rows written before interruptions had their own heading stay
         # on disk untouched and are read as what they always were: handled
         # gaps, not faults that stop dispatch.
-        return [
-            item for item in self._read_controller_failures().get("failures", [])
-            if isinstance(item, dict) and item.get("scope") != "clock"
-        ]
+        document = self._read_controller_failures()
+        recoveries = _controller_recoveries(document)
+        rows = []
+        for item in document.get("failures", []):
+            if not isinstance(item, dict) or item.get("scope") == "clock":
+                continue
+            recovered = recoveries.get(str(item.get("scope") or ""))
+            if recovered and recovered > str(item.get("last_seen") or ""):
+                item = dict(item, recovered_at=recovered)
+            rows.append(item)
+        return rows
 
     def controller_notices(self) -> list[dict[str, Any]]:
         """Handled time gaps, newest last.  Not faults; see the recorder."""

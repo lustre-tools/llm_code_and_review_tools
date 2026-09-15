@@ -1692,28 +1692,58 @@ def controller_failures_html():
     notices_html = _time_notices_html()
     if not failures:
         return notices_html
-    rows = []
-    for failure in reversed(failures[-20:]):
+
+    def row_html(failure, *, recovered=False):
         count = failure.get("count") or 1
         repeated = f" &middot; seen {escape(str(count))}&times;" if int(count) > 1 else ""
-        detail = failure.get("detail") or ""
-        rows.append(
+        detail = "" if recovered else str(failure.get("detail") or "")
+        since = (
+            " &middot; working since "
+            + escape(str(failure.get("recovered_at") or ""))
+            if recovered else ""
+        )
+        return (
             "<li><strong>" + escape(str(failure.get("scope") or "controller"))
             + "</strong>: <code>" + escape(str(failure.get("error_type") or "error"))
             + "</code> " + escape(str(failure.get("summary") or ""))
             + repeated
             + "<div class='detail'>last seen "
             + escape(str(failure.get("last_seen") or "unknown"))
-            + (" &middot; " + escape(str(detail)) if detail else "")
+            + since
+            + (" &middot; " + escape(detail) if detail else "")
             + "</div></li>"
         )
+
+    recent = list(reversed(failures[-20:]))
+    # A fault the scope has worked since is not what this panel is for: its
+    # heading is an assertion that dispatch is impeded, and an operator
+    # reading it about something that recovered an hour ago learns nothing
+    # true.  It is kept below, where a fault that keeps coming back is still
+    # visible as a pattern.
+    live = [item for item in recent if not item.get("recovered_at")]
+    recovered = [item for item in recent if item.get("recovered_at")]
+    recovered_html = ""
+    if recovered:
+        recovered_html = (
+            "<section class='card recovered-failures'>"
+            "<details><summary>Recovered faults (" + str(len(recovered))
+            + ")</summary><p class='detail'>These stopped: the same work has "
+            "succeeded since. Kept because a fault that keeps returning is "
+            "only visible as a pattern if its record outlives its recovery."
+            "</p><ol>"
+            + "".join(row_html(item, recovered=True) for item in recovered)
+            + "</ol></details></section>"
+        )
+    if not live:
+        return notices_html + recovered_html
     return (
         "<section class='card controller-failures' role='alert' "
         "aria-labelledby='controller-failures-title'>"
         "<h2 id='controller-failures-title'>Controller failures</h2>"
         "<p class='detail'>Faults that belong to no single run. While these "
         "recur, runs may not start and finished runs may not be cleaned up.</p>"
-        "<ol>" + "".join(rows) + "</ol></section>" + notices_html
+        "<ol>" + "".join(row_html(item) for item in live)
+        + "</ol></section>" + notices_html + recovered_html
     )
 
 

@@ -1,5 +1,6 @@
 import contextlib
 import sqlite3
+import json
 import tempfile
 import threading
 import time
@@ -1472,3 +1473,89 @@ class StopRunnerOnceTests(unittest.TestCase):
         session = SimpleNamespace(session_id="s1", run_id="run-1")
         RunController._stop_runner_once(controller, session, object())
         self.assertTrue(events[0].payload["signalled"])
+
+
+class ControllerRecoveryTests(unittest.TestCase):
+    """A fault the controller has worked past is not a live fault.
+
+    One `ltvm list --json` timeout sat under "runs may not start and finished
+    runs may not be cleaned up" for an hour, across a restart, while every
+    inventory since had answered in under a tenth of a second.
+    """
+
+    def _controller(self, root):
+        controller = RunController.__new__(RunController)
+        controller.controller_failure_path = Path(root) / "controller-failures.json"
+        controller.runs_directory = Path(root) / "runs"
+        controller.clock = lambda: datetime(2026, 9, 15, 19, 0, tzinfo=UTC)
+        controller._recovered_scopes = set()
+        return controller
+
+    def test_a_scope_that_works_again_stops_reading_as_live(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = self._controller(temp_dir)
+            controller.record_controller_failure(
+                TimeoutError("LTVM command could not run: TimeoutExpired"),
+                scope="ltvm_inventory", detail="1 consecutive failures",
+            )
+            live = controller.controller_failures()
+            self.assertEqual(len(live), 1)
+            self.assertNotIn("recovered_at", live[0])
+
+            controller.clock = lambda: datetime(2026, 9, 15, 19, 5, tzinfo=UTC)
+            controller.record_controller_recovery("ltvm_inventory")
+            rows = controller.controller_failures()
+            # Kept, so a fault that keeps returning is visible as a pattern.
+            self.assertEqual(len(rows), 1)
+            self.assertTrue(rows[0]["recovered_at"])
+
+    def test_a_scope_that_faults_again_is_live_again(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = self._controller(temp_dir)
+            controller.record_controller_failure(
+                TimeoutError("nope"), scope="ltvm_inventory"
+            )
+            controller.clock = lambda: datetime(2026, 9, 15, 19, 5, tzinfo=UTC)
+            controller.record_controller_recovery("ltvm_inventory")
+            self.assertTrue(controller.controller_failures()[0].get("recovered_at"))
+
+            controller.clock = lambda: datetime(2026, 9, 15, 19, 9, tzinfo=UTC)
+            controller.record_controller_failure(
+                TimeoutError("nope"), scope="ltvm_inventory"
+            )
+            self.assertFalse(
+                controller.controller_failures()[0].get("recovered_at"),
+                "a scope that faulted again is impeding dispatch again",
+            )
+
+    def test_recovery_of_a_scope_that_never_faulted_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = self._controller(temp_dir)
+            controller.record_controller_recovery("tick")
+            self.assertFalse(controller.controller_failure_path.exists())
+
+    def test_recovery_is_recorded_once_per_process(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = self._controller(temp_dir)
+            controller.record_controller_failure(TimeoutError("x"), scope="tick")
+            controller.clock = lambda: datetime(2026, 9, 15, 19, 5, tzinfo=UTC)
+            controller.record_controller_recovery("tick")
+            first = controller.controller_failure_path.read_text()
+            controller.clock = lambda: datetime(2026, 9, 15, 19, 30, tzinfo=UTC)
+            controller.record_controller_recovery("tick")
+            self.assertEqual(controller.controller_failure_path.read_text(), first)
+
+    def test_a_recovery_does_not_erase_the_notices_beside_it(self):
+        """The two share one document, and a rebuild from failures alone has
+        written the other out of it before."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            controller = self._controller(temp_dir)
+            controller.record_controller_failure(TimeoutError("x"), scope="tick")
+            document = json.loads(controller.controller_failure_path.read_text())
+            document["notices"] = [{"scope": "clock", "last_seen": "2026-09-15"}]
+            controller.controller_failure_path.write_text(json.dumps(document))
+            controller.clock = lambda: datetime(2026, 9, 15, 19, 5, tzinfo=UTC)
+            controller.record_controller_recovery("tick")
+            controller.record_controller_failure(TimeoutError("y"), scope="tick")
+            after = json.loads(controller.controller_failure_path.read_text())
+            self.assertEqual(len(after["notices"]), 1)
