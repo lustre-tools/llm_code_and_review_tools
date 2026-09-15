@@ -200,6 +200,10 @@ CONTROLLER_FAULT_LIMIT = 3
 # minutes between ticks -- but WSL2 NTP corrections routinely move the wall
 # clock by much more than that, in both directions.
 CLOCK_STEP_TOLERANCE_SECONDS = 120.0
+# How late a tick may be before the supervisor is treated as having been away
+# rather than merely busy.  The poll is one second, so this is generous by two
+# orders of magnitude and still far below any run deadline.
+SUPERVISION_GAP_SECONDS = 120.0
 CLOCK_STEP_EVENT = "clock_step_detected"
 EVIDENCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$")
 SECRET_KEY_PARTS = ("token", "password", "passwd", "secret", "api_key", "credential")
@@ -739,6 +743,8 @@ class RunController:
         # session_id -> consecutive probes that found a live worker whose
         # control socket would not answer. Cleared by any good probe.
         self._unreachable_probes: dict[str, int] = {}
+        # Seconds the supervisor's own sleep overshot, awaiting the next tick.
+        self._supervision_gap = 0.0
         self._controller_faults: dict[str, int] = {}
         # Wall and monotonic readings from the previous tick. Their divergence
         # is the only evidence available that the host clock stepped, and
@@ -1116,7 +1122,15 @@ class RunController:
             except Exception as exc:
                 with contextlib.suppress(Exception):
                     self.record_controller_failure(exc, scope="supervise")
+            before = self.monotonic()
             self._stop.wait(self.poll_seconds)
+            # A sleep that returns far later than it was asked to is the host
+            # having stopped, not the run having idled.  Measured here rather
+            # than in `tick` so that ticking on demand -- a browser, a test --
+            # never looks like an interruption.
+            overshoot = self.monotonic() - before - self.poll_seconds
+            if overshoot > SUPERVISION_GAP_SECONDS:
+                self._supervision_gap = overshoot
 
     def request_investigation(
         self, patch: Mapping[str, Any], *, model: str = "", effort: str = ""
@@ -1737,6 +1751,17 @@ class RunController:
         the next window is measured from now, and the caller suppresses
         timeout enforcement for this tick -- the tick that spans a
         discontinuity cannot measure anything across it.
+
+        A suspended host is the same problem wearing different clothes, and
+        the drift test cannot see it: on this WSL2 host CLOCK_MONOTONIC is
+        CLOCK_BOOTTIME, so both clocks cross a fifteen hour sleep together and
+        the drift is zero.  A run that was mid-work when the machine stopped
+        then reads as fifteen hours idle -- which is exactly how one was
+        killed, having done nothing wrong but be asleep along with everything
+        else.  So the second test is on the supervisor itself: a tick that
+        arrives long after the one before it means nothing was being
+        supervised in between, and nothing may be judged for inactivity across
+        a period when nobody was watching.
         """
 
         wall = self.clock().timestamp()
@@ -1748,15 +1773,29 @@ class RunController:
         if previous_wall is None or previous_monotonic is None:
             return False
         drift = (wall - previous_wall) - (monotonic - previous_monotonic)
-        if abs(drift) <= CLOCK_STEP_TOLERANCE_SECONDS:
+        stepped = abs(drift) > CLOCK_STEP_TOLERANCE_SECONDS
+        # Set by the supervisor loop when its own sleep came back late, which
+        # is the only reliable sign here that the host stopped.  It cannot be
+        # inferred from the two clocks: on this WSL2 host CLOCK_MONOTONIC is
+        # CLOCK_BOOTTIME, so both cross a suspend together and the drift is
+        # zero.  Nor from the size of the gap alone -- a tick that is simply
+        # far apart from the last is how elapsed time looks to a caller that
+        # ticks on demand, and treating that as "nobody was watching" would
+        # re-anchor a wedged run forever.
+        gap, self._supervision_gap = self._supervision_gap, 0.0
+        if not stepped and gap <= 0:
             return False
+        if gap > 0:
+            reason = (
+                f"the supervisor was not scheduled for {gap:.0f}s -- a host "
+                "that slept, or one too loaded to run it. Nothing was watched "
+                "over that period, so no run is judged idle across it"
+            )
+        else:
+            reason = f"host clock stepped {drift:+.0f}s relative to elapsed time"
         with contextlib.suppress(Exception):
-            self.record_controller_failure(
-                RunControllerError(
-                    f"host clock stepped {drift:+.0f}s relative to elapsed time; "
-                    "inactivity deadlines were re-anchored"
-                ),
-                scope="clock",
+            self.record_time_discontinuity(
+                f"{reason}; inactivity deadlines were re-anchored"
             )
         for session in self.store.list_sessions(include_terminal=False):
             with contextlib.suppress(Exception):
@@ -4679,6 +4718,39 @@ class RunController:
                 at=self.clock(),
             )
 
+    def record_time_discontinuity(self, summary: str) -> None:
+        """Record a handled gap in time, which is not a fault.
+
+        A clock step and a suspended host are both expected on a workstation,
+        and both are fully handled: deadlines are re-anchored and no run is
+        judged across the gap.  Filing them as controller failures put them
+        under a heading that says runs may not start and finished runs may not
+        be cleaned up, which is untrue of them and drowns the rows where it IS
+        true.  They are worth seeing -- an operator wondering why a run's clock
+        looks odd should find the answer -- so they are kept, separately, and
+        described as what they are.
+        """
+
+        row = {"scope": "clock", "summary": str(summary)[:CONTROLLER_FAILURE_SUMMARY_CHARS]}
+        now = self.clock().isoformat()
+        with self._controller_failure_lock():
+            document = self._read_controller_failures()
+            rows = [
+                item for item in document.get("notices", [])
+                if isinstance(item, dict) and item.get("summary") != row["summary"]
+            ]
+            existing = next(
+                (item for item in document.get("notices", [])
+                 if isinstance(item, dict) and item.get("summary") == row["summary"]),
+                None,
+            )
+            row["count"] = int((existing or {}).get("count") or 0) + 1
+            row["first_seen"] = (existing or {}).get("first_seen") or now
+            row["last_seen"] = now
+            rows.append(row)
+            document["notices"] = rows[-CONTROLLER_FAILURE_ROW_LIMIT:]
+            self._write_controller_failures(document)
+
     def record_controller_failure(
         self, exc: BaseException, *, scope: str, detail: str | None = None
     ) -> None:
@@ -4741,6 +4813,14 @@ class RunController:
 
         return [
             item for item in self._read_controller_failures().get("failures", [])
+            if isinstance(item, dict)
+        ]
+
+    def controller_notices(self) -> list[dict[str, Any]]:
+        """Handled time gaps, newest last.  Not faults; see the recorder."""
+
+        return [
+            item for item in self._read_controller_failures().get("notices", [])
             if isinstance(item, dict)
         ]
 

@@ -1680,8 +1680,9 @@ def controller_failures_html():
             "<p class='error'>The controller failure record could not be read.</p>"
             "</section>"
         )
+    notices_html = _time_notices_html()
     if not failures:
-        return ""
+        return notices_html
     rows = []
     for failure in reversed(failures[-20:]):
         count = failure.get("count") or 1
@@ -1703,6 +1704,43 @@ def controller_failures_html():
         "<h2 id='controller-failures-title'>Controller failures</h2>"
         "<p class='detail'>Faults that belong to no single run. While these "
         "recur, runs may not start and finished runs may not be cleaned up.</p>"
+        "<ol>" + "".join(rows) + "</ol></section>" + notices_html
+    )
+
+
+def _time_notices_html():
+    """Handled gaps in time, kept well away from the word "failure".
+
+    A clock step and a suspended host are both expected on a workstation and
+    both are fully handled.  Filing them under a heading that says runs may
+    not start was untrue of them, and seven of them in a row buried the rows
+    where it was true.
+    """
+    if RUN_CONTROLLER is None or not hasattr(RUN_CONTROLLER, "controller_notices"):
+        return ""
+    try:
+        notices = RUN_CONTROLLER.controller_notices()
+    except Exception:
+        return ""
+    if not notices:
+        return ""
+    rows = []
+    for notice in reversed(notices[-10:]):
+        count = int(notice.get("count") or 1)
+        repeated = f" &middot; seen {count}&times;" if count > 1 else ""
+        rows.append(
+            "<li>" + escape(str(notice.get("summary") or "")) + repeated
+            + "<div class='detail'>last seen "
+            + escape(local_time(notice.get("last_seen") or "", timespec="seconds"))
+            + "</div></li>"
+        )
+    return (
+        "<section class='card time-notices' aria-labelledby='time-notices-title'>"
+        "<h2 id='time-notices-title'>Interruptions</h2>"
+        "<p class='detail'>Times this host stopped watching -- it slept, or its "
+        "clock jumped. Each one was handled: deadlines were re-anchored and no "
+        "run was judged idle across the gap. Here so an odd-looking run clock "
+        "has an explanation.</p>"
         "<ol>" + "".join(rows) + "</ol></section>"
     )
 

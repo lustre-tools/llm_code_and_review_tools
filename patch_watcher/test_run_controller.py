@@ -327,6 +327,51 @@ class RunControllerTests(unittest.TestCase):
             "agent_inactivity_timeout",
         )
 
+    def test_a_host_that_slept_does_not_make_its_runs_look_idle(self):
+        """A run mid-work when the machine stopped is not an idle run.
+
+        The drift test cannot see a suspend here: on this WSL2 host
+        CLOCK_MONOTONIC is CLOCK_BOOTTIME, so both clocks cross a fifteen hour
+        sleep together and the drift is zero.  One run was killed for
+        "inactivity" having done nothing but be asleep along with the rest of
+        the machine.  The signal is the supervisor's own sleep coming back
+        late, which is why it is measured there.
+        """
+
+        session = self.start_run()
+        # What the supervisor loop records when its one-second wait returns
+        # fifteen hours later.
+        self.controller._supervision_gap = 55209.0
+        self.now += timedelta(hours=15)
+        self.controller.tick()
+
+        self.assertEqual(
+            self.store.get_session(session.session_id).state, "running",
+            "a sleeping host must not count as an idle agent",
+        )
+        notices = self.controller.controller_notices()
+        self.assertTrue(notices)
+        self.assertIn("not scheduled", notices[-1]["summary"])
+        # Recorded as an interruption, not filed among the faults that stop
+        # dispatch: it is fully handled, and burying the real ones is the cost.
+        self.assertEqual(
+            [row for row in self.controller.controller_failures()
+             if "not scheduled" in str(row.get("summary"))],
+            [],
+        )
+        # Consumed once: a gap grants one fresh window, it does not make a
+        # wedged run immortal.
+        self.assertEqual(self.controller._supervision_gap, 0.0)
+
+    def test_ticking_on_demand_is_never_mistaken_for_an_interruption(self):
+        """A browser or a test ticks whenever it likes; only the supervisor's
+        own cadence says anything about whether the host was running."""
+
+        self.start_run()
+        self.now += timedelta(hours=15)
+        self.controller.tick()
+        self.assertEqual(self.controller.controller_notices(), [])
+
     def test_an_ordinary_slow_tick_is_not_mistaken_for_a_clock_step(self):
         """Wall and monotonic move together, so nothing is re-anchored."""
 
