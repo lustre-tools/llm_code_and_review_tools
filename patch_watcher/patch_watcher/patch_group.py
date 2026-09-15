@@ -15,8 +15,20 @@ run, and it would be wrong exactly when the rebase question matters most.  The
 operator says which changes belong together; Gerrit says what state they are
 in.
 
-Order is the operator's too, base first.  It is what lets a report say "this
-belongs in the second patch, not the third".
+A group is one of two shapes, and they are not the same question.
+
+A SERIES is stacked: the changes depend on each other, the order is the
+operator's and is meaningful base-first, and rebasing one moves the ones above
+it.  "Does this need a rebase" and "this fix belongs in the second patch, not
+the third" are both questions about the order.
+
+A FLOCK is merely related: several changes on one ticket, or the same bug in
+different components, with no dependency between them.  There is no base and
+no tip, and an agent told otherwise would invent an ordering it then reasons
+from -- so a flock's members are held as a set, sorted for a stable
+representation, and asking one for its base is an error rather than a guess.
+
+What both share is that one agent is responsible for all of them at once.
 """
 
 from __future__ import annotations
@@ -33,6 +45,9 @@ from pathlib import Path
 DEFAULT_GROUP_CONFIG = Path.home() / ".config" / "patch-watcher" / "patch-groups.json"
 MAX_GROUP_MEMBERS = 32
 MAX_LABEL_CHARS = 200
+# "series": stacked, order meaningful, base first.
+# "flock": related but independent, no order at all.
+GROUP_KINDS = ("series", "flock")
 
 
 class PatchGroupError(RuntimeError):
@@ -68,16 +83,31 @@ def _members(values: Sequence[object]) -> tuple[str, ...]:
 
 @dataclasses.dataclass(frozen=True)
 class PatchGroup:
-    """One declared set of changes, in the operator's order, base first."""
+    """One declared set of changes handled together.
+
+    A ``series`` keeps the operator's order, base first, because the order is
+    a fact about the patches.  A ``flock`` is sorted, because any order it
+    appeared to have would be an accident of how it was typed.
+    """
 
     group_id: str
     members: tuple[str, ...]
+    kind: str = "series"
     label: str = ""
     version: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "group_id", _change_id(self.group_id))
-        object.__setattr__(self, "members", _members(self.members))
+        kind = str(self.kind or "").strip().casefold()
+        if kind not in GROUP_KINDS:
+            raise PatchGroupError(
+                f"kind must be one of {', '.join(GROUP_KINDS)}: {self.kind!r}"
+            )
+        object.__setattr__(self, "kind", kind)
+        members = _members(self.members)
+        if kind == "flock":
+            members = tuple(sorted(members, key=int))
+        object.__setattr__(self, "members", members)
         object.__setattr__(self, "label", str(self.label or "")[:MAX_LABEL_CHARS])
         if int(self.version) < 0:
             raise PatchGroupError("version must not be negative")
@@ -86,13 +116,26 @@ class PatchGroup:
             raise PatchGroupError("a group's id must be one of its own changes")
 
     @property
+    def ordered(self) -> bool:
+        """Whether position in this group means anything."""
+        return self.kind == "series"
+
+    def _require_series(self, what: str) -> None:
+        if not self.ordered:
+            raise PatchGroupError(
+                f"a flock has no {what}: its changes do not depend on each other"
+            )
+
+    @property
     def base(self) -> str:
         """The change the rest are stacked on, as the operator declared it."""
+        self._require_series("base")
         return self.members[0]
 
     @property
     def tip(self) -> str:
         """The last change in the declared order."""
+        self._require_series("tip")
         return self.members[-1]
 
     def contains(self, change_number: object) -> bool:
@@ -101,7 +144,14 @@ class PatchGroup:
         return False
 
     def position(self, change_number: object) -> int:
-        """1-based position in the declared order, or 0 when not a member."""
+        """1-based position in a series, or 0 when not a member.
+
+        Always 0 for a flock: there is no position to report, and returning a
+        plausible-looking number is how an invented ordering gets reasoned
+        from downstream.
+        """
+        if not self.ordered:
+            return 0
         with contextlib.suppress(PatchGroupError):
             change = _change_id(change_number)
             if change in self.members:
@@ -112,6 +162,7 @@ class PatchGroup:
         return {
             "group_id": self.group_id,
             "members": list(self.members),
+            "kind": self.kind,
             "label": self.label,
             "version": self.version,
         }
@@ -123,6 +174,7 @@ class PatchGroup:
         return cls(
             group_id=value.get("group_id", ""),
             members=value.get("members", ()),
+            kind=value.get("kind", "series"),
             label=value.get("label", ""),
             version=value.get("version", 0),
         )

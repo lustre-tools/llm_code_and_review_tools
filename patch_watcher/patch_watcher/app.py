@@ -794,14 +794,12 @@ def _run_left_its_event_unhandled(session):
     # the CLI itself calls transient.  The controller now marks these by author
     # from the stream, and its own wording still identifies the rows written
     # before it did -- including the very run this change exists to fix.
-    if any(
+    return not any(
         str(message.author or "") != AGENT_ERROR_AUTHOR
         and not str(message.body or "").startswith("API Error:")
         and not is_cli_transient_error(message.body)
         for message in SESSION_STORE.recent_messages(session.session_id, limit=20)
-    ):
-        return False
-    return True
+    )
 # How many never-started runs an unattended trigger may burn on one exact
 # event before it stops and leaves the event to a human.  Without a bound, a
 # host that cannot launch agents would start one every poll, forever.

@@ -16,17 +16,51 @@ class PatchGroupTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         return PatchGroupStore(Path(self.temp.name) / "patch-groups.json")
 
-    def test_order_is_the_operators_and_positions_are_readable(self):
+    def test_a_series_keeps_the_operators_order(self):
         """Order is what lets a report say "this belongs in the second patch,
         not the third", so it is preserved exactly as declared."""
 
-        group = PatchGroup("68763", ["68763", "68764", "68844", "68845"], label="fsx")
+        group = PatchGroup(
+            "68763", ["68763", "68764", "68844", "68845"],
+            kind="series", label="fsx",
+        )
+        self.assertTrue(group.ordered)
         self.assertEqual(group.base, "68763")
         self.assertEqual(group.tip, "68845")
         self.assertEqual(group.position("68844"), 3)
         self.assertEqual(group.position("35302"), 0)
         self.assertTrue(group.contains(68764))
         self.assertFalse(group.contains("35302"))
+
+    def test_a_flock_has_no_order_to_invent(self):
+        """Several changes on one ticket with no dependency between them.  Any
+        order a flock appeared to have would be an accident of how it was
+        typed, and an agent told it had a base would reason from an ordering
+        nobody asserted."""
+
+        flock = PatchGroup("68845", ["68845", "68763", "68844"], kind="flock")
+        self.assertFalse(flock.ordered)
+        # Held as a set, sorted, so the representation implies nothing.
+        self.assertEqual(flock.members, ("68763", "68844", "68845"))
+        self.assertEqual(flock.position("68763"), 0)
+        self.assertEqual(flock.position("68845"), 0)
+        for attribute in ("base", "tip"):
+            with self.assertRaises(PatchGroupError) as caught:
+                getattr(flock, attribute)
+            self.assertIn("do not depend on each other", str(caught.exception))
+        # Membership is exactly as meaningful as for a series.
+        self.assertTrue(flock.contains("68844"))
+        self.assertFalse(flock.contains("35302"))
+
+    def test_the_kind_must_be_one_we_know(self):
+        with self.assertRaises(PatchGroupError):
+            PatchGroup("68763", ["68763", "68764"], kind="pile")
+
+    def test_the_kind_survives_a_round_trip(self):
+        store = self.store()
+        store.save(PatchGroup("68763", ["68763", "68764"], kind="flock"))
+        self.assertEqual(store.for_change("68764").kind, "flock")
+        self.assertEqual(store.get("68763").kind, "flock")
 
     def test_a_group_is_at_least_two_changes_with_no_repeats(self):
         with self.assertRaises(PatchGroupError):

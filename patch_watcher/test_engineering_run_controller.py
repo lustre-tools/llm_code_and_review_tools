@@ -6,7 +6,7 @@ import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch as mock_patch
 
 from patch_watcher import run_controller
 from patch_watcher.claude_runner import (
@@ -1301,7 +1301,7 @@ class EngineeringRunControllerTests(unittest.TestCase):
         staging.mkdir()
         (staging / "artifact.bin").write_text("build output\n" * 4000)
 
-        with patch.object(run_controller, "MAX_SALVAGED_DIFF_BYTES", 2048):
+        with mock_patch.object(run_controller, "MAX_SALVAGED_DIFF_BYTES", 2048):
             controller._finish_session(
                 session, "failed", failure_code="worker_report_invalid",
                 failure_summary="report did not validate", finished_at=self.now,
