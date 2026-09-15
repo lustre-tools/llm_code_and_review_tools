@@ -29,6 +29,10 @@ ACTIVE_INACTIVITY_STATES = frozenset({"preparing", "running"})
 WAITING_STATES = frozenset(
     {"queued", "waiting_human", "waiting_external", "paused", "blocked"}
 )
+DEFAULT_SESSION_DATABASE = (
+    Path.home() / ".local" / "state" / "patch-watcher" / "sessions.sqlite3"
+)
+
 TERMINAL_STATES = frozenset(
     {"succeeded", "failed", "cancelled", "stale", "resource_exhausted"}
 )

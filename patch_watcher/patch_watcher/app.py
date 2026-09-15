@@ -150,6 +150,7 @@ from patch_watcher.run_views import (
 )
 from patch_watcher.session_state import (
     ABSOLUTE_RUNTIME_CAP,
+    DEFAULT_SESSION_DATABASE,
     ENGINEERING_INACTIVITY_LIMIT,
     TRIAGE_WALL_LIMIT,
     InvalidSessionOperation,
@@ -174,9 +175,6 @@ from patch_watcher.workspace import CheckoutPool, CheckoutPoolError
 
 PATCHES = []
 DEFAULT_SEED_FILE = Path.home() / ".config" / "patch-watcher" / "patches.txt"
-DEFAULT_SESSION_DATABASE = (
-    Path.home() / ".local" / "state" / "patch-watcher" / "sessions.sqlite3"
-)
 DEFAULT_AUTOMATION_DATABASE = (
     Path.home() / ".local" / "state" / "patch-watcher" / "automation.sqlite3"
 )
@@ -1573,6 +1571,10 @@ def initialize_run_controller(
         SESSION_STORE,
         **options,
     )
+    # So a run is told what earlier runs on its whole GROUP concluded, not
+    # only what happened to its own change.  A run on one patch of a series
+    # is the previous run on the series.
+    RUN_CONTROLLER.patch_group_store = PATCH_GROUP_STORE
     if start:
         RUN_CONTROLLER.start()
     return RUN_CONTROLLER

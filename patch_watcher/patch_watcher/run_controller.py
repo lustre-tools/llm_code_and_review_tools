@@ -51,6 +51,7 @@ from patch_watcher.ltvm_resources import (
     owner_id_for_session,
     reconcile_session_resources,
 )
+from patch_watcher.run_history import prior_runs, render_prior_runs
 from patch_watcher.session_state import (
     ABSOLUTE_RUNTIME_CAP,
     ENGINEERING_INACTIVITY_LIMIT,
@@ -612,6 +613,7 @@ def _render_instructions(
     checkout_path: str = "",
     checkout_writable: bool = False,
     profile: str = ENGINEERING_PROFILE,
+    prior_runs: str = "",
 ) -> str:
     """Render the deterministic instruction text handed to one run."""
 
@@ -659,6 +661,12 @@ def _render_instructions(
         "",
         task.strip(),
     ]
+    if prior_runs.strip():
+        # Before the task, not after: it changes what the task costs.  An
+        # agent that reads "here is the work" first has already started
+        # planning it by the time it learns the work was half done yesterday.
+        sections[-3:-3] = []
+        sections += ["", "## What earlier runs did", "", prior_runs.strip()]
     if organization_policy.strip():
         sections.extend(["", "## Organization policy", "", organization_policy.strip()])
     sections.extend([
@@ -743,6 +751,9 @@ class RunController:
         # session_id -> consecutive probes that found a live worker whose
         # control socket would not answer. Cleared by any good probe.
         self._unreachable_probes: dict[str, int] = {}
+        # Optional: set by the app so a run is told about its whole group's
+        # history, not only its own change's.
+        self.patch_group_store = None
         # Seconds the supervisor's own sleep overshot, awaiting the next tick.
         self._supervision_gap = 0.0
         self._controller_faults: dict[str, int] = {}
@@ -2925,6 +2936,7 @@ class RunController:
             checkout_path=str(checkout_path),
             checkout_writable=engineering,
             profile=str(session.profile),
+            prior_runs=self._prior_runs_section(session),
         )
         instructions_path = layout.resolve("/work/input/INSTRUCTIONS.md")
         instructions_path.write_text(instructions, encoding="utf-8")
@@ -3092,6 +3104,25 @@ class RunController:
         )
         self._send_alert_once(session, AGENT_INSTRUCTIONS_FAILURE_CODE)
         return True
+
+    def _prior_runs_section(self, session: ManagedSession) -> str:
+        """What earlier runs on this work concluded, for the prompt.
+
+        Never fatal.  A run that cannot be told what came before it is worse
+        off, not broken, and a fault in reading history must not stop the
+        history being made.
+        """
+        try:
+            members = {str(session.patch_id)}
+            if self.patch_group_store is not None:
+                group = self.patch_group_store.for_change(session.patch_id)
+                if group is not None:
+                    members |= set(group.members)
+            return render_prior_runs(
+                prior_runs(self.store, members, exclude_run_id=session.run_id)
+            )
+        except Exception:
+            return ""
 
     def _persist_handle(self, session: ManagedSession, snapshot: RunnerSnapshot) -> None:
         handle = snapshot.handle

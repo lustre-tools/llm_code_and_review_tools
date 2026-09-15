@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "patch-watcher"
-version = "0.1.33"
+version = "0.1.34"
 description = "A session console for long-running Lustre agents, with Gerrit as the work queue"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,6 +28,7 @@ browser = ["playwright>=1.40"]
 patch-watcher = "patch_watcher.app:main"
 pw-doctor = "patch_watcher.pw_doctor:main"
 pw-configure = "patch_watcher.pw_configure:main"
+pw-transcript = "patch_watcher.run_history:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -2993,6 +2993,60 @@ class PromptContractTests(unittest.TestCase):
                 self.assertIn(phrase, run.instructions)
                 self.assertIn("Name every VM you create 'co3-", run.instructions)
 
+    def test_a_run_is_told_what_earlier_runs_concluded(self):
+        """Every run starts with no memory of the ones before it.  That is
+        right for the checkout, which is reset, and wrong for the thinking: a
+        run has re-derived a conclusion an earlier run reached and re-made an
+        edit an earlier run lost."""
+
+        started = self.start("review", name="history-review")
+        store, controller = started.store, started.controller
+        # One run owns a patch at a time, so the live one has to finish before
+        # another can be recorded against the same change.
+        store.finish_session(
+            started.session.session_id, "failed",
+            failure_code="cancelled", failure_summary="made way for the fixture",
+        )
+        store.register_pinned_session(
+            "session-earlier", patch_id=started.session.patch_id,
+            run_id="pw-review-68160-earlier", revision="d" * 40, patchset=4,
+            profile="engineering", state="running",
+        )
+        store.record_message(
+            "session-earlier", "agent", "Patchset 5 uploaded and replies posted."
+        )
+        store.finish_session(
+            "session-earlier", "failed", failure_code="worker_report_invalid",
+            failure_summary="shell interpreters are not permitted in safe commands",
+        )
+
+        section = controller._prior_runs_section(started.session)
+        self.assertIn("pw-review-68160-earlier", section)
+        # The work, not the machinery: a failure reason alone would tell the
+        # next agent nothing about what had already been done.
+        self.assertIn("Patchset 5 uploaded", section)
+        self.assertIn("stopped by: shell interpreters", section)
+        # And how to read the whole thing when a summary is not enough.
+        self.assertIn("pw-transcript", section)
+        # It reaches the prompt under its own heading.
+        rendered = run_controller._render_instructions(
+            run_id="pw-x", task="do the thing", revision_sha="d" * 40,
+            prior_runs=section,
+        )
+        self.assertIn("## What earlier runs did", rendered)
+        self.assertIn("pw-review-68160-earlier", rendered)
+        # A run never counts itself as its own history.
+        self.assertNotIn(
+            started.session.run_id, controller._prior_runs_section(started.session)
+        )
+
+    def test_a_first_run_is_not_given_an_empty_history_heading(self):
+        """A heading that says nothing is a heading the agent must read to
+        discover it can be ignored."""
+
+        started = self.start("review", name="history-none")
+        self.assertNotIn("## What earlier runs did", started.instructions)
+
     def test_every_run_is_told_to_sign_its_gerrit_posts_as_the_bot(self):
         """It publishes with the operator's own account.
 
