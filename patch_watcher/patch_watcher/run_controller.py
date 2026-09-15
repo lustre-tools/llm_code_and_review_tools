@@ -4811,18 +4811,26 @@ class RunController:
     def controller_failures(self) -> list[dict[str, Any]]:
         """Return the durable session-independent failure rows, newest last."""
 
+        # Clock rows written before interruptions had their own heading stay
+        # on disk untouched and are read as what they always were: handled
+        # gaps, not faults that stop dispatch.
         return [
             item for item in self._read_controller_failures().get("failures", [])
-            if isinstance(item, dict)
+            if isinstance(item, dict) and item.get("scope") != "clock"
         ]
 
     def controller_notices(self) -> list[dict[str, Any]]:
         """Handled time gaps, newest last.  Not faults; see the recorder."""
 
-        return [
-            item for item in self._read_controller_failures().get("notices", [])
-            if isinstance(item, dict)
+        document = self._read_controller_failures()
+        legacy = [
+            item for item in document.get("failures", [])
+            if isinstance(item, dict) and item.get("scope") == "clock"
         ]
+        current = [
+            item for item in document.get("notices", []) if isinstance(item, dict)
+        ]
+        return sorted(legacy + current, key=lambda row: str(row.get("last_seen") or ""))
 
     def _read_controller_failures(self) -> dict[str, Any]:
         try:
