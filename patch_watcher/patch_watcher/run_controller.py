@@ -451,6 +451,27 @@ def unknown_failure_research_run_id(
 # first person, indistinguishable from something the patch owner said.
 # Reviewers are entitled to know which of the two they are answering.  Until
 # the bot has an account of its own, the label is how they can tell.
+# A run does not reliably reach its own last step.  These are killed by
+# inactivity deadlines, by a host that restarted, by a report the controller
+# refused -- and in every one of those the report is never written, so the
+# only account of what happened is whatever the agent last said.  "Summarise
+# when you finish" is therefore useless advice: the runs that most need a
+# summary are exactly the ones that never finish.  The summary has to be
+# standing, maintained as it goes, so that stopping at any moment leaves one.
+HANDOFF_POLICY = (
+    "Your messages are the only record of this run if it stops before you "
+    "report. Runs are ended by deadlines, host restarts and rejected reports, "
+    "and none of those let you write a closing word. So keep your most recent "
+    "message a standing account of the run: what you have established, what "
+    "you have changed, and what you have not done yet. Write it for the next "
+    "agent, who will see that one message and nothing else. "
+    "Say it again after each step that took real time -- a build, a test run, "
+    "an upload, a reply posted -- and before starting another one. State what "
+    "is settled rather than what you are about to try: \"the fix makes 430b "
+    "pass, 118c still fails on the pinned baseline\" is a handoff, "
+    "\"let me check 118c\" is not."
+)
+
 BOT_ACCOUNT_ALIAS = "patrickbot"
 GERRIT_IDENTITY_POLICY = (
     "You have your own service accounts, and you use them for every tool: "
@@ -670,6 +691,10 @@ def _render_instructions(
     if organization_policy.strip():
         sections.extend(["", "## Organization policy", "", organization_policy.strip()])
     sections.extend([
+        "",
+        "## Keeping a usable trail",
+        "",
+        HANDOFF_POLICY,
         "",
         "## Reporting",
         "",

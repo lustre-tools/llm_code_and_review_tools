@@ -11,10 +11,11 @@ rather than transcripts because a transcript is tens of thousands of tokens
 and a run has a wall-clock budget; the transcript is one command away when the
 summary raises a question.
 
-"Closing summary" is whatever the run actually left behind, in order of how
-much it is worth: the report it wrote, the reason it died, or the last thing
-it said.  A run that crashed mid-sentence still tells the next one where it
-had got to, which is the case where this matters most.
+"Closing summary" is whatever the run actually left behind: the report it
+wrote, or the last thing it said.  The second is not an accident -- every run
+is asked to keep its most recent message a standing account of itself,
+precisely because the runs whose history is most worth having are the ones
+killed by a deadline or a restart, which never reach a closing step at all.
 """
 
 from __future__ import annotations
@@ -156,8 +157,10 @@ def render_prior_runs(runs: Collection[PriorRun]) -> str:
         "",
         "Each is a summary, not a transcript. When a summary raises a question "
         "the answer is in the full run: `pw-transcript <run id>` prints its "
-        "messages and its report. A summary from a run that died is where it "
-        "had got to, not a conclusion.",
+        "messages and its report. Where a run reported, this is its own "
+        "account; where it was stopped first, this is the standing summary it "
+        "was asked to keep, so it is where that run had got to rather than a "
+        "conclusion it reached.",
         "",
     ]
     for run in items:

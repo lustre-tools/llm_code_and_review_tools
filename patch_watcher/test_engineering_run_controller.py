@@ -3040,6 +3040,26 @@ class PromptContractTests(unittest.TestCase):
             started.session.run_id, controller._prior_runs_section(started.session)
         )
 
+    def test_every_run_is_asked_to_keep_a_standing_summary(self):
+        """The next run is handed the last message, so the last message has to
+        be worth handing over.
+
+        "Summarise when you finish" would not do it: a run killed by a
+        deadline, a host restart or a rejected report never reaches its own
+        last step, and those are exactly the runs whose history is most worth
+        having.  So the summary is standing, not final.
+        """
+
+        for kind in ("engineering", "review", "build_failure", "read_only"):
+            instructions = self.start(kind, name=f"trail-{kind}").instructions
+            self.assertIn("## Keeping a usable trail", instructions, kind)
+            self.assertIn("standing account", instructions, kind)
+            # Named failure modes, because "in case something goes wrong" does
+            # not tell an agent that its own deadline is one of them.
+            self.assertIn("deadlines", instructions, kind)
+            # And the distinction that makes a message a handoff.
+            self.assertIn("State what is settled", instructions, kind)
+
     def test_a_first_run_is_not_given_an_empty_history_heading(self):
         """A heading that says nothing is a heading the agent must read to
         discover it can be ignored."""
