@@ -6,6 +6,7 @@ import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from patch_watcher import run_controller
 from patch_watcher.claude_runner import (
@@ -1267,6 +1268,63 @@ class EngineeringRunControllerTests(unittest.TestCase):
             RuntimeError("the checkout is gone"),
         )
         self.assertEqual(self.store.get_session(session.session_id).state, "failed")
+
+    def test_the_salvage_fallback_actually_drops_the_build_output(self):
+        """The fallback shared one index with the attempt it replaces.
+
+        `git add --update` only adds, so everything the `add -A` attempt had
+        already staged stayed staged, and the "tracked only" diff came back
+        byte-identical to the 62 MB it exists to exclude.  A real run salvaged
+        668 files of which 3 were the agent's actual source change, and the
+        recorded sizes before and after the exclusion matched exactly, which
+        is the tell.
+        """
+
+        controller = self.pooled_controller(indices=(3,))
+        requested = controller.request_engineering(engineering_patch())
+        controller.tick()
+        session = self.store.get_session(requested.session_id)
+        allocation = controller.engineering_store.get_allocation_by_run(session.run_id)
+
+        checkout = allocation.checkout_path
+        shutil.rmtree(checkout / ".git")
+        (checkout / "fix.c").write_text("seed\n")
+        for args in (["init", "-q", "."], ["add", "-A", "--", "."]):
+            subprocess.run(["git", *args], cwd=checkout, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "seed"],
+            cwd=checkout, check=True, capture_output=True,
+        )
+        # What the agent actually changed, and what its build left behind.
+        (checkout / "fix.c").write_text("the agent's real source change\n")
+        staging = checkout / ".ltvm-staging"
+        staging.mkdir()
+        (staging / "artifact.bin").write_text("build output\n" * 4000)
+
+        with patch.object(run_controller, "MAX_SALVAGED_DIFF_BYTES", 2048):
+            controller._finish_session(
+                session, "failed", failure_code="worker_report_invalid",
+                failure_summary="report did not validate", finished_at=self.now,
+            )
+
+        served = (
+            controller.runs_directory / "engineering-artifacts"
+            / session.run_id / "salvaged.patch"
+        )
+        content = served.read_text(errors="replace")
+        self.assertIn("the agent's real source change", content)
+        self.assertNotIn(".ltvm-staging", content)
+
+        excluded = [
+            event for event in self.store.list_events(session.session_id)
+            if event.event_type == "salvage_excluded_untracked"
+        ]
+        self.assertTrue(excluded, "the exclusion must say it happened")
+        # The two sizes matching is exactly what the bug looked like.
+        self.assertNotEqual(
+            excluded[0].payload["size_bytes"], served.stat().st_size,
+            "the fallback returned the same diff it was meant to replace",
+        )
 
     def test_automatic_runs_are_bounded_across_revisions(self):
         """Per-event coalescing cannot bound a loop that regenerates the event.

@@ -6,6 +6,7 @@ import contextlib
 import dataclasses
 import fcntl
 import hashlib
+import itertools
 import json
 import os
 import platform
@@ -3758,10 +3759,13 @@ class RunController:
             # and build stamps -- a "salvaged diff" in which the actual source
             # change could not be found, stored forever under its own sha.
             with tempfile.TemporaryDirectory() as index_dir:
-                environment = dict(os.environ)
-                environment["GIT_INDEX_FILE"] = str(Path(index_dir) / "index")
+                index_counter = itertools.count()
 
                 def staged_diff(argv: list[str]) -> bytes | None:
+                    environment = dict(os.environ)
+                    environment["GIT_INDEX_FILE"] = str(
+                        Path(index_dir) / f"index-{next(index_counter)}"
+                    )
                     staged = subprocess.run(
                         [*common, *argv],
                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -3780,7 +3784,21 @@ class RunController:
 
                 content = staged_diff(["add", "-A", "--", "."])
                 if content is not None and len(content) > MAX_SALVAGED_DIFF_BYTES:
-                    tracked = staged_diff(["add", "--update", "--", "."])
+                    # Tracked-only means the working tree against HEAD, with no
+                    # index in it at all.  Staging "--update" into the same
+                    # temporary index only ADDED, so everything the `add -A`
+                    # attempt had put there stayed, and the fallback returned
+                    # byte-for-byte the 62 MB of ltvm staging trees it exists to
+                    # exclude -- 668 files of which 3 were the agent's change.
+                    # Staging it into a fresh index is worse still: an empty
+                    # index has nothing for "--update" to update, so every
+                    # tracked file reads as deleted.
+                    captured = subprocess.run(
+                        [*common, "diff", "--binary", "--no-ext-diff", "HEAD"],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL, check=False, timeout=60,
+                    )
+                    tracked = None if captured.returncode else captured.stdout
                     if tracked is not None:
                         self.store.append_event(
                             session.session_id,
