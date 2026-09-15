@@ -1484,6 +1484,48 @@ class PatchWatcherTests(AppGlobalsIsolated):
             self.assertTrue(saved.discovered)
             self.assertEqual(saved.members, ("68763", "68764"))
 
+    def test_it_will_not_announce_assignments_read_as_the_wrong_account(self):
+        """"Assigned to the bot" only means anything read AS the bot.
+
+        Read as the operator, the same query returns their whole standing
+        backlog -- fifty tickets on the host this was written on -- and every
+        one would be announced as newly assigned.  Being wrong here is not a
+        wrong record but a mailbox full of nonsense.
+        """
+
+        class FakeJira:
+            def __init__(self, name):
+                self.name = name
+                self.asked = False
+
+            def whoami(self):
+                return {"name": self.name}
+
+            def assigned_issues(self, **kwargs):
+                self.asked = True
+                return [{"key": "LU-1", "summary": "s", "status": "Open"}]
+
+        operator = FakeJira("paf0186")
+        with patch.object(app.JiraClient, "configured", return_value=operator):
+            self.assertEqual(app.poll_bot_inbox(), [])
+        self.assertFalse(operator.asked, "it must not even ask as the wrong account")
+
+        sent = []
+
+        def record(subject, body):
+            sent.append(subject)
+            return SimpleNamespace(sent=True, detail="ok")
+
+        bot = FakeJira(app.BOT_ACCOUNT_ALIAS)
+        with tempfile.TemporaryDirectory() as temp_dir, \
+                patch.object(app.JiraClient, "configured", return_value=bot):
+            announced = app.poll_bot_inbox(
+                inbox=app.bot_inbox.BotInbox(Path(temp_dir) / "inbox.json"),
+                send=record,
+            )
+        self.assertEqual([change.key for change in announced], ["LU-1"])
+        self.assertEqual(len(sent), 1)
+
     def test_a_run_waiting_on_you_is_labelled_counted_and_explained(self):
         """The in-console channel: a paused run shows on the patch row, links
         to itself, is counted in the header, and the run page says how you

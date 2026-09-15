@@ -127,6 +127,7 @@ from patch_watcher.review_views import (
 )
 from patch_watcher.run_controller import (
     AGENT_ERROR_AUTHOR,
+    BOT_ACCOUNT_ALIAS,
     BUILD_FAILURE_REQUEST_EVENT,
     CHECKOUT_ALLOCATED_EVENT,
     ENGINEERING_REQUEST_EVENT,
@@ -526,7 +527,7 @@ def _advance_failure_action_runs(patch_id=None):
     return results
 
 
-def poll_bot_inbox():
+def poll_bot_inbox(*, inbox=None, send=None):
     """Notice tickets somebody assigned to the bot, once per cycle.
 
     Not per patch: an assignment is how work arrives that no watched patch
@@ -534,10 +535,25 @@ def poll_bot_inbox():
     """
     try:
         client = JiraClient.configured()
+        account = str(client.whoami().get("name") or "")
     except (JiraConfigError, JiraRequestError) as exc:
         log_structured_error("bot_inbox", str(exc), "")
         return []
-    announced = bot_inbox.poll(client)
+    # "Assigned to the bot" only means anything read AS the bot.  Read as the
+    # operator, this same query returns their whole standing backlog -- fifty
+    # tickets, on the host this was written on -- and every one of them would
+    # be announced as newly assigned.  Being wrong here is not a wrong record
+    # but a mailbox full of nonsense, so it refuses rather than guesses.
+    if account.casefold() != BOT_ACCOUNT_ALIAS:
+        log_structured_error(
+            "bot_inbox",
+            f"reading JIRA as {account!r}, not {BOT_ACCOUNT_ALIAS!r}; "
+            "not announcing assignments until the bot's own credentials are in "
+            "~/.config/patch-watcher/jira.json",
+            "",
+        )
+        return []
+    announced = bot_inbox.poll(client, inbox=inbox, send=send)
     for change in announced:
         if not change.notified:
             # Expected until the bot has its own Unix account and a working
