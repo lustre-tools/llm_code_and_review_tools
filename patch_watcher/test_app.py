@@ -1419,6 +1419,71 @@ class PatchWatcherTests(AppGlobalsIsolated):
             self.assertIsNotNone(app._active_session_for_patch("68764"))
             self.assertIsNone(app._active_session_for_patch("68763"))
 
+    def test_one_box_reads_a_url_a_number_or_a_ticket(self):
+        """"Add a patch", "add a series" and "add a ticket" are one intent
+        with different contents.  A form that made you choose first would be
+        asking you to classify your own paste."""
+
+        cases = {
+            "https://review.whamcloud.com/c/fs/lustre-release/+/68763/2": ("", ["68763"]),
+            "https://review.whamcloud.com/c/35302": ("", ["35302"]),
+            "68763, 68764\n68844": ("", ["68763", "68764", "68844"]),
+            "lu-20724": ("LU-20724", []),
+            "LU-20724 68763": ("LU-20724", ["68763"]),
+            # A change named twice is one change, not two.
+            "68763 68763": ("", ["68763"]),
+        }
+        for text, expected in cases.items():
+            ticket, changes, unreadable = app.parse_watch_request(text)
+            self.assertEqual((ticket, changes), expected, text)
+            self.assertEqual(unreadable, [], text)
+
+        # Nonsense is named rather than silently dropped: a typo that becomes
+        # "nothing to add" reads as the tool being broken.
+        self.assertEqual(app.parse_watch_request("banana")[2], ["banana"])
+        # Two different tickets is not a thing a group can be.
+        self.assertEqual(app.parse_watch_request("LU-1 LU-2")[2], ["LU-2"])
+
+    def test_adding_several_changes_declares_one_group(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app.initialize_session_store(root / "s.sqlite3")
+            groups = app.initialize_patch_group_store(root / "groups.json")
+
+            message, added = app.add_watch_request("68763 68764", kind="flock", label="fsx")
+            self.assertEqual(len(added), 2)
+            self.assertIn("one flock", message)
+            saved = groups.for_change("68764")
+            self.assertEqual(saved.kind, "flock")
+            self.assertEqual(saved.label, "fsx")
+            self.assertEqual(saved.members, ("68763", "68764"))
+
+            # A single change is still just a patch, with no group invented.
+            message, added = app.add_watch_request("35302")
+            self.assertEqual(len(added), 1)
+            self.assertIsNone(groups.for_change("35302"))
+
+    def test_adding_a_ticket_brings_its_changes_with_it(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            app.initialize_session_store(root / "s.sqlite3")
+            groups = app.initialize_patch_group_store(root / "groups.json")
+
+            class FakeGerrit:
+                def changes_for_ticket(self, key, **kwargs):
+                    return [{"change_number": 68764}, {"change_number": 68763}]
+
+            with patch.object(app.GerritStatusClient, "configured",
+                              return_value=FakeGerrit()):
+                message, added = app.add_watch_request("LU-20724")
+            self.assertIn("LU-20724", message)
+            self.assertIn("found 2 change(s)", message)
+            self.assertEqual(len(added), 2)
+            saved = groups.get("LU-20724")
+            self.assertEqual(saved.kind, "ticket")
+            self.assertTrue(saved.discovered)
+            self.assertEqual(saved.members, ("68763", "68764"))
+
     def test_a_run_waiting_on_you_is_labelled_counted_and_explained(self):
         """The in-console channel: a paused run shows on the patch row, links
         to itself, is counted in the header, and the run page says how you
@@ -3447,7 +3512,8 @@ class PatchWatcherTests(AppGlobalsIsolated):
             rendered.index("Watched patches"), rendered.index("Worker host memory")
         )
         self.assertLess(
-            rendered.index("Add a patch"), rendered.index("Worker host memory")
+            rendered.index("Add patches or a ticket"),
+            rendered.index("Worker host memory"),
         )
         self.assertIn("action='/resources/refresh'", rendered)
         # The headline carries the one number an operator opens the page for;
@@ -5199,13 +5265,16 @@ class AddPatchRoutePersistenceTests(unittest.TestCase):
     def test_a_successful_add_reaches_the_watch_file_write(self):
         source = inspect.getsource(app.Handler._dispatch_post)
         marker = source.index('elif path == "/add":')
-        block = source[marker:marker + 700]
-        self.assertIn("save_watch_file", block)
+        block = source[marker:]
         add_body = block[:block.index("elif path ==", 10)]
+        self.assertIn("save_watch_file", add_body)
         self.assertIn("refresh_watched_patch", add_body)
-        # The `return` must be indented deeper than the `if error:` it belongs to.
+        # The early `return` must be indented deeper than the guard it belongs
+        # to, or everything after it becomes unreachable.
         lines = [line for line in add_body.split("\n") if line.strip()]
-        error_line = next(i for i, line in enumerate(lines) if line.strip() == "if error:")
+        error_line = next(
+            i for i, line in enumerate(lines) if line.strip() == "if not added:"
+        )
         indent = len(lines[error_line]) - len(lines[error_line].lstrip())
         following = lines[error_line + 1:error_line + 3]
         for line in following:
