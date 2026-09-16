@@ -504,9 +504,9 @@ contains "an unanswered optional credential leaves it read-only" \
 
 # --- the version-bump hook -------------------------------------------------
 # The list this hook used to carry had drifted: it named crash_tool, which
-# has no pyproject.toml, and not lreview, lustre_crash, gerrit_dashboard or
-# patch_watcher, whose versions therefore never moved.  Discovery cannot
-# drift, and these pin the behaviour.
+# has no pyproject.toml, and not lreview, lustre_crash or gerrit_dashboard,
+# whose versions therefore never moved.  Discovery cannot drift, and these
+# pin the behaviour.
 HOOK="$SCRIPT_DIR/.githooks/pre-commit"
 
 hook_repo() {  # a checkout shaped like this one

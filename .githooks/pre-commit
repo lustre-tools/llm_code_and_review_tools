@@ -11,8 +11,8 @@ cd "$root" || exit 0
 
 # Tools are discovered, not listed.  A hardcoded list drifts: the one
 # this replaced still named crash_tool, which has no pyproject.toml, and
-# had never heard of lreview, lustre_crash, gerrit_dashboard or
-# patch_watcher -- four tools whose versions therefore never moved.
+# had never heard of lreview, lustre_crash or gerrit_dashboard -- tools
+# whose versions therefore never moved.
 #
 # Submodules carry their own history and versioning; never touch them.
 submodules=$(git ls-files --stage | awk '$1 == "160000" { print $4 }')

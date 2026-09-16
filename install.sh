@@ -62,7 +62,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Console scripts our packages install (used for ~/.local/bin symlinks
 # when installing into a venv, and for cleanup on uninstall)
-TOOL_BINS="jira gerrit gerrit-cli gc maloo jenkins janitor lustre-crash lreview patch-watcher pw-doctor pw-configure"
+TOOL_BINS="jira gerrit gerrit-cli gc maloo jenkins janitor lustre-crash lreview"
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -137,13 +137,12 @@ has_pip() {
 #
 # Those two called resolve_python with the still-unset $PYTHON, so the PEP 668
 # probe ran the empty string ("line 99: : command not found") and the tool was
-# then exec'd as `"" -m patch_watcher.pw_configure`, exiting 127. They do not
-# want resolve_python either: it exists to decide where pip may install, and
-# neither of these installs anything -- patch_watcher is dependency-free and
-# runs straight out of the checkout. Demanding a venv (which resolve_python
-# does on any PEP 668 host, and refuses to do without a tty) would make both
-# documented setup commands unusable there. So: reuse a venv if one is already
-# there, otherwise just take a new-enough python3.
+# then exec'd as `"" -m ...`, exiting 127. They do not want resolve_python
+# either: it exists to decide where pip may install, and neither of these
+# installs anything. Demanding a venv (which resolve_python does on any PEP 668
+# host, and refuses to do without a tty) would make both documented setup
+# commands unusable there. So: reuse a venv if one is already there, otherwise
+# just take a new-enough python3.
 require_runtime_python() {
     local venv="${VENV_PATH:-$SCRIPT_DIR/.venv}"
     if [ -x "$venv/bin/python" ]; then
@@ -317,12 +316,6 @@ install_tools() {
     $PYTHON -m pip install -q -e "$SCRIPT_DIR/gerrit_dashboard"
     echo -e "${GREEN}✓${NC} gerrit-dashboard installed"
 
-    # Install patch_watcher (the agent session console)
-    echo ""
-    echo "Installing patch-watcher..."
-    $PYTHON -m pip install -q -e "$SCRIPT_DIR/patch_watcher"
-    echo -e "${GREEN}\u2713${NC} patch-watcher installed"
-
     # Install maloo_tool
     echo ""
     echo "Installing maloo..."
@@ -479,9 +472,6 @@ uninstall_tools() {
     # Removing only the ~/.local/bin symlinks above left the editable install
     # itself in place: invisible, still importable, and dangling as soon as
     # the checkout it points at is deleted.
-    echo "Uninstalling patch-watcher..."
-    $PYTHON -m pip uninstall -y patch-watcher 2>/dev/null || true
-
     echo "Uninstalling lustre-crash..."
     $PYTHON -m pip uninstall -y lustre-crash 2>/dev/null || true
     $PYTHON -m pip uninstall -y crash-tool 2>/dev/null || true
@@ -560,7 +550,8 @@ run_doctor() {
     if command -v pw-doctor >/dev/null 2>&1; then
         pw-doctor "$@"
     else
-        (cd "$SCRIPT_DIR/patch_watcher" && "$PYTHON" -m patch_watcher.pw_doctor "$@")
+        echo "pw-doctor is not installed; it ships with patch_watcher." >&2
+        return 1
     fi
 }
 
