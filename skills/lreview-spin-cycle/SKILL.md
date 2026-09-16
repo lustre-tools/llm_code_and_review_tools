@@ -40,13 +40,18 @@ lreview run --repo <tree> --last 2 -o /tmp/lreview1.txt
 3. Amend the commits. Do not stack fixup commits -- the point is that the
    pushed patch is already clean.
 4. Re-run on the amended commits.
-5. Repeat until the only findings left are consciously declined.
+5. Repeat until two rounds in a row are clean.
+
+A clean round is one that turns up nothing but wording or style items and
+findings you consciously decline. A round that leads to a real fix resets
+the count to zero.
 
 ## When to stop
 
-Rounds converge on wording, not bugs. Once a round produces only wording
-and style items, stop: further rounds cost roughly $10 and 25 minutes each
-and mostly churn prose.
+Rounds converge on wording, not bugs. Stop after two clean rounds in a
+row, not one: runs are not deterministic, and the next pass can find what
+a clean one missed. Past that, further rounds cost roughly $10 and 25
+minutes each and mostly churn prose.
 
 Before spending another round on the same backend, get a second opinion:
 
@@ -109,5 +114,5 @@ prints human-readable coloured output, not JSON, and has no `--envelope`.
 ## Reporting findings back
 
 Say what was found and what was done with each item: fixed, or declined
-and why. A round that produced only wording changes is worth saying so
-plainly -- it is the signal to stop.
+and why. Say plainly whether the round was clean and how many clean rounds
+in a row that makes -- the second one is the signal to stop.
