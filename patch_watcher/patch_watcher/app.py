@@ -10,7 +10,6 @@ import platform
 import re
 import secrets
 import sqlite3
-import subprocess
 import tempfile
 import threading
 import time
