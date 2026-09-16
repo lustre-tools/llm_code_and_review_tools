@@ -55,6 +55,21 @@ gc push <change-id>
 `gc push` posts staged **comment replies**. It does not push commits;
 git does that, to `refs/for/<branch>`.
 
+Or write the replies to a file and post them together -- one review, one
+mail to everyone on the change, instead of one per reply:
+
+```bash
+gc batch <change> replies.json    # '-' reads the JSON from stdin
+```
+
+```json
+[{"comment_id": "8468c1b7_1b15e7ef", "message": "Done in PS8", "mark_resolved": true},
+ {"comment_id": "9005efd6_909ba5e1", "message": "Kept: the osc path still needs it"}]
+```
+
+`comment_id` is the exact address and reaches resolved and bot threads
+too; entries can instead use `thread_index`, or `file` and `line`.
+
 Declining a finding is a legitimate outcome -- reply with why. Do not
 silently skip a comment, and do not answer a finding by adding an
 explanatory code comment (see the lreview spin-cycle skill for why that

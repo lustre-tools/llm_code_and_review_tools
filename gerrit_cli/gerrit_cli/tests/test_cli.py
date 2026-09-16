@@ -1,6 +1,7 @@
 """Tests for the CLI module."""
 
 import argparse
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1209,6 +1210,56 @@ class TestCmdBatchReply:
             assert exc_info.value.code == 0
 
             MockReplier.return_value.batch_reply.assert_called_once()
+
+    def test_batch_reply_by_comment_id(self, tmp_path):
+        """A comment id reaches any comment, resolved or a bot's, in one post."""
+        from gerrit_cli.cli import cmd_batch_reply
+
+        replies_file = tmp_path / "replies.json"
+        replies_file.write_text(json.dumps([
+            {"comment_id": "c-resolved", "message": "Done in PS7", "mark_resolved": True},
+            {"comment_id": "c-reply", "message": "Kept, see above"},
+            {"comment_id": "c-missing", "message": "nobody"},
+        ]))
+        args = argparse.Namespace(
+            url="https://example.com/12345", file=str(replies_file), pretty=False,
+        )
+
+        def comment(comment_id):
+            value = MagicMock()
+            value.id = comment_id
+            return value
+
+        resolved = MagicMock()
+        resolved.all_comments = [comment("c-root"), comment("c-resolved")]
+        other = MagicMock()
+        other.all_comments = [comment("c-reply")]
+        everything = MagicMock()
+        everything.threads = [resolved, other]
+        unresolved_only = MagicMock()
+        unresolved_only.threads = []
+
+        def extract(**kwargs):
+            if kwargs.get("include_resolved"):
+                assert kwargs["exclude_ci_bots"] is False
+                assert kwargs["exclude_lint_bots"] is False
+                return everything
+            return unresolved_only
+
+        with patch('gerrit_cli.cli.GerritCommentsClient') as MockClient, \
+             patch('gerrit_cli.cli.extract_comments', side_effect=extract), \
+             patch('gerrit_cli.cli.CommentReplier') as MockReplier:
+            MockClient.parse_gerrit_url.return_value = ("https://example.com", 12345)
+            MockReplier.return_value.batch_reply.return_value = []
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_batch_reply(args)
+            assert exc_info.value.code == 0
+
+        [call] = MockReplier.return_value.batch_reply.call_args_list
+        replies = call.kwargs["replies"]
+        assert [r["comment"].id for r in replies] == ["c-resolved", "c-reply"]
+        assert [r["mark_resolved"] for r in replies] == [True, False]
+        assert [r["message"] for r in replies] == ["Done in PS7", "Kept, see above"]
 
     def test_batch_reply_out_of_range(self, tmp_path):
         """Test batch reply with invalid thread index."""

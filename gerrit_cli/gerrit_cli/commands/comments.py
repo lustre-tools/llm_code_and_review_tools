@@ -316,10 +316,40 @@ def cmd_batch_reply(args):
             include_code_context=False,
         )
 
+        # A comment id is the exact address: it names the comment to answer
+        # whether or not its thread is resolved or from a bot, and it does
+        # not shift as other threads change.
+        by_id = {}
+        if any('comment_id' in item for item in replies_data):
+            everything = cli.extract_comments(
+                url=args.url,
+                include_resolved=True,
+                include_code_context=False,
+                exclude_ci_bots=False,
+                exclude_lint_bots=False,
+            )
+            by_id = {
+                comment.id: comment
+                for thread in everything.threads
+                for comment in thread.all_comments
+            }
+
         # Build reply list
         replies = []
         skipped = []
         for item in replies_data:
+            if 'comment_id' in item:
+                comment = by_id.get(str(item['comment_id']))
+                if comment is None:
+                    skipped.append(item['comment_id'])
+                    continue
+                replies.append({
+                    'comment': comment,
+                    'message': item['message'],
+                    'mark_resolved': item.get('mark_resolved', False),
+                    'thread_index': None,
+                })
+                continue
             # A thread is addressed either by its index in the 'comments'
             # listing, or -- more stably, since indices shift as threads
             # are resolved -- by file and optionally line.
@@ -352,6 +382,7 @@ def cmd_batch_reply(args):
                 comment = reply_spec['comment']
                 would_post.append({
                     "thread_index": reply_spec['thread_index'],
+                    "comment_id": comment.id,
                     "file": comment.file_path,
                     "line": comment.line,
                     "message": reply_spec['message'],
