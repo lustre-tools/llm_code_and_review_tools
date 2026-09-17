@@ -637,15 +637,9 @@ def cmd_post(args) -> int:
             changes.append(number)
 
     try:
-        if getattr(args, "dry_run", False):
-            from .manifest import read_summary
-            for key, entry in read_summary(results_dir).items():
-                if entry.get("status") == STATUS_FINDINGS and not entry.get("posted"):
-                    print(f"  {key}: would post ({entry.get('provider', 'gerrit')})")
-            return 0
         outcomes = post_results(
             results_dir, changes=changes, prefix=args.prefix,
-            force=args.force)
+            force=args.force, dry_run=getattr(args, "dry_run", False))
     except FileNotFoundError as exc:
         print(f"error: {exc}")
         return 1

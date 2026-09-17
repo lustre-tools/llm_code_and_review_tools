@@ -286,3 +286,73 @@ class TestPostResults:
         with p_rev, p_client:
             outcomes = post_results(results_dir, changes=[101])
         assert outcomes[0].status == "skipped"
+
+
+class TestDryRun:
+    """--dry-run shares post_results' selection, so what it lists is
+    what a real post would send."""
+
+    def test_honours_the_change_filter(self, results_dir):
+        """The bug this replaced listed every entry in the results
+        dir, whatever change was asked for."""
+        (results_dir / "gerrit-review-103_ps2.json").write_text(
+            json.dumps(REVIEW_SPEC))
+        summary = load_summary(results_dir)
+        summary["103"] = {
+            "number": 103, "patchset": 2, "sha": "c" * 40,
+            "subject": "s3", "base_url": "https://gerrit.invalid",
+            "status": "findings", "findings": 1, "model": "opus",
+            "agent": "claude", "json": "gerrit-review-103_ps2.json",
+            "log": "kreview-103_ps2.log", "error": None, "posted": False,
+        }
+        (results_dir / "summary.json").write_text(json.dumps(summary))
+
+        outcomes = post_results(results_dir, changes=[101], dry_run=True)
+        assert [o.number for o in outcomes] == [101]
+        assert outcomes[0].status == "would post"
+        assert "1 comment(s) on ps4" in outcomes[0].detail
+
+    def test_contacts_no_provider_and_leaves_manifest_alone(
+            self, results_dir):
+        reviewer = _mock_reviewer()
+        p_rev, p_client = _patched(reviewer)
+        with p_rev, p_client as mock_client:
+            post_results(results_dir, changes=[101], dry_run=True)
+        reviewer.post_review.assert_not_called()
+        mock_client.assert_not_called()
+        assert load_summary(results_dir)["101"]["posted"] is False
+
+    def test_applies_the_same_guards_as_a_real_post(self, results_dir):
+        summary = load_summary(results_dir)
+        summary["mybranch_abc1234"] = {
+            "number": None, "local": True, "ref_name": "mybranch",
+            "patchset": None, "sha": "c" * 40, "subject": "s",
+            "base_url": "", "status": "findings", "findings": 2,
+            "json": "gerrit-review-mybranch_abc1234.json",
+            "posted": False,
+        }
+        (results_dir / "summary.json").write_text(json.dumps(summary))
+
+        outcomes = post_results(results_dir, dry_run=True)
+        by_key = {o.number: o for o in outcomes}
+        assert by_key[101].status == "would post"
+        assert by_key[102].status == "skipped"       # clean
+        assert by_key["mybranch_abc1234"].status == "skipped"  # local
+
+    def test_already_posted_shown_unless_force(self, results_dir):
+        summary = load_summary(results_dir)
+        summary["101"]["posted"] = True
+        (results_dir / "summary.json").write_text(json.dumps(summary))
+
+        outcomes = post_results(results_dir, changes=[101], dry_run=True)
+        assert outcomes[0].status == "skipped"
+        assert "already posted" in outcomes[0].detail
+
+        outcomes = post_results(results_dir, changes=[101], force=True,
+                                dry_run=True)
+        assert outcomes[0].status == "would post"
+        assert load_summary(results_dir)["101"]["posted"] is True
+
+    def test_unknown_change_raises(self, results_dir):
+        with pytest.raises(KeyError):
+            post_results(results_dir, changes=[999], dry_run=True)

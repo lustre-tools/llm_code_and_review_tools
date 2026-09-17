@@ -295,6 +295,39 @@ class TestCmdPost:
         assert rc == 1
         assert "not a change number" in capsys.readouterr().out
 
+    def test_dry_run_lists_only_the_named_change(self, tmp_path, capsys):
+        """A dry run shows what `post 64086` would send, not every
+        entry the shared results dir has accumulated."""
+        from lreview.cli import cmd_post
+        import argparse as ap
+        import json
+
+        results = tmp_path / "results"
+        results.mkdir()
+        spec = {"message": "m", "comments": {"a.c": [{"line": 1,
+                                                      "message": "x"}]}}
+        summary = {}
+        for number in (64086, 64087):
+            name = f"gerrit-review-{number}_ps1.json"
+            (results / name).write_text(json.dumps(spec))
+            summary[str(number)] = {
+                "number": number, "patchset": 1, "sha": "a" * 40,
+                "subject": "s", "base_url": "https://gerrit.invalid",
+                "status": "findings", "findings": 1, "model": "opus",
+                "agent": "claude", "json": name, "error": None,
+                "posted": False,
+            }
+        (results / "summary.json").write_text(json.dumps(summary))
+
+        args = ap.Namespace(
+            results_dir=str(results), changes=["64086"],
+            prefix=None, force=False, dry_run=True)
+        assert cmd_post(args) == 0
+        out = capsys.readouterr().out
+        assert "64086" in out
+        assert "64087" not in out
+        assert "would post" in out
+
 
 class TestDefaultWorktreesDir:
 

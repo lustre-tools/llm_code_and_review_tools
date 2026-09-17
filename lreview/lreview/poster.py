@@ -129,11 +129,27 @@ def _post_github(results_dir: Path, entry: dict, prefix: Optional[str]):
     return True, f"posted {len(comments)} inline comment(s) pinned to {entry['head_sha'][:12]}", prefix
 
 
+def _would_post_detail(results_dir: Path, entry: dict) -> str:
+    """Describe what a real post would send, without contacting anyone."""
+    spec = json.loads((results_dir / entry["json"]).read_text())
+    comments = spec.get("comments") or {}
+    if isinstance(comments, dict):
+        count = sum(len(v) for v in comments.values())
+    else:
+        count = len(comments)
+    if not count:
+        count = len(spec.get("findings") or [])
+    where = (f"ps{entry['patchset']}" if entry.get("patchset")
+             else entry.get("head_sha", "")[:12])
+    return f"{count} comment(s) on {where}"
+
+
 def post_results(
     results_dir: Path,
     changes: Optional[list[int]] = None,
     prefix: Optional[str] = None,
     force: bool = False,
+    dry_run: bool = False,
 ) -> list[PostOutcome]:
     """Post reviews with findings to Gerrit.
 
@@ -144,6 +160,8 @@ def post_results(
         prefix: Text prepended to every message. None auto-stamps
             "[AI review - <model>]"; "" posts without a prefix.
         force: Post even if the manifest says it was already posted.
+        dry_run: Report what would be posted, contacting no provider
+            and leaving the manifest untouched.
     """
     snapshot = load_summary(results_dir)
     if changes:
@@ -174,7 +192,7 @@ def post_results(
     for key in wanted:
         # Re-read and post under the manifest lock: the guard and the
         # posted-flag update are atomic against concurrent invocations.
-        with locked_summary(results_dir) as summary:
+        with locked_summary(results_dir, save=not dry_run) as summary:
             entry = summary.get(key)
             if entry is None:
                 outcomes.append(PostOutcome(
@@ -195,6 +213,12 @@ def post_results(
                 outcomes.append(PostOutcome(
                     number, "skipped",
                     "already posted (use --force to repost)"))
+                continue
+
+            if dry_run:
+                outcomes.append(PostOutcome(
+                    number, "would post",
+                    _would_post_detail(results_dir, entry)))
                 continue
 
             try:
