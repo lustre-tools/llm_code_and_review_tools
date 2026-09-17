@@ -192,22 +192,25 @@ def failures(session_url: str, pretty: bool) -> None:
     failed_suites = []
     for ts in failed_sets:
         suite_name = set_names.get(ts.get("test_set_script_id", ""), "unknown")
-        subtests = client.get_subtests(test_set_id=ts["id"])
+        subtests = [
+            st for st in client.get_subtests(test_set_id=ts["id"])
+            if st["status"] in ("FAIL", "CRASH", "ABORT", "TIMEOUT")
+        ]
+        # One request per name: a failed sanity run has a thousand subtests.
         subtest_names = client.resolve_subtest_names(subtests)
 
         failed_subtests = []
         for st in subtests:
-            if st["status"] in ("FAIL", "CRASH", "ABORT", "TIMEOUT"):
-                st_name = subtest_names.get(
-                    st.get("sub_test_script_id", ""), f"order_{st.get('order', '?')}"
-                )
-                failed_subtests.append({
-                    "name": st_name,
-                    "status": st["status"],
-                    "error": st.get("error", ""),
-                    "duration": st.get("duration"),
-                    "return_code": st.get("return_code"),
-                })
+            st_name = subtest_names.get(
+                st.get("sub_test_script_id", ""), f"order_{st.get('order', '?')}"
+            )
+            failed_subtests.append({
+                "name": st_name,
+                "status": st["status"],
+                "error": st.get("error", ""),
+                "duration": st.get("duration"),
+                "return_code": st.get("return_code"),
+            })
 
         failed_suites.append({
             "suite": suite_name,
@@ -619,7 +622,9 @@ def sessions(
 @click.option("--days", type=int, default=14,
               help="Number of days to look back (default: 14)")
 @click.option("--sessions", "max_sessions", type=int, default=30,
-              help="Max sessions to examine (default: 30)")
+              help="Max sessions containing the suite to examine "
+                   "(default: 30); up to 5x that many are scanned to "
+                   "find them")
 @click.option("--all", "show_all", is_flag=True,
               help="Show all history entries (default: failures only)")
 @click.option("--limit", type=int, default=10,
@@ -657,7 +662,7 @@ def test_history(
     to_date = today.strftime("%Y-%m-%d")
 
     try:
-        history, resolved_suite = client.get_test_history(
+        history, resolved_suite, stats = client.get_test_history(
             test_name=test_name,
             trigger_job=branch,
             from_date=from_date,
@@ -685,19 +690,22 @@ def test_history(
     # Apply limit
     filtered = filtered[:limit]
 
+    no_data = total == 0
+
     result = {
         "test_name": test_name,
         "branch": branch,
         "suite": resolved_suite or suite,
         "period": f"{from_date} to {to_date}",
         "days": days,
-        "sessions_examined": max_sessions,
+        "sessions_scanned": stats["sessions_scanned"],
+        "sessions_with_suite": stats["sessions_with_suite"],
         "occurrences": total,
         "summary": {
             "pass": pass_count,
             "fail": fail_count,
             "skip": skip_count,
-            "fail_rate_pct": round(fail_rate, 1),
+            "fail_rate_pct": None if no_data else round(fail_rate, 1),
         },
         "history": [
             {
@@ -713,7 +721,37 @@ def test_history(
         ],
     }
 
+    if no_data:
+        if stats["sessions_with_suite"] == 0:
+            result["warning"] = (
+                f"No run of suite {suite or '(any)'!s} in the "
+                f"{stats['sessions_scanned']} sessions scanned on "
+                f"{branch}, so this is no data, not a clean record. "
+                f"A branch runs only some suites."
+            )
+        else:
+            result["warning"] = (
+                f"Suite ran in {stats['sessions_with_suite']} scanned "
+                f"session(s) on {branch} but {test_name} did not appear "
+                f"in any of them."
+            )
+
     next_actions = []
+    if no_data and stats["sessions_with_suite"] == 0:
+        if branch != "lustre-reviews":
+            next_actions.append(
+                f"maloo test-history {test_name}"
+                f" --suite {suite} --branch lustre-reviews"
+                f" -- review runs carry the per-group suites"
+                if suite else
+                f"maloo test-history {test_name} --branch lustre-reviews"
+            )
+        next_actions.append(
+            f"maloo test-history {test_name}"
+            + (f" --suite {suite}" if suite else "")
+            + f" --branch {branch} --sessions {max_sessions * 4}"
+            + " -- scan further back"
+        )
     failed_entries = [h for h in history if h["status"] in ("FAIL", "CRASH", "TIMEOUT")]
     if failed_entries:
         ex = failed_entries[-1]

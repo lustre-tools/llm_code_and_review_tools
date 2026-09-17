@@ -113,16 +113,16 @@ class TestFailures:
         mock_client.resolve_test_set_names.return_value = {
             "script-san": "sanity",
         }
-        mock_client.get_subtests.return_value = [
-            {
-                "sub_test_script_id": "sub-39b",
-                "status": "FAIL",
-                "error": "assertion failed",
-                "duration": 30,
-                "return_code": 1,
-                "order": 5,
-            },
-        ]
+        failed = {
+            "sub_test_script_id": "sub-39b",
+            "status": "FAIL",
+            "error": "assertion failed",
+            "duration": 30,
+            "return_code": 1,
+            "order": 5,
+        }
+        passed = {"sub_test_script_id": "sub-0a", "status": "PASS", "order": 1}
+        mock_client.get_subtests.return_value = [passed, failed]
         mock_client.resolve_subtest_names.return_value = {
             "sub-39b": "test_39b",
         }
@@ -132,6 +132,9 @@ class TestFailures:
         assert env["ok"] is True
         assert len(env["data"]["failed_suites"]) == 1
         assert env["data"]["failed_suites"][0]["failed_subtests"][0]["name"] == "test_39b"
+        assert len(env["data"]["failed_suites"][0]["failed_subtests"]) == 1
+        # Names are one request each; only the failed ones are wanted.
+        mock_client.resolve_subtest_names.assert_called_once_with([failed])
 
     def test_failures_no_failures(self, runner, mock_client):
         mock_client.get_session.return_value = {
@@ -386,6 +389,10 @@ class TestSessions:
 
 # -- test-history command --
 
+STATS_OK = {"sessions_scanned": 30, "sessions_with_suite": 30}
+STATS_NONE = {"sessions_scanned": 40, "sessions_with_suite": 0}
+
+
 
 class TestTestHistory:
     HISTORY_DATA = [
@@ -426,7 +433,8 @@ class TestTestHistory:
 
     def test_history_defaults_to_failures_only(self, runner, mock_client):
         """Default should show summary for all, but history only for failures."""
-        mock_client.get_test_history.return_value = (self.HISTORY_DATA, "sanity")
+        mock_client.get_test_history.return_value = (
+            self.HISTORY_DATA, "sanity", STATS_OK)
         result = runner.invoke(main, ["--envelope", "test-history", "test_39b"])
         env = _parse_output(result)
         assert env["ok"] is True
@@ -441,7 +449,8 @@ class TestTestHistory:
 
     def test_history_all_flag(self, runner, mock_client):
         """--all should show all history entries."""
-        mock_client.get_test_history.return_value = (self.HISTORY_DATA, "sanity")
+        mock_client.get_test_history.return_value = (
+            self.HISTORY_DATA, "sanity", STATS_OK)
         result = runner.invoke(main, ["--envelope", "test-history", "test_39b", "--all"])
         env = _parse_output(result)
         assert len(env["data"]["history"]) == 3
@@ -449,13 +458,13 @@ class TestTestHistory:
     def test_history_limit(self, runner, mock_client):
         """--limit should cap history entries."""
         many = self.HISTORY_DATA * 5  # 15 entries (5 failures)
-        mock_client.get_test_history.return_value = (many, "sanity")
+        mock_client.get_test_history.return_value = (many, "sanity", STATS_OK)
         result = runner.invoke(main, ["--envelope", "test-history", "test_39b", "--all", "--limit", "3"])
         env = _parse_output(result)
         assert len(env["data"]["history"]) == 3
 
     def test_history_with_suite_filter(self, runner, mock_client):
-        mock_client.get_test_history.return_value = ([], None)
+        mock_client.get_test_history.return_value = ([], None, STATS_NONE)
         runner.invoke(main, [
             "test-history", "test_1b",
             "--suite", "replay-vbr",
@@ -467,12 +476,39 @@ class TestTestHistory:
         assert call_args[1]["trigger_job"] == "lustre-reviews"
 
     def test_history_empty(self, runner, mock_client):
-        mock_client.get_test_history.return_value = ([], None)
+        mock_client.get_test_history.return_value = ([], None, STATS_NONE)
         result = runner.invoke(main, ["--envelope", "test-history", "test_nonexistent"])
         env = _parse_output(result)
         assert env["ok"] is True
         assert env["data"]["occurrences"] == 0
-        assert env["data"]["summary"]["fail_rate_pct"] == 0.0
+        # no data is not a clean record: a 0.0% rate would read as
+        # "this test never fails" when the suite never ran
+        assert env["data"]["summary"]["fail_rate_pct"] is None
+        assert "no data" in env["data"]["warning"]
+
+    def test_history_suite_absent_warns(self, runner, mock_client):
+        """Suite missing from every scanned session must say so."""
+        mock_client.get_test_history.return_value = ([], None, STATS_NONE)
+        result = runner.invoke(main, [
+            "--envelope", "test-history", "test_18e",
+            "--suite", "sanity-lfsck",
+        ])
+        env = _parse_output(result)
+        assert env["data"]["sessions_with_suite"] == 0
+        assert env["data"]["sessions_scanned"] == 40
+        assert "sanity-lfsck" in env["data"]["warning"]
+        assert any("lustre-reviews" in a for a in env["next_actions"])
+
+    def test_history_test_absent_but_suite_ran(self, runner, mock_client):
+        """Suite ran but test never appeared -- a different message."""
+        mock_client.get_test_history.return_value = (
+            [], None, {"sessions_scanned": 30, "sessions_with_suite": 12})
+        result = runner.invoke(main, [
+            "--envelope", "test-history", "test_zzz", "--suite", "sanity",
+        ])
+        env = _parse_output(result)
+        assert env["data"]["sessions_with_suite"] == 12
+        assert "did not appear" in env["data"]["warning"]
 
 
 # -- queue command --

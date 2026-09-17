@@ -60,6 +60,7 @@ class MalooClient:
         results: list[dict[str, Any]] = []
         offset = 0
         page_size: int | None = None
+        previous: list[dict[str, Any]] | None = None
         while True:
             if max_records > 0 and len(results) >= max_records:
                 break
@@ -67,6 +68,11 @@ class MalooClient:
             page = self._get(endpoint, params)
             if not page:
                 break
+            # bug_links with related=true ignores offset and answers every
+            # request with the same full page, so this is the only end.
+            if page == previous:
+                break
+            previous = page
             results.extend(page)
             offset += len(page)
             if page_size is None:
@@ -281,6 +287,87 @@ class MalooClient:
         rows = self._get("test_set_scripts", {"name": name})
         return rows[0]["id"] if rows else None
 
+    def _test_history_by_suite(
+        self,
+        test_name: str,
+        trigger_job: str,
+        from_date: str,
+        to_date: str,
+        suite: str,
+        suite_script_id: str,
+        max_sessions: int,
+        max_scan: int,
+    ) -> tuple[list[dict[str, Any]], str | None, dict[str, int]]:
+        """Test history for one named suite, found by its test sets.
+
+        The branch lives on the session, not the test set, so each
+        candidate costs one session lookup to check trigger_job.
+        """
+        rows = self._get("test_sets", {
+            "test_set_script_id": suite_script_id,
+            "from": from_date,
+            "to": to_date,
+        })
+        rows.sort(key=lambda r: r.get("submission") or "", reverse=True)
+
+        sub_script_cache: dict[str, str] = {}
+        session_cache: dict[str, dict[str, Any] | None] = {}
+        history: list[dict[str, Any]] = []
+        resolved_suite = None
+        scanned = 0
+        with_suite = 0
+
+        for ts in rows[:max_scan]:
+            if with_suite >= max_sessions:
+                break
+            sid = ts.get("test_session_id")
+            if not sid:
+                continue
+            scanned += 1
+            if sid not in session_cache:
+                session_cache[sid] = self.get_session(sid)
+            sess = session_cache[sid]
+            if not sess or sess.get("trigger_job") != trigger_job:
+                continue
+            with_suite += 1
+
+            subtests = self.get_subtests(test_set_id=ts["id"])
+            new_sub_ids = {
+                st["sub_test_script_id"]
+                for st in subtests
+                if "sub_test_script_id" in st
+                and st["sub_test_script_id"] not in sub_script_cache
+            }
+            for script_id in new_sub_ids:
+                script = self.get_sub_test_script(script_id)
+                if script:
+                    sub_script_cache[script_id] = script["name"]
+
+            for st in subtests:
+                if sub_script_cache.get(
+                    st.get("sub_test_script_id", ""), ""
+                ) != test_name:
+                    continue
+                resolved_suite = suite
+                history.append({
+                    "session_id": sid,
+                    "submission": sess.get("submission", ""),
+                    "test_host": sess.get("test_host", ""),
+                    "test_name": sess.get("test_name", ""),
+                    "suite": suite,
+                    "status": st["status"],
+                    "error": st.get("error", ""),
+                    "duration": st.get("duration"),
+                    "test_set_id": ts["id"],
+                })
+
+        history.sort(key=lambda x: x["submission"])
+        stats = {
+            "sessions_scanned": scanned,
+            "sessions_with_suite": with_suite,
+        }
+        return history, resolved_suite, stats
+
     def get_test_history(
         self,
         test_name: str,
@@ -289,7 +376,8 @@ class MalooClient:
         to_date: str,
         suite: str | None = None,
         max_sessions: int = 50,
-    ) -> tuple[list[dict[str, Any]], str | None]:
+        max_scan: int | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None, dict[str, int]]:
         """Get pass/fail history for a specific test.
 
         Args:
@@ -298,12 +386,18 @@ class MalooClient:
             from_date: Start date (yyyy-mm-dd).
             to_date: End date (yyyy-mm-dd).
             suite: Optional suite name to filter (e.g. "sanity").
-            max_sessions: Max sessions to examine.
+            max_sessions: Max sessions *containing the suite* to examine.
+            max_scan: Max sessions to look at while finding those
+                (default 5x max_sessions).
 
         Returns:
-            (history_entries, suite_name_resolved)
+            (history_entries, suite_name_resolved, stats)
             Each entry has: session_id, submission, test_host,
-            suite, status, error, duration.
+            suite, status, error, duration.  stats carries
+            sessions_scanned and sessions_with_suite, which is how a
+            caller tells "the test never failed" from "the sample held
+            no run of this suite at all" -- a branch runs only some
+            suites, so the first N sessions can contain none of it.
         """
         # Get sessions for the branch in the date range
         params: dict[str, Any] = {
@@ -311,12 +405,33 @@ class MalooClient:
             "from": from_date,
             "to": to_date,
         }
-        sessions = self.get_sessions(params, max_records=max_sessions)
+        if max_scan is None:
+            max_scan = max_sessions * 5 if suite else max_sessions
+        max_scan = max(max_scan, max_sessions)
 
         # If suite filter given, resolve its script ID for faster matching
         suite_script_id = None
         if suite:
             suite_script_id = self.find_test_set_script_id(suite)
+
+        # With a suite, go at its test sets directly.  Walking the
+        # branch's most recent sessions instead finds nothing whenever
+        # that suite is not in them -- on a busy branch the newest
+        # sessions are a handful of groups, and a suite belonging to any
+        # other group never appears however many are scanned.
+        if suite_script_id:
+            return self._test_history_by_suite(
+                test_name=test_name,
+                trigger_job=trigger_job,
+                from_date=from_date,
+                to_date=to_date,
+                suite=suite,
+                suite_script_id=suite_script_id,
+                max_sessions=max_sessions,
+                max_scan=max_scan,
+            )
+
+        sessions = self.get_sessions(params, max_records=max_scan)
 
         # Cache for script name lookups
         set_script_cache: dict[str, str] = {}
@@ -324,9 +439,14 @@ class MalooClient:
 
         history: list[dict[str, Any]] = []
         resolved_suite = suite
+        scanned = 0
+        with_suite = 0
 
         for sess in sessions:
+            if with_suite >= max_sessions:
+                break
             sid = sess["id"]
+            scanned += 1
             test_sets = self.get_test_sets(sid)
 
             # Resolve set names we haven't seen
@@ -355,6 +475,9 @@ class MalooClient:
                         ts.get("test_set_script_id", "")
                     ) == suite
                 ]
+
+            if target_sets:
+                with_suite += 1
 
             for ts in target_sets:
                 suite_name = set_script_cache.get(
@@ -395,7 +518,11 @@ class MalooClient:
 
         # Sort by submission date
         history.sort(key=lambda x: x["submission"])
-        return history, resolved_suite
+        stats = {
+            "sessions_scanned": scanned,
+            "sessions_with_suite": with_suite,
+        }
+        return history, resolved_suite, stats
 
     # -- Failure aggregation --
 

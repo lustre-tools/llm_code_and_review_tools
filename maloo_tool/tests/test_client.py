@@ -159,6 +159,14 @@ class TestGetPaginated:
         # each page is read again and the offset never reaches the end.
         assert client._get.call_args_list[1][0][1]["offset"] == 1500
 
+    def test_a_repeated_page_ends_the_walk(self, client):
+        """bug_links with related=true ignores offset: every request returns
+        the same three rows, and each looked like a full page of three."""
+        page = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+        client._get = MagicMock(return_value=page)
+        assert client._get_paginated("bug_links", {"related": "true"}) == page
+        assert client._get.call_count == 2
+
     def test_empty_page_ends_the_walk(self, client):
         client._get = MagicMock(side_effect=[[{"id": "1"}] * 10, []])
         assert len(client._get_paginated("test_sessions", {})) == 10
@@ -877,7 +885,7 @@ class TestGetTestHistory:
             side_effect=lambda sid: script_map[sid]
         )
 
-        history, resolved = client.get_test_history(
+        history, resolved, stats = client.get_test_history(
             test_name="test_39b",
             trigger_job="lustre-master",
             from_date="2026-01-01",
@@ -889,37 +897,80 @@ class TestGetTestHistory:
         assert resolved == "sanity"
 
     def test_suite_filter(self, client):
-        """Suite filter should narrow which test sets are examined."""
-        sessions = [{"id": "s1", "submission": "2026-01-10", "test_host": "h1", "test_name": "t"}]
-        test_sets = [
-            {"id": "ts1", "test_set_script_id": "sc1"},
-            {"id": "ts2", "test_set_script_id": "sc2"},
+        """A named suite is found via its test sets, not by scanning
+        the branch's newest sessions (which may contain none of it)."""
+        rows = [
+            {"id": "ts1", "test_session_id": "s1",
+             "test_set_script_id": "sc1", "submission": "2026-01-10"},
+            {"id": "ts2", "test_session_id": "s2",
+             "test_set_script_id": "sc1", "submission": "2026-01-09"},
         ]
-
-        client.get_sessions = MagicMock(return_value=sessions)
-        client.get_test_sets = MagicMock(return_value=test_sets)
-        # find_test_set_script_id resolves suite name to script ID
+        client._get = MagicMock(return_value=rows)
         client.find_test_set_script_id = MagicMock(return_value="sc1")
-        client.get_test_set_script = MagicMock(return_value={"id": "sc1", "name": "sanity"})
+        client.get_sessions = MagicMock(return_value=[])
+        client.get_session = MagicMock(side_effect=lambda sid: {
+            "id": sid, "submission": "2026-01-10", "test_host": "h1",
+            "test_name": "t", "trigger_job": "lustre-master",
+        })
         client.get_subtests = MagicMock(return_value=[
-            {"sub_test_script_id": "st1", "status": "PASS", "error": "", "duration": 5},
+            {"sub_test_script_id": "st1", "status": "FAIL",
+             "error": "boom", "duration": 5},
         ])
-        client.get_sub_test_script = MagicMock(return_value={"id": "st1", "name": "test_1a"})
+        client.get_sub_test_script = MagicMock(
+            return_value={"id": "st1", "name": "test_18e"})
 
-        history, _ = client.get_test_history(
-            test_name="test_1a",
+        history, resolved, stats = client.get_test_history(
+            test_name="test_18e",
             trigger_job="lustre-master",
             from_date="2026-01-01",
             to_date="2026-01-31",
-            suite="sanity",
+            suite="sanity-lfsck",
         )
-        # Only ts1 (sc1=sanity) should have subtests fetched
-        client.get_subtests.assert_called_once_with(test_set_id="ts1")
+        # went at test_sets directly rather than walking sessions
+        client.get_sessions.assert_not_called()
+        assert client._get.call_args[0][0] == "test_sets"
+        assert client._get.call_args[0][1]["test_set_script_id"] == "sc1"
+        assert len(history) == 2
+        assert resolved == "sanity-lfsck"
+        assert stats["sessions_with_suite"] == 2
+
+    def test_suite_filter_skips_other_branches(self, client):
+        """A test set from another branch must not count."""
+        rows = [
+            {"id": "ts1", "test_session_id": "s1",
+             "test_set_script_id": "sc1", "submission": "2026-01-10"},
+            {"id": "ts2", "test_session_id": "s2",
+             "test_set_script_id": "sc1", "submission": "2026-01-09"},
+        ]
+        branches = {"s1": "lustre-master", "s2": "lustre-reviews"}
+        client._get = MagicMock(return_value=rows)
+        client.find_test_set_script_id = MagicMock(return_value="sc1")
+        client.get_session = MagicMock(side_effect=lambda sid: {
+            "id": sid, "submission": "2026-01-10", "test_host": "h",
+            "test_name": "t", "trigger_job": branches[sid],
+        })
+        client.get_subtests = MagicMock(return_value=[
+            {"sub_test_script_id": "st1", "status": "PASS",
+             "error": "", "duration": 5},
+        ])
+        client.get_sub_test_script = MagicMock(
+            return_value={"id": "st1", "name": "test_18e"})
+
+        history, _, stats = client.get_test_history(
+            test_name="test_18e",
+            trigger_job="lustre-master",
+            from_date="2026-01-01",
+            to_date="2026-01-31",
+            suite="sanity-lfsck",
+        )
+        assert stats["sessions_with_suite"] == 1
+        assert len(history) == 1
+        assert history[0]["session_id"] == "s1"
 
     def test_empty_sessions(self, client):
         """No sessions means empty history."""
         client.get_sessions = MagicMock(return_value=[])
-        history, resolved = client.get_test_history(
+        history, resolved, stats = client.get_test_history(
             test_name="test_1a",
             trigger_job="lustre-master",
             from_date="2026-01-01",
@@ -946,7 +997,7 @@ class TestGetTestHistory:
         ])
         client.get_sub_test_script = MagicMock(return_value={"id": "st1", "name": "test_1a"})
 
-        history, _ = client.get_test_history(
+        history, _, stats = client.get_test_history(
             test_name="test_1a",
             trigger_job="lustre-master",
             from_date="2026-01-01",
