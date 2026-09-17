@@ -34,6 +34,16 @@ CONFIG_PATH = Path.home() / ".config" / "gerrit-cli" / ".env"
 DEFAULT_GERRIT_URL: str | None = os.environ.get("GERRIT_URL")
 
 
+# A Change-Id as the commit-msg hook writes it: 'I' plus a 40-character
+# SHA1.  Prefixes are accepted too, since Gerrit's change: operator
+# resolves them; 8 characters keeps ordinary words out.
+CHANGE_ID_RE = re.compile(r"I[0-9a-fA-F]{8,40}")
+
+# Change-Id -> change number, keyed by server.  Resolving costs a query,
+# and a single command can parse the same handle many times.
+_CHANGE_ID_CACHE: dict[tuple[str, str], int] = {}
+
+
 CREDENTIAL_HINT = (
     "Set GERRIT_USER and GERRIT_PASS, or run "
     "`install.sh --configure --only gerrit`. The password is generated "
@@ -127,17 +137,91 @@ class GerritCommentsClient:
         return bool(self.username and self.password)
 
     @staticmethod
-    def parse_gerrit_url(url: str, default_base_url: str | None = None) -> tuple[str, int]:
-        """Parse a Gerrit URL or change number to extract base URL and change number.
+    def extract_change_id(text: str) -> str | None:
+        """Return the Change-Id in a change handle, if it is one.
+
+        Accepts the bare Change-Id, Gerrit's project~branch~Change-Id
+        triplet (URL-encoded or not) and the /q/ URLs Gerrit links to.
+        """
+        candidate = text.strip().replace("%7E", "~").replace("%7e", "~")
+        candidate = candidate.rstrip("/").split("/")[-1].split("~")[-1]
+        if CHANGE_ID_RE.fullmatch(candidate):
+            return candidate
+        return None
+
+    @classmethod
+    def resolve_change_id(
+        cls, change_id: str, base_url: str | None = None
+    ) -> int:
+        """Look up the change number a Change-Id names.
+
+        Args:
+            change_id: The Change-Id, with its leading 'I'
+            base_url: Gerrit to query. Defaults to DEFAULT_GERRIT_URL.
+
+        Returns:
+            The change number
+
+        Raises:
+            ValueError: If the Change-Id matches no change, or matches
+                several and none of them is the only open one.
+        """
+        base = (base_url or DEFAULT_GERRIT_URL or "").rstrip("/")
+        cache_key = (base, change_id.lower())
+        cached = _CHANGE_ID_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
+        client = cls(url=base or None)
+        matches = client.search_changes(
+            f"change:{change_id}", limit=10, options=[]
+        )
+        if not matches:
+            raise ValueError(
+                f"No change on {client.url.rstrip('/')} has Change-Id "
+                f"{change_id}"
+            )
+
+        chosen = matches[0]
+        if len(matches) > 1:
+            # One Change-Id, several changes: a backport series shares
+            # the Change-Id across branches. An open one is what the
+            # caller is working on; anything else needs the number.
+            open_changes = [
+                c for c in matches if c.get("status") == "NEW"
+            ]
+            if len(open_changes) != 1:
+                listed = ", ".join(
+                    f"{c.get('_number')} ({c.get('branch')}, "
+                    f"{c.get('status')})"
+                    for c in matches
+                )
+                raise ValueError(
+                    f"Change-Id {change_id} matches {len(matches)} "
+                    f"changes: {listed}. Pass the change number."
+                )
+            chosen = open_changes[0]
+
+        number = int(chosen["_number"])
+        _CHANGE_ID_CACHE[cache_key] = number
+        return number
+
+    @classmethod
+    def parse_gerrit_url(
+        cls, url: str, default_base_url: str | None = None
+    ) -> tuple[str, int]:
+        """Parse a Gerrit URL, change number or Change-Id.
 
         Supports:
         - https://review.whamcloud.com/c/fs/lustre-release/+/61965
         - https://review.whamcloud.com/61965
         - https://review.whamcloud.com/c/fs/lustre-release/+/61965/3 (with patchset)
         - 61965 (just the change number, uses default base URL)
+        - If2706506135264f501c6cbc6243ed449f9792605 (Change-Id, resolved
+          against the server; also the project~branch~Change-Id triplet)
 
         Args:
-            url: Gerrit URL or change number
+            url: Gerrit URL, change number or Change-Id
             default_base_url: Base URL to use if only a change number is provided.
                               Defaults to DEFAULT_GERRIT_URL.
 
@@ -164,7 +248,24 @@ class GerritCommentsClient:
         if match:
             return match.group(1), int(match.group(2))
 
-        raise ValueError(f"Could not parse Gerrit URL or change number: {url}")
+        change_id = cls.extract_change_id(url)
+        if change_id:
+            base = default_base_url or DEFAULT_GERRIT_URL
+            if not base:
+                raise ValueError(
+                    f"Could not resolve Change-Id {change_id}. "
+                    "Set GERRIT_URL environment variable to use Change-Ids "
+                    "directly."
+                )
+            # A Change-Id URL can name a server other than the default.
+            match = re.match(r"(https?://[^/]+)/", url)
+            if match:
+                base = match.group(1)
+            return base, cls.resolve_change_id(change_id, base)
+
+        raise ValueError(
+            f"Could not parse Gerrit URL, change number or Change-Id: {url}"
+        )
 
     def get_change_detail(self, change_number: int) -> dict[str, Any]:
         """Get detailed information about a change.

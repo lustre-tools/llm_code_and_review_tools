@@ -14,7 +14,7 @@ def add_extract_parser(subparsers):
         help="Get comments from a Gerrit change",
         description="Get unresolved comments from a Gerrit change URL",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "--all", "-a",
         action="store_true",
@@ -123,7 +123,7 @@ def add_batch_parser(subparsers):
         help="Reply to multiple comments from JSON file",
         description="Post multiple replies from a JSON file",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "file",
         help="JSON file with replies [{comment_id | thread_index | file [+ line], message, mark_resolved}]; '-' reads the JSON from stdin",
@@ -151,7 +151,7 @@ def add_review_parser(subparsers):
                     "(equivalent to 'git diff -U3'). Use --full-context for the full file, "
                     "or --changes-only for just the changed lines.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "--pretty", "-p",
         action="store_true",
@@ -242,7 +242,8 @@ def add_series_comments_parser(subparsers):
     )
     parser.add_argument(
         "url",
-        help="Gerrit change URL, number (any patch in the series), "
+        help="Gerrit change URL, number or Change-Id (any patch in "
+             "the series), "
              "or a JIRA ticket like LU-18222. Ticket form picks the "
              "anchor automatically: the in-flight patch whose series "
              "has the most in-flight members (newest merged patch "
@@ -311,7 +312,8 @@ def add_review_series_parser(subparsers):
     )
     parser.add_argument(
         "url",
-        help="Gerrit change URL, number (any patch in the series), "
+        help="Gerrit change URL, number or Change-Id (any patch in "
+             "the series), "
              "or a JIRA ticket like LU-18222. Ticket form picks the "
              "anchor automatically: the in-flight patch whose series "
              "has the most in-flight members (newest merged patch "
@@ -358,7 +360,7 @@ def add_interactive_parser(subparsers):
         help="Interactive mode for reviewing comments",
         description="Review and reply to comments interactively",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     return parser
 
 
@@ -369,7 +371,7 @@ def add_series_status_parser(subparsers):
         help="Show status of all patches in a series",
         description="Display status, comments, and review state for each patch",
     )
-    parser.add_argument("url", help="Gerrit change URL or number (any patch in series)")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id (any patch in series)")
     parser.add_argument(
         "--pretty", "-p",
         action="store_true",
@@ -616,7 +618,7 @@ def add_reviewers_parser(subparsers):
         help="List reviewers on a change",
         description="Show all reviewers and their votes on a Gerrit change.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "--pretty", "-p",
         action="store_true",
@@ -633,7 +635,7 @@ def add_add_reviewer_parser(subparsers):
         description="Add a reviewer to a Gerrit change. Supports fuzzy matching "
                     "on names - just provide a partial name and it will find matches.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "name",
         help="Reviewer name, email, or username (fuzzy matching supported)",
@@ -663,7 +665,7 @@ def add_remove_reviewer_parser(subparsers):
         help="Remove a reviewer from a change",
         description="Remove a reviewer from a Gerrit change.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "name",
         help="Reviewer name, email, or username",
@@ -688,7 +690,7 @@ def add_abandon_parser(subparsers):
         help="Abandon a Gerrit change",
         description="Abandon a Gerrit change with an optional message.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "message",
         nargs="?",
@@ -722,7 +724,7 @@ def add_info_parser(subparsers):
         description="Show patchset upload dates, review scores, "
                     "and CI status in one shot.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "--show-bots",
         action="store_true",
@@ -748,7 +750,8 @@ def add_series_info_parser(subparsers):
     )
     parser.add_argument(
         "url",
-        help="Gerrit change URL, number (any patch in the series), "
+        help="Gerrit change URL, number or Change-Id (any patch in "
+             "the series), "
              "or a JIRA ticket like LU-18222. Ticket form picks the "
              "anchor automatically: the in-flight patch whose series "
              "has the most in-flight members (newest merged patch "
@@ -793,7 +796,7 @@ def add_maloo_parser(subparsers):
                     "of enforced/optional pass/fail results. "
                     "Accepts multiple URLs for batch mode.",
     )
-    parser.add_argument("url", nargs="+", help="Gerrit change URL(s) or number(s)")
+    parser.add_argument("url", nargs="+", help="Gerrit change URL(s), number(s) or Change-Id(s)")
     parser.add_argument(
         "--patchset", "-r",
         type=int,
@@ -817,7 +820,7 @@ def add_checkout_parser(subparsers):
         description="Fetch a Gerrit change ref and checkout the source. "
                     "Detaches HEAD by default; use --branch to create a branch.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "--patchset", "-r",
         type=int,
@@ -904,7 +907,7 @@ def add_done_parser(subparsers):
         description="Quickly mark a comment thread as resolved with 'Done' message. "
                     "This is a shortcut for 'gc reply --done <url> <thread_index>'.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "thread_index",
         type=int,
@@ -932,7 +935,7 @@ def add_ack_parser(subparsers):
         description="Quickly acknowledge a comment thread with 'Acknowledged' message. "
                     "This is a shortcut for 'gc reply --ack <url> <thread_index>'.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "thread_index",
         type=int,
@@ -965,7 +968,8 @@ def add_graph_parser(subparsers):
     )
     parser.add_argument(
         "url",
-        help="Gerrit change URL, number (any patch in the series), "
+        help="Gerrit change URL, number or Change-Id (any patch in "
+             "the series), "
              "or a JIRA ticket like LU-18222. Ticket form picks the "
              "anchor automatically: the in-flight patch whose series "
              "has the most in-flight members (newest merged patch "
@@ -1095,7 +1099,7 @@ def add_set_topic_parser(subparsers):
         description="Set or update the topic label on a Gerrit change. "
                     "Topics group related changes together.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument("topic", help="Topic name to set")
     parser.add_argument(
         "--pretty", "-p",
@@ -1113,7 +1117,7 @@ def add_hashtag_parser(subparsers):
         description="Get, add, or remove hashtags on a Gerrit change. "
                     "Hashtags are free-form tags that can coexist with a change's topic.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "--add", "-a",
         metavar="TAG",
@@ -1143,7 +1147,7 @@ def add_restore_parser(subparsers):
         help="Restore an abandoned Gerrit change",
         description="Restore a previously abandoned change back to active status.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "-m", "--message",
         help="Optional message explaining the restore",
@@ -1164,7 +1168,7 @@ def add_rebase_parser(subparsers):
         description="Rebase a change on the server without checking it out locally. "
                     "Useful for keeping a series current with its parent branch.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "--pretty", "-p",
         action="store_true",
@@ -1182,7 +1186,7 @@ def add_vote_parser(subparsers):
         description="Set a review label/vote on a Gerrit change. "
                     "Example: gc vote <url> Code-Review +2",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument("label", help="Label name (e.g. Code-Review, Verified)")
     parser.add_argument(
         "score", type=int,
@@ -1209,7 +1213,7 @@ def add_diff_parser(subparsers):
                     "Useful for re-review after updates. "
                     "Example: gc diff <url> 3 5",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument("patchset_a", type=int, help="Base patchset number")
     parser.add_argument(
         "patchset_b", type=int, nargs="?",
@@ -1232,7 +1236,7 @@ def add_message_parser(subparsers):
                     "on a Gerrit change. This is the equivalent of leaving "
                     "a comment in the Gerrit web UI.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument("text", help="Message text to post")
     parser.add_argument(
         "--pretty", "-p",
@@ -1286,7 +1290,7 @@ def add_related_parser(subparsers):
         description="Show all changes in the git relation chain for a change. "
                     "Returns the series from root ancestor to tip, in order.",
     )
-    parser.add_argument("url", help="Gerrit change URL or number")
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "--pretty", "-p",
         action="store_true",

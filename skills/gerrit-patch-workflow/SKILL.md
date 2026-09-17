@@ -12,8 +12,20 @@ sessions, change metadata and CI overview. Output is JSON; add
 the built-in workflow cheatsheets, `gc explain <command>` details one
 command, and `gc describe` emits the machine-readable API.
 
-A change is addressed by full URL or by bare number. Most commands
-remember the URL from the last `gc comments`, so later calls can omit it.
+A change is addressed by full URL, bare number or Change-Id -- the
+Change-Id being the handle a checkout has, from the commit message. Most
+commands remember the URL from the last `gc comments`, so later calls can
+omit it.
+
+```bash
+gc info 64086
+gc info If2706506135264f501c6cbc6243ed449f9792605
+gc info $(git log -1 --format=%B | sed -n 's/^Change-Id: //p')
+```
+
+A Change-Id shared across branches (a backport) resolves to the open
+change; if more than one is open, the error lists them and you pass the
+number.
 
 ## Reading feedback
 

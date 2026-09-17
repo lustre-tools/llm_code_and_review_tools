@@ -29,7 +29,7 @@ def get_tool_description() -> ToolDescription:
                 description="Get unresolved comments from a Gerrit change with code context",
                 usage="gc comments <URL>",
                 arguments=[
-                    Argument(name="url", description="Gerrit change URL or number", required=True),
+                    Argument(name="url", description="Gerrit change URL, number or Change-Id", required=True),
                     Argument(name="--all", description="Include resolved comments too", type="boolean", default=False),
                     Argument(name="--no-context", description="Skip code context around comments", type="boolean", default=False),
                     Argument(name="--context-lines", description="Lines of code context", type="integer", default=3),
@@ -70,7 +70,7 @@ def get_tool_description() -> ToolDescription:
                 description="Reply to multiple comments from a JSON file",
                 usage="gc batch <URL> <FILE>",
                 arguments=[
-                    Argument(name="url", description="Gerrit change URL or number", required=True),
+                    Argument(name="url", description="Gerrit change URL, number or Change-Id", required=True),
                     Argument(name="file", description="JSON file with replies [{comment_id | thread_index | file [+ line], message, mark_resolved}]; '-' reads the JSON from stdin", required=True),
                     Argument(name="--dry-run", description="Preview without posting", type="boolean", default=False),
                 ],
@@ -83,7 +83,7 @@ def get_tool_description() -> ToolDescription:
                 description="Get code diffs for review, optionally post review comments",
                 usage="gc review <URL>",
                 arguments=[
-                    Argument(name="url", description="Gerrit change URL or number", required=True),
+                    Argument(name="url", description="Gerrit change URL, number or Change-Id", required=True),
                     Argument(name="--changes-only", description="Show only changed lines", type="boolean", default=False),
                     Argument(name="--full-content", description="Include full file content", type="boolean", default=False),
                     Argument(name="--unified", description="Lines of diff context", type="integer", default=3),
@@ -252,7 +252,7 @@ def get_tool_description() -> ToolDescription:
                 description="List reviewers and their votes on a change",
                 usage="gc reviewers <URL>",
                 arguments=[
-                    Argument(name="url", description="Gerrit change URL or number", required=True),
+                    Argument(name="url", description="Gerrit change URL, number or Change-Id", required=True),
                 ],
                 examples=["gc reviewers 12345"],
                 output_fields=["reviewers[].name", "reviewers[].username", "reviewers[].votes"],
@@ -263,7 +263,7 @@ def get_tool_description() -> ToolDescription:
                 description="Add a reviewer (supports fuzzy name matching)",
                 usage='gc add-reviewer <URL> "<NAME>"',
                 arguments=[
-                    Argument(name="url", description="Gerrit change URL or number", required=True),
+                    Argument(name="url", description="Gerrit change URL, number or Change-Id", required=True),
                     Argument(name="name", description="Name, email, or username (fuzzy matching supported)", required=True),
                     Argument(name="--cc", description="Add as CC instead of reviewer", type="boolean", default=False),
                     Argument(name="--dry-run", description="Preview without adding", type="boolean", default=False),
@@ -280,7 +280,7 @@ def get_tool_description() -> ToolDescription:
                 description="Remove a reviewer from a change",
                 usage='gc remove-reviewer <URL> "<NAME>"',
                 arguments=[
-                    Argument(name="url", description="Gerrit change URL or number", required=True),
+                    Argument(name="url", description="Gerrit change URL, number or Change-Id", required=True),
                     Argument(name="name", description="Name, email, or username", required=True),
                     Argument(name="--dry-run", description="Preview without removing", type="boolean", default=False),
                 ],

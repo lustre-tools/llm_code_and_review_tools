@@ -1,5 +1,6 @@
 """Tests for the client module."""
 
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -109,6 +110,117 @@ class TestGerritCommentsClient:
         url = client.format_change_url("my/project", 12345)
 
         assert url == "https://review.example.com/c/my/project/+/12345"
+
+
+class TestChangeIdResolution:
+    """Tests for resolving a Change-Id to a change number."""
+
+    CHANGE_ID = "If2706506135264f501c6cbc6243ed449f9792605"
+
+    def setup_method(self):
+        import gerrit_cli.client as client_module
+        client_module._CHANGE_ID_CACHE.clear()
+
+    @contextmanager
+    def _server(self, matches):
+        """Stand in for the Gerrit resolve_change_id() builds a client for."""
+        calls = []
+
+        def fake_init(self, url=None, username=None, password=None):
+            self.url = url or "https://review.example.com"
+
+        def fake_search(self, query, limit=25, start=0, options=None):
+            calls.append(query)
+            return matches
+
+        with patch.object(GerritCommentsClient, "__init__", fake_init), \
+                patch.object(GerritCommentsClient, "search_changes", fake_search):
+            yield calls
+
+    def test_extract_change_id_bare(self):
+        assert (
+            GerritCommentsClient.extract_change_id(self.CHANGE_ID)
+            == self.CHANGE_ID
+        )
+
+    def test_extract_change_id_triplet(self):
+        triplet = f"fs%2Flustre-release~master~{self.CHANGE_ID}"
+        assert (
+            GerritCommentsClient.extract_change_id(triplet) == self.CHANGE_ID
+        )
+
+    def test_extract_change_id_query_url(self):
+        url = f"https://review.example.com/q/{self.CHANGE_ID}"
+        assert GerritCommentsClient.extract_change_id(url) == self.CHANGE_ID
+
+    def test_extract_change_id_rejects_other_words(self):
+        assert GerritCommentsClient.extract_change_id("Invalid") is None
+        assert GerritCommentsClient.extract_change_id("61965") is None
+
+    def test_parse_gerrit_url_resolves_change_id(self):
+        with self._server([{"_number": 61965, "status": "NEW"}]) as calls:
+            base_url, change_number = GerritCommentsClient.parse_gerrit_url(
+                self.CHANGE_ID,
+                default_base_url="https://review.example.com",
+            )
+
+        assert base_url == "https://review.example.com"
+        assert change_number == 61965
+        assert calls == [f"change:{self.CHANGE_ID}"]
+
+    def test_parse_gerrit_url_resolves_triplet(self):
+        triplet = f"fs%2Flustre-release~master~{self.CHANGE_ID}"
+        with self._server([{"_number": 61965, "status": "NEW"}]):
+            _, change_number = GerritCommentsClient.parse_gerrit_url(
+                triplet, default_base_url="https://review.example.com"
+            )
+
+        assert change_number == 61965
+
+    def test_parse_gerrit_url_change_id_url_keeps_its_server(self):
+        url = f"https://other.gerrit.com/q/{self.CHANGE_ID}"
+        with self._server([{"_number": 61965, "status": "NEW"}]):
+            base_url, change_number = GerritCommentsClient.parse_gerrit_url(
+                url, default_base_url="https://review.example.com"
+            )
+
+        assert base_url == "https://other.gerrit.com"
+        assert change_number == 61965
+
+    def test_resolve_change_id_caches(self):
+        with self._server([{"_number": 61965, "status": "NEW"}]) as calls:
+            for _ in range(3):
+                GerritCommentsClient.resolve_change_id(
+                    self.CHANGE_ID, "https://review.example.com"
+                )
+
+        assert len(calls) == 1
+
+    def test_resolve_change_id_no_match(self):
+        with self._server([]):
+            with pytest.raises(ValueError, match="No change on"):
+                GerritCommentsClient.resolve_change_id(
+                    self.CHANGE_ID, "https://review.example.com"
+                )
+
+    def test_resolve_change_id_picks_the_open_one(self):
+        with self._server([
+            {"_number": 61965, "status": "MERGED", "branch": "master"},
+            {"_number": 62001, "status": "NEW", "branch": "b2_15"},
+        ]):
+            assert GerritCommentsClient.resolve_change_id(
+                self.CHANGE_ID, "https://review.example.com"
+            ) == 62001
+
+    def test_resolve_change_id_ambiguous(self):
+        with self._server([
+            {"_number": 61965, "status": "NEW", "branch": "master"},
+            {"_number": 62001, "status": "NEW", "branch": "b2_15"},
+        ]):
+            with pytest.raises(ValueError, match="matches 2 changes"):
+                GerritCommentsClient.resolve_change_id(
+                    self.CHANGE_ID, "https://review.example.com"
+                )
 
 
 class TestGerritCommentsClientWithMocks:

@@ -25,10 +25,15 @@ def cmd_work_on_patch(args):
                 print("Error: Set GERRIT_URL environment variable to use change numbers directly.", file=sys.stderr)
                 sys.exit(1)
         else:
-            # Full or short URL - parse it
+            # URL or Change-Id - parse it
             try:
-                _, change_number = cli.GerritCommentsClient.parse_gerrit_url(target)
-                url = target
+                base_url, change_number = (
+                    cli.GerritCommentsClient.parse_gerrit_url(target)
+                )
+                # A Change-Id is not a URL, and this one is stored.
+                url = target if target.startswith("http") else (
+                    f"{base_url.rstrip('/')}/{change_number}"
+                )
             except ValueError as e:
                 print(f"Error: {e}", file=sys.stderr)
                 sys.exit(1)

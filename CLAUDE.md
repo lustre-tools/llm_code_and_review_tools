@@ -82,6 +82,12 @@ Code review, comment management, patch workflows, and CI triage.
 Reads work with only `GERRIT_URL`; anything that changes a patch needs
 `GERRIT_USER` and `GERRIT_PASS`.
 
+Every command that takes a change accepts a URL, a bare change number or
+a Change-Id (bare, or Gerrit's `project~branch~Change-Id` triplet) --
+the Change-Id being what a checkout has to hand, from the commit
+message. A Change-Id shared across branches resolves to the open change;
+if several are open the error lists them.
+
 **Key commands:**
 - **Review:** `gc comments <url>`,
   `gc reply <idx> "msg" [--url <url>]` (URL defaults to the one

@@ -280,10 +280,7 @@ def cmd_sashiko_review(args):
     from .client import GerritCommentsClient
 
     change_input = args.change
-    if change_input.startswith("http"):
-        _, change_number = GerritCommentsClient.parse_gerrit_url(change_input)
-    else:
-        change_number = int(change_input)
+    _, change_number = GerritCommentsClient.parse_gerrit_url(change_input)
 
     result = do_review(
         change_number=change_number,
