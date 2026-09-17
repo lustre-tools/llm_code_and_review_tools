@@ -184,3 +184,8 @@ Without `--user` the default set is used, which is the one to leave
 alone unless the task names an account. `./install.sh --status` lists
 the sets a host actually has; do not guess an alias, since a wrong one
 is an error rather than a fallback.
+
+`GERRIT_CLI_ENV_FILE`, when set, makes `gerrit` read that one file
+instead -- a harness uses it to hand an agent the bot's credentials.
+`./install.sh --status` does not see such a file; a refused `--user`
+lists the sets it does hold.

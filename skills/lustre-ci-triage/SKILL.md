@@ -155,4 +155,11 @@ Both take `--user <alias-or-username>` when a host holds more than one
 account, in any argument position. On `jenkins` that flag names a stored
 credential set, not a bare username: `--token` is still the way to pass
 a token by hand. Leave `--user` off unless the task names an account --
-`./install.sh --status` lists what a host has.
+`./install.sh --status` lists what a host has. A host with no Jenkins
+set at all refuses `jenkins --user` even for a read, so leave it off
+reads.
+
+`MALOO_TOOL_ENV_FILE` and `JENKINS_TOOL_ENV_FILE`, when set, make each
+tool read that one file instead -- a harness uses them to hand an
+agent the bot's credentials. `./install.sh --status` does not see such
+a file; a refused `--user` lists the sets it does hold.

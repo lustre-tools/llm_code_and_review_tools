@@ -133,6 +133,12 @@ already means "add alice as a watcher", so the credential flag goes
 `./install.sh --status` lists the sets a host has; a wrong alias is an
 error, not a fallback, so do not guess one.
 
+`JIRA_TOOL_ENV_FILE` and `JIRA_TOOL_CONFIG`, when set, point `jira` at
+one `.env` and one JSON store instead of the usual ones -- a harness
+uses them to hand an agent the bot's credentials. `./install.sh
+--status` does not see those files; a refused `--user` lists the sets
+it does hold.
+
 Tokens: a Server personal access token comes from the JIRA profile menu
 (Profile > Personal Access Tokens); a Cloud API token from
 `id.atlassian.com/manage-profile/security/api-tokens`.
