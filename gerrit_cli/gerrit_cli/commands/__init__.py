@@ -68,6 +68,7 @@ from .reintegration import (
     cmd_continue_reintegration,
     cmd_skip_reintegration,
 )
+from .upload import cmd_upload
 
 __all__ = [
     "cmd_extract",
@@ -114,4 +115,5 @@ __all__ = [
     "cmd_describe",
     "cmd_continue_reintegration",
     "cmd_skip_reintegration",
+    "cmd_upload",
 ]

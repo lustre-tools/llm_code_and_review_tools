@@ -40,7 +40,7 @@ gc finish-patch                # Auto-advances to next
 
 # 3. When done
 gc abort --keep-changes
-git push origin HEAD:refs/for/master
+gc upload <CHANGE>             # the amended commit, as a new patchset
 ```
 
 ## Posting a Review from JSON
@@ -87,6 +87,69 @@ Options:
 gc review --post-comments review.json --prefix '[Marc Bot]' --dry-run <URL>
 gc review --post-comments review.json --prefix '[Marc Bot]' <URL>
 ```
+
+## Uploading a Patchset
+
+`gc upload` pushes HEAD to `refs/for/<branch>` -- the commit upload.
+(`gc push` is something else: it posts staged comment replies.)
+
+```bash
+gc [--user SET] upload [CHANGE] [--series] [--branch B] [--project P]
+                       [--topic T] [--repo PATH] [--no-amend] [--dry-run]
+
+# An automated run uploading the next patchset of change 12345 as the bot:
+gc --user patrickbot upload 12345 --repo /path/to/checkout
+```
+
+- **Account and transport.** It pushes over HTTPS to
+  `$GERRIT_URL/a/<project>` as the credential set's `GERRIT_USER`, never
+  over an SSH alias. The password reaches git through a temporary
+  `GIT_ASKPASS` script that reads it from the environment, so it is in
+  no URL and on no command line (`ps` shows argv), and a `/` in it is
+  harmless. Configured credential helpers are switched off for the push,
+  so a stored personal login can neither answer for the account nor be
+  overwritten with its password; a `url.*.insteadOf` / `pushInsteadOf`
+  rule that would reroute the URL is refused.
+- **Which change.** With CHANGE (number, URL or Change-Id) the change's
+  project and branch are used, and the upload is refused unless HEAD's
+  `Change-Id:` trailer is that change's -- the error says which Change-Id
+  HEAD carries and, when Gerrit knows it, whose change that is. Without
+  CHANGE, HEAD's Change-Id finds the change. A Change-Id Gerrit does not
+  know is uploaded as a new change only when `--project` and `--branch`
+  are both given. Closed changes, and a HEAD that is already a patchset,
+  are refused before anything is pushed.
+- **One commit, or `--series`.** By default only HEAD may be new to
+  Gerrit. If the branch-to-HEAD range holds more commits Gerrit does not
+  have, the upload is refused with each commit's SHA, subject and
+  Change-Id listed. `--series` uploads them all, each to the change its
+  own Change-Id names (updated, or created if new); every commit needs a
+  Change-Id, and CHANGE, if given, may be any commit in the range rather
+  than HEAD. Commits Gerrit already has are not uploaded again.
+- **Committer.** Gerrit refuses a committer email that is not registered
+  to the pushing account unless it has "forge committer". The account's
+  emails are read from `/accounts/self/emails`; a commit whose committer
+  is not among them is rewritten with the account's name and preferred
+  email -- and so is every commit above it, since its parent changed.
+  Author, tree and message are copied unchanged, staged files stay
+  staged, HEAD moves with a reflog entry, and `committer_amended` lists
+  every rewrite (`old_sha`, `new_sha`, `from`, `to`). `--no-amend`
+  refuses instead.
+- **`--dry-run`** makes every check and lookup -- including logging in
+  over git -- and prints the exact push with the password redacted, plus
+  what each commit would do. Nothing is pushed or rewritten.
+
+Output: `sha` (what was pushed), `change_number`, `url`, `patchset` and
+`new_change` for HEAD's change; `commits[]`, one per commit in the
+range, with `action` (`update`, `create`, or `none` when Gerrit already
+has it), `change_number` and `patchset`; `committer_amended[]`;
+`remote_messages` (Gerrit's `remote:` lines) and `warnings` (for
+example, uncommitted changes that were not uploaded). A rejected push
+exits 1 with code `PUSH_REJECTED`, Gerrit's reason in the message and
+its remote output in `details`.
+
+`GERRIT_PUSH_URL` replaces `$GERRIT_URL/a` as the base the project is
+appended to -- for a Gerrit whose git endpoint lives elsewhere, or a
+local bare repository in tests.
 
 ## Series Graph (DAG Visualizer)
 
@@ -253,7 +316,14 @@ staged show <change>             # Show staged for specific change
 staged remove <change> <index>   # Remove one staged operation
 staged clear [change]            # Clear staged (one change or all)
 staged refresh <change>          # Refresh staged metadata
-push <change>                    # Push staged operations for a change
+push <change>                    # Post staged comment replies (not commits)
+```
+
+### Uploading Commits
+```bash
+upload [CHANGE]                  # Push HEAD as a new patchset (see above)
+upload [CHANGE] --series         # Push every new commit up to HEAD
+upload --project P --branch B    # Push HEAD as a new change
 ```
 
 ### Reintegration (for stale patches)

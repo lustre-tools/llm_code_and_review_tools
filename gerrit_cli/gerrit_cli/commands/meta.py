@@ -105,6 +105,8 @@ If you're in an active session (from review-series), the URL is optional.
         "description": """
 The 'push' command posts all staged replies to Gerrit. Use --dry-run to
 preview what would be posted without actually sending.
+
+It does not push commits. To upload a patchset, use 'upload'.
 """,
         "examples": [
             {
@@ -121,6 +123,57 @@ preview what would be posted without actually sending.
             },
         ],
         "related": ["stage", "staged"],
+    },
+    "upload": {
+        "summary": "Upload HEAD (or a series ending at HEAD) to Gerrit",
+        "description": """
+The 'upload' command pushes HEAD to refs/for/<branch> over HTTPS, as the
+account of the credential set --user selects. The password reaches git
+through a temporary GIT_ASKPASS script reading it from the environment:
+never in the URL, never on a command line. Configured credential helpers
+are switched off for the push.
+
+By default it uploads exactly one commit. With CHANGE (number, URL or
+Change-Id), it refuses unless HEAD's Change-Id trailer is that change's
+-- the guard against uploading a diff as a patchset of some other
+change. Without CHANGE, HEAD's Change-Id names the change. A Change-Id
+Gerrit does not know is uploaded as a new change, only when --project
+and --branch are both given. If more than one commit between the branch
+and HEAD is new to Gerrit, it refuses and lists them.
+
+--series uploads all of those commits, each to the change its own
+Change-Id names (updating it, or creating it). Every commit needs a
+Change-Id, and CHANGE, if given, must be one of them rather than HEAD.
+
+A commit whose committer email is not registered to the account is
+rewritten so the committer is the account's name and preferred email --
+and so is every commit above it, since its parent changes. Author, tree
+and message are untouched, and the result lists every rewrite.
+--no-amend refuses instead.
+
+--dry-run does every check and lookup, and prints the exact git push,
+password redacted, plus what each commit would update or create, without
+pushing or rewriting anything.
+""",
+        "examples": [
+            {
+                "command": "gc --user patrickbot upload 12345 --dry-run",
+                "description": "Check everything and show the push, as the bot",
+            },
+            {
+                "command": "gc --user patrickbot upload 12345",
+                "description": "Upload HEAD as the next patchset of 12345",
+            },
+            {
+                "command": "gc --user patrickbot upload 12345 --series --dry-run",
+                "description": "Show what each commit of the series would update or create",
+            },
+            {
+                "command": "gc upload --project fs/lustre-release --branch b2_15",
+                "description": "Upload HEAD as a new change on b2_15",
+            },
+        ],
+        "related": ["info", "set-topic", "push"],
     },
     "staged": {
         "summary": "Manage staged comment replies",
@@ -519,6 +572,7 @@ WORKFLOW_EXAMPLES = {
             ("gc stage --done 0", "Stage 'Done' for thread 0"),
             ("gc stage 1 \"Will fix in follow-up\"", "Stage reply for thread 1"),
             ("gc stage --ack 2", "Stage acknowledgment for thread 2"),
+            ("gc upload CHANGE_ID", "Upload the amended commit as a new patchset"),
             ("gc staged list", "Review all staged replies"),
             ("gc push --dry-run CHANGE_ID", "Preview what will be posted"),
             ("gc push CHANGE_ID", "Post all staged replies"),

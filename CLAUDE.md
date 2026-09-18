@@ -109,6 +109,14 @@ if several are open the error lists them.
   `gc set-topic <url> <topic>`, `gc hashtag <url> --add <tag>`,
   `gc rebase <url>`, `gc abandon <url>`, `gc restore <url>`,
   `gc checkout <url>`
+- **Upload commits:** `gc --user <set> upload <change>` pushes HEAD as
+  the change's next patchset, over HTTPS as that set's account. It
+  refuses a HEAD whose Change-Id is not the change's, and rewrites a
+  committer email the account has not registered. One commit by
+  default; `--series` pushes every new commit up to HEAD, each to its
+  own change. `--dry-run` checks everything and pushes nothing. (`gc
+  push` is different: it posts staged comment replies.) See
+  `gerrit_cli/README.md` ("Uploading a Patchset").
 - **Reviewers:** `gc reviewers <url>`, `gc add-reviewer <url> <name>`,
   `gc remove-reviewer <url> <name>`, `gc find-user <name>`
 

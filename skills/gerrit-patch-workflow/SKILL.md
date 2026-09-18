@@ -1,6 +1,6 @@
 ---
 name: gerrit-patch-workflow
-description: This skill should be used for work on Gerrit changes with the gerrit/gc CLI - "what comments are on this patch", "reply to the review feedback", "address the reviewer comments", "mark that thread done", "shepherd this patch series", "what is the status of my patches", "post a review on this change", "add a reviewer", "check the CI status of my patches", "rebase and repush the series". Covers comment triage, staged replies, multi-patch series sessions, and Lustre commit-message rules.
+description: This skill should be used for work on Gerrit changes with the gerrit/gc CLI - "what comments are on this patch", "reply to the review feedback", "address the reviewer comments", "mark that thread done", "shepherd this patch series", "what is the status of my patches", "post a review on this change", "add a reviewer", "check the CI status of my patches", "upload the new patchset", "push this commit to Gerrit", "rebase and repush the series". Covers comment triage, staged replies, uploading patchsets, multi-patch series sessions, and Lustre commit-message rules.
 version: 0.1.0
 ---
 
@@ -65,7 +65,7 @@ gc push <change-id>
 ```
 
 `gc push` posts staged **comment replies**. It does not push commits;
-git does that, to `refs/for/<branch>`.
+`gc upload` does -- see "Uploading a patchset" below.
 
 Or write the replies to a file and post them together -- one review, one
 mail to everyone on the change, instead of one per reply:
@@ -170,6 +170,39 @@ violates them cannot be pushed:
 
 A commit message that walks through the code is too verbose. Describe
 what was wrong and what changed.
+
+## Uploading a patchset
+
+`gc upload` is the commit push. Use it rather than a hand-built
+`git push`: it pushes over HTTPS as the `--user` set's account (never an
+SSH alias, which pushes as whoever owns the key), keeps the password out
+of URLs and command lines, fixes a committer Gerrit would reject, and
+refuses to put HEAD on the wrong change.
+
+```bash
+gc --user patrickbot upload 64086 --dry-run     # every check, nothing pushed
+gc --user patrickbot upload 64086               # HEAD -> next patchset of 64086
+gc --user patrickbot upload 64086 --series      # every new commit up to HEAD
+gc upload --project fs/lustre-release --branch master   # HEAD as a new change
+```
+
+- Name the change you mean to update. The upload is refused unless
+  HEAD's `Change-Id:` is that change's, and the error says whose change
+  HEAD's Change-Id belongs to. Fix the commit message; do not drop the
+  change argument to get past the refusal.
+- One commit by default. If the branch-to-HEAD range holds more commits
+  Gerrit does not have, the refusal lists each one's SHA, subject and
+  Change-Id. Pass `--series` only when all of them are meant to go up,
+  each to its own change; the named change may then be any of them.
+  Every commit in a series needs a Change-Id.
+- A committer email the account has not registered is rewritten to the
+  account's own -- on HEAD, or with `--series` on every commit from the
+  first such one up. Author and content are untouched, but the SHAs
+  change and HEAD moves; `committer_amended` lists each rewrite.
+  `--no-amend` refuses instead.
+- The output carries `patchset`, `url` and per-commit `action`
+  (`update`, `create`, `none`). A refused push is `PUSH_REJECTED`, with
+  Gerrit's reason in the message.
 
 ## Before pushing
 

@@ -14,7 +14,7 @@ _gerrit_completions() {
     local commands="extract reply batch review review-series series-comments \
         interactive series-status work-on-patch next-patch finish-patch \
         abort-patch rebase-status end-session continue-reintegration \
-        skip-reintegration stage push staged-list staged-review staged-remove \
+        skip-reintegration stage push upload staged-list staged-review staged-remove \
         staged-clear staged-clear-all staged-refresh \
         reviewers add-reviewer remove-reviewer find-user \
         abandon checkout maloo message"
@@ -32,6 +32,7 @@ _gerrit_completions() {
     local finish_patch_opts="--stay -s"
     local stage_opts="--done -d --ack -a --resolve -r --url -u"
     local push_opts="--dry-run -n"
+    local upload_opts="--series --branch -b --project --topic -t --repo -C --no-amend --dry-run -n"
     local staged_list_opts="--json -j"
     local staged_review_opts="--json -j"
 
@@ -95,6 +96,9 @@ _gerrit_completions() {
             ;;
         push)
             COMPREPLY=($(compgen -W "$push_opts" -- "$cur"))
+            ;;
+        upload)
+            COMPREPLY=($(compgen -W "$upload_opts" -- "$cur"))
             ;;
         staged-list)
             COMPREPLY=($(compgen -W "$staged_list_opts" -- "$cur"))

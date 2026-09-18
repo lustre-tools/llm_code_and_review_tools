@@ -281,6 +281,23 @@ class GerritCommentsClient:
             "o=ALL_REVISIONS&o=CURRENT_REVISION&o=CURRENT_COMMIT&o=DETAILED_ACCOUNTS"
         )
 
+    def get_change(
+        self, change_number: int, options: list[str] | None = None
+    ) -> dict[str, Any]:
+        """Get a change with just the output options asked for."""
+        query = "&".join(f"o={opt}" for opt in options or [])
+        return self.rest.get(
+            f"/changes/{change_number}" + (f"?{query}" if query else "")
+        )
+
+    def get_self_account(self) -> dict[str, Any]:
+        """The account these credentials log in as."""
+        return self.rest.get("/accounts/self")
+
+    def get_self_emails(self) -> list[dict[str, Any]]:
+        """Email addresses registered to the logged-in account."""
+        return self.rest.get("/accounts/self/emails")
+
     def get_comments(self, change_number: int) -> dict[str, list[dict[str, Any]]]:
         """Get all published comments for a change.
 

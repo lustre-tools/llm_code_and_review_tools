@@ -499,8 +499,9 @@ def add_push_parser(subparsers):
     """Add the 'push' subcommand parser."""
     parser = subparsers.add_parser(
         "push",
-        help="Push all staged operations",
-        description="Post all staged comment replies to Gerrit.",
+        help="Post all staged comment replies (commits: see 'upload')",
+        description="Post all staged comment replies to Gerrit. This "
+                    "does not push commits; 'upload' does.",
     )
     parser.add_argument(
         "change_number",
@@ -512,6 +513,76 @@ def add_push_parser(subparsers):
         "--dry-run", "-n",
         action="store_true",
         help="Show what would be pushed without posting",
+    )
+    return parser
+
+
+def add_upload_parser(subparsers):
+    """Add the 'upload' subcommand parser."""
+    parser = subparsers.add_parser(
+        "upload",
+        help="Upload HEAD to Gerrit as a new patchset (git push, over HTTPS)",
+        description="Push HEAD to refs/for/<branch> over HTTPS as the "
+                    "account of the selected credential set (--user). "
+                    "With CHANGE, refuses unless HEAD's Change-Id trailer "
+                    "is that change's. Without it, HEAD's Change-Id finds "
+                    "the change; one Gerrit does not know is uploaded as "
+                    "a new change when --project and --branch are given. "
+                    "One commit by default; --series uploads every new "
+                    "commit up to HEAD, each to its own change. A "
+                    "committer email not registered to the account is "
+                    "rewritten to the account's own. Unlike 'push', "
+                    "which posts staged comment replies.",
+    )
+    parser.add_argument(
+        "change",
+        nargs="?",
+        default=None,
+        help="Change number, URL or Change-Id HEAD must belong to "
+             "(with --series: one of the uploaded commits must) "
+             "(default: the change HEAD's Change-Id names)",
+    )
+    parser.add_argument(
+        "--branch", "-b",
+        default=None,
+        help="Target branch (default: the change's; required for a new "
+             "change)",
+    )
+    parser.add_argument(
+        "--project",
+        default=None,
+        help="Gerrit project (default: the change's; required for a new "
+             "change)",
+    )
+    parser.add_argument(
+        "--topic", "-t",
+        default=None,
+        help="Set this topic on the upload",
+    )
+    parser.add_argument(
+        "--repo", "-C",
+        default=".",
+        help="Git repository to upload from (default: current directory)",
+    )
+    parser.add_argument(
+        "--series",
+        action="store_true",
+        help="Upload every commit between the branch and HEAD that Gerrit "
+             "does not have, each to the change its own Change-Id names. "
+             "Without it, more than one such commit is refused",
+    )
+    parser.add_argument(
+        "--no-amend",
+        action="store_true",
+        help="Refuse, rather than rewrite, when a committer email is "
+             "not registered to the account",
+    )
+    parser.add_argument(
+        "--dry-run", "-n",
+        action="store_true",
+        help="Run every check and print the push, password redacted, "
+             "and what each commit would update or create, without pushing "
+             "or rewriting anything",
     )
     return parser
 
@@ -1381,6 +1452,7 @@ def setup_parsers(subparsers, handlers):
     # Staging commands
     add_stage_reply_parser(subparsers).set_defaults(func=handlers['stage'])
     add_push_parser(subparsers).set_defaults(func=handlers['push'])
+    add_upload_parser(subparsers).set_defaults(func=handlers['upload'])
     add_staged_parser(subparsers, handlers)  # Has its own subcommands
 
     # Reintegration commands

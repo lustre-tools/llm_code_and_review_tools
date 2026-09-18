@@ -141,6 +141,7 @@ from .commands import change as _cmd_change
 from .commands import reviewers as _cmd_reviewers
 from .commands import meta as _cmd_meta
 from .commands import reintegration as _cmd_reintegration
+from .commands import upload as _cmd_upload
 
 # ---------------------------------------------------------------------------
 # Re-export every cmd_* handler from the commands modules.
@@ -198,6 +199,8 @@ cmd_search = _cmd_meta.cmd_search
 cmd_explain = _cmd_meta.cmd_explain
 cmd_examples = _cmd_meta.cmd_examples
 cmd_describe = _cmd_meta.cmd_describe
+
+cmd_upload = _cmd_upload.cmd_upload
 
 cmd_continue_reintegration = _cmd_reintegration.cmd_continue_reintegration
 cmd_skip_reintegration = _cmd_reintegration.cmd_skip_reintegration
@@ -343,6 +346,7 @@ def build_handlers():
         'status': cmd_status,
         'stage': cmd_stage,
         'push': cmd_push,
+        'upload': cmd_upload,
         'staged_list': cmd_staged_list,
         'staged_show': cmd_staged_show,
         'staged_remove': cmd_staged_remove,
