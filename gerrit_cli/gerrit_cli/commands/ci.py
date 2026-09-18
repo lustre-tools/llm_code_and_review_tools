@@ -339,6 +339,7 @@ def _info_for_change(client, change_number, show_bots=False):
 
     return {
         "change_number": change_number,
+        "change_id": change.get("change_id", ""),
         "project": change.get("project", ""),
         "branch": change.get("branch", ""),
         "subject": change.get("subject", ""),
