@@ -76,6 +76,15 @@ maloo link-bug <subtest_id> LU-12345 --type SubTest
 
 Raising a new one: `maloo raise-bug` files via Maloo and auto-links.
 
+`link-bug` takes LU tickets only; any other project prefix is refused
+("project prefixes may only include LU"). Infrastructure failures --
+node-provisioning, `LJBChefError` -- are tracked in DCO tickets, which Maloo
+usually auto-links to the failed subtest itself (`maloo bugs --related`
+shows them). For those, skip the link and retest with the DCO ticket:
+`maloo retest <session_url> DCO-11677` is accepted. Such a failure is
+covered, so do not raise an LU ticket for it. DCO tickets cannot be read
+with the `jira` CLI here; go by the summary `maloo bugs --related` gives.
+
 ## Retest only what deserves it
 
 ```bash
