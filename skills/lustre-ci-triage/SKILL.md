@@ -44,6 +44,14 @@ maloo logs <test_set_id> --grep test_81a   # extract suite logs
 `maloo failures` is the workhorse: it yields both the failing subtest names
 and the test set UUIDs that every other command takes.
 
+`maloo logs` extracts what Maloo kept, and Maloo does not always keep every
+node's console log. A missing one arrives as a stub of about 66 bytes whose
+whole content is "The requested log file ... was not found", and the command
+still exits 0. That is normal, not a tool failure -- but a grep over a stub
+finds nothing, which reads exactly like a clean log. Before trusting a no-hit,
+check which logs are stubs (`grep -l "was not found" console.*.log`) and treat
+those nodes' console logs as unavailable.
+
 ## Decide whether the failure is yours
 
 Do this before touching a retest. Three questions, three commands:
