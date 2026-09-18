@@ -183,8 +183,15 @@ refuses to put HEAD on the wrong change.
 gc --user patrickbot upload 64086 --dry-run     # every check, nothing pushed
 gc --user patrickbot upload 64086               # HEAD -> next patchset of 64086
 gc --user patrickbot upload 64086 --series      # every new commit up to HEAD
+gc --user patrickbot upload 64086 --repo /abs/path/to/checkout   # from elsewhere
 gc upload --project fs/lustre-release --branch master   # HEAD as a new change
 ```
+
+An agent acting as a bot pushes only this way. `gitpushwcmaster`, an SSH
+URL or any plain `git push` goes up as the operator whatever CLAUDE.md
+says for the operator's own work -- so a bot's patchset would appear under
+the operator's name. Give `--repo` as an absolute path when the checkout
+is not the working directory.
 
 - Name the change you mean to update. The upload is refused unless
   HEAD's `Change-Id:` is that change's, and the error says whose change
@@ -200,6 +207,12 @@ gc upload --project fs/lustre-release --branch master   # HEAD as a new change
   first such one up. Author and content are untouched, but the SHAs
   change and HEAD moves; `committer_amended` lists each rewrite.
   `--no-amend` refuses instead.
+- A commit-message-only amend -- wording, a `Test-Parameters:` line -- is
+  uploaded the same way; Gerrit takes it as a new patchset with no diff.
+- With `--series`, every commit in the range goes to the change its own
+  Change-Id names, so one carrying another change's Change-Id would update
+  that change. Read the `--dry-run` plan -- one line per commit and the
+  change it would `update` or `create` -- before a series push.
 - The output carries `patchset`, `url` and per-commit `action`
   (`update`, `create`, `none`). A refused push is `PUSH_REJECTED`, with
   Gerrit's reason in the message.
