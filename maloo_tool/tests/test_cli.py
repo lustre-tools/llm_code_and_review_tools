@@ -316,6 +316,7 @@ class TestBugs:
             "id": SUBTEST_1, "sub_test_script_id": "script-np",
         }
         mock_client.get_sub_test_script.return_value = {"name": "node-provisioning"}
+        mock_client.get_session.return_value = None
 
     def test_links_on_the_set_itself(self, runner, mock_client):
         link = _maloo_link(TSID_1, "LU-16301", True)
@@ -353,6 +354,20 @@ class TestBugs:
         env = _parse_output(runner.invoke(main, ["--envelope", "bugs", TSID_1]))
         assert [i["ticket"] for i in env["data"]["bug_links"]] == ["LU-16301", "DCO-11631"]
 
+    def test_a_link_maloo_repeats_is_listed_once(self, runner, mock_client):
+        child = _maloo_link(SUBTEST_1, "LU-18361", True)
+        self._links(mock_client, [], [child, dict(child)])
+        env = _parse_output(runner.invoke(main, ["--envelope", "bugs", TSID_1]))
+        assert env["data"]["count"] == 1
+
+    def test_one_ticket_in_two_states_is_two_links(self, runner, mock_client):
+        self._links(mock_client, [], [
+            _maloo_link(SUBTEST_1, "LU-18361", True),
+            _maloo_link(SUBTEST_1, "LU-18361", None),
+        ])
+        env = _parse_output(runner.invoke(main, ["--envelope", "bugs", TSID_1]))
+        assert [i["state"] for i in env["data"]["bug_links"]] == ["accepted", "pending"]
+
     def test_direct_only(self, runner, mock_client):
         self._links(mock_client, [], [_maloo_link(SUBTEST_1, "DCO-11631", True)])
         env = _parse_output(
@@ -376,6 +391,18 @@ class TestBugs:
         self._links(mock_client, [], [])
         env = _parse_output(runner.invoke(main, ["--envelope", "bugs", TSID_1]))
         assert env["data"]["count"] == 0
+
+    def test_a_session_id_is_refused_rather_than_answered_empty(self, runner, mock_client):
+        """A link made on a test set read back through its session's id came
+        back count 0, which looked like the link had silently failed."""
+        self._links(mock_client, [], [])
+        mock_client.get_session.return_value = {"id": SID_1}
+        result = runner.invoke(main, ["--envelope", "bugs", SID_1])
+        assert result.exit_code != 0
+        env = json.loads(result.output)
+        assert env["ok"] is False
+        assert "is a test session" in env["error"]["message"]
+        assert f"maloo failures {SID_1}" in env["error"]["message"]
 
 
 # -- link-bug command --

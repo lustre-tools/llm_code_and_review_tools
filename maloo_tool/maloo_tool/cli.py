@@ -408,15 +408,22 @@ def bugs(buggable_id: str, direct_only: bool, related: bool, pretty: bool) -> No
     auto-links DCO tickets there -- so links on its child subtests are
     included unless --direct-only.  Each link gives its ticket, its state
     (accepted, pending or rejected) and the subtest it is attached to.
+    Its "status" is Maloo's copy of the ticket's status and can be stale;
+    Jira has the real one.
     """
     client = _make_client()
-    links = client.get_bug_links(buggable_id)
+    found = client.get_bug_links(buggable_id)
     if not direct_only:
-        seen = {(link.get("id"), link.get("jira")) for link in links}
-        links += [
-            link for link in client.get_bug_links(buggable_id, related=True)
-            if (link.get("id"), link.get("jira")) not in seen
-        ]
+        found += client.get_bug_links(buggable_id, related=True)
+    # The related query repeats the direct links, and Maloo can return one
+    # subtest's link twice over; neither is a second link.
+    links: list[dict[str, Any]] = []
+    seen = set()
+    for link in found:
+        key = (link.get("id"), link.get("jira"), link.get("valid"))
+        if key not in seen:
+            seen.add(key)
+            links.append(link)
 
     # A link record's id is the test set or subtest it is attached to.
     subtest_names: dict[str, str | None] = {}
@@ -440,6 +447,15 @@ def bugs(buggable_id: str, direct_only: bool, related: bool, pretty: bool) -> No
             "buggable_id": attached,
             "subtest": subtest,
         })
+
+    if not items and client.get_session(buggable_id):
+        _error(
+            ErrorCode.INVALID_INPUT,
+            f"{buggable_id} is a test session; bug links are on its test sets "
+            f"and subtests. `maloo failures {buggable_id}` lists the failed "
+            "test sets.",
+            "bugs", pretty,
+        )
 
     result = {
         "buggable_id": buggable_id,

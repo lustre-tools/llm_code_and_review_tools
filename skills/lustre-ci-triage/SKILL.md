@@ -76,7 +76,13 @@ maloo link-bug <subtest_id> LU-12345 --type SubTest
 
 `maloo bugs` on a test set includes the links on its subtests, where most
 of them are, and says which subtest each is on; `maloo subtests
-<test_set_id>` gives the subtest ids.
+<test_set_id>` gives the subtest ids. It takes a test set or subtest id,
+not a session id.
+
+Whether a link counts is its `state` (accepted, pending, rejected). The
+`status` beside it is Maloo's copy of the ticket's and goes stale -- an
+Open LU ticket can read Abandoned there -- so ask `jira get` for an LU
+ticket's status before deciding it is dead.
 
 Raising a new one: `maloo raise-bug` files via Maloo and auto-links.
 
