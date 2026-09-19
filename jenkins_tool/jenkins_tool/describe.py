@@ -86,14 +86,17 @@ def get_tool_description() -> ToolDescription:
                     Argument(name="build_number", description="Build number", default="lastBuild"),
                     Argument(name="--tail", description="Lines from end", type="integer", default=200),
                     Argument(name="--head", description="Lines from start", type="integer"),
-                    Argument(name="--grep", description="Filter lines by regex pattern"),
+                    Argument(name="--grep",
+                             description="Only lines matching this regex; --tail/--head count matches"),
                 ],
                 examples=[
                     "jenkins console lustre-master 4704",
                     "jenkins console lustre-reviews lastBuild --tail 50",
                     "jenkins console lustre-master lastFailedBuild --grep error",
                 ],
-                output_fields=["job", "build", "total_lines", "showing", "lines"],
+                output_fields=["job", "build", "total_lines", "showing", "lines",
+                               "grep_pattern (with --grep)",
+                               "match_count (with --grep)", "line_numbers (with --grep)"],
                 next_actions=["jenkins build <name> <number>"],
             ),
             Command(
@@ -123,7 +126,8 @@ def get_tool_description() -> ToolDescription:
                              required=True),
                     Argument(name="--tail", description="Lines from end", type="integer", default=200),
                     Argument(name="--head", description="Lines from start", type="integer"),
-                    Argument(name="--grep", description="Filter lines by regex pattern"),
+                    Argument(name="--grep",
+                             description="Only lines matching this regex; --tail/--head count matches"),
                 ],
                 examples=[
                     'jenkins run-console lustre-reviews 121880 '
@@ -131,7 +135,9 @@ def get_tool_description() -> ToolDescription:
                     'jenkins run-console lustre-reviews 121880 '
                     '"arch=x86_64,build_type=client,distro=el8.9,ib_stack=inkernel" --grep "error"',
                 ],
-                output_fields=["job", "build", "config", "total_lines", "showing", "lines"],
+                output_fields=["job", "build", "config", "total_lines", "showing", "lines",
+                               "grep_pattern (with --grep)",
+                               "match_count (with --grep)", "line_numbers (with --grep)"],
                 next_actions=["jenkins build <name> <number>"],
             ),
             Command(

@@ -414,7 +414,59 @@ class TestConsoleCommand:
         env = _parse(result)
         assert env["ok"] is True
         assert env["data"]["match_count"] == 1
-        assert "ERROR" in env["data"]["matches"][0]["text"]
+        assert env["data"]["lines"] == ["ERROR: something broke"]
+        assert env["data"]["line_numbers"] == [2]
+        assert env["data"]["showing"] == "all 1 lines matching 'error'"
+
+    @patch("jenkins_tool.cli._make_client")
+    def test_console_grep_without_a_match_says_so(self, mock_make, runner):
+        mock_client = MagicMock()
+        mock_client.get_console_text.return_value = "INFO: starting\nINFO: done"
+        mock_make.return_value = mock_client
+
+        result = runner.invoke(main, ["console", "foo", "100", "--grep", "error"], env=_make_env())
+        data = _parse(result)
+        assert data["match_count"] == 0
+        assert data["lines"] == []
+        assert data["showing"] == "no line matches 'error'"
+
+    @patch("jenkins_tool.cli._make_client")
+    def test_console_grep_tail_counts_matches(self, mock_make, runner):
+        mock_client = MagicMock()
+        mock_client.get_console_text.return_value = "\n".join(
+            f"{'ERROR' if i % 2 else 'INFO'} {i}" for i in range(20)
+        )
+        mock_make.return_value = mock_client
+
+        result = runner.invoke(
+            main, ["console", "foo", "100", "--grep", "error", "--tail", "3"], env=_make_env()
+        )
+        data = _parse(result)
+        assert data["match_count"] == 10
+        assert data["lines"] == ["ERROR 15", "ERROR 17", "ERROR 19"]
+        assert data["line_numbers"] == [16, 18, 20]
+        assert data["showing"] == "last 3 of 10 lines matching 'error'"
+
+    @patch("jenkins_tool.cli._make_client")
+    def test_run_console_grep_fills_lines(self, mock_make, runner):
+        mock_client = MagicMock()
+        mock_client.config.base_url = "https://build.example.com"
+        mock_client.get_run_console_text.return_value = (
+            "checking for gcc\nFATAL: command execution failed\nFinished: FAILURE"
+        )
+        mock_make.return_value = mock_client
+
+        result = runner.invoke(
+            main, ["run-console", "foo", "100", "arch=aarch64", "--grep", "fatal"],
+            env=_make_env(),
+        )
+        data = _parse(result)
+        assert data["config"] == "arch=aarch64"
+        assert data["lines"] == ["FATAL: command execution failed"]
+        assert data["line_numbers"] == [2]
+        mock_client.get_run_console_text.assert_called_once_with(
+            "https://build.example.com/job/foo/arch=aarch64/100"
+        )
 
     @patch("jenkins_tool.cli._make_client")
     def test_console_invalid_regex(self, mock_make, runner):

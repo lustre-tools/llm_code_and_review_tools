@@ -55,6 +55,7 @@ jenkins build lustre-master lastFailedBuild
 
 # Console output (last 200 lines by default)
 jenkins console lustre-reviews 121880
+# Matching lines only, in the same "lines" field; --tail/--head count matches
 jenkins console lustre-master 4704 --grep "error"
 
 # Sub-build console for a specific matrix configuration

@@ -445,12 +445,51 @@ def build(
     _output(env, pretty)
 
 
+def _console_selection(
+    text: str, tail: int, head: int | None, pattern: re.Pattern[str] | None,
+) -> dict[str, Any]:
+    """The console lines to show, in the same fields with or without --grep.
+
+    --grep filters first, and --head/--tail then count matching lines.
+    """
+    lines = text.splitlines()
+    numbered = list(enumerate(lines, 1))
+    if pattern is not None:
+        numbered = [(n, line) for n, line in numbered if pattern.search(line)]
+    if head is not None:
+        selected, end = numbered[:max(head, 0)], "first"
+    else:
+        selected, end = numbered[max(len(numbered) - tail, 0):], "last"
+    shown = len(selected)
+    if pattern is None:
+        showing = f"all {shown} lines" if shown == len(numbered) else f"{end} {shown} lines"
+    elif not numbered:
+        showing = f"no line matches {pattern.pattern!r}"
+    elif shown == len(numbered):
+        showing = f"all {shown} lines matching {pattern.pattern!r}"
+    else:
+        showing = f"{end} {shown} of {len(numbered)} lines matching {pattern.pattern!r}"
+
+    result: dict[str, Any] = {"total_lines": len(lines)}
+    if pattern is not None:
+        result["grep_pattern"] = pattern.pattern
+        result["match_count"] = len(numbered)
+    result["showing"] = showing
+    result["lines"] = [line for _, line in selected]
+    if pattern is not None:
+        result["line_numbers"] = [n for n, _ in selected]
+    return result
+
+
+GREP_HELP = "Only lines matching this regex (case-insensitive); --tail/--head count matches"
+
+
 @main.command()
 @click.argument("job_name")
 @click.argument("build_number", default="lastBuild")
 @click.option("--tail", type=int, default=200, help="Number of lines from end (default: 200)")
 @click.option("--head", type=int, default=None, help="Number of lines from start")
-@click.option("--grep", "grep_pattern", default=None, help="Filter lines matching pattern")
+@click.option("--grep", "grep_pattern", default=None, help=GREP_HELP)
 @click.option("--url", envvar="JENKINS_URL", default=None, help="Jenkins server URL")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
@@ -468,7 +507,9 @@ def console(
     """Get console output for a build.
 
     By default shows the last 200 lines. Use --tail or --head to control
-    how much output to show. Use --grep to filter for specific patterns.
+    how much output to show. --grep keeps only matching lines, and
+    --tail/--head then count those; their line numbers are in
+    line_numbers.
 
     \b
     Examples:
@@ -477,45 +518,19 @@ def console(
       jenkins console lustre-master lastFailedBuild --grep "error"
       jenkins console lustre-master 4704 --head 100
     """
-    client = _make_client(url, token)
-    text = client.get_console_text(job_name, build_number)
-
-    lines = text.splitlines()
-    total_lines = len(lines)
-    next_action = [f"jenkins build {job_name} {build_number} -- build details"]
-
+    pattern = None
     if grep_pattern:
         try:
             pattern = re.compile(grep_pattern, re.IGNORECASE)
         except re.error:
             _error("INVALID_INPUT", f"Invalid regex: {grep_pattern}", "console", pretty)
             return
-        matched = [
-            {"line_number": i + 1, "text": line}
-            for i, line in enumerate(lines)
-            if pattern.search(line)
-        ]
-        result: dict[str, Any] = {
-            "job": job_name, "build": build_number,
-            "total_lines": total_lines, "grep_pattern": grep_pattern,
-            "match_count": len(matched), "matches": matched[:200],
-        }
-        _output(success_response(result, TOOL_NAME, "console", next_action), pretty)
-        return
-
-    if head is not None:
-        selected = lines[:head]
-        showing = f"first {len(selected)} lines"
-    else:
-        selected = lines[-tail:] if tail < total_lines else lines
-        showing = (
-            f"last {len(selected)} lines" if len(selected) < total_lines
-            else f"all {total_lines} lines"
-        )
-
+    client = _make_client(url, token)
+    text = client.get_console_text(job_name, build_number)
+    next_action = [f"jenkins build {job_name} {build_number} -- build details"]
     result = {
         "job": job_name, "build": build_number,
-        "total_lines": total_lines, "showing": showing, "lines": selected,
+        **_console_selection(text, tail, head, pattern),
     }
     _output(success_response(result, TOOL_NAME, "console", next_action), pretty)
 
@@ -586,7 +601,7 @@ def review(
 @click.argument("config")
 @click.option("--tail", type=int, default=200, help="Number of lines from end (default: 200)")
 @click.option("--head", type=int, default=None, help="Number of lines from start")
-@click.option("--grep", "grep_pattern", default=None, help="Filter lines matching pattern")
+@click.option("--grep", "grep_pattern", default=None, help=GREP_HELP)
 @click.option("--url", envvar="JENKINS_URL", default=None, help="Jenkins server URL")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
@@ -615,46 +630,20 @@ def run_console(
       jenkins run-console lustre-reviews 121880 "arch=x86_64,build_type=client,distro=el8.9,ib_stack=inkernel" --tail 50
       jenkins run-console lustre-reviews 121880 "arch=x86_64,build_type=client,distro=el8.9,ib_stack=inkernel" --grep "error"
     """
-    client = _make_client(url, token)
-    run_url = f"{client.config.base_url}/job/{job_name}/{config}/{build_number}"
-    text = client.get_run_console_text(run_url)
-
-    lines = text.splitlines()
-    total_lines = len(lines)
-    next_action = [f"jenkins build {job_name} {build_number} -- full build details with all runs"]
-
+    pattern = None
     if grep_pattern:
         try:
             pattern = re.compile(grep_pattern, re.IGNORECASE)
         except re.error:
             _error("INVALID_INPUT", f"Invalid regex: {grep_pattern}", "run-console", pretty)
             return
-        matched = [
-            {"line_number": i + 1, "text": line}
-            for i, line in enumerate(lines)
-            if pattern.search(line)
-        ]
-        result: dict[str, Any] = {
-            "job": job_name, "build": build_number, "config": config,
-            "total_lines": total_lines, "grep_pattern": grep_pattern,
-            "match_count": len(matched), "matches": matched[:200],
-        }
-        _output(success_response(result, TOOL_NAME, "run-console", next_action), pretty)
-        return
-
-    if head is not None:
-        selected = lines[:head]
-        showing = f"first {len(selected)} lines"
-    else:
-        selected = lines[-tail:] if tail < total_lines else lines
-        showing = (
-            f"last {len(selected)} lines" if len(selected) < total_lines
-            else f"all {total_lines} lines"
-        )
-
+    client = _make_client(url, token)
+    run_url = f"{client.config.base_url}/job/{job_name}/{config}/{build_number}"
+    text = client.get_run_console_text(run_url)
+    next_action = [f"jenkins build {job_name} {build_number} -- full build details with all runs"]
     result = {
         "job": job_name, "build": build_number, "config": config,
-        "total_lines": total_lines, "showing": showing, "lines": selected,
+        **_console_selection(text, tail, head, pattern),
     }
     _output(success_response(result, TOOL_NAME, "run-console", next_action), pretty)
 
