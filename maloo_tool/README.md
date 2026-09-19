@@ -47,7 +47,7 @@ maloo subtests <test_set-UUID>
 maloo subtests <test_set-UUID> --status PASS
 
 # Bug links for a test set (use --related to include links from child subtests)
-maloo bugs <test_set-UUID> --related
+maloo bugs <test_set-UUID>
 
 # Find test sessions for a Gerrit review
 maloo review 54225
@@ -114,13 +114,13 @@ follow-up commands.)
 |---------|-------------|
 | `maloo session <session-UUID>` | Session overview: suites, pass/fail totals |
 | `maloo failures <session-UUID>` | Failed subtests with error messages for each failed suite |
-| `maloo subtests <test_set-UUID>` | All subtests for a suite (filter by `--status`) |
+| `maloo subtests <test_set-UUID>` | All subtests for a suite, each with its `id` (filter by `--status`) |
 
 ### Bugs and Retesting
 
 | Command | Description |
 |---------|-------------|
-| `maloo bugs <test_set-or-subtest-UUID>` | JIRA bug links for a test set or subtest (add `--related` to also include links attached to child subtests) |
+| `maloo bugs <test_set-or-subtest-UUID>` | JIRA bug links for a test set or subtest, including those on its child subtests (`--direct-only` for its own); each gives `ticket`, `state` (accepted/pending/rejected) and the `subtest` it is attached to |
 | `maloo link-bug <test_set-UUID> <TICKET>` | Associate a JIRA bug with a test failure |
 | `maloo raise-bug <test_set-UUID>` | Raise a new JIRA bug via Maloo and auto-link it to the test failure (`--project`, `--summary`, `--description`, `--type TestSet\|SubTest`) |
 | `maloo retest <session-URL> <TICKET>` | Request a retest (requires JIRA justification) |

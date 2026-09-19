@@ -57,7 +57,7 @@ those nodes' console logs as unavailable.
 Do this before touching a retest. Three questions, three commands:
 
 ```bash
-maloo bugs <test_set_id> --related          # already a known bug?
+maloo bugs <test_set_id>                    # already a known bug?
 maloo test-history test_39b --suite sanity --days 30   # flaky in general?
 maloo top-failures lustre-master --days 14  # is the branch itself sick?
 ```
@@ -74,16 +74,20 @@ maloo link-bug <test_set_id> LU-12345
 maloo link-bug <subtest_id> LU-12345 --type SubTest
 ```
 
+`maloo bugs` on a test set includes the links on its subtests, where most
+of them are, and says which subtest each is on; `maloo subtests
+<test_set_id>` gives the subtest ids.
+
 Raising a new one: `maloo raise-bug` files via Maloo and auto-links.
 
 `link-bug` takes LU tickets only; any other project prefix is refused
 ("project prefixes may only include LU"). Infrastructure failures --
 node-provisioning, `LJBChefError` -- are tracked in DCO tickets, which Maloo
-usually auto-links to the failed subtest itself (`maloo bugs --related`
-shows them). For those, skip the link and retest with the DCO ticket:
+usually auto-links to the failed subtest itself (`maloo bugs` shows
+them). For those, skip the link and retest with the DCO ticket:
 `maloo retest <session_url> DCO-11677` is accepted. Such a failure is
 covered, so do not raise an LU ticket for it. DCO tickets cannot be read
-with the `jira` CLI here; go by the summary `maloo bugs --related` gives.
+with the `jira` CLI here; go by the summary `maloo bugs` gives.
 
 ## Retest only what deserves it
 

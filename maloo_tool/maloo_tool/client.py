@@ -166,6 +166,11 @@ class MalooClient:
             params["test_session_id"] = session_id
         return self._get_paginated("sub_tests", params)
 
+    def get_subtest(self, subtest_id: str) -> dict[str, Any] | None:
+        """Get a single subtest by ID."""
+        rows = self._get("sub_tests", {"id": subtest_id})
+        return rows[0] if rows else None
+
     # -- Script names (for resolving IDs to names) --
 
     def get_test_set_script(

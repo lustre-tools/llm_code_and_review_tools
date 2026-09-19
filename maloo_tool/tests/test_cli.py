@@ -170,6 +170,7 @@ class TestSubtests:
         }
         mock_client.get_subtests.return_value = [
             {
+                "id": "sub-id-1",
                 "sub_test_script_id": "sub-1",
                 "status": "PASS",
                 "error": "",
@@ -178,6 +179,7 @@ class TestSubtests:
                 "order": 0,
             },
             {
+                "id": "sub-id-2",
                 "sub_test_script_id": "sub-2",
                 "status": "FAIL",
                 "error": "oops",
@@ -202,6 +204,13 @@ class TestSubtests:
         assert env["data"]["shown"] == 1
         assert env["data"]["filter"] == "FAIL"
         assert env["data"]["subtests"][0]["name"] == "test_1b"
+
+    def test_subtests_carry_their_ids(self, runner, mock_client):
+        """link-bug --type SubTest needs one, and subtests is where it is."""
+        self._setup_subtests(mock_client)
+        result = runner.invoke(main, ["--envelope", "subtests", TSID_1, "--all"])
+        env = _parse_output(result)
+        assert [s["id"] for s in env["data"]["subtests"]] == ["sub-id-1", "sub-id-2"]
 
     def test_subtests_all_flag(self, runner, mock_client):
         """--all should show all subtests regardless of status."""
@@ -285,20 +294,87 @@ class TestReview:
 # -- bugs command --
 
 
+SUBTEST_1 = "ac9e298f-e265-48b9-9921-4246e6c1eddb"
+
+
+def _maloo_link(attached_to, jira, valid):
+    """A bug link as Maloo's API returns it: ``id`` is what it is attached to."""
+    return {
+        "id": attached_to, "jira": jira, "summary": f"{jira} summary",
+        "status": "Open", "valid": valid,
+    }
+
+
 class TestBugs:
-    def test_bugs_found(self, runner, mock_client):
-        mock_client.get_bug_links.return_value = [
-            {"bug_upstream_id": "LU-12345", "buggable_id": TSID_1},
+    def _links(self, mock_client, direct, with_children):
+        """Answer the plain query with ``direct``, related=true with the rest."""
+        def get_bug_links(buggable_id, related=False):
+            return list(with_children if related else direct)
+
+        mock_client.get_bug_links.side_effect = get_bug_links
+        mock_client.get_subtest.return_value = {
+            "id": SUBTEST_1, "sub_test_script_id": "script-np",
+        }
+        mock_client.get_sub_test_script.return_value = {"name": "node-provisioning"}
+
+    def test_links_on_the_set_itself(self, runner, mock_client):
+        link = _maloo_link(TSID_1, "LU-16301", True)
+        self._links(mock_client, [link], [link])
+        env = _parse_output(runner.invoke(main, ["--envelope", "bugs", TSID_1]))
+        assert env["data"]["count"] == 1
+        [item] = env["data"]["bug_links"]
+        assert (item["ticket"], item["state"], item["buggable_id"], item["subtest"]) == (
+            "LU-16301", "accepted", TSID_1, None,
+        )
+
+    def test_links_on_a_child_subtest_are_found(self, runner, mock_client):
+        """Maloo auto-links DCO tickets to the failed subtest, not the set:
+        a bare query on the set answered count 0 for exactly those."""
+        self._links(mock_client, [], [
+            _maloo_link(SUBTEST_1, "DCO-11631", True),
+            _maloo_link(SUBTEST_1, "DCO-11677", None),
+        ])
+        env = _parse_output(runner.invoke(main, ["--envelope", "bugs", TSID_1]))
+        assert env["data"]["count"] == 2
+        assert [
+            (i["ticket"], i["state"], i["buggable_id"], i["subtest"])
+            for i in env["data"]["bug_links"]
+        ] == [
+            ("DCO-11631", "accepted", SUBTEST_1, "node-provisioning"),
+            ("DCO-11677", "pending", SUBTEST_1, "node-provisioning"),
         ]
-        result = runner.invoke(main, ["--envelope", "bugs", TSID_1])
-        env = _parse_output(result)
-        assert env["ok"] is True
+        # One lookup per subtest, however many links it carries.
+        mock_client.get_subtest.assert_called_once_with(SUBTEST_1)
+
+    def test_a_link_seen_both_ways_is_listed_once(self, runner, mock_client):
+        link = _maloo_link(TSID_1, "LU-16301", True)
+        child = _maloo_link(SUBTEST_1, "DCO-11631", True)
+        self._links(mock_client, [link], [link, child])
+        env = _parse_output(runner.invoke(main, ["--envelope", "bugs", TSID_1]))
+        assert [i["ticket"] for i in env["data"]["bug_links"]] == ["LU-16301", "DCO-11631"]
+
+    def test_direct_only(self, runner, mock_client):
+        self._links(mock_client, [], [_maloo_link(SUBTEST_1, "DCO-11631", True)])
+        env = _parse_output(
+            runner.invoke(main, ["--envelope", "bugs", TSID_1, "--direct-only"])
+        )
+        assert env["data"]["count"] == 0
+
+    def test_related_is_still_accepted(self, runner, mock_client):
+        self._links(mock_client, [], [_maloo_link(SUBTEST_1, "DCO-11631", True)])
+        env = _parse_output(
+            runner.invoke(main, ["--envelope", "bugs", TSID_1, "--related"])
+        )
         assert env["data"]["count"] == 1
 
+    def test_a_rejected_link_says_so(self, runner, mock_client):
+        self._links(mock_client, [_maloo_link(TSID_1, "LU-1", False)], [])
+        env = _parse_output(runner.invoke(main, ["--envelope", "bugs", TSID_1]))
+        assert env["data"]["bug_links"][0]["state"] == "rejected"
+
     def test_bugs_empty(self, runner, mock_client):
-        mock_client.get_bug_links.return_value = []
-        result = runner.invoke(main, ["--envelope", "bugs", TSID_1])
-        env = _parse_output(result)
+        self._links(mock_client, [], [])
+        env = _parse_output(runner.invoke(main, ["--envelope", "bugs", TSID_1]))
         assert env["data"]["count"] == 0
 
 

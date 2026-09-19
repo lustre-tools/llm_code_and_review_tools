@@ -282,6 +282,7 @@ def subtests(test_set_id: str, status: str | None, show_all: bool, pretty: bool)
             st.get("sub_test_script_id", ""), f"order_{st.get('order', '?')}"
         )
         items.append({
+            "id": st.get("id"),
             "name": st_name,
             "status": st["status"],
             "error": st.get("error", ""),
@@ -376,22 +377,74 @@ def review(
     _output(env, pretty)
 
 
+def _link_state(link: dict[str, Any]) -> str:
+    """A bug link's state from Maloo's ``valid``: true, null or false."""
+    if "valid" not in link:
+        return "unknown"
+    valid = link["valid"]
+    if valid is True:
+        return "accepted"
+    if valid is False:
+        return "rejected"
+    return "pending"
+
+
 @main.command()
 @click.argument("buggable_id")
-@click.option("--related", is_flag=True, help="Include bug links from child subtests")
+@click.option(
+    "--direct-only", is_flag=True,
+    help="Only links on BUGGABLE_ID itself, not on its child subtests",
+)
+@click.option(
+    "--related", is_flag=True, hidden=True,
+    help="Accepted for old invocations; child subtest links are the default",
+)
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON")
-def bugs(buggable_id: str, related: bool, pretty: bool) -> None:
+def bugs(buggable_id: str, direct_only: bool, related: bool, pretty: bool) -> None:
     """Show bug links for a test set or subtest.
 
-    BUGGABLE_ID is the UUID of a test set or subtest.
+    BUGGABLE_ID is the UUID of a test set or subtest.  A test set's failure
+    is usually linked on the failed subtest rather than on the set -- Maloo
+    auto-links DCO tickets there -- so links on its child subtests are
+    included unless --direct-only.  Each link gives its ticket, its state
+    (accepted, pending or rejected) and the subtest it is attached to.
     """
     client = _make_client()
-    links = client.get_bug_links(buggable_id, related=related)
+    links = client.get_bug_links(buggable_id)
+    if not direct_only:
+        seen = {(link.get("id"), link.get("jira")) for link in links}
+        links += [
+            link for link in client.get_bug_links(buggable_id, related=True)
+            if (link.get("id"), link.get("jira")) not in seen
+        ]
+
+    # A link record's id is the test set or subtest it is attached to.
+    subtest_names: dict[str, str | None] = {}
+    items = []
+    for link in links:
+        attached = str(link.get("id") or buggable_id)
+        subtest = None
+        if attached != buggable_id:
+            if attached not in subtest_names:
+                row = client.get_subtest(attached)
+                script = (
+                    client.get_sub_test_script(row["sub_test_script_id"])
+                    if row and row.get("sub_test_script_id") else None
+                )
+                subtest_names[attached] = script["name"] if script else None
+            subtest = subtest_names[attached]
+        items.append({
+            **link,
+            "ticket": link.get("jira") or link.get("bug_upstream_id") or "",
+            "state": _link_state(link),
+            "buggable_id": attached,
+            "subtest": subtest,
+        })
 
     result = {
         "buggable_id": buggable_id,
-        "count": len(links),
-        "bug_links": links,
+        "count": len(items),
+        "bug_links": items,
     }
 
     next_actions = [
