@@ -147,7 +147,9 @@ follow-up commands.)
 - `subtests` defaults to `--status FAIL`; use `--all` to see every subtest
 - `test-history` defaults to 14 days and failures only; use `--all` to include passes
 - `top-failures` scans up to 50 sessions by default; adjust with `--sessions N`
-- `logs` downloads to `/tmp/maloo_logs` by default; use `--output-dir` to change
+- `logs` extracts to `$TMPDIR/maloo_logs/<test_set_id>` by default, one
+  directory per test set because every archive holds the same
+  `console.*.log` names; use `--output-dir` to change
 
 ## License
 

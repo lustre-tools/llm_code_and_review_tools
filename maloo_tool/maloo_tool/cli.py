@@ -1201,14 +1201,15 @@ def retest(session_url: str, jira_ticket: str, option: str, pretty: bool) -> Non
 
 @main.command()
 @click.argument("test_set_id")
-@click.option("--output-dir", type=str, default="/tmp/maloo_logs",
-              help="Directory to extract logs into (default: /tmp/maloo_logs)")
+@click.option("--output-dir", type=str, default=None,
+              help="Directory to extract logs into "
+                   "(default: $TMPDIR/maloo_logs/<test_set_id>)")
 @click.option("--grep", "grep_pattern", type=str, default=None,
               help="Search extracted logs for a pattern (grep -i)")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON")
 def logs(
     test_set_id: str,
-    output_dir: str,
+    output_dir: str | None,
     grep_pattern: str | None,
     pretty: bool,
 ) -> None:
@@ -1216,6 +1217,10 @@ def logs(
 
     TEST_SET_ID is the UUID of the test set. You can find it
     from 'maloo failures' or 'maloo session' output.
+
+    Extracts under $TMPDIR, in a directory named for the test set:
+    every suite's archive holds the same console.*.log names, so a
+    shared directory has one extraction overwriting another's.
 
     \b
     Examples:
@@ -1227,6 +1232,11 @@ def logs(
     import zipfile
     import tempfile
     from io import BytesIO
+
+    if output_dir is None:
+        output_dir = os.path.join(
+            tempfile.gettempdir(), "maloo_logs", test_set_id
+        )
 
     client = _make_client()
 
