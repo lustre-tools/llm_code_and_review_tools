@@ -531,8 +531,10 @@ def add_upload_parser(subparsers):
                     "One commit by default; --series uploads every new "
                     "commit up to HEAD, each to its own change. A "
                     "committer email not registered to the account is "
-                    "rewritten to the account's own. Unlike 'push', "
-                    "which posts staged comment replies.",
+                    "rewritten to the account's own. --expect-patchset "
+                    "refuses when the change has moved on since HEAD was "
+                    "written. Unlike 'push', which posts staged comment "
+                    "replies.",
     )
     parser.add_argument(
         "change",
@@ -576,6 +578,16 @@ def add_upload_parser(subparsers):
         action="store_true",
         help="Refuse, rather than rewrite, when a committer email is "
              "not registered to the account",
+    )
+    parser.add_argument(
+        "--expect-patchset",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Refuse unless the change is still at patchset N, the one "
+             "HEAD was written to replace. Catches another uploader "
+             "getting there first, whose patchset this would silently "
+             "replace. Not for --series",
     )
     parser.add_argument(
         "--dry-run", "-n",

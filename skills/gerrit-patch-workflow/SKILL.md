@@ -184,6 +184,7 @@ gc --user patrickbot upload 64086 --dry-run     # every check, nothing pushed
 gc --user patrickbot upload 64086               # HEAD -> next patchset of 64086
 gc --user patrickbot upload 64086 --series      # every new commit up to HEAD
 gc --user patrickbot upload 64086 --repo /abs/path/to/checkout   # from elsewhere
+gc --user patrickbot upload 64086 --expect-patchset 3   # refuse if it moved on
 gc upload --project fs/lustre-release --branch master   # HEAD as a new change
 ```
 
@@ -207,6 +208,14 @@ is not the working directory.
   first such one up. Author and content are untouched, but the SHAs
   change and HEAD moves; `committer_amended` lists each rewrite.
   `--no-amend` refuses instead.
+- `--expect-patchset N` refuses unless the change is still at patchset N,
+  the one the local commit was written to replace. Without it, a patchset
+  someone uploaded while you were working is replaced by yours with no
+  conflict and no warning -- git never sees their commit, because an
+  amend does not have the previous patchset as a parent. Pass it whenever
+  something else might be touching the change: any bot, any concurrent
+  session. On a refusal, rebase onto the patchset that is now current
+  rather than pushing over it. It does not apply to `--series`.
 - A commit-message-only amend -- wording, a `Test-Parameters:` line -- is
   uploaded the same way; Gerrit takes it as a new patchset with no diff.
 - With `--series`, every commit in the range goes to the change its own

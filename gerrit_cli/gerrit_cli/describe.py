@@ -242,9 +242,12 @@ def get_tool_description() -> ToolDescription:
                     "unless --series, which uploads each to the change its own "
                     "Change-Id names. A committer email not registered to the "
                     "account is rewritten to the account's name and preferred "
-                    "email; author, tree and message are untouched."
+                    "email; author, tree and message are untouched. "
+                    "--expect-patchset N refuses the push when the change has "
+                    "moved past patchset N, so a concurrent uploader's "
+                    "patchset is not silently replaced."
                 ),
-                usage="gc [--user SET] upload [CHANGE] [--series] [--branch B] [--project P] [--topic T] [--repo PATH] [--no-amend] [--dry-run]",
+                usage="gc [--user SET] upload [CHANGE] [--series] [--branch B] [--project P] [--topic T] [--repo PATH] [--no-amend] [--expect-patchset N] [--dry-run]",
                 arguments=[
                     Argument(name="change", description="Change number, URL or Change-Id that HEAD (with --series: one of the uploaded commits) must belong to (default: the one HEAD's Change-Id names)"),
                     Argument(name="--series", description="Upload every commit between the branch and HEAD, each to its own change by its Change-Id", type="boolean", default=False),
@@ -253,12 +256,14 @@ def get_tool_description() -> ToolDescription:
                     Argument(name="--topic", description="Topic to set on the upload"),
                     Argument(name="--repo", description="Repository to upload from", default="."),
                     Argument(name="--no-amend", description="Refuse instead of rewriting an unregistered committer", type="boolean", default=False),
+                    Argument(name="--expect-patchset", description="Refuse unless the change is still at this patchset, the one HEAD replaces; catches another uploader having got there first. Not for --series", type="integer"),
                     Argument(name="--dry-run", description="Do every check, print the push with the password redacted and what each commit would update or create; push nothing", type="boolean", default=False),
                 ],
                 examples=[
                     "gc --user patrickbot upload 12345 --dry-run",
                     "gc --user patrickbot upload 12345",
                     "gc --user patrickbot upload 12345 --series",
+                    "gc --user patrickbot upload 12345 --expect-patchset 3",
                     "gc upload --project fs/lustre-release --branch master",
                 ],
                 output_fields=["sha", "change_number", "url", "patchset", "new_change", "committer_amended[]", "commits[].action", "commits[].change_number", "commits[].patchset", "remote_messages", "warnings"],

@@ -1015,6 +1015,75 @@ def test_cli_reports_a_wrong_password_as_an_auth_error(
     assert result.returncode == ExitCode.AUTH_ERROR, result.stdout
     assert json.loads(result.stdout)["code"] == ErrorCode.AUTH_FAILED
 
+# ---------------------------------------------------------------------------
+# --expect-patchset: the change moved on while HEAD was being written
+# ---------------------------------------------------------------------------
+
+def test_expect_patchset_uploads_when_the_change_has_not_moved(gerrit):
+    fake, bare, work = gerrit
+    head = commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)
+
+    data = upload(fake, repo=str(work), change="51164", expect_patchset=2)
+
+    assert data["pushed"] is True
+    assert data["patchset"] == 3
+    assert pushed_refs(bare) == {"refs/for/master": head}
+
+
+def test_expect_patchset_refuses_when_someone_else_uploaded(gerrit):
+    """The guard for two uploaders racing on one change."""
+    fake, bare, work = gerrit
+    head = commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)
+
+    with pytest.raises(UploadError) as err:
+        upload(fake, repo=str(work), change="51164", expect_patchset=1)
+
+    e = err.value
+    assert e.code == ErrorCode.STALE_PATCHSET
+    assert e.details["expected_patchset"] == 1
+    assert e.details["current_patchset"] == 2
+    assert e.details["change_number"] == 51164
+    assert pushed_refs(bare) == {}
+    assert git(work, "rev-parse", "HEAD") == head
+
+
+def test_expect_patchset_refuses_a_dry_run_too(gerrit):
+    """A dry run reports what would happen, and a refusal is what would."""
+    fake, bare, work = gerrit
+    commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)
+
+    with pytest.raises(UploadError) as err:
+        upload(fake, repo=str(work), change="51164", expect_patchset=1,
+               dry_run=True)
+
+    assert err.value.code == ErrorCode.STALE_PATCHSET
+
+
+def test_expect_patchset_is_refused_with_series(gerrit):
+    fake, bare, work = gerrit
+    commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)
+
+    with pytest.raises(UploadError) as err:
+        upload(fake, repo=str(work), series=True, expect_patchset=2)
+
+    assert err.value.code == ErrorCode.INVALID_INPUT
+    assert "--series" in err.value.message
+    assert pushed_refs(bare) == {}
+
+
+def test_expect_patchset_is_refused_for_a_new_change(gerrit):
+    fake, bare, work = gerrit
+    commit(work, "LU-9 lnet: brand new", cid=CID_B, committer=BOT)
+
+    with pytest.raises(UploadError) as err:
+        upload(fake, repo=str(work), project=PROJECT, branch="master",
+               expect_patchset=1)
+
+    assert err.value.code == ErrorCode.INVALID_INPUT
+    assert "new change" in err.value.message
+    assert pushed_refs(bare) == {}
+
+
 
 def test_upload_parser_defines_what_the_handler_reads():
     import argparse
@@ -1029,13 +1098,17 @@ def test_upload_parser_defines_what_the_handler_reads():
     bare = parser.parse_args(["upload"])
     assert bare.func is cli.cmd_upload
     assert (bare.change, bare.series, bare.dry_run, bare.no_amend,
-            bare.repo) == (None, False, False, False, ".")
+            bare.repo, bare.expect_patchset) == (
+        None, False, False, False, ".", None,
+    )
 
     full = parser.parse_args([
         "upload", "51164", "--series", "--dry-run", "--no-amend",
         "--topic", "t", "--repo", "/r", "--branch", "b", "--project", "p",
+        "--expect-patchset", "3",
     ])
     assert (full.change, full.series, full.dry_run, full.no_amend,
-            full.topic, full.repo, full.branch, full.project) == (
-        "51164", True, True, True, "t", "/r", "b", "p",
+            full.topic, full.repo, full.branch, full.project,
+            full.expect_patchset) == (
+        "51164", True, True, True, "t", "/r", "b", "p", 3,
     )

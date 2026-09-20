@@ -983,6 +983,54 @@ def _add_current_patchsets(
         ).get("_number")
 
 
+def _check_expected_patchset(
+    client: Any, head_entry: dict[str, Any], expect: int
+) -> None:
+    """Refuse when the change has moved past the patchset HEAD replaces.
+
+    Read fresh and as late as possible.  The whole point is to catch an
+    uploader that overtook this one while the commit was being written,
+    and the value read when the destination was resolved is stale by
+    exactly the window that matters.
+    """
+    if head_entry["action"] != "update":
+        raise UploadError(
+            ErrorCode.INVALID_INPUT,
+            "--expect-patchset names the patchset HEAD replaces, so it "
+            "cannot be given for an upload that creates a new change.",
+            exit_code=ExitCode.INVALID_INPUT,
+        )
+    number = head_entry["change_number"]
+    detail = _rest(
+        f"reading change {number}", client.get_change, number,
+        ["CURRENT_REVISION", "DETAILED_ACCOUNTS"],
+    )
+    current = detail.get("current_revision")
+    revision = (detail.get("revisions") or {}).get(current) or {}
+    actual = revision.get("_number")
+    head_entry["current_patchset"] = actual
+    if actual == expect:
+        return
+    uploader = ((revision.get("uploader") or {}).get("name") or "").strip()
+    raise UploadError(
+        ErrorCode.STALE_PATCHSET,
+        f"Change {number} is at patchset {actual}"
+        + (f", uploaded by {uploader}" if uploader else "")
+        + f", not the patchset {expect} this upload replaces: someone "
+        f"else uploaded while this commit was being written, and what "
+        f"they changed is not in what you are about to push. Rebase onto "
+        f"patchset {actual} and upload again, or drop --expect-patchset "
+        f"to supersede it anyway.",
+        details={
+            "change_number": number,
+            "expected_patchset": expect,
+            "current_patchset": actual,
+            "current_uploader": uploader,
+        },
+        exit_code=ExitCode.INVALID_INPUT,
+    )
+
+
 def _push_failure(
     stderr: str,
     status: tuple[str, str] | None,
@@ -1027,6 +1075,7 @@ def upload(
     dry_run: bool = False,
     amend: bool = True,
     series: bool = False,
+    expect_patchset: int | None = None,
 ) -> dict[str, Any]:
     """Push HEAD to refs/for/<branch> as the client's account.
 
@@ -1052,6 +1101,14 @@ def upload(
             f"Topic '{topic}' cannot be passed as a push option (no "
             "whitespace, ',' or '%'). Upload without --topic and set it "
             "with: gerrit set-topic <change> <topic>",
+            exit_code=ExitCode.INVALID_INPUT,
+        )
+
+    if expect_patchset is not None and series:
+        raise UploadError(
+            ErrorCode.INVALID_INPUT,
+            "--expect-patchset applies to the one change HEAD updates, "
+            "which --series does not have. Upload the series without it.",
             exit_code=ExitCode.INVALID_INPUT,
         )
 
@@ -1128,6 +1185,8 @@ def upload(
                     f"{sha}:{ref}"]
 
         head_entry = plan[-1]
+        if expect_patchset is not None:
+            _check_expected_patchset(client, head_entry, expect_patchset)
         data: dict[str, Any] = {
             "dry_run": dry_run,
             "pushed": False,
