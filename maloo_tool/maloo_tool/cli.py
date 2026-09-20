@@ -424,8 +424,13 @@ def bugs(buggable_id: str, direct_only: bool, related: bool, pretty: bool) -> No
     auto-links DCO tickets there -- so links on its child subtests are
     included unless --direct-only.  Each link gives its ticket, its state
     (accepted, pending or rejected) and the subtest it is attached to.
-    Its "status" is Maloo's copy of the ticket's status and can be stale;
-    Jira has the real one.
+
+    Its "status" and "summary" are both Maloo's own copy of the ticket,
+    taken when the link was made and never refreshed: an Open ticket can
+    read Abandoned here, and a renamed one keeps its old title.  Ask
+    `jira get` for either before acting on it.  Maloo also auto-links by
+    signature, which mislinks: a link to a ticket with nothing to do with
+    the test is ordinary, and its origin is not in the API to report.
     """
     client = _make_client()
     found = client.get_bug_links(buggable_id)

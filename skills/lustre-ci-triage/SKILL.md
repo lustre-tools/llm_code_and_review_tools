@@ -88,9 +88,17 @@ of them are, and says which subtest each is on; `maloo subtests
 not a session id.
 
 Whether a link counts is its `state` (accepted, pending, rejected). The
-`status` beside it is Maloo's copy of the ticket's and goes stale -- an
-Open LU ticket can read Abandoned there -- so ask `jira get` for an LU
-ticket's status before deciding it is dead.
+`status` and `summary` beside it are both Maloo's own copy of the ticket,
+taken when the link was made and never refreshed: an Open LU ticket can
+read Abandoned there, and a renamed one still shows its old title. Ask
+`jira get` for either before acting on it.
+
+Maloo also auto-links by signature, and those mislink. A pending link to
+a ticket with nothing to do with the test is ordinary -- read the ticket,
+disregard it if it does not fit, and move on. Neither the mislink nor the
+stale copy is worth reporting as a tool defect: the API returns only the
+ticket, its cached summary and status, and the link state, so there is no
+field saying where a link came from and nothing for the CLI to fix.
 
 Raising a new one: `maloo raise-bug` files via Maloo and auto-links.
 
