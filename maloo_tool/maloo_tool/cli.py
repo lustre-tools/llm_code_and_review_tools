@@ -160,6 +160,19 @@ def session(session_url: str, pretty: bool) -> None:
     _output(env, pretty)
 
 
+# Autotest, not the suite, ends a run whose cleanup did not finish, and it
+# reports its own 90-minute budget as the subtest's duration with "Autotest
+# time out" as the error.  Both are about Autotest; neither is the failure.
+# The cause is one error() line in the suite log, which is far too big to
+# pull in on the chance that it is wanted.
+_CLEANUP_NOTE = (
+    "status and duration here are Autotest's own, not this failure's -- "
+    "cleanup did not finish, so Autotest ended the run and reported its "
+    "budget. The real error is in the suite log: `maloo logs {id}`, then "
+    "grep -A5 'start cleanup' in {suite}.suite_log."
+)
+
+
 @main.command()
 @click.argument("session_url")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON")
@@ -204,13 +217,16 @@ def failures(session_url: str, pretty: bool) -> None:
             st_name = subtest_names.get(
                 st.get("sub_test_script_id", ""), f"order_{st.get('order', '?')}"
             )
-            failed_subtests.append({
+            row = {
                 "name": st_name,
                 "status": st["status"],
                 "error": st.get("error", ""),
                 "duration": st.get("duration"),
                 "return_code": st.get("return_code"),
-            })
+            }
+            if st_name == "test_cleanup":
+                row["note"] = _CLEANUP_NOTE.format(suite=suite_name, id=ts["id"])
+            failed_subtests.append(row)
 
         failed_suites.append({
             "suite": suite_name,

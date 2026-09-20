@@ -44,6 +44,14 @@ maloo logs <test_set_id> --grep test_81a   # extract suite logs
 `maloo failures` is the workhorse: it yields both the failing subtest names
 and the test set UUIDs that every other command takes.
 
+A failed `test_cleanup` is the one subtest whose `status`, `duration` and
+`error` say nothing about the failure: cleanup did not finish, so Autotest
+ended the run and reported its own 90-minute budget as `TIMEOUT` /
+`"Autotest time out"` / `5400`. It is not a hang. The real error is a
+single line in the suite log -- `maloo logs <test_set_id>`, then
+`grep -A5 'start cleanup' <suite>.suite_log`. `maloo failures` flags this
+in a `note` on the subtest.
+
 `maloo logs` extracts what Maloo kept, and Maloo does not always keep every
 node's console log. A missing one arrives as a stub of about 66 bytes whose
 whole content is "The requested log file ... was not found", and the command
