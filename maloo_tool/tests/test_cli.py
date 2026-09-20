@@ -4,6 +4,7 @@ All tests mock the MalooClient to avoid hitting the real API.
 """
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -633,7 +634,7 @@ class TestQueue:
         ]
 
         with patch("maloo_tool.cli._resolve_review_to_revision",
-                    return_value="abc123def456"):
+                    return_value=("abc123def456", "")):
             result = runner.invoke(main, ["--envelope", "queue", "--review", "54321"])
         env = _parse_output(result)
         assert env["ok"] is True
@@ -968,11 +969,14 @@ class TestQueueBranchResolution:
 
     def test_queue_review_resolve_failure(self, runner, mock_client):
         """When gerrit CLI fails to resolve, should error."""
-        with patch("maloo_tool.cli._resolve_review_to_revision", return_value=None):
+        with patch("maloo_tool.cli._resolve_review_to_revision",
+                    return_value=(None, "`gerrit info 64266` exited 1")):
             result = runner.invoke(main, ["--envelope", "queue", "--review", "64266"])
         env = json.loads(result.output)
         assert env["ok"] is False
         assert "resolve" in env["error"]["message"].lower()
+        # The reason the lookup failed is what the user has to act on.
+        assert "exited 1" in env["error"]["message"]
 
     def test_queue_review_with_commit_hash(self, runner, mock_client):
         """Commit hash should be passed through without resolution."""
@@ -990,6 +994,52 @@ class TestQueueBranchResolution:
         env = json.loads(result.output)
         assert env["ok"] is False
         assert result.exit_code != 0
+
+
+class TestResolveReviewToRevision:
+    """The gerrit CLI prints the bare payload; --envelope wraps it."""
+
+    def _run(self, stdout="", stderr="", returncode=0):
+        from maloo_tool.cli import _resolve_review_to_revision
+        proc = SimpleNamespace(
+            stdout=stdout, stderr=stderr, returncode=returncode
+        )
+        with patch("subprocess.run", return_value=proc):
+            return _resolve_review_to_revision(54749)
+
+    def test_bare_payload(self):
+        revision, why = self._run(
+            stdout=json.dumps({"change_number": 54749, "current_revision": "68414988"})
+        )
+        assert revision == "68414988"
+        assert why == ""
+
+    def test_envelope_payload(self):
+        revision, why = self._run(
+            stdout=json.dumps(
+                {"ok": True, "data": {"current_revision": "68414988"}}
+            )
+        )
+        assert revision == "68414988"
+        assert why == ""
+
+    def test_nonzero_exit_says_why(self):
+        revision, why = self._run(stderr="404 Not Found", returncode=1)
+        assert revision is None
+        assert "exited 1" in why
+        assert "404 Not Found" in why
+
+    def test_missing_revision_says_why(self):
+        revision, why = self._run(stdout=json.dumps({"change_number": 54749}))
+        assert revision is None
+        assert "current_revision" in why
+
+    def test_not_installed_says_why(self):
+        from maloo_tool.cli import _resolve_review_to_revision
+        with patch("subprocess.run", side_effect=FileNotFoundError()):
+            revision, why = _resolve_review_to_revision(54749)
+        assert revision is None
+        assert "not installed" in why
 
 
 # -- retest command: additional tests --

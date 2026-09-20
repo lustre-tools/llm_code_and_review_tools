@@ -837,26 +837,46 @@ def test_history(
     _output(env, pretty)
 
 
-def _resolve_review_to_revision(review_id: int) -> str | None:
+def _resolve_review_to_revision(review_id: int) -> tuple[str | None, str]:
     """Resolve a Gerrit change number to its current patchset revision hash.
 
     Uses the gerrit CLI tool to look up the change.  Returns the commit
-    hash string, or None if the lookup fails.
+    hash and an empty string, or None and why the lookup failed -- the
+    caller has nothing else to tell the user with.
     """
     import json
     import subprocess
 
+    argv = ["gerrit", "info", str(review_id)]
+    shown = " ".join(argv)
     try:
         proc = subprocess.run(
-            ["gerrit", "info", str(review_id)],
-            capture_output=True, text=True, timeout=15,
+            argv, capture_output=True, text=True, timeout=15,
         )
-        if proc.returncode != 0:
-            return None
+    except FileNotFoundError:
+        return None, f"`{shown}` is not installed"
+    except subprocess.TimeoutExpired:
+        return None, f"`{shown}` timed out after 15s"
+    except Exception as exc:
+        return None, f"`{shown}` failed: {exc}"
+
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        return None, (
+            f"`{shown}` exited {proc.returncode}"
+            + (f": {detail[0]}" if detail else "")
+        )
+    try:
         data = json.loads(proc.stdout)
-        return data.get("data", {}).get("current_revision")
-    except Exception:
-        return None
+    except ValueError:
+        return None, f"`{shown}` did not print JSON"
+    # The gerrit CLI prints the bare payload; --envelope wraps it in "data".
+    if isinstance(data.get("data"), dict):
+        data = data["data"]
+    revision = data.get("current_revision")
+    if not revision:
+        return None, f"`{shown}` gave no current_revision"
+    return revision, ""
 
 
 def _parse_review_arg(value: str) -> str:
@@ -965,7 +985,7 @@ def queue(
         # If it looks like a pure integer (Gerrit change number),
         # resolve to the current patchset commit hash via gerrit CLI.
         if review_id.isdigit():
-            revision = _resolve_review_to_revision(int(review_id))
+            revision, why = _resolve_review_to_revision(int(review_id))
             if revision:
                 params["review_id"] = revision
                 resolved_review = revision
@@ -973,8 +993,8 @@ def queue(
                 _error(
                     ErrorCode.RESOLVE_FAILED,
                     f"Could not resolve Gerrit change {review_id} to a "
-                    f"commit hash (is the gerrit CLI available?). "
-                    f"Try --build <buildno> or pass the commit hash directly.",
+                    f"commit hash: {why}. Try --build <buildno> or pass "
+                    f"the commit hash directly.",
                     "queue",
                     pretty,
                 )
