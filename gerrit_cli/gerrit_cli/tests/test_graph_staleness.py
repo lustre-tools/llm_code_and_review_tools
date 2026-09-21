@@ -225,3 +225,20 @@ class TestGroupInternalEdges:
         e = next(e for e in out if (e["from"], e["to"]) == (10, 11))
         assert e["is_stale"] is True and e["child_patchset"] == 1
 
+
+class TestBreakLateCycles:
+    def test_removes_history_edge_of_two_cycle(self):
+        from gerrit_cli.graph.build import _break_late_cycles
+        edges = [
+            _make_edge(1, 5, 5, 2, 2, 4),   # 1->2 from old child ps: history
+            _make_edge(2, 3, 4, 1, 5, 5),   # 2->1 child current, parent moved
+            _make_edge(2, 4, 4, 9, 1, 1),   # unrelated live edge
+        ]
+        removed = _break_late_cycles(edges)
+        assert removed == 1
+        assert [(e["from"], e["to"]) for e in edges] == [(2, 1), (2, 9)]
+
+    def test_noop_on_dag(self):
+        from gerrit_cli.graph.build import _break_late_cycles
+        edges = [_make_edge(1, 1, 1, 2, 1, 1), _make_edge(2, 1, 1, 3, 1, 1)]
+        assert _break_late_cycles(edges) == 0 and len(edges) == 2

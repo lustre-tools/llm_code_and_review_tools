@@ -1881,6 +1881,71 @@ def _prune_unrelated_merged(ctx: BuildContext) -> tuple[int, int]:
     return len(deleted), structural
 
 
+def _break_late_cycles(edges: list[dict[str, Any]]) -> int:
+    """Remove edges that lie ON a cycle, one per cycle found, until the
+    edge list is acyclic. Returns the number removed.
+
+    _break_cycles runs inside _build_main_edges and never sees the
+    edges added afterwards (separate-group internal/cross edges,
+    redirects, hookups). A 2-cycle between an in-flight patch and
+    the merged patch it sits on (62859 <-> 62906: 62906 ps35 sat on
+    62859 ps45, 62859 ps47 sits on 62906 ps38) survives to graph.js,
+    whose recursive subtree walks then overflow the stack and the
+    page renders blank.
+
+    Victim preference within a cycle: an edge derived from an old
+    patchset of its child (pure history), else any stale edge, else
+    the back edge that closed the cycle. Only edges on the detected
+    cycle are candidates, so this is a no-op on an acyclic graph."""
+    removed = 0
+    for _ in range(50):
+        adj: dict[int, list[int]] = {}
+        for e in edges:
+            adj.setdefault(e["from"], []).append(e["to"])
+        color: dict[int, int] = {}
+        parent: dict[int, int] = {}
+        cycle: list[tuple[int, int]] | None = None
+
+        def dfs(u: int) -> None:
+            nonlocal cycle
+            color[u] = 1
+            for v in adj.get(u, ()):
+                if cycle is not None:
+                    return
+                if color.get(v, 0) == 0:
+                    parent[v] = u
+                    dfs(v)
+                elif color[v] == 1:
+                    path = [(u, v)]
+                    cur = u
+                    while cur != v:
+                        path.append((parent[cur], cur))
+                        cur = parent[cur]
+                    cycle = path
+                    return
+            color[u] = 2
+
+        for start in list(adj):
+            if color.get(start, 0) == 0:
+                dfs(start)
+            if cycle is not None:
+                break
+        if cycle is None:
+            return removed
+        on_cycle = set(cycle)
+        cands = [e for e in edges if (e["from"], e["to"]) in on_cycle]
+        victim = (
+            next((e for e in cands
+                  if e.get("child_patchset", e.get("child_latest", 0))
+                  < e.get("child_latest", 0)), None)
+            or next((e for e in cands if e["is_stale"]), None)
+            or next(e for e in cands if (e["from"], e["to"]) == cycle[0])
+        )
+        edges.remove(victim)
+        removed += 1
+    return removed
+
+
 def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
     """Flatten the accumulated build state into the final dict shape
     consumed by `render.generate_html`."""
@@ -1925,6 +1990,9 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
     # it, and running after avoids any risk of the two phases
     # picking competing targets for the same node.
     _hook_orphan_main_chains(ctx, merged_trunk)
+    late_cycles = _break_late_cycles(ctx.edges)
+    if late_cycles and ctx.logger is not None:
+        ctx.logger.note(f"{late_cycles} late cycle edge(s) removed")
     return {
         "anchor": ctx.change_number,
         "base_url": ctx.base_url,
