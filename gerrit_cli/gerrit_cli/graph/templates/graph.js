@@ -15,12 +15,22 @@ G.edges.forEach(e => {
     edgeMap[key] = e;
     childrenOf[e.from] = childrenOf[e.from] || [];
     childrenOf[e.from].push(e.to);
-    parentOf[e.to] = e.from;
     edgesFrom[e.from] = edgesFrom[e.from] || [];
     edgesFrom[e.from].push(e);
     edgesTo[e.to] = edgesTo[e.to] || [];
     edgesTo[e.to].push(e);
 });
+// parentOf follows the same ranking as the rendered incoming edge;
+// the anchor column, the main-chain walk and the info panel all
+// read it, and a history edge listed last in the payload must not
+// become "the" parent by write order.
+for (const child in edgesTo) {
+    let best = null;
+    for (const e of edgesTo[child]) {
+        if (best === null || _rankIncoming(e, best) < 0) best = e;
+    }
+    parentOf[child] = best.from;
+}
 
 // ─── STATS BAR ───
 // In-flight badge breaks down NEW changes by review health so a
@@ -301,12 +311,38 @@ function _layoutShouldShow(ctx, id) {
     return nodeVisible(id);
 }
 
+// The parent that owns `kid` for placement is the one whose edge
+// wins _rankIncoming among the kid's VISIBLE parents — the same
+// ranking that picks the rendered incoming edge, so a node always
+// sits next to the parent it is drawn attached to. A history edge
+// (derived from an old patchset of the kid) never wins over the
+// edge from the kid's current patchset, even when that parent has
+// since uploaded a newer patchset: 62459 used to grab 58229, which
+// sits on 68752 in Gerrit.
+function _ownedByOtherParent(ctx, parentId, kid) {
+    let best = null;
+    for (const p of (edgesTo[kid] || [])) {
+        if (!_layoutShouldShow(ctx, p.from)) continue;
+        if (best === null || _rankIncoming(p, best) < 0) best = p;
+    }
+    return best !== null && best.from !== parentId;
+}
+
+// Children `id` places in the layout: visible, and owned by `id`
+// rather than another parent. Every layout-side subtree walk goes
+// through here so placement and the metrics that reserve space for
+// it (width / height / extents / chain-shape) agree.
+function _layoutKids(ctx, id) {
+    return (childrenOf[id] || []).filter(k =>
+        _layoutShouldShow(ctx, k) && !_ownedByOtherParent(ctx, id, k));
+}
+
 // Subtree width = number of visible leaf descendants. Memoized per
 // layout context so repeated queries from the tree-placement phases
 // don't re-walk the same subtrees.
 function _subtreeWidth(ctx, id) {
     if (ctx.widthCache[id] !== undefined) return ctx.widthCache[id];
-    const kids = (childrenOf[id] || []).filter(k => _layoutShouldShow(ctx, k));
+    const kids = _layoutKids(ctx, id);
     if (kids.length === 0) { ctx.widthCache[id] = 1; return 1; }
     let w = 0;
     for (const k of kids) w += _subtreeWidth(ctx, k);
@@ -331,8 +367,7 @@ function _subtreeWidth(ctx, id) {
 // this helper.
 function _subtreeExtents(ctx, id) {
     if (ctx.extentsCache[id] !== undefined) return ctx.extentsCache[id];
-    const kidsAll = (childrenOf[id] || [])
-        .filter(k => _layoutShouldShow(ctx, k));
+    const kidsAll = _layoutKids(ctx, id);
     if (kidsAll.length === 0) {
         ctx.extentsCache[id] = { left: 0, right: 0 };
         return ctx.extentsCache[id];
@@ -370,7 +405,7 @@ function _subtreeExtents(ctx, id) {
 // Subtree height = max depth from `id` to any visible leaf.
 function _subtreeHeight(ctx, id) {
     if (ctx.heightCache[id] !== undefined) return ctx.heightCache[id];
-    const kids = (childrenOf[id] || []).filter(k => _layoutShouldShow(ctx, k));
+    const kids = _layoutKids(ctx, id);
     if (kids.length === 0) { ctx.heightCache[id] = 1; return 1; }
     let maxH = 0;
     for (const k of kids) maxH = Math.max(maxH, _subtreeHeight(ctx, k));
@@ -507,8 +542,7 @@ function _layoutTree(ctx, id, x, level, dir) {
     const frame = _enterLayoutFrame(ctx, id, x, level);
     x = frame.x; level = frame.level;
 
-    const kidsAll = (childrenOf[id] || [])
-        .filter(k => _layoutShouldShow(ctx, k));
+    const kidsAll = _layoutKids(ctx, id);
     if (kidsAll.length === 0) return level;
 
     const mainKid = _pickMainKid(ctx, id, kidsAll);
@@ -672,8 +706,7 @@ function _isChainSubtree(ctx, id) {
     // Safety bound to prevent runaway in case of an unexpected
     // cycle that wasn't caught by _break_cycles.
     for (let i = 0; i < 500; i++) {
-        const kids = (childrenOf[cur] || [])
-            .filter(k => _layoutShouldShow(ctx, k));
+        const kids = _layoutKids(ctx, cur);
         if (kids.length === 0) return true;
         if (kids.length > 1) return false;
         cur = kids[0];
@@ -1081,9 +1114,8 @@ function _layoutMergedTrunk(ctx, belowAnchorLevel) {
         while (stack.length > 0) {
             const cur = stack.pop();
             if (cur === avoidId) continue;
-            for (const k of (childrenOf[cur] || [])) {
+            for (const k of _layoutKids(ctx, cur)) {
                 if (reach.has(k)) continue;
-                if (!_layoutShouldShow(ctx, k)) continue;
                 reach.add(k);
                 stack.push(k);
             }
@@ -1099,14 +1131,12 @@ function _layoutMergedTrunk(ctx, belowAnchorLevel) {
             if (ctx.positions[k] !== undefined) return 0;
             seen.add(k);
             let h = 0;
-            for (const c of (childrenOf[k] || [])) {
-                if (!_layoutShouldShow(ctx, c)) continue;
+            for (const c of _layoutKids(ctx, k)) {
                 h = Math.max(h, heightExcl(c));
             }
             return h + 1;
         };
-        const sideKids = (childrenOf[id] || [])
-            .filter(k => _layoutShouldShow(ctx, k))
+        const sideKids = _layoutKids(ctx, id)
             .filter(k => !trunkSet.has(k));
         let h = 0;
         for (const sk of sideKids) h = Math.max(h, heightExcl(sk));
@@ -1197,8 +1227,7 @@ function _layoutTrunkSideBranches(ctx) {
                 const p = parentSides[i];
                 const pX = (i % 2 === 0) ? rightX : leftX;
                 _placeNode(ctx, p, pX, -(level - 1) * LEVEL_H);
-                for (const gk of (childrenOf[p] || [])) {
-                    if (!_layoutShouldShow(ctx, gk)) continue;
+                for (const gk of _layoutKids(ctx, p)) {
                     if (positions[gk]) continue;
                     _layoutTree(ctx, gk, pX, level, 1);
                 }
@@ -1207,8 +1236,7 @@ function _layoutTrunkSideBranches(ctx) {
                 else leftX = pX - (ext.left + 1) * NODE_W;
             }
         }
-        const unplaced = (childrenOf[id] || [])
-            .filter(k => _layoutShouldShow(ctx, k))
+        const unplaced = _layoutKids(ctx, id)
             .filter(k => !positions[k])
             .sort((a, b) => a - b);
         if (unplaced.length === 0) continue;
@@ -1626,6 +1654,53 @@ function styleForNode(node, flags, position, C) {
     };
 }
 
+// Parent-side staleness: the child's current patchset sits on an
+// older patchset of the parent — the child needs a rebase.
+function edgeParentMoved(edge) {
+    return edge.parent_patchset < edge.parent_latest;
+}
+
+// Child-side staleness: the edge was derived from an old patchset of
+// the child; the child has since been rebased elsewhere. History, not
+// a rebase debt.
+function edgeChildMoved(edge) {
+    return edge.child_patchset !== undefined
+        && edge.child_patchset < edge.child_latest;
+}
+
+// Ranks a node's incoming edges, best first: the edge from the
+// node's CURRENT patchset (its real base) before history edges, a
+// current-on-both-sides edge before a NEEDS-REBASE one, then the
+// highest parent patchset. Shared by placement ownership
+// (_ownedByOtherParent), the rendered-edge pick
+// (computeHistoricalSuppression) and parentOf, so the three never
+// disagree about a node's parent.
+function _rankIncoming(a, b) {
+    const ca = edgeChildMoved(a) ? 1 : 0;
+    const cb = edgeChildMoved(b) ? 1 : 0;
+    if (ca !== cb) return ca - cb;
+    const sa = a.is_stale ? 1 : 0;
+    const sb = b.is_stale ? 1 : 0;
+    if (sa !== sb) return sa - sb;
+    if (b.parent_patchset !== a.parent_patchset) {
+        return b.parent_patchset - a.parent_patchset;
+    }
+    if (b.parent_latest !== a.parent_latest) {
+        return b.parent_latest - a.parent_latest;
+    }
+    return a.from - b.from;
+}
+
+// Patchset label for an edge: the parent patchset the child is based
+// on, "→latest" when the parent has moved on, and "(old psN)" when the
+// edge comes from an old patchset of the child.
+function edgePsLabel(edge) {
+    let label = 'ps' + edge.parent_patchset;
+    if (edgeParentMoved(edge)) label += '→' + edge.parent_latest;
+    if (edgeChildMoved(edge)) label += ' (old ps' + edge.child_patchset + ')';
+    return label;
+}
+
 // Full vis.js edge options for a rendered edge.
 function styleForEdge(edge, edgeId, flags, C) {
     let color;
@@ -1649,9 +1724,7 @@ function styleForEdge(edge, edgeId, flags, C) {
         dashes = false;
     }
 
-    const label = edge.is_stale
-        ? `ps${edge.parent_patchset}→${edge.parent_latest}`
-        : `ps${edge.parent_patchset}`;
+    const label = edgePsLabel(edge);
 
     return {
         id: 'e' + edgeId,
@@ -1715,18 +1788,7 @@ function computeHistoricalSuppression(positions) {
     }
     for (const child in byChild) {
         const uniq = Object.values(byChild[child]);
-        uniq.sort((a, b) => {
-            const sa = a.is_stale ? 1 : 0;
-            const sb = b.is_stale ? 1 : 0;
-            if (sa !== sb) return sa - sb;
-            if (b.parent_patchset !== a.parent_patchset) {
-                return b.parent_patchset - a.parent_patchset;
-            }
-            if (b.parent_latest !== a.parent_latest) {
-                return b.parent_latest - a.parent_latest;
-            }
-            return a.from - b.from;
-        });
+        uniq.sort(_rankIncoming);
         keptSources[child] = new Set([uniq[0].from]);
     }
     return keptSources;
@@ -2069,7 +2131,11 @@ function showNodeInfo(id) {
         cursor = parentOf[cursor];
     }
 
-    const staleIncoming = (edgesTo[node.id] || []).filter(e => e.is_stale);
+    // Rebase debt = the node's CURRENT patchset sits on a parent that
+    // has since uploaded a newer patchset. Edges derived from the
+    // node's own old patchsets are history and don't count.
+    const staleIncoming = (edgesTo[node.id] || [])
+        .filter(e => edgeParentMoved(e) && !edgeChildMoved(e));
     const staleTag = staleIncoming.length > 0
         ? `<span class="stale-tag">NEEDS REBASE</span>` : '';
 
@@ -2160,7 +2226,7 @@ function chainItem(node, edge, selectedId, isBelow) {
     const isMain = mainChain.has(node.id);
     const cls = isAnc ? 'anchor' : (isMain ? 'main-chain' : '');
     const stale = edge && edge.is_stale
-        ? `<span class="stale-tag">ps${edge.parent_patchset}→${edge.parent_latest}</span>`
+        ? `<span class="stale-tag">${edgePsLabel(edge)}</span>`
         : (edge ? `<span style="color:#484f58;font-size:10px">ps${edge.parent_patchset}</span>` : '');
 
     return `<div class="ci ${cls}" onclick="clickNode(${node.id})" title="${esc(node.subject)}">

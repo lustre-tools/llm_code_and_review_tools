@@ -592,6 +592,48 @@ def _fetch_ci_and_comments(
     return len(active_cns)
 
 
+def _current_first(
+    ctx: BuildContext, rev_parents: dict[str, str],
+) -> list[list[tuple[str, str]]]:
+    """Split (child_hash, parent_hash) items into two batches: those
+    derived from a change's CURRENT patchset, then everything else.
+    Emitting in that order lets the first-wins edge dedupe keep the
+    live edge whenever an old patchset produced the same pair."""
+    current: list[tuple[str, str]] = []
+    older: list[tuple[str, str]] = []
+    for child_hash, parent_hash in rev_parents.items():
+        info = ctx.commit_to_change_ps.get(child_hash)
+        node = ctx.nodes.get(info[0]) if info else None
+        if node is not None and info[1] == node.get("current_patchset"):
+            current.append((child_hash, parent_hash))
+        else:
+            older.append((child_hash, parent_hash))
+    return [current, older]
+
+
+def _make_edge(
+    parent_cn: int, parent_ps: int, parent_latest: int,
+    child_cn: int, child_ps: int, child_latest: int,
+) -> dict[str, Any]:
+    """Edge dict shared by every emitter. An edge is stale when
+    EITHER endpoint has moved on: the parent uploaded a newer
+    patchset than the one the child sits on (parent-side — the
+    child needs a rebase), or the edge was derived from an old
+    patchset of the child that has since been rebased elsewhere
+    (child-side — pure history). 58229 ps16 sat on 62459's merged
+    commit; by ps26 it sits on 68752, yet the 62459 edge used to
+    render as live because only the parent side was checked."""
+    return {
+        "from": parent_cn,
+        "to": child_cn,
+        "parent_patchset": parent_ps,
+        "parent_latest": parent_latest,
+        "child_patchset": child_ps,
+        "child_latest": child_latest,
+        "is_stale": parent_ps < parent_latest or child_ps < child_latest,
+    }
+
+
 def _build_main_edges(ctx: BuildContext) -> int:
     """Produce edges for the main series.
 
@@ -619,7 +661,9 @@ def _build_main_edges(ctx: BuildContext) -> int:
         if cn in ctx.nodes and ps == ctx.nodes[cn].get("current_patchset"):
             cn_current_commit[cn] = h
 
-    def add_edge(parent_cn: int, child_cn: int, parent_ps: int) -> None:
+    def add_edge(
+        parent_cn: int, child_cn: int, parent_ps: int, child_ps: int,
+    ) -> None:
         if parent_cn == child_cn:
             return
         if parent_cn not in ctx.nodes or child_cn not in ctx.nodes:
@@ -628,14 +672,10 @@ def _build_main_edges(ctx: BuildContext) -> int:
         if key in ctx.seen_edges:
             return
         ctx.seen_edges.add(key)
-        parent_latest = ctx.nodes[parent_cn]["current_patchset"]
-        ctx.edges.append({
-            "from": parent_cn,
-            "to": child_cn,
-            "parent_patchset": parent_ps,
-            "parent_latest": parent_latest,
-            "is_stale": parent_ps < parent_latest,
-        })
+        ctx.edges.append(_make_edge(
+            parent_cn, parent_ps, ctx.nodes[parent_cn]["current_patchset"],
+            child_cn, child_ps, ctx.nodes[child_cn]["current_patchset"],
+        ))
 
     # One primary parent edge per node, derived from the node's
     # current patchset. raw_entries is iterated only to enumerate
@@ -665,30 +705,37 @@ def _build_main_edges(ctx: BuildContext) -> int:
             ctx.revision_parents.get(current_h, "") if current_h else ""
         )
         resolved = _resolve(parent_commit)
+        child_ps = ctx.nodes[cn]["current_patchset"]
         if resolved is None:
             resolved = _resolve(entry["parent_commit"])
+            child_ps = entry["ps"]
         if resolved is None:
             continue
         parent_cn, parent_ps = resolved
-        add_edge(parent_cn, cn, parent_ps)
+        add_edge(parent_cn, cn, parent_ps, child_ps)
 
     # Edges from revision parents — only where at least one endpoint
     # is a discovered change (not in the /related set). This hooks
     # discovered nodes back onto the graph without adding cross-
     # connections between /related changes from old patchset history.
     related_cns = {e["cn"] for e in ctx.raw_entries}
-    for child_hash, parent_hash in ctx.revision_parents.items():
-        if not parent_hash:
-            continue
-        if child_hash not in ctx.commit_to_change_ps:
-            continue
-        if parent_hash not in ctx.commit_to_change_ps:
-            continue
-        child_cn, _child_ps = ctx.commit_to_change_ps[child_hash]
-        parent_cn, parent_ps = ctx.commit_to_change_ps[parent_hash]
-        if child_cn in related_cns and parent_cn in related_cns:
-            continue
-        add_edge(parent_cn, child_cn, parent_ps)
+    # Current patchsets first: the (parent, child) key is deduped on
+    # first sight, and the same pair can arise from both the child's
+    # current patchset (live edge) and an older one (history) — the
+    # live derivation must win the key.
+    for hashes in _current_first(ctx, ctx.revision_parents):
+        for child_hash, parent_hash in hashes:
+            if not parent_hash:
+                continue
+            if child_hash not in ctx.commit_to_change_ps:
+                continue
+            if parent_hash not in ctx.commit_to_change_ps:
+                continue
+            child_cn, child_ps = ctx.commit_to_change_ps[child_hash]
+            parent_cn, parent_ps = ctx.commit_to_change_ps[parent_hash]
+            if child_cn in related_cns and parent_cn in related_cns:
+                continue
+            add_edge(parent_cn, child_cn, parent_ps, child_ps)
 
     return _break_cycles(ctx.edges)
 
@@ -787,7 +834,7 @@ def _build_separate_group(
         )
 
         group_edges = _group_internal_edges(
-            ctx, group_raw, group_ctps, group_nodes
+            ctx, group_raw, group_ctps, group_nodes, group_rev_parents,
         )
         group_edges.extend(
             _group_cross_edges(ctx, group_ctps, group_rev_parents, group_nodes)
@@ -925,33 +972,59 @@ def _group_internal_edges(
     group_raw: list[dict[str, Any]],
     group_ctps: dict[str, tuple[int, int]],
     group_nodes: dict[int, dict[str, Any]],
+    group_rev_parents: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build edges between members of a single separate group from
-    its own raw_entries. Uses the global ctx.seen_edges set so a
-    (from, to) pair never gets added twice across all stages."""
+    """Build edges between members of a single separate group.
+
+    One edge per member, derived from the member's CURRENT patchset
+    parent when that resolves to another group member — /related
+    lists members at whatever revision sits in the seed's chain, so
+    a seed that lags a re-uploaded member would otherwise report an
+    old patchset and a live edge would be recorded as history. Only
+    when the current parent is outside the group does the /related
+    entry's parent commit serve as the (stale) fallback, mirroring
+    the primary-edge loop of _build_main_edges. Uses the global
+    ctx.seen_edges set so a (from, to) pair never gets added twice
+    across all stages."""
+    rev_parents = group_rev_parents or {}
+    cur_commit: dict[int, str] = {}
+    for h, (cn, ps) in group_ctps.items():
+        node = group_nodes.get(cn)
+        if node is not None and ps == node.get("current_patchset"):
+            cur_commit[cn] = h
+
     out: list[dict[str, Any]] = []
     for entry in group_raw:
-        pc = entry["parent_commit"]
         child_cn = entry["cn"]
-        if not pc or pc not in group_ctps:
+        if child_cn not in group_nodes:
             continue
-        parent_cn, parent_ps = group_ctps[pc]
-        if parent_cn not in group_nodes:
-            continue
+        child_latest = group_nodes[child_cn]["current_patchset"]
+        resolved = None
+        child_ps = child_latest
+        cur_h = cur_commit.get(child_cn)
+        if cur_h:
+            info = group_ctps.get(rev_parents.get(cur_h, ""))
+            if info and info[0] in group_nodes:
+                resolved = info
+        if resolved is None:
+            pc = entry["parent_commit"]
+            if not pc or pc not in group_ctps:
+                continue
+            resolved = group_ctps[pc]
+            if resolved[0] not in group_nodes:
+                continue
+            child_ps = group_ctps.get(entry["commit"], (child_cn, child_latest))[1]
+        parent_cn, parent_ps = resolved
         if parent_cn == child_cn:
             continue
         key = (parent_cn, child_cn)
         if key in ctx.seen_edges:
             continue
         ctx.seen_edges.add(key)
-        parent_latest = group_nodes[parent_cn]["current_patchset"]
-        out.append({
-            "from": parent_cn,
-            "to": child_cn,
-            "parent_patchset": parent_ps,
-            "parent_latest": parent_latest,
-            "is_stale": parent_ps < parent_latest,
-        })
+        out.append(_make_edge(
+            parent_cn, parent_ps, group_nodes[parent_cn]["current_patchset"],
+            child_cn, child_ps, child_latest,
+        ))
     return out
 
 
@@ -965,12 +1038,20 @@ def _group_cross_edges(
     separate series back to its historical base in main. Uses the
     global ctx.seen_edges set for dedupe."""
     out: list[dict[str, Any]] = []
-    for child_hash, parent_hash in group_rev_parents.items():
+    # Current patchsets first so the live derivation of a (parent,
+    # child) pair wins the first-seen dedupe over an old-patchset one.
+    items = list(group_rev_parents.items())
+    def _is_current(item: tuple[str, str]) -> bool:
+        info = group_ctps.get(item[0])
+        node = group_nodes.get(info[0]) if info else None
+        return node is not None and info[1] == node.get("current_patchset")
+    items.sort(key=lambda it: 0 if _is_current(it) else 1)
+    for child_hash, parent_hash in items:
         if not parent_hash:
             continue
         if child_hash not in group_ctps:
             continue
-        child_cn, _ = group_ctps[child_hash]
+        child_cn, child_ps = group_ctps[child_hash]
         if child_cn not in group_nodes:
             continue
         if parent_hash not in ctx.commit_to_change_ps:
@@ -987,14 +1068,10 @@ def _group_cross_edges(
         if key in ctx.seen_edges:
             continue
         ctx.seen_edges.add(key)
-        parent_latest = ctx.nodes[parent_cn]["current_patchset"]
-        out.append({
-            "from": parent_cn,
-            "to": child_cn,
-            "parent_patchset": parent_ps,
-            "parent_latest": parent_latest,
-            "is_stale": parent_ps < parent_latest,
-        })
+        out.append(_make_edge(
+            parent_cn, parent_ps, ctx.nodes[parent_cn]["current_patchset"],
+            child_cn, child_ps, group_nodes[child_cn]["current_patchset"],
+        ))
     return out
 
 
@@ -1302,6 +1379,22 @@ def _most_recent_merged_at_or_before(
     return best_cn
 
 
+def _current_parent_cn(ctx: BuildContext, cn: int) -> int | None:
+    """Change number owning the git parent of `cn`'s current
+    patchset, or None when the parent commit isn't a known change
+    (master commit, or a change outside the pool)."""
+    node = ctx.nodes.get(cn)
+    if not node:
+        return None
+    current_ps = node.get("current_patchset", 0)
+    for h, (owner, ps) in ctx.commit_to_change_ps.items():
+        if owner == cn and ps == current_ps:
+            info = ctx.commit_to_change_ps.get(
+                ctx.revision_parents.get(h, ""))
+            return info[0] if info else None
+    return None
+
+
 def _child_ancestry_contains(
     ctx: BuildContext, child_id: int, parent_id: int,
     max_hops: int = 50,
@@ -1392,6 +1485,19 @@ def _redirect_inflight_to_recent_merged(
             return False, None
         if e["from"] not in submitted_map:
             return False, None
+        # A child whose CURRENT patchset sits on an in-flight change
+        # that is in the graph is already attached where it belongs;
+        # every merged→child edge it carries is history. Retargeting
+        # one of those manufactures a trunk attachment that
+        # contradicts Gerrit (58229 on 68752 was re-aimed at 66691).
+        # An ABANDONED current parent does not count: it is hidden
+        # by default, so the child still needs the date-based trunk
+        # attachment to have a visible base.
+        cur_parent_cn = _current_parent_cn(ctx, e["to"])
+        if cur_parent_cn is not None:
+            cur_parent = ctx.nodes.get(cur_parent_cn)
+            if cur_parent and cur_parent.get("status") == "NEW":
+                return False, None
         # Series-relative parent precedence (dual gate). Keep the
         # /related edge as-is when BOTH:
         #   (1) the parent merged AFTER the child's last upload
@@ -1511,13 +1617,10 @@ def _redirect_inflight_to_recent_merged(
                 adj.setdefault(orig["from"], set()).add(orig["to"])
             continue
         target_ps = ctx.nodes[target].get("current_patchset", 0)
-        keep_edges.append({
-            "from": target,
-            "to": child,
-            "parent_patchset": target_ps,
-            "parent_latest": target_ps,
-            "is_stale": False,
-        })
+        child_ps = ctx.nodes[child].get("current_patchset", 0)
+        keep_edges.append(_make_edge(
+            target, target_ps, target_ps, child, child_ps, child_ps,
+        ))
         existing_pairs.add((target, child))
         adj.setdefault(target, set()).add(child)
     ctx.edges = keep_edges
@@ -1637,16 +1740,13 @@ def _hook_orphan_main_chains(
             continue
         ctx.seen_edges.add(key)
         target_ps = ctx.nodes[target].get("current_patchset", 0)
-        ctx.edges.append({
-            "from": target,
-            "to": root,
-            "parent_patchset": target_ps,
-            "parent_latest": target_ps,
-            # Stale so the JS layout renders the hookup with a
-            # dashed connector — we're inferring the relationship
-            # from a date walk, not from a concrete /related edge.
-            "is_stale": True,
-        })
+        root_ps = ctx.nodes[root].get("current_patchset", 0)
+        edge = _make_edge(target, target_ps, target_ps, root, root_ps, root_ps)
+        # Stale so the JS layout renders the hookup with a dashed
+        # connector — we're inferring the relationship from a date
+        # walk, not from a concrete /related edge.
+        edge["is_stale"] = True
+        ctx.edges.append(edge)
         adj.setdefault(target, set()).add(root)
         added += 1
     return added

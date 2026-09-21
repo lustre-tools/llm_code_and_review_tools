@@ -211,8 +211,13 @@ includes:
   code-review summary (`CR: 3×(+1) | 💬4`).
 - **WIP detection**: changes marked work-in-progress render with a 🚧
   prefix and a dashed border so they stand out from finished patches.
-- **Stale edges** (child depends on an older patchset of parent) are
-  drawn in orange with dashed lines and labels like `ps53→57`.
+- **Stale edges** are drawn in orange with dashed lines. Two kinds:
+  the child sits on an older patchset of the parent (`ps53→57` —
+  the child needs a rebase, and its panel says NEEDS REBASE), or the
+  edge comes from an older patchset of the child that has since been
+  rebased elsewhere (`ps35 (old ps16)` — pure history). A node is
+  placed next to, and drawn attached to, the parent of its current
+  patchset; history edges only show with "Show historical parents".
 - **Separate-series trees** for patches sharing the anchor's topic or
   hashtags. Each group gets its own distinctive border when it's not
   wired back into the main chain by a cross-group edge.
