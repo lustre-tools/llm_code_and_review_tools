@@ -22,6 +22,32 @@ Do not use `--pretty`, and do not pipe output through Python. Run
 `<tool> --help` or `<tool> describe` for the full surface; this skill
 covers the order to use them in and the judgment that goes with it.
 
+## Cheapest evidence first
+
+Settle each failure from what is already known before downloading
+anything. Climb to the next rung only when the one below leaves the
+failure genuinely open:
+
+1. **Metadata.** The subtest name and its error message (`maloo
+   failures`), the links already on it (`maloo bugs`), a JIRA search,
+   `maloo test-history` on the branch and on other reviews, `maloo
+   top-failures`, the Janitor's annotation on the subtest (`janitor
+   results`), and whether the patch touches the failing code or test
+   (`git show --stat HEAD`). None of it downloads a log, and it settles
+   most failures.
+2. **Logs, targeted.** `maloo logs <test_set_id> --grep <pattern>`,
+   `janitor crash`, `janitor fetch ... --grep`, `jenkins console
+   --grep`. Grep for the subtest or the error; do not read whole console
+   logs end to end.
+3. **Reproduction in VMs** (the `ltvm` skill). Only for a failure that
+   is plausibly the patch's and that the logs cannot decide: run the
+   subtest with and without the patch. Guests are also where a fix is
+   tested. They are never the first step: a reproduction costs tens of
+   minutes, a `test-history` query seconds.
+
+Failures that share a cause are one question: settle the cause, not
+each subtest.
+
 ## Start at the change, not at the test
 
 Always begin with the Gerrit-level summary, which separates enforced from
@@ -50,7 +76,8 @@ ended the run and reported its own 90-minute budget as `TIMEOUT` /
 `"Autotest time out"` / `5400`. It is not a hang. The real error is a
 single line in the suite log -- `maloo logs <test_set_id>`, then
 `grep -A5 'start cleanup' <suite>.suite_log`. `maloo failures` flags this
-in a `note` on the subtest.
+in a `note` on the subtest. It is the one failure the metadata cannot
+settle, so go straight to that grep.
 
 `maloo logs` extracts what Maloo kept, and Maloo does not always keep every
 node's console log. A missing one arrives as a stub of about 66 bytes whose
@@ -62,9 +89,10 @@ those nodes' console logs as unavailable.
 
 ## Decide whether the failure is yours
 
-Do this before touching a retest. Most triage needs nothing but the
-subtest name and its error message, both of which `maloo failures` gives;
-go to the logs only when the four steps below leave it open.
+Do this before touching a retest. These four steps are the metadata
+rung: they need nothing but the subtest name and its error message, both
+of which `maloo failures` gives. Go to the logs only when they leave it
+open.
 
 **1. Start from the test, its message and any link already on it.**
 
@@ -160,7 +188,16 @@ stale copy is worth reporting as a tool defect: the API returns only the
 ticket, its cached summary and status, and the link state, so there is no
 field saying where a link came from and nothing for the CLI to fix.
 
-Raising a new one: `maloo raise-bug` files via Maloo and auto-links.
+Raise a new ticket only once the evidence shows the failure is not the
+patch's -- the same failure on the branch or on other changes in
+`maloo test-history`, or a reproduction without the patch -- and
+`maloo bugs` and `jira search` on the test name and the message find
+nothing that covers it. `maloo raise-bug <test_set_id> --summary ...
+--description ...` files it in LU and links it in one step; link it to
+any other failed session with the same cause with `link-bug`. One
+ticket per cause, not per subtest. The summary takes the usual form,
+`<suite> test_<n>: <what failed>`; the description gives the failure
+message, the Maloo links, and the evidence that it is not the patch's.
 
 `link-bug` takes LU tickets only; any other project prefix is refused
 ("project prefixes may only include LU"). Infrastructure failures --
@@ -201,6 +238,12 @@ jenkins console lustre-reviews 121880 --grep error --tail 200
 jenkins run-console <job> <build> <run>    # one matrix sub-build
 ```
 
+A build failed on infrastructure when the builder died, lost its agent,
+or ran out of disk, with no compile, packaging or test error the patch
+could have caused. A compile error in files the patch does not touch,
+on a base weeks behind the branch, is usually kernel compatibility the
+branch has since fixed: the repair is a rebase, not a source change.
+
 For a build that failed on infrastructure rather than code,
 `jenkins retrigger <job> <build>` re-runs it with the same Gerrit event.
 When Jenkins has posted a Verified-1 from a flaky build, the accepted fix
@@ -213,8 +256,17 @@ ssh -p 29418 <user>@review.whamcloud.com gerrit review -m '"BUILD"' <commit-sha>
 ## Janitor for crashes and raw logs
 
 Janitor runs its own tests and keeps console logs, syslog and kernel crash
-logs that Maloo does not expose. Reach for it when a test crashed, hung, or
-the Maloo failure message is too thin to act on:
+logs that Maloo does not expose. Its results are not enforced: a patch can
+land with Janitor failures standing, there is no retest, and no Maloo
+session to link a ticket to.
+
+Start with the annotation `janitor results` puts beside each failed
+subtest -- `test_1c(810 fails in 30d)` fleet-wide, `Seen in reviews:`
+with other changes' numbers, or `NEW unique failure`. A subtest failing
+across the fleet or on other reviews is not this patch's unless the patch
+touches that code; a new unique failure is the one to look at. Reach for
+its logs when a test crashed, hung, or the failure message is too thin to
+act on:
 
 ```bash
 janitor results 64440                          # change number, build number or URL
