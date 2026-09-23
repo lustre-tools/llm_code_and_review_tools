@@ -34,6 +34,7 @@ def runner():
 def mock_client():
     """Create a mock MalooClient and patch _make_client to return it."""
     client = MagicMock()
+    client.get_session_review.return_value = None
     with patch("maloo_tool.cli._make_client", return_value=client):
         yield client
 
@@ -550,6 +551,19 @@ class TestTestHistory:
         # History should only contain the failure entry
         assert len(env["data"]["history"]) == 1
         assert env["data"]["history"][0]["status"] == "FAIL"
+
+    def test_history_names_the_review(self, runner, mock_client):
+        """Each entry says which Gerrit change its session tested."""
+        mock_client.get_test_history.return_value = (
+            self.HISTORY_DATA, "sanity", STATS_OK)
+        review = {"change": 69111, "patchset": 3, "commit": "f4d6f2",
+                  "project": "fs/lustre-release", "branch": "master"}
+        mock_client.get_session_review.return_value = review
+        result = runner.invoke(main, ["--envelope", "test-history", "test_39b"])
+        env = _parse_output(result)
+        assert env["data"]["history"][0]["review"] == review
+        # Looked up only for the entries shown, not the whole history.
+        assert mock_client.get_session_review.call_count == 1
 
     def test_history_all_flag(self, runner, mock_client):
         """--all should show all history entries."""

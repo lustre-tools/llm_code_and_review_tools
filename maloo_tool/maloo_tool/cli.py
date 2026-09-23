@@ -135,6 +135,7 @@ def session(session_url: str, pretty: bool) -> None:
         "test_group": data.get("test_group"),
         "test_name": data.get("test_name"),
         "test_host": data.get("test_host"),
+        "review": client.get_session_review(sid),
         "submission": data.get("submission"),
         "duration": data.get("duration"),
         "enforcing": data.get("enforcing"),
@@ -733,7 +734,9 @@ def test_history(
     """Show pass/fail history for a specific test.
 
     By default shows only failures in the history detail.
-    Use --all to include PASS entries too.
+    Use --all to include PASS entries too.  Each entry names the Gerrit
+    change and patchset its session tested under "review" (null for a
+    branch run).
 
     \b
     TEST_NAME is the subtest name (e.g. test_39b).
@@ -779,6 +782,10 @@ def test_history(
 
     # Apply limit
     filtered = filtered[:limit]
+    reviews = {
+        sid: client.get_session_review(sid)
+        for sid in {h["session_id"] for h in filtered}
+    }
 
     no_data = total == 0
 
@@ -806,6 +813,7 @@ def test_history(
                 "test_host": h["test_host"],
                 "session_id": h["session_id"],
                 "test_set_id": h["test_set_id"],
+                "review": reviews.get(h["session_id"]),
             }
             for h in filtered
         ],

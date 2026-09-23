@@ -1,5 +1,6 @@
 """Maloo REST API client."""
 
+import json
 import re
 from typing import Any
 
@@ -104,6 +105,28 @@ class MalooClient:
         """Get a single test session by ID."""
         rows = self._get("test_sessions", {"id": session_id})
         return rows[0] if rows else None
+
+    def get_session_review(self, session_id: str) -> dict[str, Any] | None:
+        """Gerrit change, patchset and revision a test session tested.
+
+        None for a session that tested no review, such as a branch build.
+        """
+        rows = self._get("code_reviews", {"test_session_id": session_id})
+        if not rows:
+            return None
+        row = rows[0]
+        try:
+            data = json.loads(row.get("data") or "{}")
+        except ValueError:
+            data = {}
+        change = data.get("review_no")
+        return {
+            "change": int(change) if str(change or "").isdigit() else None,
+            "patchset": data.get("patch_no"),
+            "commit": row.get("commit_id"),
+            "project": data.get("project"),
+            "branch": data.get("branch"),
+        }
 
     def find_sessions_by_commit(
         self, commit_id: str

@@ -514,6 +514,24 @@ class TestBugLinks:
         params = client._get_paginated.call_args[0][1]
         assert params["related"] == "true"
 
+    def test_get_session_review(self, client):
+        client._get = MagicMock(return_value=[{
+            "test_session_id": "s1",
+            "commit_id": "f4d6f2",
+            "data": '{"branch":"master","patch_no":3,'
+                    '"project":"fs/lustre-release","review_no":"69111"}',
+        }])
+        assert client.get_session_review("s1") == {
+            "change": 69111, "patchset": 3, "commit": "f4d6f2",
+            "project": "fs/lustre-release", "branch": "master",
+        }
+        assert client._get.call_args[0] == (
+            "code_reviews", {"test_session_id": "s1"})
+
+    def test_get_session_review_none(self, client):
+        client._get = MagicMock(return_value=[])
+        assert client.get_session_review("s1") is None
+
     def test_create_bug_link_success(self, client):
         client.session.post.return_value = _mock_response(text="OK")
         result = client.create_bug_link(
