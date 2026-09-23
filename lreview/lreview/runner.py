@@ -841,6 +841,10 @@ def run_batch(
     if in_place and len(changes) != 1:
         raise ValueError("in_place reviews take exactly one change")
     config.results_dir.mkdir(parents=True, exist_ok=True)
+    if not in_place and not config.keep_worktrees:
+        stranded = wt.reap_orphan_worktrees(config.worktrees_dir)
+        if stranded:
+            _log(f"reaped {stranded} worktree(s) left by killed runs")
 
     # (change, directory, cleanup?) — in-place runs use the repo
     # itself and must never be removed

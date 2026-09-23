@@ -5,6 +5,8 @@ they are serialized with a lock; the actual reviews then run fully in
 parallel, each in its own worktree.
 """
 
+import os
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -102,3 +104,58 @@ def prune_worktrees(repo: Path) -> None:
     """Drop registrations of worktrees whose directories are gone."""
     with _GIT_LOCK:
         run_git(repo, "worktree", "prune", check=False)
+
+
+def _owning_repo(wtree: Path):
+    """The repository a worktree directory belongs to, or None.
+
+    A worktree's .git is a file holding
+    'gitdir: <repo>/.git/worktrees/<name>'.
+    """
+    try:
+        line = (wtree / ".git").read_text().strip()
+    except OSError:
+        return None
+    if not line.startswith("gitdir:"):
+        return None
+    gitdir = Path(line.split(":", 1)[1].strip())
+    # .../<repo>/.git/worktrees/<name>
+    if gitdir.parent.name != "worktrees":
+        return None
+    return gitdir.parent.parent.parent
+
+
+def reap_orphan_worktrees(worktrees_dir: Path) -> int:
+    """Remove worktrees left behind by lreview runs that were killed.
+
+    A run cleans up in a finally, so only a SIGKILL or a lost machine
+    strands one -- but nothing reaped those afterwards, and each is a
+    full checkout.  The directory name ends in the creating process's
+    pid, so a directory whose pid is gone belongs to no live run.
+    Returns the number removed.
+    """
+    reaped = 0
+    for wtree in sorted(worktrees_dir.glob("kreview_*")):
+        if not wtree.is_dir():
+            continue
+        pid = wtree.name.rsplit(".", 1)[-1]
+        if not pid.isdigit():
+            continue
+        try:
+            os.kill(int(pid), 0)
+            continue        # a live run owns it
+        except PermissionError:
+            continue        # alive, someone else's
+        except (OSError, ValueError):
+            pass            # no such process: stranded
+
+        owner = _owning_repo(wtree)
+        if owner is not None:
+            remove_worktree(owner, wtree)
+        if wtree.exists():
+            shutil.rmtree(wtree, ignore_errors=True)
+        if owner is not None:
+            prune_worktrees(owner)
+        if not wtree.exists():
+            reaped += 1
+    return reaped

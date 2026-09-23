@@ -891,3 +891,33 @@ class TestRecentCommits:
         from lreview.worktree import recent_commits
         repo = self._repo(tmp_path, 2)
         assert len(recent_commits(repo, 10)) == 2
+
+
+def test_reap_orphan_worktrees_removes_only_dead_pids(tmp_path):
+    """A worktree whose creating pid is gone is stranded; a live one is not."""
+    from lreview import worktree as wt
+
+    wtrees = tmp_path / "worktrees"
+    wtrees.mkdir()
+    dead = wtrees / f"kreview_HEAD_abc1234.{_dead_pid()}"
+    live = wtrees / f"kreview_HEAD_def5678.{os.getpid()}"
+    other = wtrees / "not-a-review"
+    for d in (dead, live, other):
+        d.mkdir()
+        (d / "file").write_text("x")
+
+    assert wt.reap_orphan_worktrees(wtrees) == 1
+    assert not dead.exists()
+    assert live.exists()
+    assert other.exists()
+    # a second pass has nothing left to do
+    assert wt.reap_orphan_worktrees(wtrees) == 0
+
+
+def _dead_pid() -> int:
+    """A pid with no live process behind it."""
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+    os.waitpid(pid, 0)
+    return pid
