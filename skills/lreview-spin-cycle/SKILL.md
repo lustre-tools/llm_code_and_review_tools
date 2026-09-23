@@ -26,6 +26,18 @@ lreview run --repo <tree> --last 2 -o /tmp/lreview1.txt
   pass** -- that posts to Gerrit.
 - Per-review timeout defaults to 7200s. Run it in the background with
   output redirected to a file; never wait on it in the foreground.
+- To wait for that background run, wait on its **pid**. Never wait on a
+  `pgrep -f` pattern naming the command: the waiting shell's own command
+  line contains the pattern, so `pgrep` matches the waiter itself and the
+  loop never ends -- reporting the run as still going long after it
+  finished. The same trap makes `pkill -f <cmd>` kill the shell that runs
+  it, before it kills anything else.
+
+  ```bash
+  lreview run --repo <tree> --last 6 -o /tmp/r1.txt > /tmp/r1.console 2>&1 &
+  lrpid=$!
+  while kill -0 $lrpid 2>/dev/null; do sleep 30; done
+  ```
 - One log per commit lands in the results directory as
   `kreview-<ref>-<timestamp>.log`; `-o` also writes one plain-text dump of
   the whole batch, including the clean commits.
