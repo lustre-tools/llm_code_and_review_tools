@@ -1,6 +1,6 @@
 ---
 name: lustre-ci-triage
-description: This skill should be used when a Lustre Gerrit change has failing CI and the question is why, or what to do about it - "my patch failed CI", "what failed on this change", "is this failure mine or known", "triage these test failures", "should I retest", "link this to a bug", "why is this patch Verified-1", "check the Janitor results", "get the console log for this build". Covers the maloo, jenkins and janitor CLIs and the order they are used in.
+description: This skill should be used when a Lustre Gerrit change has failing CI and the question is why, or what to do about it - "my patch failed CI", "what failed on this change", "is this failure mine or known", "triage these test failures", "should I retest", "link this to a bug", "why is this patch Verified-1", "check the Janitor results", "get the console log for this build", "is there an LU for this test failure", "has this test been failing elsewhere", "triage this Maloo failure". Covers the maloo, jenkins and janitor CLIs and the order they are used in.
 version: 0.1.0
 ---
 
@@ -62,17 +62,77 @@ those nodes' console logs as unavailable.
 
 ## Decide whether the failure is yours
 
-Do this before touching a retest. Three questions, three commands:
+Do this before touching a retest. Most triage needs nothing but the
+subtest name and its error message, both of which `maloo failures` gives;
+go to the logs only when the four steps below leave it open.
+
+**1. Start from the test, its message and any link already on it.**
 
 ```bash
-maloo bugs <test_set_id>                    # already a known bug?
-maloo test-history test_39b --suite sanity --days 30   # flaky in general?
-maloo top-failures lustre-master --days 14  # is the branch itself sick?
+maloo bugs <test_set_id>          # links already made, by hand or by signature
 ```
 
-A failure that appears in `test-history` across unrelated changes, or in
-`top-failures` for the branch, is pre-existing. A failure in code the patch
-touches is the patch's, however flaky the test is elsewhere.
+A link is a lead, not an answer. Check that the ticket describes this test
+failing this way (`jira get`) before you rely on it; see mislinks below.
+
+**2. Search JIRA for the full test name, then for the message.**
+
+```bash
+jira search 'project = LU AND text ~ "\"sanity test_39b\"" ORDER BY updated DESC' \
+	--fields key,summary,status,updated
+jira search 'project = LU AND text ~ "\"<distinctive words of the error>\""' \
+	--fields key,summary,status,updated
+```
+
+Tickets are titled `<suite> test_<n>: <what failed>`, so search on the
+full `<suite> test_<n>` phrase. A bare `test_39b` also matches every other
+suite's 39b. Strip node names, FIDs, paths and counts from the message
+before you search on it. A ticket for the same test with a different
+failure mode is a different bug. A closed ticket still counts: the fix may
+not be on this branch, or the bug may have come back.
+
+**3. Search Maloo for the subtest: is it failing elsewhere, and on what?**
+
+```bash
+maloo test-history test_39b --suite sanity --days 30        # lustre-master
+maloo test-history test_39b --suite sanity --days 14 \
+	--branch lustre-reviews --limit 30                      # other patches
+```
+
+A failure on `lustre-master` (the default) is pre-existing. A failure on
+`lustre-reviews` comes from other changes' review testing: the same error
+on several unrelated changes is not this patch's. Each entry's `review`
+names the Gerrit change and patchset it came from, so you can see which
+changes the failure hit (it is null for a branch run). Compare the `error`
+field, not just the status, because a test that fails often can fail for
+several reasons. Run `maloo bugs <test_set_id>` on the matching failures
+to see what others linked them to. That often turns up the ticket step 2
+missed. If the test is clean across a busy window and fails only here,
+the patch is the likely cause.
+
+**4. Was the test added or changed recently?**
+
+```bash
+git log --oneline -s -L '/^test_39b()/,/^}/:lustre/tests/sanity.sh'
+git show HEAD --stat -- lustre/tests/        # does this patch touch it?
+```
+
+A test added or rewritten in the last few weeks may be failing for its own
+reasons. The commit that changed it names an LU ticket, and that ticket is
+where to look first. A patch that changes the failing test owns the
+failure.
+
+Then check whether the branch itself is failing broadly:
+
+```bash
+maloo top-failures lustre-master --days 14
+```
+
+A failure in code the patch touches is the patch's, however flaky the test
+is elsewhere. Each failure ends up in one of four places: the patch's own,
+covered by an existing LU, pre-existing with no ticket (raise one), or
+unsettled. For an unsettled failure, say what would settle it: the logs,
+or a reproduction with and without the patch.
 
 When a known bug covers it, link it rather than retesting -- a linked
 failure stops blocking the landing:
