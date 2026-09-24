@@ -5,7 +5,7 @@ import sys
 import click
 
 from ..envelope import success_response
-from ..errors import ConfigError, ExitCode, JiraToolError
+from ..errors import ConfigError, ExitCode, JiraToolError, NotFoundError
 from ._helpers import (
     get_client,
     handle_error,
@@ -24,7 +24,9 @@ def register(main):
         """
         Search for users by name, username, or email.
 
-        QUERY is the search string.
+        QUERY is the search string.  On a server where search finds
+        nothing (no Browse Users permission), QUERY is looked up as an
+        exact username instead; "active" false is a deactivated account.
         """
         command = "users"
         pretty = ctx.obj.get("pretty", False)
@@ -33,6 +35,13 @@ def register(main):
             client = get_client(ctx)
 
             raw_users = client.search_users(query, max_results=limit)
+            if not raw_users and not client.config.is_cloud:
+                # Search needs Browse Users, which the Whamcloud accounts
+                # lack; an exact username still resolves.
+                try:
+                    raw_users = [client.get_user(query)]
+                except NotFoundError:
+                    raw_users = []
 
             users = []
             for u in raw_users:

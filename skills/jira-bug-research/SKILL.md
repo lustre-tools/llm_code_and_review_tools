@@ -97,6 +97,11 @@ v2, Atlassian Document Format conversion on read and write, `accountId`
 instead of `username`, `nextPageToken` pagination. Display names are
 resolved to account IDs automatically for `assign`, `watch` and `unwatch`;
 use `jira users <name>` to check who a name resolves to before assigning.
+On the Whamcloud server search finds nobody (no Browse Users
+permission), so `jira users` there resolves an exact username only, and
+`"active": false` is a deactivated account: a person may have an old one.
+`jira watch --user` checks the name first and fails `USER_NOT_FOUND` or
+`USER_INACTIVE` rather than JIRA's misleading 401.
 
 ## Configuration
 

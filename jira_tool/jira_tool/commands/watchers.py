@@ -85,6 +85,7 @@ def register(main):
         try:
             key = extract_issue_key(key)
             client = get_client(ctx, issue_key=key)
+            named = user is not None
 
             # If no user specified, get current user from server
             if user is None:
@@ -100,8 +101,26 @@ def register(main):
                     )
 
             # On Cloud, resolve display names to accountIds
+            display_name = None
             if client.config.is_cloud and user:
                 user = resolve_cloud_user(client, user)
+            elif named:
+                # Server answers a deactivated watcher with a proxy 401 that
+                # reads as our own credentials failing.
+                found = client.get_user(user)
+                display_name = found.get("displayName")
+                if found.get("active") is False:
+                    from ..errors import ErrorCode, InvalidInputError
+                    raise InvalidInputError(
+                        code=ErrorCode.USER_INACTIVE,
+                        message=(
+                            f"JIRA user '{found.get('name') or user}' "
+                            f"({display_name or 'no display name'}) is deactivated "
+                            "and cannot watch issues. `jira watchers <issue>` on an "
+                            "issue they watch shows their current username."
+                        ),
+                    )
+                user = found.get("name") or user
 
             client.add_watcher(key, user)
 
@@ -110,6 +129,8 @@ def register(main):
                 "user": user,
                 "action": "added",
             }
+            if display_name:
+                watch_data["display_name"] = display_name
 
             envelope = success_response(watch_data, command)
             output_result(envelope, pretty)

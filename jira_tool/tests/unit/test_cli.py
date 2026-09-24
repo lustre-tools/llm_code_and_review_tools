@@ -1514,6 +1514,12 @@ class TestCLIIssueWatch:
     def test_watch_with_user(self, runner, mock_env):
         """Should add specified user as watcher."""
         responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/user",
+            json={"name": "jdoe", "displayName": "John Doe", "active": True},
+            status=200,
+        )
+        responses.add(
             responses.POST,
             "https://jira.example.com/rest/api/2/issue/PROJ-123/watchers",
             status=204,
@@ -1526,6 +1532,39 @@ class TestCLIIssueWatch:
         assert data["data"]["issue_key"] == "PROJ-123"
         assert data["data"]["user"] == "jdoe"
         assert data["data"]["action"] == "added"
+        assert data["data"]["display_name"] == "John Doe"
+
+    @responses.activate
+    def test_watch_unknown_user_is_not_found(self, runner, mock_env):
+        """An unknown username fails before the add, as USER_NOT_FOUND."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/user",
+            body="<html>Not Found</html>",
+            status=404,
+        )
+        result = runner.invoke(main, ["--envelope", "watch", "PROJ-123", "--user", "nobody"])
+        assert result.exit_code == 3
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "USER_NOT_FOUND"
+        assert "nobody" in data["error"]["message"]
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_watch_deactivated_user_is_refused(self, runner, mock_env):
+        """A deactivated account draws a proxy 401 from the add; say what it is."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/user",
+            json={"name": "pfarrell", "displayName": "Patrick Farrell", "active": False},
+            status=200,
+        )
+        result = runner.invoke(main, ["--envelope", "watch", "PROJ-123", "--user", "Pfarrell"])
+        assert result.exit_code == 4
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "USER_INACTIVE"
+        assert "Patrick Farrell" in data["error"]["message"]
+        assert len(responses.calls) == 1
 
     @responses.activate
     def test_watch_current_user(self, runner, mock_env):
@@ -1715,6 +1754,12 @@ class TestCLIUserSearch:
             json=[],
             status=200,
         )
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/user",
+            body="<html>Not Found</html>",
+            status=404,
+        )
 
         result = runner.invoke(main, ["users", "test", "--limit", "5"])
 
@@ -1722,6 +1767,44 @@ class TestCLIUserSearch:
         url = responses.calls[0].request.url
         assert "maxResults=5" in url
 
+    @responses.activate
+    def test_search_falls_back_to_exact_username(self, runner, mock_env):
+        """Search finds nothing without Browse Users; the username still resolves."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/user/search",
+            json=[],
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/user",
+            json={"name": "pfarrell", "displayName": "Patrick Farrell", "active": False},
+            status=200,
+        )
+        result = runner.invoke(main, ["--envelope", "users", "pfarrell"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["data"]["total"] == 1
+        assert data["data"]["users"][0]["active"] is False
+
+    @responses.activate
+    def test_search_with_no_such_username_is_empty(self, runner, mock_env):
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/user/search",
+            json=[],
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/user",
+            body="<html>Not Found</html>",
+            status=404,
+        )
+        result = runner.invoke(main, ["--envelope", "users", "nobody"])
+        assert result.exit_code == 0
+        assert json.loads(result.output)["data"]["total"] == 0
 
 class TestCLIIssueTypes:
     """Tests for 'jira issue-types' command."""

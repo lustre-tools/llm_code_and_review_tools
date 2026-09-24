@@ -1367,6 +1367,26 @@ class JiraClient:
         }
         return self._request("GET", "user/search", params=params, context=f"user search: {query}")
 
+    def get_user(self, username: str) -> dict[str, Any]:
+        """
+        Look up one Server user by exact username.
+
+        Works where user search returns nothing because the account lacks
+        the Browse Users permission.
+
+        Raises:
+            NotFoundError: USER_NOT_FOUND if there is no such user
+        """
+        try:
+            return self._request(
+                "GET", "user", params={"username": username}, context=f"user {username}"
+            )
+        except NotFoundError:
+            raise NotFoundError(
+                code=ErrorCode.USER_NOT_FOUND,
+                message=f"No JIRA user with username '{username}'.",
+            ) from None
+
     # =========================================================================
     # Issue Type Operations
     # =========================================================================
