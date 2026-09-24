@@ -2417,6 +2417,14 @@ document.getElementById('btn-theme').addEventListener('click', () => actions.tog
 
 // Keyboard
 document.addEventListener('keydown', function(e) {
+    // The Stats tab has no canvas: leave Ctrl+F to the browser's own
+    // find and the remaining keys to page scrolling.
+    if (isStatsTab()) {
+        if (e.target.tagName === 'INPUT') return;
+        if (e.key === '?') actions.toggleHelp();
+        else if (e.key === 'Escape') document.getElementById('help-overlay').classList.add('hidden');
+        return;
+    }
     // Ctrl/Cmd+F opens search
     if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault();

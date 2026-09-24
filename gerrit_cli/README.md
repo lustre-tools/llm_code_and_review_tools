@@ -174,7 +174,7 @@ gc graph 61962 --no-open
 # Include detailed inline comments (slower, fetches per-change)
 gc graph 61962 --comments
 
-# Skip CI link fetching for faster generation
+# Skip CI links and review activity for faster generation
 gc graph 61962 --skip-ci-details
 
 # Don't pull in series sharing the anchor's topic / hashtags
@@ -235,6 +235,49 @@ includes:
 - **Search** (Ctrl/Cmd+F): fuzzy search across change number, subject,
   author, ticket; highlights matches and walks through them with
   Enter / Shift+Enter.
+- **Stats tab**: the "Stats" toggle next to the graph controls
+  switches to series statistics built from Gerrit timestamps —
+  headline numbers (merged/opened in the last 30 days vs. the 30
+  before, open backlog, median and p90 time from first upload to
+  merge and to first human review, patchsets per merged patch,
+  oldest open patch), cumulative opened/merged/abandoned over time
+  with the open backlog shaded, throughput per week/month/quarter,
+  a 12-month heatmap of patchset uploads or human reviews,
+  distributions of time-to-merge, time-to-first-review and
+  patchsets-to-merge, an age-vs-idle scatter of open patches colored
+  by review health, and tables of the patches waiting longest,
+  tickets, authors and reviewers. Clicking a dot or row jumps to
+  that node in the graph. Append `#stats` to the URL to open the
+  page on this tab. "Human review" means a change message from
+  someone other than the owner, with CI bots and generated messages
+  excluded; `--skip-ci-details` skips the message fetch, so the
+  review-based figures are then marked unavailable. Ages are
+  measured from the time the graph was built.
+
+  The headline numbers are computed when the graph is built and
+  stored in the embedded payload as `stats.summary`, so a page that
+  lists graphs can read them without running the Stats tab (parse
+  `const G = {...};` the same way as `stats.status_counts`). All
+  times are epoch seconds (UTC); durations are seconds; a missing
+  value is `null`.
+
+  | key | meaning |
+  |---|---|
+  | `as_of` | build time; every "last 30 days" figure is relative to it |
+  | `patches`, `open`, `merged`, `abandoned` | patch counts (merged base patches that are not part of the series are excluded) |
+  | `last_30d`, `prev_30d` | `{opened, merged, abandoned}` in `(as_of-30d, as_of]` and `(as_of-60d, as_of-30d]` |
+  | `open_30d_ago` | patches open at `as_of - 30d` |
+  | `recent_events` | `{opened, merged, abandoned}`: sorted event times from the 60 days before `as_of`, for recounting against another clock |
+  | `time_to_merge` | `{count, median, p90}`: first upload to submit, merged patches |
+  | `time_to_first_review` | `{count, median, p90}`: first upload to first human review; `null` without change messages |
+  | `patchsets_to_merge` | `{count, median, max}`: final patchset number of merged patches |
+  | `oldest_open` | `{id, ticket, opened_at}` of the open patch uploaded first |
+  | `longest_idle` | `{id, ticket, last_activity}` of the open patch whose last upload or human review is oldest |
+  | `merged_by_month` | `[["YYYY-MM", count], ...]`: the 12 calendar months ending with `as_of`'s |
+
+  Each node also carries `opened_at`, `closed_at`, `closed_approx`
+  (no close event was found; the last update time stands in),
+  `last_activity` and `first_review_at`.
 - **Dark/Light mode**: toggle with the "Light Mode" / "Dark Mode" button
   in the toolbar.
 - **Keyboard shortcuts**: `F` = fit to view, `Z` = focus selected node,

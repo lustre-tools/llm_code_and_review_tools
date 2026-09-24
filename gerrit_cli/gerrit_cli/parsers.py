@@ -1072,7 +1072,8 @@ def add_graph_parser(subparsers):
     parser.add_argument(
         "--skip-ci-details",
         action="store_true",
-        help="Skip fetching CI links (faster, fewer API calls)",
+        help="Skip fetching change messages: no CI links and no review "
+        "activity on the Stats tab (faster, fewer API calls)",
     )
     parser.add_argument(
         "--comments",

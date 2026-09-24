@@ -5,6 +5,7 @@ builder creates one per change and progressively enriches it with
 topic/hashtag/status/review info as more Gerrit data arrives."""
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 # `Lustre-change:` trailer in the commit message is the marker for a
@@ -14,6 +15,16 @@ from typing import Any
 _LUSTRE_CHANGE_TRAILER_RE = re.compile(
     r"^Lustre-change:\s*\S+\s*$", re.MULTILINE
 )
+
+
+def gerrit_epoch(ts: str) -> int:
+    """Epoch seconds for a Gerrit REST timestamp
+    ("2026-03-26 17:29:37.000000000", always UTC), 0 if unparsable."""
+    try:
+        dt = datetime.strptime((ts or "")[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return 0
+    return int(dt.replace(tzinfo=timezone.utc).timestamp())
 
 
 def subject_ticket(subject: str) -> str:
@@ -78,6 +89,20 @@ def _make_node(
         # patch to. Backfilled from the revisions payload's
         # `created` field on the current revision.
         "current_ps_created": "",
+        # Activity timestamps for the Stats tab. `created` is the
+        # change's first upload; `ps_times` holds every patchset's
+        # upload time as epoch seconds in patchset order. Both come
+        # from the bulk revision fetch. `review_times` (epoch
+        # seconds) and `reviewers` ({name: message count}) cover
+        # human, non-owner review messages, and `abandoned_at` the
+        # last abandon that was not followed by a restore; those
+        # three come from the change-message fetch and stay empty
+        # when it is skipped (--skip-ci-details).
+        "created": "",
+        "ps_times": [],
+        "review_times": [],
+        "reviewers": {},
+        "abandoned_at": "",
         "url": f"{base_url}/c/{project}/+/{cn}",
         "ticket": ticket,
         "topic": topic,
@@ -136,6 +161,18 @@ def _update_node_meta(node: dict[str, Any], change: dict[str, Any]) -> None:
         created = rev.get("created", "")
         if created:
             node["current_ps_created"] = created
+    created_at = change.get("created", "")
+    if created_at:
+        node["created"] = created_at
+    ps_times = sorted(
+        (rev.get("_number", 0), gerrit_epoch(rev.get("created", "")))
+        for rev in (change.get("revisions") or {}).values()
+    )
+    ps_times = [t for _, t in ps_times if t]
+    # A CURRENT_REVISION-only payload carries one patchset; never let
+    # it overwrite the full history an ALL_REVISIONS fetch recorded.
+    if len(ps_times) >= len(node.get("ps_times") or []):
+        node["ps_times"] = ps_times
     submitted = change.get("submitted", "")
     if submitted:
         node["submitted"] = submitted

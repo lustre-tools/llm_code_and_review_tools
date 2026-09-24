@@ -25,7 +25,9 @@ from urllib.parse import quote
 from ..client import GerritCommentsClient
 from .edges import _break_cycles, _collect_revisions
 from .nodes import _make_node, _update_node_meta, subject_ticket
+from .summary import add_timeline, series_summary
 from .review import (
+    _extract_activity,
     _empty_review,
     _extract_ci_links,
     _extract_cr_history,
@@ -523,32 +525,34 @@ def _attach_review_info(ctx: BuildContext) -> None:
 def _fetch_ci_and_comments(
     ctx: BuildContext, cns: list[int] | None = None,
 ) -> int:
-    """Attach CI links (from change messages) and, when requested,
-    detailed unresolved comments. Only non-abandoned changes are
-    queried — abandoned patches carry no useful extra detail.
+    """Attach CI links (from change messages), human review activity
+    and abandon times, and, when requested, detailed unresolved
+    comments. CI links, CR history and unresolved comments are only
+    worked out for non-abandoned changes; abandoned ones are fetched
+    for their activity and abandon time alone.
 
-    When `cns` is None, every active node is processed (the main
-    pass). Pass an explicit cn list to backfill a subset — used for
+    When `cns` is None, every node is processed (the main pass).
+    Pass an explicit cn list to backfill a subset — used for
     separate-group nodes, which are added to ctx.nodes after the
     main pass and would otherwise have no Jenkins/Maloo links.
     Returns the number of active changes that were processed."""
     if not ctx.fetch_details:
         return 0
     candidates = ctx.nodes.keys() if cns is None else cns
-    active_cns = sorted(
-        cn for cn in candidates
-        if cn in ctx.nodes and ctx.nodes[cn]["status"] != "ABANDONED"
-    )
-    if not active_cns:
+    msg_cns = sorted(cn for cn in candidates if cn in ctx.nodes)
+    active_cns = [
+        cn for cn in msg_cns if ctx.nodes[cn]["status"] != "ABANDONED"
+    ]
+    if not msg_cns:
         return 0
 
-    # Batch-fetch messages for CI links and prior-patchset
-    # Code-Review history. DETAILED_ACCOUNTS ensures message
+    # Batch-fetch messages for CI links, prior-patchset Code-Review
+    # history and review activity. DETAILED_ACCOUNTS ensures message
     # authors carry a name we can match against owner/author and
     # the bot exclusion list.
     msg_batches = [
-        active_cns[i:i + _MESSAGES_BATCH_SIZE]
-        for i in range(0, len(active_cns), _MESSAGES_BATCH_SIZE)
+        msg_cns[i:i + _MESSAGES_BATCH_SIZE]
+        for i in range(0, len(msg_cns), _MESSAGES_BATCH_SIZE)
     ]
     for batch in msg_batches:
         query = " OR ".join(f"change:{cn}" for cn in batch)
@@ -561,8 +565,14 @@ def _fetch_ci_and_comments(
                 cn = change.get("_number", 0)
                 if cn not in ctx.nodes:
                     continue
-                latest_ps = ctx.nodes[cn]["current_patchset"]
+                node = ctx.nodes[cn]
                 msgs = change.get("messages", [])
+                node.update(_extract_activity(
+                    msgs, node.get("owner") or node.get("author", ""),
+                ))
+                if node["status"] == "ABANDONED":
+                    continue
+                latest_ps = node["current_patchset"]
                 links = _extract_ci_links(msgs, latest_ps)
                 ctx.nodes[cn]["review"]["jenkins_url"] = links.get(
                     "jenkins_url", ""
@@ -1993,6 +2003,12 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
     late_cycles = _break_late_cycles(ctx.edges)
     if late_cycles and ctx.logger is not None:
         ctx.logger.note(f"{late_cycles} late cycle edge(s) removed")
+    generated_ts = int(time.time())
+    for n in ctx.nodes.values():
+        add_timeline(n)
+    summary = series_summary(
+        list(ctx.nodes.values()), generated_ts, bool(ctx.fetch_details),
+    )
     return {
         "anchor": ctx.change_number,
         "base_url": ctx.base_url,
@@ -2011,6 +2027,13 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
         # above.
         "merged_trunk": merged_trunk,
         "generated_at": generated_at,
+        # Epoch seconds of the build; the Stats tab measures ages
+        # (open for, idle for, "last 30 days") against this, not the
+        # viewer's clock, since the data is a snapshot.
+        "generated_ts": generated_ts,
+        # Whether change messages were fetched: without them there is
+        # no review activity or abandon time, and the Stats tab says so.
+        "review_activity": bool(ctx.fetch_details),
         "stats": {
             "node_count": len(ctx.nodes),
             "edge_count": len(ctx.edges),
@@ -2028,6 +2051,9 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
             "structural_merged_cns": getattr(
                 ctx, "structural_merged_cns", []),
             "generated_at": generated_at,
+            # Headline numbers (see summary.py); read by the Stats tab
+            # and by the portal's graph list.
+            "summary": summary,
         },
     }
 
