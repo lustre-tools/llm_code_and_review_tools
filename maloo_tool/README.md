@@ -121,7 +121,7 @@ follow-up commands.)
 | Command | Description |
 |---------|-------------|
 | `maloo bugs <test_set-or-subtest-UUID>` | JIRA bug links for a test set or subtest, including those on its child subtests (`--direct-only` for its own); each gives `ticket`, `state` (accepted/pending/rejected) and the `subtest` it is attached to |
-| `maloo link-bug <test_set-UUID> <TICKET>` | Associate a JIRA bug with a test failure |
+| `maloo link-bug <test_set-UUID> <TICKET>` | Associate a JIRA bug with a test failure (`--type SubTest` for a subtest). Reads the link back and reports the `state` Maloo stored; an existing link Maloo left in another state (an auto-linked pending one) fails with `LINK_STATE_MISMATCH` |
 | `maloo raise-bug <test_set-UUID>` | Raise a new JIRA bug via Maloo and auto-link it to the test failure (`--project`, `--summary`, `--description`, `--type TestSet\|SubTest`) |
 | `maloo retest <session-URL> <TICKET>` | Request a retest (requires JIRA justification) |
 

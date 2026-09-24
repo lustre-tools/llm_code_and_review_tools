@@ -54,9 +54,12 @@ def _output(envelope: dict[str, Any], pretty: bool) -> None:
 
 
 def _error(
-    code: str, message: str, command: str, pretty: bool
+    code: str, message: str, command: str, pretty: bool,
+    details: dict[str, Any] | None = None,
 ) -> None:
-    env = error_response_from_dict(code, message, TOOL_NAME, command)
+    env = error_response_from_dict(
+        code, message, TOOL_NAME, command, details=details
+    )
     _output(env, pretty)
     sys.exit(1)
 
@@ -515,6 +518,14 @@ def link_bug(
     This marks a test failure as a known bug so it doesn't
     block patch landing.
 
+    The link is read back after it is made, and "state" is the state Maloo
+    stored.  Maloo answers OK to a link for a ticket the target already
+    carries and leaves that link as it was -- an auto-linked pending one
+    stays pending -- so a stored state other than --state is an error
+    (LINK_STATE_MISMATCH).  Such a link has to be accepted in the Maloo web
+    UI.  If the read-back itself fails, the link was requested but its
+    state is unknown: "state" is null and "warning" says so.
+
     \b
     Examples:
       maloo link-bug <test_set_id> LU-12345
@@ -527,20 +538,67 @@ def link_bug(
         bug_upstream_id=jira_ticket,
         bug_state=state,
     )
+    if not resp.startswith("OK"):
+        _error(ErrorCode.LINK_FAILED, resp, "link-bug", pretty)
 
-    if resp.startswith("OK"):
-        result = {
-            "success": True,
-            "buggable_class": buggable_class,
-            "buggable_id": buggable_id,
-            "bug": jira_ticket,
-            "state": state,
-            "response": resp,
-        }
+    result: dict[str, Any] = {
+        "success": True,
+        "buggable_class": buggable_class,
+        "buggable_id": buggable_id,
+        "bug": jira_ticket,
+        "requested_state": state,
+        "state": None,
+        "response": resp,
+    }
+    check = f"maloo bugs {buggable_id} --direct-only"
+
+    try:
+        links = client.get_bug_links(buggable_id)
+    except Exception as exc:
+        result["warning"] = (
+            f"Maloo answered {resp!r} but reading the link back failed "
+            f"({exc}), so its state is unconfirmed. Check it with `{check}`."
+        )
+        env = success_response(result, TOOL_NAME, "link-bug", [check])
+        _output(env, pretty)
+        return
+
+    stored = sorted({
+        _link_state(link) for link in links
+        if (link.get("jira") or link.get("bug_upstream_id") or "").upper()
+        == jira_ticket.upper()
+        and str(link.get("id") or buggable_id) == buggable_id
+    })
+
+    if state in stored:
+        result["state"] = state
         env = success_response(result, TOOL_NAME, "link-bug")
         _output(env, pretty)
-    else:
-        _error(ErrorCode.LINK_FAILED, resp, "link-bug", pretty)
+        return
+
+    details = {
+        "buggable_id": buggable_id,
+        "bug": jira_ticket,
+        "requested_state": state,
+        "stored_states": stored,
+        "response": resp,
+    }
+    if not stored:
+        _error(
+            ErrorCode.LINK_NOT_STORED,
+            f"Maloo answered {resp!r} but {buggable_id} carries no "
+            f"{jira_ticket} link on reading it back. Check the id and "
+            f"--type, and `{check}`.",
+            "link-bug", pretty, details,
+        )
+    _error(
+        ErrorCode.LINK_STATE_MISMATCH,
+        f"Maloo answered {resp!r} but the {jira_ticket} link on "
+        f"{buggable_id} is {'/'.join(stored)}, not {state}: it already "
+        "existed, and Maloo does not change the state of an existing link. "
+        "It has to be changed in the Maloo web UI.",
+        "link-bug", pretty, details,
+    )
 
 
 @main.command(name="raise-bug")

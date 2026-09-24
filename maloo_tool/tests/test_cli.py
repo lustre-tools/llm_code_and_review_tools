@@ -413,10 +413,15 @@ class TestBugs:
 class TestLinkBug:
     def test_link_bug_success(self, runner, mock_client):
         mock_client.create_bug_link.return_value = "OK"
+        mock_client.get_bug_links.return_value = [
+            _maloo_link(TSID_1, "LU-12345", True),
+        ]
         result = runner.invoke(main, ["--envelope", "link-bug", TSID_1, "LU-12345"])
         env = _parse_output(result)
         assert env["ok"] is True
         assert env["data"]["bug"] == "LU-12345"
+        assert env["data"]["state"] == "accepted"
+        mock_client.get_bug_links.assert_called_once_with(TSID_1)
 
     def test_link_bug_error(self, runner, mock_client):
         mock_client.create_bug_link.return_value = "ERROR: bug not found"
@@ -424,6 +429,77 @@ class TestLinkBug:
         env = json.loads(result.output)
         assert env["ok"] is False
         assert result.exit_code != 0
+        mock_client.get_bug_links.assert_not_called()
+
+    def test_an_existing_pending_link_left_pending_is_an_error(
+        self, runner, mock_client
+    ):
+        """Maloo answered OK to --state accepted and left the auto-link
+        pending; this reported success with state "accepted"."""
+        mock_client.create_bug_link.return_value = "OK"
+        mock_client.get_bug_links.return_value = [
+            _maloo_link(SUBTEST_1, "LU-16932", None),
+        ]
+        result = runner.invoke(main, [
+            "--envelope", "link-bug", SUBTEST_1, "LU-16932",
+            "--type", "SubTest", "--state", "accepted",
+        ])
+        assert result.exit_code != 0
+        env = json.loads(result.output)
+        assert env["ok"] is False
+        assert env["error"]["code"] == "LINK_STATE_MISMATCH"
+        assert "is pending, not accepted" in env["error"]["message"]
+        assert "web UI" in env["error"]["message"]
+        assert env["error"]["details"]["stored_states"] == ["pending"]
+
+    def test_only_the_named_ticket_on_the_named_target_counts(
+        self, runner, mock_client
+    ):
+        mock_client.create_bug_link.return_value = "OK"
+        mock_client.get_bug_links.return_value = [
+            _maloo_link(TSID_1, "LU-1", True),
+            _maloo_link(SUBTEST_1, "LU-12345", True),
+            _maloo_link(TSID_1, "LU-12345", None),
+        ]
+        result = runner.invoke(main, ["--envelope", "link-bug", TSID_1, "LU-12345"])
+        env = json.loads(result.output)
+        assert env["error"]["code"] == "LINK_STATE_MISMATCH"
+        assert env["error"]["details"]["stored_states"] == ["pending"]
+
+    def test_the_requested_state_among_several_is_success(
+        self, runner, mock_client
+    ):
+        mock_client.create_bug_link.return_value = "OK"
+        mock_client.get_bug_links.return_value = [
+            _maloo_link(TSID_1, "lu-12345", None),
+            _maloo_link(TSID_1, "LU-12345", True),
+        ]
+        env = _parse_output(
+            runner.invoke(main, ["--envelope", "link-bug", TSID_1, "LU-12345"])
+        )
+        assert env["data"]["state"] == "accepted"
+
+    def test_ok_with_no_link_stored_is_an_error(self, runner, mock_client):
+        mock_client.create_bug_link.return_value = "OK"
+        mock_client.get_bug_links.return_value = []
+        result = runner.invoke(main, ["--envelope", "link-bug", TSID_1, "LU-12345"])
+        assert result.exit_code != 0
+        env = json.loads(result.output)
+        assert env["error"]["code"] == "LINK_NOT_STORED"
+
+    def test_a_failed_read_back_does_not_claim_the_state(
+        self, runner, mock_client
+    ):
+        mock_client.create_bug_link.return_value = "OK"
+        mock_client.get_bug_links.side_effect = Exception("read timed out")
+        env = _parse_output(
+            runner.invoke(main, ["--envelope", "link-bug", TSID_1, "LU-12345"])
+        )
+        assert env["data"]["success"] is True
+        assert env["data"]["state"] is None
+        assert env["data"]["requested_state"] == "accepted"
+        assert "read timed out" in env["data"]["warning"]
+        assert "unconfirmed" in env["data"]["warning"]
 
 
 # -- sessions command --
