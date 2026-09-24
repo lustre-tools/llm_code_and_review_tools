@@ -1,7 +1,10 @@
 """CLI entry point for Maloo test results tool."""
 
+import os
 import re
 import sys
+import tempfile
+from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -168,23 +171,180 @@ def session(session_url: str, pretty: bool) -> None:
 # reports its own 90-minute budget as the subtest's duration with "Autotest
 # time out" as the error.  Both are about Autotest; neither is the failure.
 # The cause is one error() line in the suite log, which is far too big to
-# pull in on the chance that it is wanted.
+# pull in unless asked to.
 _CLEANUP_NOTE = (
     "status and duration here are Autotest's own, not this failure's -- "
     "cleanup did not finish, so Autotest ended the run and reported its "
-    "budget. The real error is in the suite log: `maloo logs {id}`, then "
-    "grep -A5 'start cleanup' in {suite}.suite_log."
+    "budget. The real error is in the suite log: `maloo failures "
+    "<session> --cleanup-error` pulls it out, or `maloo logs {id}`, then "
+    "grep -A5 'start cleanup' {suite}.suite_log.*"
 )
+
+_FAILED = ("FAIL", "CRASH", "ABORT", "TIMEOUT")
+
+_CLEANUP_START_RE = re.compile(r"^=== \S+: start cleanup\b")
+_FAIL_RE = re.compile(r"@@@@@@ FAIL: ")
+_ERRORISH_RE = re.compile(r"error|fail|cannot|denied|busy", re.IGNORECASE)
+_CLEANUP_SCAN_LINES = 500
+
+
+def _is_noise(line: str) -> bool:
+    return not line or line.startswith(("CMD: ", "Trace dump:", "= "))
+
+
+def _parse_cleanup_error(lines: Iterable[str]) -> dict[str, Any] | None:
+    """The error that ended a suite's cleanup, from its suite log.
+
+    Looks only after the last "=== <suite>: start cleanup" line, so an
+    earlier subtest's FAIL is not taken for it.  Gives the first FAIL line
+    there with the lines just before it, which carry the command's own
+    error, or failing any FAIL line, the first error-looking lines.
+    """
+    section: list[tuple[int, str]] | None = None
+    start = 0
+    for lineno, raw in enumerate(lines, 1):
+        line = raw.rstrip("\r\n")
+        if _CLEANUP_START_RE.match(line):
+            section, start = [], lineno
+            continue
+        if section is not None and lineno - start <= _CLEANUP_SCAN_LINES:
+            section.append((lineno, line.strip()))
+    if section is None:
+        return None
+
+    for i, (lineno, line) in enumerate(section):
+        if _FAIL_RE.search(line):
+            before = [text for _, text in section[:i] if not _is_noise(text)]
+            return {"error": line, "preceding": before[-5:], "line": lineno}
+
+    errorish = [
+        (lineno, text) for lineno, text in section
+        if not _is_noise(text) and _ERRORISH_RE.search(text)
+    ]
+    if not errorish:
+        return None
+    return {
+        "error": errorish[0][1],
+        "preceding": [],
+        "following": [text for _, text in errorish[1:5]],
+        "line": errorish[0][0],
+    }
+
+
+def _extract_archive(
+    data: bytes,
+    output_dir: str,
+    test_set_id: str,
+    want: Callable[[str], bool] | None = None,
+) -> list[str]:
+    """Extract a download_logs archive; return the paths of its files.
+
+    ``want`` picks members by name.  An archive that is neither zip nor
+    tar.gz is saved whole for manual inspection.
+    """
+    import tarfile
+    import zipfile
+    from io import BytesIO
+
+    os.makedirs(output_dir, exist_ok=True)
+    extracted: list[str] = []
+    try:
+        with zipfile.ZipFile(BytesIO(data)) as zf:
+            for name in zf.namelist():
+                if want and not want(name):
+                    continue
+                zf.extract(name, output_dir)
+                extracted.append(os.path.join(output_dir, name))
+        return extracted
+    except zipfile.BadZipFile:
+        pass
+    try:
+        with tarfile.open(fileobj=BytesIO(data), mode="r:gz") as tf:
+            members = [
+                m for m in tf.getmembers()
+                if not want or want(m.name)
+            ]
+            tf.extractall(output_dir, members=members)
+            return [
+                os.path.join(output_dir, m.name)
+                for m in members if m.isfile()
+            ]
+    except Exception:
+        raw_path = os.path.join(output_dir, f"{test_set_id}.bin")
+        with open(raw_path, "wb") as f:
+            f.write(data)
+        return [raw_path]
+
+
+def _find_cleanup_error(
+    client: MalooClient, test_set_id: str, suite: str
+) -> dict[str, Any]:
+    """Download a test set's logs and pull the cleanup error out of them.
+
+    Returns {"cleanup_error": ...} or, when there is none to give,
+    {"cleanup_error": None, "cleanup_error_warning": why}.
+    """
+    try:
+        data = client.download_logs(test_set_id)
+    except Exception as exc:
+        return {
+            "cleanup_error": None,
+            "cleanup_error_warning": f"log download failed: {exc}",
+        }
+
+    def is_suite_log(name: str) -> bool:
+        return ".suite_log" in os.path.basename(name)
+
+    with tempfile.TemporaryDirectory(prefix="maloo_cleanup_") as tmp:
+        paths = [
+            p for p in _extract_archive(data, tmp, test_set_id, is_suite_log)
+            if is_suite_log(p) and os.path.isfile(p)
+        ]
+        if not paths:
+            return {
+                "cleanup_error": None,
+                "cleanup_error_warning": "no suite_log in the test set's logs",
+            }
+        # The suite's own log first; any other is a fallback.
+        paths.sort(key=lambda p: not os.path.basename(p).startswith(suite + "."))
+        for path in paths:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                found = _parse_cleanup_error(f)
+            if found:
+                return {
+                    "cleanup_error": {
+                        **found, "suite_log": os.path.basename(path),
+                    },
+                }
+    return {
+        "cleanup_error": None,
+        "cleanup_error_warning": (
+            "no error found after 'start cleanup' in "
+            + ", ".join(os.path.basename(p) for p in paths)
+        ),
+    }
 
 
 @main.command()
 @click.argument("session_url")
+@click.option(
+    "--cleanup-error", is_flag=True,
+    help="For a failed test_cleanup, download its test set's logs and put "
+         "the error that ended cleanup in the row as cleanup_error",
+)
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON")
-def failures(session_url: str, pretty: bool) -> None:
+def failures(session_url: str, cleanup_error: bool, pretty: bool) -> None:
     """Show failed subtests for a test session.
 
     Drills into each failed test set and shows the individual
     subtest failures with error messages.
+
+    A failed test_cleanup reports Autotest's timeout, not its error, and
+    carries a note saying so.  --cleanup-error downloads that test set's
+    logs (tens of MB) into a temporary directory, removed afterwards, and
+    puts the first FAIL line after "start cleanup" in the suite log, with
+    the lines before it, in the row as cleanup_error.  If it cannot,
+    cleanup_error is null and cleanup_error_warning says why.
     """
     sid = _extract_session_id(session_url)
     client = _make_client()
@@ -196,7 +356,7 @@ def failures(session_url: str, pretty: bool) -> None:
     test_sets = client.get_test_sets(sid)
     set_names = client.resolve_test_set_names(test_sets)
 
-    failed_sets = [ts for ts in test_sets if ts["status"] in ("FAIL", "CRASH", "ABORT", "TIMEOUT")]
+    failed_sets = [ts for ts in test_sets if ts["status"] in _FAILED]
 
     if not failed_sets:
         env = success_response(
@@ -211,7 +371,7 @@ def failures(session_url: str, pretty: bool) -> None:
         suite_name = set_names.get(ts.get("test_set_script_id", ""), "unknown")
         subtests = [
             st for st in client.get_subtests(test_set_id=ts["id"])
-            if st["status"] in ("FAIL", "CRASH", "ABORT", "TIMEOUT")
+            if st["status"] in _FAILED
         ]
         # One request per name: a failed sanity run has a thousand subtests.
         subtest_names = client.resolve_subtest_names(subtests)
@@ -230,6 +390,8 @@ def failures(session_url: str, pretty: bool) -> None:
             }
             if st_name == "test_cleanup":
                 row["note"] = _CLEANUP_NOTE.format(suite=suite_name, id=ts["id"])
+                if cleanup_error:
+                    row.update(_find_cleanup_error(client, ts["id"], suite_name))
             failed_subtests.append(row)
 
         failed_suites.append({
@@ -301,7 +463,7 @@ def subtests(test_set_id: str, status: str | None, show_all: bool, pretty: bool)
         st_name = subtest_names.get(
             st.get("sub_test_script_id", ""), f"order_{st.get('order', '?')}"
         )
-        items.append({
+        item = {
             "id": st.get("id"),
             "name": st_name,
             "status": st["status"],
@@ -309,7 +471,10 @@ def subtests(test_set_id: str, status: str | None, show_all: bool, pretty: bool)
             "duration": st.get("duration"),
             "return_code": st.get("return_code"),
             "order": st.get("order"),
-        })
+        }
+        if st_name == "test_cleanup" and st["status"] in _FAILED:
+            item["note"] = _CLEANUP_NOTE.format(suite=suite_name, id=test_set_id)
+        items.append(item)
 
     result = {
         "test_set_id": test_set_id,
@@ -1315,11 +1480,6 @@ def logs(
       maloo logs <test_set_id> --grep "test_81a"
       maloo logs <test_set_id> --output-dir /tmp/my_logs
     """
-    import os
-    import zipfile
-    import tempfile
-    from io import BytesIO
-
     if output_dir is None:
         output_dir = os.path.join(
             tempfile.gettempdir(), "maloo_logs", test_set_id
@@ -1333,38 +1493,7 @@ def logs(
         _error(ErrorCode.DOWNLOAD_FAILED, str(exc), "logs", pretty)
         return
 
-    # Extract the archive
-    os.makedirs(output_dir, exist_ok=True)
-    extracted_files: list[str] = []
-
-    try:
-        with zipfile.ZipFile(BytesIO(data)) as zf:
-            for name in zf.namelist():
-                zf.extract(name, output_dir)
-                extracted_files.append(
-                    os.path.join(output_dir, name)
-                )
-    except zipfile.BadZipFile:
-        # Try as gzip/tar
-        import tarfile
-        try:
-            with tarfile.open(
-                fileobj=BytesIO(data), mode="r:gz"
-            ) as tf:
-                tf.extractall(output_dir)
-                extracted_files = [
-                    os.path.join(output_dir, m.name)
-                    for m in tf.getmembers()
-                    if m.isfile()
-                ]
-        except Exception:
-            # Save raw file for manual inspection
-            raw_path = os.path.join(
-                output_dir, f"{test_set_id}.bin"
-            )
-            with open(raw_path, "wb") as f:
-                f.write(data)
-            extracted_files = [raw_path]
+    extracted_files = _extract_archive(data, output_dir, test_set_id)
 
     # Optional grep
     grep_results: list[dict[str, Any]] = []

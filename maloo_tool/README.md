@@ -113,8 +113,8 @@ follow-up commands.)
 | Command | Description |
 |---------|-------------|
 | `maloo session <session-UUID>` | Session overview: suites, pass/fail totals |
-| `maloo failures <session-UUID>` | Failed subtests with error messages for each failed suite |
-| `maloo subtests <test_set-UUID>` | All subtests for a suite, each with its `id` (filter by `--status`) |
+| `maloo failures <session-UUID>` | Failed subtests with error messages for each failed suite. A failed `test_cleanup` carries a `note`: its status is Autotest's timeout, not the error. `--cleanup-error` downloads that suite's logs to a temporary directory and adds the error from the suite log as `cleanup_error` |
+| `maloo subtests <test_set-UUID>` | All subtests for a suite, each with its `id` (filter by `--status`); a failed `test_cleanup` carries the same `note` |
 
 ### Bugs and Retesting
 

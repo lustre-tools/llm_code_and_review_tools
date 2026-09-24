@@ -1,0 +1,30 @@
+-----============= acceptance-small: sanityn ============----- Thu Sep 24 07:55:44 AM UTC 2026
+Running: bash /usr/lib64/lustre/tests/sanityn.sh
+CMD: onyx-157vm125 hostname -I
+CMD: onyx-157vm125 ip -o addr show
+CMD: onyx-157vm125 ip -o link show
+ sanityn test_77k: @@@@@@ FAIL: dd failed on /mnt/lustre/f77k.sanityn 
+  Trace dump:
+  = /usr/lib64/lustre/tests/test-framework.sh:7530:error()
+CMD: onyx-157vm121.onyx.whamcloud.com lctl get_param -n at_min
+CMD: onyx-157vm121.onyx.whamcloud.com PATH=/usr/lib64/lustre/tests:/usr/lib/lustre/tests:/usr/lib64/lustre/tests:/opt/iozone/bin:/opt/iozone/bin:/usr/lib64/lustre/tests/mpi:/usr/lib64/lustre/tests/racer:/usr/lib64/lustre/../lustre-iokit/sgpdd-survey:/usr/lib64/lustre/tests:/usr/lib64/lustre/utils/gss:/usr/lib64/lustre/utils:/opt/iozone/bin:/root/.local/bin:/root/bin:/usr/lib64/openmpi/bin:/usr/share/Modules/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/usr/sbin:/sbin::/sbin:/bin:/usr/sbin: NAME=autotest_config 		TESTLOG_PREFIX=/autotest/autotest-2/2026-09-24/lustre-reviews_review-dne-part-5_132229_28_a3879083-5f4b-4c3d-9f01-b8401da67cc0//sanityn TESTNAME=test_200 		CONFIG=/usr/lib64/lustre/tests/cfg/autotest_config.sh bash rpc.sh wait_import_state \(FULL\|IDLE\) osc.lustre-OST0000-osc-ff1fe72644366000.ost_server_uuid 50 
+CMD: onyx-157vm125 hostname -I
+CMD: onyx-157vm125 ip -o addr show
+CMD: onyx-157vm125 ip -o link show
+onyx-157vm121.onyx.whamcloud.com: executing wait_import_state (FULL|IDLE) osc.lustre-OST0000-osc-ff1fe72644366000.ost_server_uuid 50
+osc.lustre-OST0000-osc-ff1fe72644366000.ost_server_uuid in FULL state after 0 sec
+PASS 200 (68s)
+cleanup: ======================================================
+CMD: onyx-157vm121.onyx.whamcloud.com fuser -m /mnt/lustre2
+== sanityn test complete, duration 7434 sec ============== 09:59:39 (1790243979)
+=== sanityn: start cleanup 09:59:39 (1790243979) ===
+rm: cannot remove '/mnt/lustre/d80b.sanityn/migrate_dir': Directory not empty
+ sanityn : @@@@@@ FAIL: remove sub-test dirs failed 
+  Trace dump:
+  = /usr/lib64/lustre/tests/test-framework.sh:7530:error()
+  = /usr/lib64/lustre/tests/test-framework.sh:6915:do_check_and_cleanup_lustre()
+  = /usr/lib64/lustre/tests/test-framework.sh:6955:check_and_cleanup_lustre()
+  = /usr/lib64/lustre/tests/sanityn.sh:7582:main()
+Dumping lctl log to /autotest/autotest-2/2026-09-24/lustre-reviews_review-dne-part-5_132229_28_a3879083-5f4b-4c3d-9f01-b8401da67cc0//sanityn..*.1790244009.log
+CMD: onyx-157vm121.onyx.whamcloud.com,onyx-157vm123,onyx-157vm124,onyx-157vm125,onyx-157vm229 /usr/sbin/lctl dk > /autotest/autotest-2/2026-09-24/lustre-reviews_review-dne-part-5_132229_28_a3879083-5f4b-4c3d-9f01-b8401da67cc0//sanityn..debug_log.\$(hostname -s).1790244009.log;
+		dmesg > /autotest/autotest-2/2026-09-24/lustre-reviews_review-dne-part-5_132229_28_a3879083-5f4b-4c3d-9f01-b8401da67cc0//sanityn..dmesg.\$(hostname -s).1790244009.log

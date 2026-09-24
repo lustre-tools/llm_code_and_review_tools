@@ -3,7 +3,11 @@
 All tests mock the MalooClient to avoid hitting the real API.
 """
 
+import io
 import json
+import os
+import zipfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +17,7 @@ from click.testing import CliRunner
 from maloo_tool.cli import (
     main,
     _extract_session_id,
+    _parse_cleanup_error,
     _parse_review_arg,
     _resolve_branch_to_job,
 )
@@ -23,6 +28,9 @@ SID_2 = "22222222-2222-2222-2222-222222222222"
 SID_3 = "33333333-3333-3333-3333-333333333333"
 TSID_1 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 TSID_2 = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+FIXTURES = Path(__file__).parent / "fixtures"
+CLEANUP_SUITE_LOG = FIXTURES / "sanityn.suite_log.cleanup.log"
 
 
 @pytest.fixture
@@ -153,6 +161,141 @@ class TestFailures:
         env = _parse_output(result)
         assert env["ok"] is True
         assert env["data"]["failed_suites"] == []
+
+
+class TestCleanupError:
+    """A failed test_cleanup's real error is only in the suite log."""
+
+    def _session(self, mock_client, st_name="test_cleanup"):
+        mock_client.get_session.return_value = {"id": SID_1}
+        mock_client.get_test_sets.return_value = [{
+            "id": TSID_1, "test_set_script_id": "sc", "status": "FAIL",
+        }]
+        mock_client.resolve_test_set_names.return_value = {"sc": "sanityn"}
+        mock_client.get_subtests.return_value = [{
+            "sub_test_script_id": "st", "status": "TIMEOUT",
+            "error": "Autotest time out", "duration": 5400, "return_code": -1,
+        }]
+        mock_client.resolve_subtest_names.return_value = {"st": st_name}
+
+    @staticmethod
+    def _archive(files):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            for name, text in files.items():
+                zf.writestr(name, text)
+        return buf.getvalue()
+
+    def test_parser_takes_the_fail_after_start_cleanup(self):
+        with open(CLEANUP_SUITE_LOG) as f:
+            found = _parse_cleanup_error(f)
+        assert found["error"] == "sanityn : @@@@@@ FAIL: remove sub-test dirs failed"
+        assert found["preceding"] == [
+            "rm: cannot remove '/mnt/lustre/d80b.sanityn/migrate_dir': "
+            "Directory not empty",
+        ]
+        lines = CLEANUP_SUITE_LOG.read_text().splitlines()
+        assert lines[found["line"] - 1].strip() == found["error"]
+
+    def test_parser_without_start_cleanup_finds_nothing(self):
+        """The earlier subtest FAIL in the fixture is not cleanup's."""
+        lines = CLEANUP_SUITE_LOG.read_text().splitlines(keepends=True)
+        before = [ln for ln in lines if "start cleanup" not in ln]
+        assert _parse_cleanup_error(before) is None
+
+    def test_parser_without_a_fail_line_takes_error_lines(self):
+        found = _parse_cleanup_error([
+            "=== sanity: start cleanup 10:00:00 (1) ===\n",
+            "CMD: host1 rm -rf /mnt/lustre/d1\n",
+            "umount: /mnt/lustre: target is busy.\n",
+            "some other line\n",
+        ])
+        assert found["error"] == "umount: /mnt/lustre: target is busy."
+
+    def test_failures_notes_but_does_not_download_by_default(self, runner, mock_client):
+        self._session(mock_client)
+        env = _parse_output(runner.invoke(main, ["--envelope", "failures", SID_1]))
+        [row] = env["data"]["failed_suites"][0]["failed_subtests"]
+        assert "--cleanup-error" in row["note"]
+        assert "cleanup_error" not in row
+        mock_client.download_logs.assert_not_called()
+
+    def test_failures_cleanup_error(self, runner, mock_client, tmp_path, monkeypatch):
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        import tempfile
+        monkeypatch.setattr(tempfile, "tempdir", None)
+        self._session(mock_client)
+        mock_client.download_logs.return_value = self._archive({
+            "console.host1.log": "console\n",
+            "sanityn.suite_log.host1.log": CLEANUP_SUITE_LOG.read_text(),
+        })
+        env = _parse_output(runner.invoke(
+            main, ["--envelope", "failures", SID_1, "--cleanup-error"]
+        ))
+        [row] = env["data"]["failed_suites"][0]["failed_subtests"]
+        err = row["cleanup_error"]
+        assert err["error"] == "sanityn : @@@@@@ FAIL: remove sub-test dirs failed"
+        assert err["preceding"][0].startswith("rm: cannot remove")
+        assert err["suite_log"] == "sanityn.suite_log.host1.log"
+        mock_client.download_logs.assert_called_once_with(TSID_1)
+        assert os.listdir(tmp_path) == []
+
+    def test_failures_cleanup_error_only_for_test_cleanup(self, runner, mock_client):
+        self._session(mock_client, st_name="test_80b")
+        env = _parse_output(runner.invoke(
+            main, ["--envelope", "failures", SID_1, "--cleanup-error"]
+        ))
+        [row] = env["data"]["failed_suites"][0]["failed_subtests"]
+        assert "cleanup_error" not in row and "note" not in row
+        mock_client.download_logs.assert_not_called()
+
+    def test_failures_cleanup_error_download_fails(self, runner, mock_client):
+        self._session(mock_client)
+        mock_client.download_logs.side_effect = Exception("HTTP 502")
+        env = _parse_output(runner.invoke(
+            main, ["--envelope", "failures", SID_1, "--cleanup-error"]
+        ))
+        [row] = env["data"]["failed_suites"][0]["failed_subtests"]
+        assert row["cleanup_error"] is None
+        assert "HTTP 502" in row["cleanup_error_warning"]
+
+    def test_failures_cleanup_error_no_suite_log(self, runner, mock_client):
+        self._session(mock_client)
+        mock_client.download_logs.return_value = self._archive(
+            {"console.host1.log": "x\n"}
+        )
+        env = _parse_output(runner.invoke(
+            main, ["--envelope", "failures", SID_1, "--cleanup-error"]
+        ))
+        [row] = env["data"]["failed_suites"][0]["failed_subtests"]
+        assert row["cleanup_error"] is None
+        assert "no suite_log" in row["cleanup_error_warning"]
+
+    def test_subtests_notes_a_failed_test_cleanup(self, runner, mock_client):
+        mock_client.get_test_set.return_value = {
+            "id": TSID_1, "test_set_script_id": "sc", "status": "FAIL",
+        }
+        mock_client.get_test_set_script.return_value = {"name": "sanityn"}
+        mock_client.get_subtests.return_value = [
+            {"id": "a", "sub_test_script_id": "st", "status": "TIMEOUT"},
+        ]
+        mock_client.resolve_subtest_names.return_value = {"st": "test_cleanup"}
+        env = _parse_output(runner.invoke(main, ["--envelope", "subtests", TSID_1, "--all"]))
+        [item] = env["data"]["subtests"]
+        assert f"maloo logs {TSID_1}" in item["note"]
+        assert "sanityn.suite_log" in item["note"]
+
+    def test_subtests_does_not_note_a_passed_test_cleanup(self, runner, mock_client):
+        mock_client.get_test_set.return_value = {
+            "id": TSID_1, "test_set_script_id": "sc", "status": "PASS",
+        }
+        mock_client.get_test_set_script.return_value = {"name": "sanityn"}
+        mock_client.get_subtests.return_value = [
+            {"id": "a", "sub_test_script_id": "st", "status": "PASS"},
+        ]
+        mock_client.resolve_subtest_names.return_value = {"st": "test_cleanup"}
+        env = _parse_output(runner.invoke(main, ["--envelope", "subtests", TSID_1, "--all"]))
+        assert "note" not in env["data"]["subtests"][0]
 
 
 # -- subtests command --

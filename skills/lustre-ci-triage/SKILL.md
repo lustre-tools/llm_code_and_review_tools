@@ -74,10 +74,14 @@ A failed `test_cleanup` is the one subtest whose `status`, `duration` and
 `error` say nothing about the failure: cleanup did not finish, so Autotest
 ended the run and reported its own 90-minute budget as `TIMEOUT` /
 `"Autotest time out"` / `5400`. It is not a hang. The real error is a
-single line in the suite log -- `maloo logs <test_set_id>`, then
-`grep -A5 'start cleanup' <suite>.suite_log`. `maloo failures` flags this
-in a `note` on the subtest. It is the one failure the metadata cannot
-settle, so go straight to that grep.
+single line in the suite log after `start cleanup`. `maloo failures` and
+`maloo subtests` flag this in a `note` on the subtest. It is the one
+failure the metadata cannot settle, so go straight to the log:
+`maloo failures <session> --cleanup-error` downloads it and puts the
+FAIL line, and the error before it (`rm: cannot remove ...: Directory
+not empty`), in the row as `cleanup_error`. By hand, it is
+`maloo logs <test_set_id>`, then
+`grep -A5 'start cleanup' <suite>.suite_log.*`.
 
 `maloo logs` extracts what Maloo kept, and Maloo does not always keep every
 node's console log. A missing one arrives as a stub of about 66 bytes whose
