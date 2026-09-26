@@ -532,6 +532,32 @@ install_ltvm() {
     echo -e "${GREEN}\u2713${NC} ltvm installed: $(command -v ltvm)"
 }
 
+install_cscope() {
+    # Backs the lustre-cscope-nav skill: fast, non-semantic code
+    # navigation with no build/compile step. Unlike some code-nav
+    # tooling, cscope has no risky Recommends chain, so it's safe to
+    # install unconditionally rather than gate behind a flag.
+    if command -v cscope >/dev/null 2>&1; then
+        return 0
+    fi
+    echo ""
+    echo "Installing cscope (for the lustre-cscope-nav skill)..."
+    if command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y --no-install-recommends cscope \
+            && echo -e "${GREEN}\u2713${NC} cscope installed" && return 0
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y cscope \
+            && echo -e "${GREEN}\u2713${NC} cscope installed" && return 0
+    elif command -v brew >/dev/null 2>&1; then
+        brew install cscope \
+            && echo -e "${GREEN}\u2713${NC} cscope installed" && return 0
+    fi
+    echo -e "${YELLOW}!${NC} could not install cscope automatically" \
+        "(no apt-get/dnf/brew found, or the install failed)"
+    echo "  Install it by hand -- the lustre-cscope-nav skill needs it."
+    return 1
+}
+
 # Credential setup is bash and needs no interpreter, no install and no
 # network: it writes the same ~/.config/<tool>/.env files the CLIs already
 # read, so it works on a host where nothing is installed yet.
@@ -1670,6 +1696,7 @@ case "$ACTION" in
         if [ "$WITH_LTVM" = "1" ]; then
             install_ltvm || ltvm_failed=1
         fi
+        install_cscope || true
         if [ "$INSTALL_SKILLS" = "1" ]; then
             echo ""
             install_skills
