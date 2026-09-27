@@ -295,11 +295,11 @@ function buildStats() {
         + '<div class="st-kpis" id="st-kpis"></div>'
         + '<section class="st-card">'
         +   '<div class="st-head"><h3>Patches over time</h3>'
-        +     '<span class="st-sub">cumulative opened, merged and abandoned; shaded: open at that moment</span>'
+        +     '<span class="st-sub">cumulative created, merged and abandoned; shaded: open at that moment</span>'
         +     stSeg('st-range', ST_RANGES, stState.range) + '</div>'
         +   '<div class="st-chart" id="st-timeline"></div>'
         +   '<div class="st-legend">'
-        +     stLegendItem(ST_COL.opened, 'opened') + stLegendItem(ST_COL.merged, 'merged')
+        +     stLegendItem(ST_COL.opened, 'created') + stLegendItem(ST_COL.merged, 'merged')
         +     stLegendItem(ST_COL.abandoned, 'abandoned', true) + stLegendItem(ST_COL.backlog, 'open', false, true)
         +   '</div>'
         + '</section>'
@@ -307,7 +307,7 @@ function buildStats() {
         +   '<div class="st-head"><h3>Throughput</h3><span class="st-sub" id="st-thru-sub"></span></div>'
         +   '<div class="st-chart" id="st-throughput"></div>'
         +   '<div class="st-legend">'
-        +     stLegendItem(ST_COL.opened, 'opened') + stLegendItem(ST_COL.merged, 'merged')
+        +     stLegendItem(ST_COL.opened, 'created') + stLegendItem(ST_COL.merged, 'merged')
         +     stLegendItem(ST_COL.abandoned, 'abandoned')
         +   '</div>'
         + '</section>'
@@ -329,7 +329,7 @@ function buildStats() {
         +   '</section>'
         +   '<section class="st-card">'
         +     '<div class="st-head"><h3>Open patches: age vs. idle</h3>'
-        +       '<span class="st-sub">idle = since the last upload or human review; click a dot to open it</span></div>'
+        +       '<span class="st-sub">idle = since the last upload or human review; click a dot to show it in the graph</span></div>'
         +     '<div class="st-chart" id="st-scatter"></div>'
         +     '<div class="st-legend">'
         +       Object.values(ST_HEALTH).map(([c, l]) => stLegendItem(c, l, false, false, true)).join('')
@@ -410,7 +410,7 @@ function stDrawKpis() {
             + '<span style="color:' + ST_COL.merged + '">' + S.merged + ' merged</span> · '
             + S.abandoned + ' abandoned'),
         tile('Merged, last 30 days', S.last_30d.merged, delta(S.last_30d.merged, S.prev_30d.merged)),
-        tile('Opened, last 30 days', S.last_30d.opened, delta(S.last_30d.opened, S.prev_30d.opened)),
+        tile('Created, last 30 days', S.last_30d.opened, delta(S.last_30d.opened, S.prev_30d.opened)),
         tile('Open now', S.open,
             S.open === S.open_30d_ago ? 'same as 30 days ago'
             : (S.open > S.open_30d_ago ? 'up' : 'down') + ' from ' + S.open_30d_ago + ' (30 days ago)'),
@@ -491,7 +491,7 @@ function stDrawTimeline() {
         cross.setAttribute('x2', x(t));
         const o = stCountLE(ev.opened, t), mg = stCountLE(ev.merged, t), ab = stCountLE(ev.abandoned, t);
         stTip('<b>' + stDate(t) + '</b>'
-            + '<div><span class="st-sw" style="background:' + ST_COL.opened + '"></span>opened ' + o + '</div>'
+            + '<div><span class="st-sw" style="background:' + ST_COL.opened + '"></span>created ' + o + '</div>'
             + '<div><span class="st-sw" style="background:' + ST_COL.merged + '"></span>merged ' + mg + '</div>'
             + '<div><span class="st-sw" style="background:' + ST_COL.abandoned + '"></span>abandoned ' + ab + '</div>'
             + '<div><span class="st-sw" style="background:' + ST_COL.backlog + ';opacity:.5"></span>open ' + (o - mg - ab) + '</div>', e);
@@ -589,7 +589,7 @@ function stDrawThroughput() {
         e.target.classList.add('on');
         const r = rows[+i];
         stTip('<b>' + stBucketLabel(unit, r.a) + '</b>'
-            + '<div><span class="st-sw" style="background:' + ST_COL.opened + '"></span>opened ' + r.opened + '</div>'
+            + '<div><span class="st-sw" style="background:' + ST_COL.opened + '"></span>created ' + r.opened + '</div>'
             + '<div><span class="st-sw" style="background:' + ST_COL.merged + '"></span>merged ' + r.merged + '</div>'
             + '<div><span class="st-sw" style="background:' + ST_COL.abandoned + '"></span>abandoned ' + r.abandoned + '</div>', e);
     };
@@ -932,7 +932,7 @@ function stDrawNotes() {
     const pruned = (G.stats.pruned_merged_cns || []).length;
     const notes = [
         'Covers the ' + stRecs.length + ' patches in this graph, including separate groups and abandoned patches.',
-        'Opened = first patchset upload. Merged = submit time. Abandoned = the last abandon not followed by a restore.',
+        'Created = first patchset upload. Merged = submit time. Abandoned = the last abandon not followed by a restore.',
         'Human review = a message from someone other than the owner, excluding CI bots and generated messages (uploads, rebases, AI reviews).',
         'Times are relative to the build (' + esc(G.generated_at || stDate(ST_NOW)) + '), not to now.',
     ];

@@ -237,10 +237,10 @@ includes:
   Enter / Shift+Enter.
 - **Stats tab**: the "Stats" toggle next to the graph controls
   switches to series statistics built from Gerrit timestamps —
-  headline numbers (merged/opened in the last 30 days vs. the 30
+  headline numbers (merged/created in the last 30 days vs. the 30
   before, open backlog, median and p90 time from first upload to
   merge and to first human review, patchsets per merged patch,
-  oldest open patch), cumulative opened/merged/abandoned over time
+  oldest open patch), cumulative created/merged/abandoned over time
   with the open backlog shaded, throughput per week/month/quarter,
   a 12-month heatmap of patchset uploads or human reviews,
   distributions of time-to-merge, time-to-first-review and
@@ -265,7 +265,7 @@ includes:
   |---|---|
   | `as_of` | build time; every "last 30 days" figure is relative to it |
   | `patches`, `open`, `merged`, `abandoned` | patch counts (merged base patches that are not part of the series are excluded) |
-  | `last_30d`, `prev_30d` | `{opened, merged, abandoned}` in `(as_of-30d, as_of]` and `(as_of-60d, as_of-30d]` |
+  | `last_30d`, `prev_30d` | `{opened, merged, abandoned}` (`opened` = patches created) in `(as_of-30d, as_of]` and `(as_of-60d, as_of-30d]` |
   | `open_30d_ago` | patches open at `as_of - 30d` |
   | `recent_events` | `{opened, merged, abandoned}`: sorted event times from the 60 days before `as_of`, for recounting against another clock |
   | `time_to_merge` | `{count, median, p90}`: first upload to submit, merged patches |
