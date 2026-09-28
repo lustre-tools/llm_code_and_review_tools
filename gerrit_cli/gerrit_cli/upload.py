@@ -77,6 +77,8 @@ class Commit:
     committer_name: str
     committer_email: str
     change_ids: list[str] = field(default_factory=list)
+    author_email: str = ""
+    signoffs: list[str] = field(default_factory=list)
 
     @property
     def committer(self) -> str:
@@ -191,7 +193,9 @@ def _toplevel(repo: str) -> str:
 # One record per commit; fields NUL-separated, records RS-terminated.
 _LOG_FORMAT = (
     "%H%x00%P%x00%s%x00%cn%x00%ce%x00"
-    "%(trailers:key=Change-Id,valueonly,separator=%x01)%x1e"
+    "%(trailers:key=Change-Id,valueonly,separator=%x01)%x00"
+    "%ae%x00"
+    "%(trailers:key=Signed-off-by,valueonly,separator=%x01)%x1e"
 )
 
 
@@ -205,7 +209,9 @@ def _read_commits(repo: str, revs: list[str]) -> list[Commit]:
         record = record.strip("\n")
         if not record:
             continue
-        sha, parents, subject, cname, cemail, ids = record.split("\x00")
+        sha, parents, subject, cname, cemail, ids, aemail, sobs = (
+            record.split("\x00")
+        )
         commits.append(Commit(
             sha=sha,
             parents=parents.split(),
@@ -213,6 +219,8 @@ def _read_commits(repo: str, revs: list[str]) -> list[Commit]:
             committer_name=cname,
             committer_email=cemail,
             change_ids=[i.strip() for i in ids.split("\x01") if i.strip()],
+            author_email=aemail,
+            signoffs=[i.strip() for i in sobs.split("\x01") if i.strip()],
         ))
     return commits
 
@@ -924,6 +932,43 @@ def _plan(
     return plan
 
 
+def _check_signoffs(
+    new: list[Commit], account: Account
+) -> None:
+    """Refuse a commit Gerrit's footer check would reject.
+
+    Gerrit wants a Signed-off-by naming the author, the committer or the
+    uploader.  The committer is rewritten to a registered address of the
+    account, so the uploader's addresses stand in for it.
+    """
+    bad = []
+    for c in new:
+        allowed = {c.author_email.lower(), *(e.lower() for e in account.emails)}
+        emails = {
+            m.group(1).lower()
+            for m in (re.search(r"<([^>]*)>", s) for s in c.signoffs) if m
+        }
+        if not emails & allowed:
+            bad.append(c)
+    if not bad:
+        return
+    raise UploadError(
+        ErrorCode.NO_SIGNOFF,
+        "Gerrit would reject the push: no Signed-off-by in the message "
+        "footer names the author, committer or uploader ("
+        f"'{account.username}': {', '.join(sorted(account.emails)) or 'none'}"
+        "). Commits: "
+        + "; ".join(
+            f"{c.label()} [author {c.author_email}, "
+            f"signoffs: {', '.join(c.signoffs) or 'none'}]"
+            for c in bad
+        )
+        + ". Add a Signed-off-by for one of them. Nothing was rewritten "
+        "or pushed.",
+        exit_code=ExitCode.INVALID_INPUT,
+    )
+
+
 def _committer_rewrites(
     commits: list[Commit], known: set[str], account: Account, amend: bool
 ) -> list[Commit]:
@@ -1167,6 +1212,8 @@ def upload(
         _check_range(commits, new, head, series, named, project, branch)
 
         plan = _plan(client, commits, known, project, branch)
+
+        _check_signoffs(new, account)
 
         rewrite = _committer_rewrites(commits, known, account, amend)
         to = f"{account.name} <{account.preferred_email}>"

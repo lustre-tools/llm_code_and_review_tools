@@ -63,12 +63,13 @@ def git(repo, *args, env=None, input=None) -> str:
 
 def commit(
     repo, subject, cid=None, committer=OPERATOR, author=OWNER,
-    filename=None, extra_trailer=None,
+    filename=None, extra_trailer=None, signoff=None,
 ):
     path = Path(repo) / (filename or re.sub(r"\W+", "_", subject))
     path.write_text(subject + "\n")
     git(repo, "add", path.name)
-    message = f"{subject}\n\nBody of {subject}.\n\nSigned-off-by: {author[0]} <{author[1]}>\n"
+    signer = signoff or author
+    message = f"{subject}\n\nBody of {subject}.\n\nSigned-off-by: {signer[0]} <{signer[1]}>\n"
     if extra_trailer:
         message += extra_trailer + "\n"
     if cid:
@@ -468,6 +469,21 @@ def test_no_amend_refuses_instead(gerrit):
     assert OPERATOR[1] in err.value.message
     assert git(work, "rev-parse", "HEAD") == old
     assert pushed_refs(bare) == {}
+
+
+def test_foreign_signoff_refused_before_anything_is_rewritten(gerrit):
+    fake, bare, work = gerrit
+    old = commit(work, "LU-1 llite: fix", cid=CID_A, committer=OPERATOR,
+                 signoff=("Someone Else", "else@example.com"))
+
+    for dry_run in (True, False):
+        with pytest.raises(UploadError) as err:
+            upload(fake, repo=str(work), change="51164", dry_run=dry_run)
+
+        assert err.value.code == ErrorCode.NO_SIGNOFF
+        assert "else@example.com" in err.value.message
+        assert git(work, "rev-parse", "HEAD") == old
+        assert pushed_refs(bare) == {}
 
 
 def test_a_parent_gerrit_already_has_is_not_checked(gerrit):
