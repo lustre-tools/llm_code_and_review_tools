@@ -326,7 +326,8 @@ related <URL>                    # Relation chain (series) for a change
 graph <URL>                      # Interactive DAG visualizer (see above)
 info <URL>                       # Show change info (reviewers, labels, etc.)
 diff <URL>                       # Show what changed between two patchsets
-search <query>                   # Search changes (alias: s)
+search <query>                   # Search changes (alias: s); --all follows
+                                 # the pages, 'explain search' has operators
 maloo <URL> [URL...]             # Triage Maloo CI results (batch mode)
 watch <json-file>                # Check CI status on watched patches
 ```

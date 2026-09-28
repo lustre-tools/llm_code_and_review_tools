@@ -1,6 +1,6 @@
 ---
 name: gerrit-patch-workflow
-description: This skill should be used for work on Gerrit changes with the gerrit/gc CLI - "what comments are on this patch", "reply to the review feedback", "address the reviewer comments", "mark that thread done", "shepherd this patch series", "what is the status of my patches", "post a review on this change", "add a reviewer", "check the CI status of my patches", "upload the new patchset", "push this commit to Gerrit", "rebase and repush the series". Covers comment triage, staged replies, uploading patchsets, multi-patch series sessions, and Lustre commit-message rules.
+description: This skill should be used for work on Gerrit changes with the gerrit/gc CLI - "what comments are on this patch", "reply to the review feedback", "address the reviewer comments", "mark that thread done", "shepherd this patch series", "what is the status of my patches", "post a review on this change", "add a reviewer", "check the CI status of my patches", "upload the new patchset", "push this commit to Gerrit", "rebase and repush the series", "is there already a patch for this", "find the follow-up to this change". Covers comment triage, staged replies, uploading patchsets, multi-patch series sessions, finding related changes, and Lustre commit-message rules.
 version: 0.1.0
 ---
 
@@ -128,6 +128,44 @@ gc watch patches.json     # Maloo triage across a watched list
 
 `gc watch` takes a JSON array of objects with a `gerrit_url` field. For
 what to do with a failure, use the CI triage skill.
+
+## Finding related changes
+
+"Is there already a patch for this", "where did the follow-up go":
+`gc search` passes Gerrit's query syntax through, so narrow the query on
+the server rather than filtering a small page yourself. Roughly from the
+strongest link to the weakest:
+
+```bash
+gc related <url>                                      # the relation chain
+gc search 'message:"LU-20566" -is:abandoned'          # a ticket
+gc search 'message:"783c13bb0b8f" -change:62757'      # Fixes: citations
+gc search --all 'project:fs/lustre-release branch:master
+    path:"lustre/tests/sanity-ec.sh" after:2026-08-22 -is:abandoned'
+gc search 'project:fs/lustre-release hashtag:pt_ecro after:2026-08-22'
+```
+
+- The tickets worth searching are not only the change's own: a patch
+  often parks work under another one in its own code --
+  `always_except LU-20566 41j 41k`, `/* LU-19999: ... */` -- and a reply
+  names where it goes ("filed LU-20566"). The own ticket of a series
+  matches every sibling.
+- `after:` is "modified after", not "created after"; Gerrit has no
+  creation filter. An open follow-up that nobody touched since the
+  promise was made is still a follow-up, so do not throw out what was
+  created earlier.
+- A file search is only as good as the file: a comment on the commit
+  message or a change-level comment has none, so take the file from what
+  the thread is about -- the test list, the function -- and grep the
+  candidates' diffs for it rather than trusting that a change touching
+  the file does the work.
+- Results come newest-updated first and one page by default;
+  `more_results` in the output means there are more, and `--all` follows
+  them.
+- On review.whamcloud.com `tr:`/`bug:` return nothing (no tracking-id
+  config) and `footer:"Fixes=..."` misses Lustre's `Fixes: sha ("...")`
+  trailer -- use `message:` for both. `comment:<number>` matches far too
+  much to be useful there.
 
 ## Change metadata
 

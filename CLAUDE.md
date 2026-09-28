@@ -104,7 +104,8 @@ if several are open the error lists them.
 - **Info:** `gc info <url>`, `gc series-info <url>`,
   `gc series-status <url>`, `gc related <url>`, `gc diff <url>`
 - **CI:** `gc maloo <url>`, `gc watch <file>`
-- **Search:** `gc search <query>`, `gc s <query>`
+- **Search:** `gc search <query>`, `gc s <query>` (`--all` follows the
+  pages; `gc explain search` lists the operators that find related changes)
 - **Manage:** `gc vote <url> <label> <score>`, `gc message <url> "msg"`,
   `gc set-topic <url> <topic>`, `gc hashtag <url> --add <tag>`,
   `gc rebase <url>`, `gc abandon <url>`, `gc restore <url>`,

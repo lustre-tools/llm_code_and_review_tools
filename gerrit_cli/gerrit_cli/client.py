@@ -1121,3 +1121,36 @@ class GerritCommentsClient:
             params += f"&o={opt}"
 
         return self.rest.get(params)
+
+    def search_all(
+        self,
+        query: str,
+        max_results: int = 500,
+        page_size: int = 100,
+        options: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search, following Gerrit's pages until the results run out or
+        ``max_results`` are in.
+
+        Gerrit marks the last change of a page with ``_more_changes`` when
+        there are more; that flag, not a full page, decides -- a server may
+        cap a page below what was asked for. When the results are cut at
+        ``max_results``, the last one kept still carries ``_more_changes``,
+        so a caller can tell a complete answer from a truncated one.
+        """
+        results: list[dict[str, Any]] = []
+        start = 0
+        while len(results) < max_results:
+            page = self.search_changes(
+                query,
+                limit=min(page_size, max_results - len(results)),
+                start=start,
+                options=options,
+            )
+            if not page:
+                break
+            results.extend(page)
+            if not page[-1].get("_more_changes"):
+                break
+            start += len(page)
+        return results

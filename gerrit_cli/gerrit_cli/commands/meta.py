@@ -468,6 +468,48 @@ Show all reviewers and their votes on a Gerrit change.
         ],
         "related": ["add-reviewer", "remove-reviewer"],
     },
+    "search": {
+        "summary": "Search for changes with Gerrit's query syntax",
+        "description": """
+The query goes to Gerrit as typed: every operator of the web UI search bar
+works. One page by default (--limit, --start); --all follows the pages up
+to --max. "more_results" is set when Gerrit says there are more, and
+"next_start" is where the next page starts.
+
+Operators that find related changes:
+  message:"LU-12345"   commit message names it (a ticket, a sha, a word)
+  comment:"TEXT"       a review comment mentions it, e.g. a change number
+  path:"dir/file.c"    touches that file (exact; ^regex also works)
+  file:NAME            touches a file with that path component
+  topic:NAME           exact topic; hashtag:NAME (case-insensitive)
+  parentof:N, is:open, status:merged, -is:abandoned, -change:N
+
+after:/before: compare with the time a change was last MODIFIED, not
+created -- there is no "created after" operator. For "changes since X",
+after:X narrows the search on the server; check "created" yourself.
+Results come newest-updated first, so a narrow query plus paging beats a
+broad query with a small --limit.
+
+Whether tr:/bug: work depends on the server's trackingid configuration,
+and footer: only matches trailers written as Key: value it can parse --
+if either returns nothing, fall back to message:.
+""",
+        "examples": [
+            {
+                "command": "gc search 'message:\"LU-12345\" after:2026-01-01 -is:abandoned'",
+                "description": "Changes naming a ticket, touched since January",
+            },
+            {
+                "command": "gc search --all 'path:\"lustre/llite/file.c\" after:2026-06-01 status:open'",
+                "description": "Every open change touching a file, all pages",
+            },
+            {
+                "command": "gc search 'comment:12345 -change:12345'",
+                "description": "Changes whose reviews mention change 12345",
+            },
+        ],
+        "related": ["related", "info"],
+    },
     "find-user": {
         "summary": "Search for users by name",
         "description": """
@@ -613,11 +655,14 @@ def cmd_search(args):
 
     try:
         client = cli.GerritCommentsClient()
-        results = client.search_changes(
-            query=args.query,
-            limit=args.limit,
-            start=args.start,
-        )
+        if getattr(args, 'all', False):
+            results = client.search_all(args.query, max_results=args.max)
+        else:
+            results = client.search_changes(
+                query=args.query,
+                limit=args.limit,
+                start=args.start,
+            )
 
         changes = []
         for change in results:
@@ -632,8 +677,14 @@ def cmd_search(args):
                 "updated": change.get("updated", ""),
                 "url": client.format_change_url(change.get("project", ""), change.get("_number")),
             }
+            if change.get("created"):
+                entry["created"] = change["created"]
+            if change.get("submitted"):
+                entry["submitted"] = change["submitted"]
             if change.get("topic"):
                 entry["topic"] = change["topic"]
+            if change.get("hashtags"):
+                entry["hashtags"] = change["hashtags"]
             insertions = change.get("insertions", 0)
             deletions = change.get("deletions", 0)
             if insertions or deletions:
@@ -645,9 +696,12 @@ def cmd_search(args):
             "count": len(changes),
             "changes": changes,
         }
-        if len(results) == args.limit:
+        # Gerrit flags the last change of a page when there are more; a
+        # full page alone does not mean that.
+        if results and results[-1].get("_more_changes"):
             data["more_results"] = True
-            data["next_start"] = args.start + args.limit
+            start = 0 if getattr(args, 'all', False) else args.start
+            data["next_start"] = start + len(results)
 
         output_success(data, command, pretty)
         sys.exit(ExitCode.SUCCESS)

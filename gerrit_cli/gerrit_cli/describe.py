@@ -328,6 +328,24 @@ def get_tool_description() -> ToolDescription:
                 next_actions=["reviewers"],
             ),
             Command(
+                name="search",
+                description="Search for changes with Gerrit's query syntax (message:, comment:, path:, topic:, hashtag:, after:, ...)",
+                usage='gc search "<QUERY>"',
+                arguments=[
+                    Argument(name="query", description="Gerrit search query, passed as typed", required=True),
+                    Argument(name="--limit", description="Results in one page", type="integer", default=25),
+                    Argument(name="--start", description="Offset of the page", type="integer", default=0),
+                    Argument(name="--all", description="Follow the pages up to --max", type="boolean", default=False),
+                    Argument(name="--max", description="With --all: most results", type="integer", default=500),
+                ],
+                examples=[
+                    "gc search 'message:\"LU-12345\" after:2026-01-01 -is:abandoned'",
+                    "gc search --all 'path:\"lustre/llite/file.c\" status:open'",
+                ],
+                output_fields=["count", "changes[].number", "changes[].subject", "changes[].status", "changes[].created", "changes[].updated", "more_results", "next_start"],
+                next_actions=["info", "diff", "comments"],
+            ),
+            Command(
                 name="find-user",
                 description="Search for Gerrit users by name, email, or username",
                 usage='gc find-user "<QUERY>"',

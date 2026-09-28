@@ -1339,7 +1339,8 @@ def add_search_parser(subparsers):
         description="Search Gerrit for changes matching a query. Uses the "
                     "same query syntax as the Gerrit web UI search bar. "
                     "Common operators: owner, reviewer, project, branch, "
-                    "topic, status, label, message, age, is.",
+                    "topic, hashtag, status, label, message, comment, "
+                    "path, after, age, is. 'gc explain search' has more.",
     )
     parser.add_argument(
         "query",
@@ -1357,6 +1358,18 @@ def add_search_parser(subparsers):
         type=int,
         default=0,
         help="Offset for pagination (default: 0)",
+    )
+    parser.add_argument(
+        "--all", "-a",
+        action="store_true",
+        help="Follow Gerrit's pages instead of returning one "
+             "(up to --max; --limit and --start are ignored)",
+    )
+    parser.add_argument(
+        "--max",
+        type=int,
+        default=500,
+        help="With --all: stop after this many results (default: 500)",
     )
     parser.add_argument(
         "--pretty", "-p",
