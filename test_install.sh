@@ -556,6 +556,18 @@ repo=$(hook_repo)
 check "a hand-edited version is not bumped on top" "0.3.0" \
     "$(tool_version "$repo" jira_tool)"
 
+# Only the project's own version line: a later table may carry one too.
+# (The sed this used before took GNU's "0,/re/" address; BSD sed on macOS
+# changed nothing, and the hook still said it had bumped.)
+repo=$(hook_repo)
+(cd "$repo" &&
+    printf '[tool.other]\nversion = "0.2.0"\n' >> lreview/pyproject.toml &&
+    git add -A && git commit -qm "second version line" &&
+    echo "x = 4" > lreview/code.py && git add lreview/code.py &&
+    git commit -qm "lreview change") > /dev/null 2>&1
+check "only the first version line is bumped" \
+    "0.2.1 0.2.0" "$(tool_version "$repo" lreview | tr '\n' ' ' | sed 's/ $//')"
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

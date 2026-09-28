@@ -40,9 +40,17 @@ for pyproject in */pyproject.toml; do
 	[[ "$patch" =~ ^[0-9]+$ ]] || continue
 	new="$major.$minor.$((patch + 1))"
 
-	# `sed -i` differs between GNU and BSD; temp file + mv works on both.
-	sed "0,/^version = \"$current\"/s//version = \"$new\"/" \
-		"$pyproject" > "$pyproject.tmp" || continue
+	# Only the first version line. Not sed: its "0,/re/" address is GNU
+	# only -- BSD sed (macOS) accepts it, changes nothing and exits 0, so
+	# the bump was announced but never made. And say nothing unless the
+	# new line really is there.
+	awk -v cur="version = \"$current\"" -v new="version = \"$new\"" \
+		'!done && $0 == cur { print new; done = 1; next } { print }' \
+		"$pyproject" > "$pyproject.tmp" || { rm -f "$pyproject.tmp"; continue; }
+	if ! grep -qx "version = \"$new\"" "$pyproject.tmp"; then
+		rm -f "$pyproject.tmp"
+		continue
+	fi
 	mv "$pyproject.tmp" "$pyproject"
 	git add "$pyproject"
 	bumped="$bumped $tool: $current -> $new"$'\n'
