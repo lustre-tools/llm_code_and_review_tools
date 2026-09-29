@@ -1,5 +1,7 @@
 """Maloo REST API client."""
 
+import json
+import os
 import re
 from typing import Any
 
@@ -10,6 +12,32 @@ from .config import MalooConfig
 CSRF_RE = re.compile(
     r'<meta\s+name="csrf-token"\s+content="([^"]+)"'
 )
+
+GERRIT_URL = os.environ.get("GERRIT_URL", "https://review.whamcloud.com").rstrip("/")
+
+
+def resolve_patchset_commit(
+    review_id: int, patch: int | None = None
+) -> str | None:
+    """Resolve a Gerrit change/patchset to its git commit hash.
+
+    Uses Gerrit's public REST API directly (no auth needed for reads
+    on whamcloud's Gerrit).  ``patch`` may be a specific patchset
+    number; ``None`` resolves to the change's current (latest)
+    patchset.  Returns None if the lookup fails.
+    """
+    revision = str(patch) if patch is not None else "current"
+    url = f"{GERRIT_URL}/changes/{review_id}/revisions/{revision}/commit"
+    try:
+        resp = requests.get(url, timeout=15)
+        if resp.status_code != 200:
+            return None
+        text = resp.text
+        if text.startswith(")]}'"):
+            text = text[4:]
+        return json.loads(text).get("commit")
+    except Exception:
+        return None
 
 
 class MalooClient:
@@ -86,18 +114,25 @@ class MalooClient:
     def find_sessions_by_review(
         self, review_id: int, patch: int | None = None
     ) -> list[dict[str, Any]]:
-        """Find test sessions for a Gerrit review via code_reviews."""
-        params: dict[str, Any] = {"review_id": review_id}
-        if patch is not None:
-            params["review_patch"] = patch
-        # First get the code reviews to find session IDs
-        reviews = self._get_paginated("code_reviews", params)
+        """Find test sessions for a Gerrit review via code_reviews.
+
+        Maloo's code_reviews endpoint doesn't actually filter on a
+        Gerrit change number or patchset ("review_id"/"review_patch"
+        query params are silently ignored) -- it only filters on the
+        patchset's git commit hash ("commit_id").  So the requested
+        patchset (or the change's current patchset, if none given) is
+        resolved to a commit hash via Gerrit's REST API first.
+        """
+        commit = resolve_patchset_commit(review_id, patch)
+        if commit is None:
+            raise RuntimeError(
+                f"Could not resolve Gerrit change {review_id} "
+                f"(patch {patch if patch is not None else 'current'}) "
+                "to a commit hash via Gerrit's REST API."
+            )
+        reviews = self._get_paginated("code_reviews", {"commit_id": commit})
         if not reviews:
-            # Try via test_queues as fallback
-            qparams: dict[str, Any] = {"review_id": review_id}
-            if patch is not None:
-                qparams["review_patch"] = patch
-            return self._get_paginated("test_queues", qparams)
+            return self._get_paginated("test_queues", {"review_id": commit})
         # Fetch the actual sessions
         session_ids = {r["test_session_id"] for r in reviews}
         sessions = []

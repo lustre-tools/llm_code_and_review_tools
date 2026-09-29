@@ -236,8 +236,12 @@ class TestGetSessions:
 # ---------------------------------------------------------------------------
 
 class TestFindSessionsByReview:
-    def test_via_code_reviews(self, client):
-        """Should find sessions through code_reviews endpoint."""
+    """code_reviews only filters on commit_id -- review_id/review_patch
+    are silently ignored by the API -- so the target patchset is
+    resolved to a git commit hash via Gerrit's REST API first."""
+
+    def test_via_code_reviews(self, client, monkeypatch):
+        """Should find sessions through code_reviews endpoint, keyed by commit."""
         reviews = [
             {"test_session_id": "s1"},
             {"test_session_id": "s2"},
@@ -245,41 +249,66 @@ class TestFindSessionsByReview:
         session_1 = {"id": "s1", "test_group": "full"}
         session_2 = {"id": "s2", "test_group": "full"}
 
+        monkeypatch.setattr(
+            "maloo_tool.client.resolve_patchset_commit",
+            MagicMock(return_value="abc123"),
+        )
         client._get_paginated = MagicMock(return_value=reviews)
         client.get_session = MagicMock(side_effect=[session_1, session_2])
 
         result = client.find_sessions_by_review(64266)
         assert len(result) == 2
         client._get_paginated.assert_called_once_with(
-            "code_reviews", {"review_id": 64266}
+            "code_reviews", {"commit_id": "abc123"}
         )
 
-    def test_fallback_to_test_queues(self, client):
+    def test_fallback_to_test_queues(self, client, monkeypatch):
         """When code_reviews returns nothing, fall back to test_queues."""
         queue_data = [{"id": "q1", "test_group": "full"}]
+        monkeypatch.setattr(
+            "maloo_tool.client.resolve_patchset_commit",
+            MagicMock(return_value="abc123"),
+        )
         client._get_paginated = MagicMock(side_effect=[[], queue_data])
 
         result = client.find_sessions_by_review(64266)
         assert result == queue_data
         calls = client._get_paginated.call_args_list
-        assert calls[0][0][0] == "code_reviews"
-        assert calls[1][0][0] == "test_queues"
+        assert calls[0][0] == ("code_reviews", {"commit_id": "abc123"})
+        assert calls[1][0] == ("test_queues", {"review_id": "abc123"})
 
-    def test_with_patch_number(self, client):
-        """Should pass patch number to the query."""
+    def test_with_patch_number(self, client, monkeypatch):
+        """Should resolve the given patch number to a commit hash."""
+        resolve_mock = MagicMock(return_value="def456")
+        monkeypatch.setattr(
+            "maloo_tool.client.resolve_patchset_commit", resolve_mock
+        )
         client._get_paginated = MagicMock(return_value=[])
         client.find_sessions_by_review(64266, patch=3)
-        params = client._get_paginated.call_args[0][1]
-        assert params["review_id"] == 64266
-        assert params["review_patch"] == 3
+        resolve_mock.assert_called_once_with(64266, 3)
+        params = client._get_paginated.call_args_list[0][0][1]
+        assert params == {"commit_id": "def456"}
 
-    def test_deduplicates_sessions(self, client):
+    def test_unresolvable_review_raises(self, client, monkeypatch):
+        """Should raise a clear error when the commit hash can't be resolved."""
+        monkeypatch.setattr(
+            "maloo_tool.client.resolve_patchset_commit",
+            MagicMock(return_value=None),
+        )
+        with pytest.raises(RuntimeError):
+            client.find_sessions_by_review(64266)
+
+    def test_deduplicates_sessions(self, client, monkeypatch):
         """When multiple reviews point to same session, should deduplicate."""
         reviews = [
             {"test_session_id": "s1"},
             {"test_session_id": "s1"},
         ]
         session = {"id": "s1", "test_group": "full"}
+        monkeypatch.setattr(
+            "maloo_tool.client.resolve_patchset_commit",
+            MagicMock(return_value="abc123"),
+        )
         client._get_paginated = MagicMock(return_value=reviews)
         client.get_session = MagicMock(return_value=session)
 

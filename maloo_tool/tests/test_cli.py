@@ -246,18 +246,49 @@ class TestReview:
             },
         ]
 
-        result = runner.invoke(main, ["--envelope", "review", "54321"])
+        with patch("maloo_tool.cli._resolve_current_patchset", return_value=7):
+            result = runner.invoke(main, ["--envelope", "review", "54321"])
         env = _parse_output(result)
         assert env["ok"] is True
         assert env["data"]["review_id"] == 54321
         assert env["data"]["session_count"] == 1
+        assert env["data"]["patch"] == 7
 
     def test_review_not_found(self, runner, mock_client):
         mock_client.find_sessions_by_review.return_value = []
-        result = runner.invoke(main, ["--envelope", "review", "99999"])
+        with patch("maloo_tool.cli._resolve_current_patchset", return_value=None):
+            result = runner.invoke(main, ["--envelope", "review", "99999"])
         env = _parse_output(result)
         assert env["ok"] is True
         assert env["data"]["sessions"] == []
+
+    def test_review_api_error(self, runner, mock_client):
+        mock_client.find_sessions_by_review.side_effect = RuntimeError(
+            "Could not resolve Gerrit change 54321 to a commit hash."
+        )
+        result = runner.invoke(main, ["--envelope", "review", "54321"])
+        env = json.loads(result.output)
+        assert env["ok"] is False
+        assert env["error"]["code"] == "API_ERROR"
+
+    def test_review_all_patchsets(self, runner, mock_client):
+        session = {
+            "id": SID_1,
+            "test_group": "full",
+            "test_sets_passed_count": 1,
+            "test_sets_failed_count": 0,
+            "test_sets_count": 1,
+        }
+        mock_client.find_sessions_by_review.return_value = [session]
+        with patch("maloo_tool.cli._resolve_current_patchset", return_value=2):
+            result = runner.invoke(
+                main, ["--envelope", "review", "54321", "--all-patchsets"]
+            )
+        env = _parse_output(result)
+        assert env["ok"] is True
+        # Deduplicated across the (mocked) 2 patchsets queried.
+        assert env["data"]["session_count"] == 1
+        assert mock_client.find_sessions_by_review.call_count == 2
 
 
 # -- bugs command --

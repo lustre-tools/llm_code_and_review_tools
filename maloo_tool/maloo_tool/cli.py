@@ -271,15 +271,55 @@ def subtests(test_set_id: str, status: str | None, show_all: bool, pretty: bool)
 
 @main.command()
 @click.argument("review_id", type=int)
-@click.option("--patch", type=int, default=None, help="Patchset number")
+@click.option("--patch", type=int, default=None,
+              help="Patchset number (default: the review's current/latest patchset)")
+@click.option("--all-patchsets", is_flag=True,
+              help="Fetch sessions for every patchset instead of just one "
+                   "(can be very slow on heavily-retested reviews)")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON")
-def review(review_id: int, patch: int | None, pretty: bool) -> None:
+def review(
+    review_id: int, patch: int | None, all_patchsets: bool, pretty: bool
+) -> None:
     """Find test sessions for a Gerrit review.
 
     REVIEW_ID is the Gerrit change number.
+
+    By default only the review's current (latest) patchset is queried.
+    Use --patch to look at a specific patchset, or --all-patchsets to
+    fetch sessions across every patchset ever uploaded (slow for
+    reviews with many patchsets/retests).
     """
     client = _make_client()
-    sessions = client.find_sessions_by_review(review_id, patch)
+    try:
+        if all_patchsets:
+            current = _resolve_current_patchset(review_id)
+            if current is None:
+                raise RuntimeError(
+                    f"Could not resolve Gerrit change {review_id} to "
+                    "its current patchset."
+                )
+            sessions = []
+            seen_ids: set[str] = set()
+            for p in range(1, current + 1):
+                try:
+                    patch_sessions = client.find_sessions_by_review(review_id, p)
+                except Exception:
+                    # One patchset's lookup hiccuping (network blip,
+                    # unresolvable/empty patchset) shouldn't abort the
+                    # whole --all-patchsets scan.
+                    continue
+                for s in patch_sessions:
+                    if s.get("id") not in seen_ids:
+                        seen_ids.add(s.get("id"))
+                        sessions.append(s)
+        else:
+            sessions = client.find_sessions_by_review(review_id, patch)
+            if patch is None:
+                # Report which patchset was actually queried.
+                patch = _resolve_current_patchset(review_id)
+    except Exception as exc:
+        _error(ErrorCode.API_ERROR, str(exc), "review", pretty)
+        return
 
     if not sessions:
         env = success_response(
@@ -698,7 +738,30 @@ def _resolve_review_to_revision(review_id: int) -> str | None:
         if proc.returncode != 0:
             return None
         data = json.loads(proc.stdout)
-        return data.get("data", {}).get("current_revision")
+        return data.get("current_revision")
+    except Exception:
+        return None
+
+
+def _resolve_current_patchset(review_id: int) -> int | None:
+    """Resolve a Gerrit change number to its current patchset number.
+
+    Uses the gerrit CLI tool to look up the change.  Returns None if
+    the lookup fails, in which case the caller falls back to
+    fetching sessions across all patchsets.
+    """
+    import json
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["gerrit", "info", str(review_id)],
+            capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode != 0:
+            return None
+        data = json.loads(proc.stdout)
+        return data.get("current_patchset")
     except Exception:
         return None
 
