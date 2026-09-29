@@ -21,7 +21,7 @@ from llm_tool_common.envelope import (
     success_response,
 )
 
-from .client import MalooClient
+from .client import MalooClient, resolve_patchset_commit
 from .config import load_config
 from .errors import ErrorCode
 
@@ -492,31 +492,87 @@ def subtests(test_set_id: str, status: str | None, show_all: bool, pretty: bool)
 
 @main.command()
 @click.argument("review_id", type=int)
-@click.option("--patch", type=int, default=None, help="Patchset number")
+@click.option("--patch", type=int, default=None,
+              help="Patchset number (default: the review's current/latest patchset)")
 @click.option(
     "--commit", "commit_id", default=None,
-    help="Revision SHA of the patchset to look up (required)",
+    help="Revision SHA of the patchset to look up directly, skipping "
+         "auto-resolution via Gerrit (e.g. from `gerrit info <review>`)",
 )
+@click.option("--all-patchsets", is_flag=True,
+              help="Fetch sessions for every patchset instead of just one "
+                   "(can be very slow on heavily-retested reviews)")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON")
 def review(
-    review_id: int, patch: int | None, commit_id: str | None, pretty: bool
+    review_id: int, patch: int | None, commit_id: str | None,
+    all_patchsets: bool, pretty: bool,
 ) -> None:
     """Find test sessions for a Gerrit review.
 
-    REVIEW_ID is the Gerrit change number, and --commit is the revision SHA
-    of the patchset to look up.  The change number cannot be queried: it is
-    not a column, so it is carried through only to label the answer.
+    REVIEW_ID is the Gerrit change number.  Maloo stores no change
+    number to query -- code_reviews carries only a commit hash -- so
+    the patchset is resolved to its revision SHA automatically via
+    Gerrit's public REST API.  Pass --commit <sha> to query an exact
+    revision directly instead (e.g. from `gerrit info <review>`).
+
+    By default only the review's current (latest) patchset is queried.
+    Use --patch to look at a specific patchset, or --all-patchsets to
+    fetch sessions across every patchset ever uploaded (slow for
+    reviews with many patchsets/retests).
     """
-    if not commit_id:
-        _error(
-            ErrorCode.MISSING_FILTER,
-            "--commit <sha> is required: Maloo stores no change number to "
-            "query, so the patchset has to be named by its revision. Get it "
-            "with `gerrit info " + str(review_id) + "`.",
-            "review", pretty,
-        )
     client = _make_client()
-    sessions = client.find_sessions_by_commit(commit_id)
+
+    if all_patchsets and not commit_id:
+        current = _resolve_current_patchset(review_id)
+        if current is None:
+            _error(
+                ErrorCode.RESOLVE_FAILED,
+                f"Could not resolve Gerrit change {review_id} to its "
+                "current patchset. Is the gerrit CLI available?",
+                "review", pretty,
+            )
+            return
+    elif not commit_id:
+        commit_id = resolve_patchset_commit(review_id, patch)
+        if commit_id is None:
+            _error(
+                ErrorCode.RESOLVE_FAILED,
+                f"Could not resolve Gerrit change {review_id} "
+                f"(patch {patch if patch is not None else 'current'}) "
+                "to a commit hash via Gerrit's REST API. Pass "
+                f"--commit <sha> directly, e.g. from "
+                f"`gerrit info {review_id}`.",
+                "review", pretty,
+            )
+            return
+        if patch is None:
+            # Report which patchset was actually queried.
+            patch = _resolve_current_patchset(review_id)
+
+    try:
+        if all_patchsets and not commit_id:
+            sessions = []
+            seen_ids: set[str] = set()
+            for p in range(1, current + 1):
+                commit = resolve_patchset_commit(review_id, p)
+                if commit is None:
+                    continue
+                try:
+                    patch_sessions = client.find_sessions_by_commit(commit)
+                except Exception:
+                    # One patchset's lookup hiccuping (network blip,
+                    # unresolvable/empty patchset) shouldn't abort the
+                    # whole --all-patchsets scan.
+                    continue
+                for s in patch_sessions:
+                    if s.get("id") not in seen_ids:
+                        seen_ids.add(s.get("id"))
+                        sessions.append(s)
+        else:
+            sessions = client.find_sessions_by_commit(commit_id)
+    except Exception as exc:
+        _error(ErrorCode.API_ERROR, str(exc), "review", pretty)
+        return
 
     if not sessions:
         env = success_response(
@@ -1129,6 +1185,31 @@ def _resolve_review_to_revision(review_id: int) -> tuple[str | None, str]:
     if not revision:
         return None, f"`{shown}` gave no current_revision"
     return revision, ""
+
+
+def _resolve_current_patchset(review_id: int) -> int | None:
+    """Resolve a Gerrit change number to its current patchset number.
+
+    Uses the gerrit CLI tool to look up the change.  Returns None if
+    the lookup fails, in which case the caller reports that instead
+    of guessing.
+    """
+    import json
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["gerrit", "info", str(review_id)],
+            capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode != 0:
+            return None
+        data = json.loads(proc.stdout)
+        if isinstance(data.get("data"), dict):
+            data = data["data"]
+        return data.get("current_patchset")
+    except Exception:
+        return None
 
 
 def _parse_review_arg(value: str) -> str:

@@ -49,8 +49,11 @@ maloo subtests <test_set-UUID> --status PASS
 # Bug links for a test set (use --related to include links from child subtests)
 maloo bugs <test_set-UUID>
 
-# Find test sessions for a Gerrit review
+# Find test sessions for a Gerrit review (current/latest patchset only by default)
 maloo review 54225
+maloo review 54225 --patch 3         # a specific patchset
+maloo review 54225 --all-patchsets   # every patchset ever uploaded (slow)
+maloo review 54225 --commit <sha>    # skip auto-resolution, query an exact revision
 
 # List recent sessions
 maloo sessions --branch lustre-master
@@ -130,7 +133,7 @@ follow-up commands.)
 | Command | Description |
 |---------|-------------|
 | `maloo sessions` | List recent sessions (filter by `--branch`, `--host`, `--failed`) |
-| `maloo review <change>` | Test sessions for a Gerrit change number |
+| `maloo review <change>` | Test sessions for a Gerrit change number (current patchset by default; `--patch N`, `--all-patchsets`, or `--commit <sha>` to change scope) |
 | `maloo top-failures <branch>` | Most common failing tests on a branch |
 | `maloo test-history <test>` | Pass/fail history for a specific subtest |
 | `maloo queue` | Test queue status; requires at least one filter: `--review`, `--build`, `--branch`, or `--status` |

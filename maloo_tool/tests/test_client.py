@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, Mock, patch, PropertyMock
 import pytest
 import requests
 
-from maloo_tool.client import MalooClient
+from maloo_tool.client import MalooClient, resolve_patchset_commit
 from maloo_tool.config import MalooConfig
 
 
@@ -313,6 +313,51 @@ class TestFindSessionsByCommit:
         with pytest.raises(ValueError):
             client.find_sessions_by_commit("")
         client._get_paginated.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# resolve_patchset_commit
+# ---------------------------------------------------------------------------
+
+class TestResolvePatchsetCommit:
+    """Resolves a change/patchset to its revision SHA via Gerrit's own
+    public REST API, so callers don't have to look it up by hand."""
+
+    def test_resolves_current_patchset_by_default(self, monkeypatch):
+        captured = {}
+
+        def fake_get(url, timeout):
+            captured["url"] = url
+            return Mock(status_code=200, text=")]}'\n{\"commit\": \"deadbeef\"}")
+
+        monkeypatch.setattr("maloo_tool.client.requests.get", fake_get)
+        assert resolve_patchset_commit(64266) == "deadbeef"
+        assert captured["url"].endswith("/changes/64266/revisions/current/commit")
+
+    def test_resolves_a_specific_patchset(self, monkeypatch):
+        captured = {}
+
+        def fake_get(url, timeout):
+            captured["url"] = url
+            return Mock(status_code=200, text='{"commit": "cafef00d"}')
+
+        monkeypatch.setattr("maloo_tool.client.requests.get", fake_get)
+        assert resolve_patchset_commit(64266, patch=3) == "cafef00d"
+        assert captured["url"].endswith("/changes/64266/revisions/3/commit")
+
+    def test_returns_none_on_http_error(self, monkeypatch):
+        monkeypatch.setattr(
+            "maloo_tool.client.requests.get",
+            lambda url, timeout: Mock(status_code=404, text="Not Found"),
+        )
+        assert resolve_patchset_commit(999999999) is None
+
+    def test_returns_none_on_network_error(self, monkeypatch):
+        def raise_error(url, timeout):
+            raise requests.exceptions.ConnectionError("boom")
+
+        monkeypatch.setattr("maloo_tool.client.requests.get", raise_error)
+        assert resolve_patchset_commit(64266) is None
 
 
 # ---------------------------------------------------------------------------

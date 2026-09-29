@@ -387,7 +387,8 @@ class TestSubtests:
 
 
 class TestReview:
-    def test_review_found(self, runner, mock_client):
+    def test_review_found_with_explicit_commit(self, runner, mock_client):
+        """--commit skips auto-resolution and queries that revision directly."""
         mock_client.find_sessions_by_commit.return_value = [
             {
                 "id": SID_1,
@@ -413,6 +414,32 @@ class TestReview:
         assert env["data"]["session_count"] == 1
         mock_client.find_sessions_by_commit.assert_called_once_with("a" * 40)
 
+    def test_review_found_auto_resolves_commit(self, runner, mock_client):
+        """Without --commit, the current patchset's revision is resolved
+        automatically via Gerrit's REST API."""
+        mock_client.find_sessions_by_commit.return_value = [
+            {
+                "id": SID_1,
+                "test_group": "full",
+                "test_sets_passed_count": 1,
+                "test_sets_failed_count": 0,
+                "test_sets_count": 1,
+            },
+        ]
+        with patch(
+            "maloo_tool.cli.resolve_patchset_commit", return_value="c" * 40
+        ) as resolve_mock, patch(
+            "maloo_tool.cli._resolve_current_patchset", return_value=7
+        ):
+            result = runner.invoke(main, ["--envelope", "review", "54321"])
+        env = _parse_output(result)
+        assert env["ok"] is True
+        assert env["data"]["commit"] == "c" * 40
+        assert env["data"]["patch"] == 7
+        assert env["data"]["session_count"] == 1
+        resolve_mock.assert_called_once_with(54321, None)
+        mock_client.find_sessions_by_commit.assert_called_once_with("c" * 40)
+
     def test_review_not_found(self, runner, mock_client):
         mock_client.find_sessions_by_commit.return_value = []
         result = runner.invoke(
@@ -422,19 +449,52 @@ class TestReview:
         assert env["ok"] is True
         assert env["data"]["sessions"] == []
 
-    def test_review_without_a_commit_says_so_instead_of_guessing(
-        self, runner, mock_client
-    ):
-        """Maloo stores no change number to query, so there is nothing to
-        fall back to: a review id on its own selected the whole table."""
-        result = runner.invoke(main, ["--envelope", "review", "54321"])
+    def test_review_unresolvable_reports_resolve_failed(self, runner, mock_client):
+        """When the patchset can't be resolved to a commit, say so instead
+        of falling back to an unfiltered (and previously unbounded) scan."""
+        with patch(
+            "maloo_tool.cli.resolve_patchset_commit", return_value=None
+        ):
+            result = runner.invoke(main, ["--envelope", "review", "54321"])
         assert result.exit_code == 1
         env = json.loads(result.output)
         assert env["ok"] is False
-        assert env["error"]["code"] == "MISSING_FILTER"
-        assert "gerrit info 54321" in env["error"]["message"]
+        assert env["error"]["code"] == "RESOLVE_FAILED"
         mock_client.find_sessions_by_commit.assert_not_called()
 
+    def test_review_api_error(self, runner, mock_client):
+        mock_client.find_sessions_by_commit.side_effect = RuntimeError("boom")
+        with patch(
+            "maloo_tool.cli.resolve_patchset_commit", return_value="c" * 40
+        ):
+            result = runner.invoke(main, ["--envelope", "review", "54321"])
+        env = json.loads(result.output)
+        assert env["ok"] is False
+        assert env["error"]["code"] == "API_ERROR"
+
+    def test_review_all_patchsets(self, runner, mock_client):
+        session = {
+            "id": SID_1,
+            "test_group": "full",
+            "test_sets_passed_count": 1,
+            "test_sets_failed_count": 0,
+            "test_sets_count": 1,
+        }
+        mock_client.find_sessions_by_commit.return_value = [session]
+        with patch(
+            "maloo_tool.cli._resolve_current_patchset", return_value=2
+        ), patch(
+            "maloo_tool.cli.resolve_patchset_commit",
+            side_effect=["d" * 40, "e" * 40],
+        ):
+            result = runner.invoke(
+                main, ["--envelope", "review", "54321", "--all-patchsets"]
+            )
+        env = _parse_output(result)
+        assert env["ok"] is True
+        # Deduplicated across the (mocked) 2 patchsets queried.
+        assert env["data"]["session_count"] == 1
+        assert mock_client.find_sessions_by_commit.call_count == 2
 
 # -- bugs command --
 
