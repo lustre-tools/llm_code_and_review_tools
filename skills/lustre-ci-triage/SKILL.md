@@ -252,7 +252,10 @@ jenkins run-console <job> <build> <run>    # one matrix sub-build
 
 A build failed on infrastructure when the builder died, lost its agent,
 or ran out of disk, with no compile, packaging or test error the patch
-could have caused. A compile error in files the patch does not touch,
+could have caused. A lost agent ends the console with `FATAL: command
+execution failed`, `java.io.EOFException` and `Backing channel '<node>'
+is disconnected`; that alone settles it, so say so in a sentence and
+retrigger, without comparing matrix runs or the files the patch touches. A compile error in files the patch does not touch,
 on a base weeks behind the branch, is usually kernel compatibility the
 branch has since fixed: the repair is a rebase, not a source change.
 
