@@ -48,8 +48,11 @@ class TestCatalog:
 class TestCanonicalModel:
 
     @pytest.mark.parametrize("alias,slug", [
-        ("sol", "gpt-5.6-sol"),
-        ("SOL", "gpt-5.6-sol"),
+        ("sol", "gpt-6.1-sol"),
+        ("SOL", "gpt-6.1-sol"),
+        ("gpt-6.1", "gpt-6.1-sol"),
+        ("sol6", "gpt-6-sol"),
+        ("sol5.6", "gpt-5.6-sol"),
         ("terra", "gpt-5.6-terra"),
         ("luna", "gpt-5.6-luna"),
         ("astra", "gpt-6-astra"),

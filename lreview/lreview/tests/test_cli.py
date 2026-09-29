@@ -73,7 +73,7 @@ class TestParser:
         from lreview.cli import resolve_model
         monkeypatch.delenv("LREVIEW_MODEL", raising=False)
         assert resolve_model("claude") == "opus"
-        assert resolve_model("codex") == "gpt-6-astra"
+        assert resolve_model("codex") == "gpt-6.1-sol"
         assert resolve_model("gemini") is None
         assert resolve_model("claude", "fable") == "fable"
         monkeypatch.setenv("LREVIEW_MODEL", "sonnet")
@@ -83,7 +83,7 @@ class TestParser:
     def test_resolve_model_expands_codex_aliases(self, monkeypatch):
         from lreview.cli import resolve_model
         monkeypatch.delenv("LREVIEW_MODEL", raising=False)
-        assert resolve_model("codex", "sol") == "gpt-5.6-sol"
+        assert resolve_model("codex", "sol") == "gpt-6.1-sol"
         assert resolve_model("codex", "gpt-6") == "gpt-6-astra"
         # unknown names reach the CLI untouched
         assert resolve_model("codex", "gpt-7-nova") == "gpt-7-nova"

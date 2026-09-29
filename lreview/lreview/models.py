@@ -11,8 +11,8 @@ seconds into the run, after lreview has already fetched the change and
 built a worktree, and the batch records it as a failed review. So the
 pair is validated up front, before anything expensive happens.
 
-The table is a snapshot of codex's own model list (codex-cli 0.153.4,
-2026-09-09). A name that is not in it is passed through to the agent
+The table is a snapshot of codex's own model list (codex-cli 0.159.1,
+2026-10-03). A name that is not in it is passed through to the agent
 untouched and not effort-checked, so a model released after this table
 was written still works -- the table constrains only what it knows.
 """
@@ -44,6 +44,22 @@ class CodexModel:
 
 CODEX_MODELS = (
     CodexModel(
+        slug="gpt-6.1-sol",
+        family="GPT-6.1",
+        summary="default: GPT-6-class work at several times less than astra",
+        efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
+        default_effort="medium",
+        aliases=("sol", "sol6.1", "gpt-6.1", "gpt6.1"),
+    ),
+    CodexModel(
+        slug="gpt-6-sol",
+        family="GPT-6",
+        summary="previous Sol",
+        efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
+        default_effort="medium",
+        aliases=("sol6",),
+    ),
+    CodexModel(
         slug="gpt-6-astra",
         family="GPT-6",
         summary="most capable; complex, demanding work",
@@ -57,7 +73,7 @@ CODEX_MODELS = (
         summary="reliable agentic workhorse for everyday tasks",
         efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
         default_effort="low",
-        aliases=("sol",),
+        aliases=("sol5.6",),
     ),
     CodexModel(
         slug="gpt-5.6-terra",
@@ -94,9 +110,9 @@ CODEX_MODELS = (
     ),
 )
 
-# Reviews default to the most capable model of each agent, as claude
-# reviews default to opus. Override with --model / $LREVIEW_MODEL.
-CODEX_DEFAULT_MODEL = "gpt-6-astra"
+# Codex reviews default to gpt-6.1-sol: astra's capability at several
+# times less of the plan. Override with --model / $LREVIEW_MODEL.
+CODEX_DEFAULT_MODEL = "gpt-6.1-sol"
 
 CLAUDE_DEFAULT_MODEL = "opus"
 

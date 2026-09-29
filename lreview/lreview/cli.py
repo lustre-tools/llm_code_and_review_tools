@@ -67,7 +67,7 @@ def resolve_model(agent: str, model: str = None) -> str:
     """Model to run reviews with.
 
     Explicit --model wins, then $LREVIEW_MODEL; claude defaults to
-    opus and codex to gpt-6-astra (each agent's most capable model),
+    opus and codex to gpt-6.1-sol,
     gemini and opencode to whatever their own CLI defaults to.
 
     codex aliases are expanded to the slug the CLI expects, so
@@ -671,7 +671,7 @@ def build_parser() -> argparse.ArgumentParser:
             "                   focused pass instead of the deep dive\n"
             "  --agent NAME     claude (default), codex, gemini, opencode\n"
             "  --model NAME     claude: opus (default), sonnet, fable\n"
-            "                   codex: gpt-6-astra (default), sol, terra,\n"
+            "                   codex: gpt-6.1-sol (default), astra, terra,\n"
             "                   luna, ... — see 'lreview models'\n"
             "  --effort LEVEL   low..max, ultra (codex, per model)\n"
             "  --post           post findings when the batch finishes\n"
@@ -791,7 +791,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--model", default=None,
         help="Model for the review runs — claude: opus (default), "
-             "sonnet, fable, haiku; codex: gpt-6-astra (default), "
+             "sonnet, fable, haiku; codex: gpt-6.1-sol (default), "
              "gpt-5.6-sol/-terra/-luna, gpt-5.5, gpt-5.3-codex-spark, "
              "or their aliases (astra, sol, terra, luna, spark). "
              "$LREVIEW_MODEL sets the default; 'lreview models' "

@@ -99,15 +99,17 @@ it a review.) Select the backend with
 
 ### Codex models and effort
 
-`--agent codex` reaches the GPT-6 and GPT-5.6 families. Reviews
-default to **gpt-6-astra**, the most capable one, as claude reviews
-default to opus; `--model` (or `$LREVIEW_MODEL`) picks another, by
+`--agent codex` reaches the GPT-6.1, GPT-6 and GPT-5.6 families. Reviews
+default to **gpt-6.1-sol**, Astra-class at several times less of the
+plan; `--model` (or `$LREVIEW_MODEL`) picks another, by
 slug or by the short alias in brackets:
 
 | Model | Alias | Effort ladder |
 |---|---|---|
-| `gpt-6-astra` (default) | `astra`, `gpt-6` | low … max, **ultra** |
-| `gpt-5.6-sol` | `sol` | low … max, **ultra** |
+| `gpt-6.1-sol` (default) | `sol`, `gpt-6.1` | low … max, **ultra** |
+| `gpt-6-sol` | `sol6` | low … max, **ultra** |
+| `gpt-6-astra` | `astra`, `gpt-6` | low … max, **ultra** |
+| `gpt-5.6-sol` | `sol5.6` | low … max, **ultra** |
 | `gpt-5.6-terra` | `terra`, `gpt-5.6` | low … max, **ultra** |
 | `gpt-5.6-luna` | `luna` | low … max |
 | `gpt-5.5` | — | low … xhigh |
