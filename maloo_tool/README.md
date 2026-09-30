@@ -38,6 +38,7 @@ Both can be found in the output of `session` and `failures`.
 ```bash
 # Session overview: suites with pass/fail counts
 maloo session <session-UUID>
+maloo session <session-UUID> --status FAIL
 
 # Drill into failures: failed subtests with error messages
 maloo failures <session-UUID>
@@ -115,7 +116,7 @@ follow-up commands.)
 
 | Command | Description |
 |---------|-------------|
-| `maloo session <session-UUID>` | Session overview: suites, pass/fail totals |
+| `maloo session <session-UUID>` | Session overview: suites, pass/fail totals (filter suites by `--status`) |
 | `maloo failures <session-UUID>` | Failed subtests with error messages for each failed suite. A failed `test_cleanup` carries a `note`: its status is Autotest's timeout, not the error. `--cleanup-error` downloads that suite's logs to a temporary directory and adds the error from the suite log as `cleanup_error` |
 | `maloo subtests <test_set-UUID>` | All subtests for a suite, each with its `id` (filter by `--status`); a failed `test_cleanup` carries the same `note` |
 
