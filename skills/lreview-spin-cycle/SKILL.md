@@ -77,10 +77,11 @@ backends fail differently; `lreview models` lists what each accepts
 (claude: opus, sonnet, fable, haiku; codex: astra, sol, terra, luna,
 spark, with an `--effort` level).
 
-Inside a Patch Watcher run, `codex` is only on PATH in a Codex run; in a
-Claude run lreview reviews with claude alone, so skip the codex opinion
-there. Results go to `$LREVIEW_RESULTS_DIR`, which the run sets to its own
-tmp. A bare `claude -p` in a run is not logged in; lreview is.
+Inside a Patch Watcher run, use lreview for reviews and do not start
+`claude` or `codex` yourself. In a Claude run lreview reviews with Claude;
+`codex` is only in Codex runs, so skip the codex opinion there. In a Codex
+run lreview is not logged in yet. Results go to `$LREVIEW_RESULTS_DIR`,
+which the run sets to its own tmp.
 
 ## The comment-bloat trap
 
