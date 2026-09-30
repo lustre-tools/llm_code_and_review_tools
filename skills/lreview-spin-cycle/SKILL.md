@@ -77,6 +77,11 @@ backends fail differently; `lreview models` lists what each accepts
 (claude: opus, sonnet, fable, haiku; codex: astra, sol, terra, luna,
 spark, with an `--effort` level).
 
+Inside a Patch Watcher run, `codex` is only on PATH in a Codex run; in a
+Claude run lreview reviews with claude alone, so skip the codex opinion
+there. Results go to `$LREVIEW_RESULTS_DIR`, which the run sets to its own
+tmp. A bare `claude -p` in a run is not logged in; lreview is.
+
 ## The comment-bloat trap
 
 The strong pull during a spin cycle is to answer each finding by adding an
