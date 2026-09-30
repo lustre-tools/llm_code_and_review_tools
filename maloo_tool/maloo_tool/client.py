@@ -1,6 +1,7 @@
 """Maloo REST API client."""
 
 import json
+import os
 import re
 from typing import Any
 
@@ -11,6 +12,32 @@ from .config import MalooConfig
 CSRF_RE = re.compile(
     r'<meta\s+name="csrf-token"\s+content="([^"]+)"'
 )
+
+GERRIT_URL = os.environ.get("GERRIT_URL", "https://review.whamcloud.com").rstrip("/")
+
+
+def resolve_patchset_commit(
+    review_id: int, patch: int | None = None
+) -> str | None:
+    """Resolve a Gerrit change/patchset to its git commit hash.
+
+    Uses Gerrit's public REST API directly (no auth needed for reads
+    on whamcloud's Gerrit).  ``patch`` may be a specific patchset
+    number; ``None`` resolves to the change's current (latest)
+    patchset.  Returns None if the lookup fails.
+    """
+    revision = str(patch) if patch is not None else "current"
+    url = f"{GERRIT_URL}/changes/{review_id}/revisions/{revision}/commit"
+    try:
+        resp = requests.get(url, timeout=15)
+        if resp.status_code != 200:
+            return None
+        text = resp.text
+        if text.startswith(")]}'"):
+            text = text[4:]
+        return json.loads(text).get("commit")
+    except Exception:
+        return None
 
 
 class MalooClient:
