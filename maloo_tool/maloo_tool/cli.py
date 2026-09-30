@@ -106,11 +106,15 @@ def main(ctx: click.Context, envelope: bool, user: str | None) -> None:
 
 @main.command()
 @click.argument("session_url")
+@click.option("--status", type=str, default=None,
+              help="Filter suites by status (PASS/FAIL/SKIP/CRASH/...)")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON")
-def session(session_url: str, pretty: bool) -> None:
+def session(session_url: str, status: str | None, pretty: bool) -> None:
     """Show test session overview.
 
     SESSION_URL can be a full Maloo URL or a bare UUID.
+
+    Use --status PASS/FAIL/... to show only suites with that status.
     """
     sid = _extract_session_id(session_url)
     client = _make_client()
@@ -124,6 +128,8 @@ def session(session_url: str, pretty: bool) -> None:
 
     suites = []
     for ts in test_sets:
+        if status and ts["status"] != status.upper():
+            continue
         name = set_names.get(ts.get("test_set_script_id", ""), "unknown")
         suites.append({
             "id": ts["id"],
