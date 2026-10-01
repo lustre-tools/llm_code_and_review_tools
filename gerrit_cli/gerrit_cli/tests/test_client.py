@@ -1,5 +1,6 @@
 """Tests for the client module."""
 
+import os
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -232,9 +233,10 @@ class TestGerritCommentsClientWithMocks:
         """Test initialization with default credentials."""
         client = GerritCommentsClient()
 
-        mock_auth.assert_called_once()
+        mock_auth.assert_called_once_with(
+            os.environ["GERRIT_USER"], os.environ["GERRIT_PASS"])
         mock_api.assert_called_once()
-        assert client.url == "https://review.whamcloud.com"
+        assert client.url == os.environ["GERRIT_URL"]
 
     @patch("gerrit_cli.client.GerritRestAPI")
     @patch("gerrit_cli.client.HTTPBasicAuth")

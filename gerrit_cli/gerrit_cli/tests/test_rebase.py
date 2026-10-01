@@ -742,7 +742,9 @@ class TestFinishRebaseWithDescendants:
              patch.object(manager, "_run_git", side_effect=mock_git_behavior), \
              patch.object(manager, "_is_cherry_pick_in_progress") as mock_cherry, \
              patch.object(manager, "_has_unmerged_files") as mock_unmerged, \
+             patch.object(manager, "client") as mock_client, \
              patch.object(manager, "save_session", side_effect=capture_save):
+            mock_client.get_change_detail.return_value = {"branch": "master"}
             mock_load.return_value = session
             mock_cherry.return_value = False
             # No unmerged files = empty commit, not a conflict

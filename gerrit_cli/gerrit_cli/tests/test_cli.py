@@ -1554,7 +1554,9 @@ class TestCmdReviewPostComments:
             changes_only=False,
         )
 
-        with patch('gerrit_cli.cli.CodeReviewer') as MockReviewer:
+        with patch('gerrit_cli.cli.CodeReviewer') as MockReviewer, \
+             patch('gerrit_cli.cli.extract_comments',
+                   return_value=MagicMock(threads=[])):
             mock_data = MagicMock()
             mock_data.change_info.change_number = 12345
             MockReviewer.return_value.get_review_data.return_value = mock_data
@@ -1586,7 +1588,9 @@ class TestCmdReviewPostComments:
             changes_only=False,
         )
 
-        with patch('gerrit_cli.cli.CodeReviewer') as MockReviewer:
+        with patch('gerrit_cli.cli.CodeReviewer') as MockReviewer, \
+             patch('gerrit_cli.cli.extract_comments',
+                   return_value=MagicMock(threads=[])):
             mock_data = MagicMock()
             mock_data.change_info.change_number = 12345
             MockReviewer.return_value.get_review_data.return_value = mock_data
@@ -1769,7 +1773,9 @@ class TestCmdReviewPostComments:
             tag="cli-tag",
         )
 
-        with patch('gerrit_cli.cli.CodeReviewer') as MockReviewer:
+        with patch('gerrit_cli.cli.CodeReviewer') as MockReviewer, \
+             patch('gerrit_cli.cli.extract_comments',
+                   return_value=MagicMock(threads=[])):
             mock_data = MagicMock()
             mock_data.change_info.change_number = 12345
             MockReviewer.return_value.get_review_data.return_value = mock_data
@@ -1816,7 +1822,9 @@ class TestCmdReviewPostComments:
             tag="cli-tag",
         )
 
-        with patch('gerrit_cli.cli.CodeReviewer') as MockReviewer:
+        with patch('gerrit_cli.cli.CodeReviewer') as MockReviewer, \
+             patch('gerrit_cli.cli.extract_comments',
+                   return_value=MagicMock(threads=[])):
             mock_data = MagicMock()
             mock_data.change_info.change_number = 12345
             MockReviewer.return_value.get_review_data.return_value = mock_data
