@@ -229,7 +229,9 @@ Optional: `GERRIT_SSH_USER` for SSH operations. If unset, the SSH
 user is auto-discovered from `ssh://user@<gerrit-host>` URLs in
 `git remote -v`, then from shell alias definitions, then from the
 `GERRIT_USER=` entry in `~/.config/gerrit-cli/.env`; the
-`GERRIT_USER` environment variable itself is not used.
+`GERRIT_USER` environment variable itself is not used. Under `--user`,
+SSH operations log in as that set's `GERRIT_USER` instead, so a
+fallback never acts as another account.
 
 Verify: `gerrit info <any-change-url>`
 
