@@ -27,7 +27,14 @@ VALID_AUTH_TYPES = {AUTH_TYPE_BEARER, AUTH_TYPE_BASIC}
 # all of them resolve configuration by the same rules: a variable already set
 # in the environment always wins, then JIRA_TOOL_ENV_FILE if it names a file,
 # then ~/.config/jira-tool/.env.
-load_env_files("jira-tool")
+#
+# This runs at import, before a command can report anything, so a
+# JIRA_TOOL_ENV_FILE naming no file is raised by load_config() instead.
+try:
+    load_env_files("jira-tool")
+    _ENV_FILE_ERROR: str | None = None
+except FileNotFoundError as e:
+    _ENV_FILE_ERROR = str(e)
 
 
 def _load_env_file() -> None:
@@ -226,6 +233,8 @@ def load_config(
     Raises:
         ConfigError: If configuration is invalid or missing required fields
     """
+    if _ENV_FILE_ERROR:
+        raise ConfigError(_ENV_FILE_ERROR)
     # Start with empty config
     config_data: dict[str, Any] = {}
 

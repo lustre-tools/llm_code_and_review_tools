@@ -693,3 +693,50 @@ class TestAnonymousAccess:
                 with pytest.raises(AuthError, match="token is required"):
                     write()
                 assert len(rs.calls) == 0, f"{name} reached the server"
+
+
+def _run_jira(env_file, *args):
+    """Run jira in a fresh interpreter: the env file is read at import."""
+    import subprocess
+    import sys
+
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith("JIRA_")
+    }
+    env["JIRA_TOOL_ENV_FILE"] = str(env_file)
+    env["PYTHONPATH"] = os.pathsep.join(sys.path)
+    return subprocess.run(
+        [sys.executable, "-c", "from jira_tool.cli import main; main()", *args],
+        capture_output=True, text=True, env=env, timeout=60,
+    )
+
+
+class TestMissingEnvFile:
+    """JIRA_TOOL_ENV_FILE naming no file is a JSON CONFIG_ERROR, never a
+    traceback, and nothing falls back to the default configuration."""
+
+    def _config_error(self, proc):
+        assert "Traceback" not in proc.stderr, proc.stderr
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        return json.loads(proc.stdout)
+
+    def test_a_command(self, tmp_path):
+        missing = tmp_path / "missing.env"
+        out = self._config_error(_run_jira(missing, "get", "LU-1"))
+        assert out["code"] == "CONFIG_ERROR"
+        assert str(missing) in out["message"]
+
+    def test_envelope_and_user(self, tmp_path):
+        env = self._config_error(
+            _run_jira(tmp_path / "missing.env", "--envelope", "--user", "bot",
+                      "get", "LU-1")
+        )
+        assert env["ok"] is False
+        assert env["error"]["code"] == "CONFIG_ERROR"
+
+    def test_help_and_describe_still_work(self, tmp_path):
+        assert _run_jira(tmp_path / "missing.env", "--help").returncode == 0
+        proc = _run_jira(tmp_path / "missing.env", "describe")
+        assert proc.returncode == 0
+        assert json.loads(proc.stdout)["name"] == "jira"

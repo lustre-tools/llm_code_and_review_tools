@@ -210,6 +210,8 @@ def main(
     if user:
         try:
             apply_credential_set("jira-tool", user)
+        except FileNotFoundError as e:
+            _fail_config(ctx, str(e), pretty, envelope)
         except CredentialSetError as env_error:
             instance_name = _instance_named(user, config_path)
             if instance_name is None:
