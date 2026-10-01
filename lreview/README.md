@@ -131,7 +131,7 @@ lreview run --agent codex --model luna --effort ultra 64086
 ```
 
 Aliases are expanded before the review runs, so `--model sol` is
-recorded and posted as `[AI review - gpt-5.6-sol]`. A model name
+recorded and posted as `[AI review - gpt-6.1-sol]`. A model name
 lreview does not know is passed to the CLI untouched and not
 effort-checked, so a model released after this table was written
 still works.
@@ -175,7 +175,7 @@ review text.
 
 Reviews run on **opus** by default (`--model sonnet` / `--model fable`
 or `LREVIEW_MODEL` to change; `--agent codex` defaults to
-**gpt-6-astra**). Posted messages are prefixed
+**gpt-6.1-sol**). Posted messages are prefixed
 `[AI review - <model>]`, stamped with the model that actually ran the
 review and rendered as a bold standalone first line with a blank line
 before the message body:
@@ -495,7 +495,7 @@ opencode's `--model` wants the `provider/model` form.
 | `--worktrees-dir DIR` | auto | Where worktrees are created |
 | `--keep-worktrees` | off | Keep worktrees after review |
 | `--agent NAME` | `claude` (or `$LREVIEW_AGENT`) | Agent backend: claude, codex (verified), gemini, opencode |
-| `--model NAME` | `opus` for claude, `gpt-6-astra` for codex (or `$LREVIEW_MODEL`); gemini/opencode use their own default | Model for the review runs; see `lreview models` |
+| `--model NAME` | `opus` for claude, `gpt-6.1-sol` for codex (or `$LREVIEW_MODEL`); gemini/opencode use their own default | Model for the review runs; see `lreview models` |
 | `--effort LEVEL` | agent's default (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max, plus `ultra` on the codex models that have it — claude (`--effort`) or codex (`-c model_reasoning_effort=...`); ignored for gemini/opencode. The ladder is per model and checked before the run |
 | `--memory, -m` | off | Read/update the per-change review memory document |
 | `--clear-memory, -c` | off | With `-m`: delete the change's memory document first |
@@ -524,7 +524,7 @@ already-posted review.
 | Variable | Effect |
 |---|---|
 | `LREVIEW_AGENT` | Default for `--agent` (else `claude`) |
-| `LREVIEW_MODEL` | Default for `--model` (else `opus` for claude, `gpt-6-astra` for codex); a name from another agent's models, such as `opus` under `--agent codex`, gives way to that agent's default |
+| `LREVIEW_MODEL` | Default for `--model` (else `opus` for claude, `gpt-6.1-sol` for codex); a name from another agent's models, such as `opus` under `--agent codex`, gives way to that agent's default |
 | `LREVIEW_EFFORT` | Default for `--effort` (else the agent's own) |
 | `LREVIEW_DB` | Default for `--db` (memory database directory) |
 | `LREVIEW_RESULTS_DIR` | Default for `--results-dir` |

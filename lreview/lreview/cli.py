@@ -74,7 +74,7 @@ def resolve_model(agent: str, model: str = None) -> str:
 
     codex aliases are expanded to the slug the CLI expects, so
     `--model sol` runs — and is posted and recorded as —
-    gpt-5.6-sol. An unrecognized name is passed through untouched.
+    gpt-6.1-sol. An unrecognized name is passed through untouched.
     """
     from .models import DEFAULT_MODELS, canonical_model, catalog_agent
     if not model:
@@ -806,8 +806,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--model", default=None,
         help="Model for the review runs — claude: opus (default), "
              "sonnet, fable, haiku; codex: gpt-6.1-sol (default), "
-             "gpt-5.6-sol/-terra/-luna, gpt-5.5, gpt-5.3-codex-spark, "
-             "or their aliases (astra, sol, terra, luna, spark). "
+             "gpt-6-sol, gpt-6-astra, gpt-5.6-sol/-terra/-luna, gpt-5.5, "
+             "gpt-5.3-codex-spark, or their aliases (sol, astra, terra, "
+             "luna, spark). "
              "$LREVIEW_MODEL sets the default; 'lreview models' "
              "prints the codex table")
     run_p.add_argument(
