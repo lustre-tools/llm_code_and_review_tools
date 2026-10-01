@@ -42,6 +42,12 @@ REVIEW_SPEC = {
 # analysis always writes review-metadata.json (as review-core.md
 # mandates); NO_METADATA simulates a claude run that bailed out early.
 STUB_CLAUDE = """#!/bin/bash
+if [ -n "$STUB_ARGS_LOG" ]; then printf '%s\\n' "$@" -- >> "$STUB_ARGS_LOG"; fi
+case " $* " in *" --resume "*)
+    if [ -n "$STUB_NO_SESSION" ]; then
+        echo "No conversation found with session ID: gone" >&2; exit 1
+    fi;;
+esac
 echo '{"type":"system","subtype":"init","session_id":"'"${STUB_SESSION:-sess-1}"'"}'
 if [ -f FAIL_MARKER ]; then echo "boom"; exit 3; fi
 if [ -f SLEEP_MARKER ]; then sleep 30; exit 0; fi
@@ -1075,3 +1081,134 @@ class TestClaudeSessionRecording:
         results = run_batch(config, [_change(805, sha)])
         assert results[0].status == STATUS_CLEAN
         assert read_session(results[0].memory_path, "full") is None
+
+
+def _claude_session_file(tmp_path, monkeypatch, session_id):
+    """Where Claude Code keeps a session; lreview checks it exists."""
+    config_dir = tmp_path / "claude-config"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    path = config_dir / "projects" / "-some-worktree" / f"{session_id}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n")
+    return path
+
+
+def _invocations(args_log: Path) -> list[list[str]]:
+    runs, current = [], []
+    for line in args_log.read_text().splitlines():
+        if line == "--":
+            runs.append(current)
+            current = []
+        else:
+            current.append(line)
+    return runs
+
+
+class TestClaudeSessionResume:
+    """--memory runs resume the recorded Claude session (forked), with
+    a fresh session as the fallback."""
+
+    def test_claude_resume_and_settings_flags(self):
+        from lreview.agents import get_agent
+        cmd = get_agent("claude").build_cmd(
+            "opus", None, [], "PROMPT", resume="sess-1", settings="{}")
+        assert cmd[cmd.index("--resume") + 1] == "sess-1"
+        assert "--fork-session" in cmd
+        assert cmd[cmd.index("--settings") + 1] == "{}"
+
+    def test_other_agents_ignore_them(self):
+        from lreview.agents import get_agent
+        cmd = get_agent("codex").build_cmd(
+            None, None, [], "PROMPT", resume="sess-1", settings="{}")
+        assert "--resume" not in cmd and "--settings" not in cmd
+
+    def test_compaction_hook_rereads_the_memory(self, tmp_path):
+        from lreview.memory import MEMORY_PROMPT_PATH
+        from lreview.runner import compaction_settings
+        doc = tmp_path / "db" / "1-x.md"
+        settings = json.loads(compaction_settings(doc))
+        (entry,) = settings["hooks"]["SessionStart"]
+        assert entry["matcher"] == "compact"
+        out = subprocess.run(entry["hooks"][0]["command"], shell=True,
+                             capture_output=True, text=True).stdout
+        assert str(doc) in out and str(MEMORY_PROMPT_PATH) in out
+
+    def test_resume_prompt_says_where_the_code_is_now(self, tmp_path):
+        from lreview.memory import ClaudeSession
+        from lreview.runner import review_prompt
+        config = _config(tmp_path, tmp_path, memory_db=tmp_path / "db")
+        prompt = review_prompt(
+            config, _change(901, "d" * 40),
+            session=ClaudeSession("sess-1", "ps1 aaaaaaaaaaaa"),
+            worktree=Path("/wt/new"))
+        assert "continues your earlier review" in prompt
+        assert "ps1 aaaaaaaaaaaa" in prompt
+        assert "/wt/new" in prompt
+        assert "review-core.md" in prompt
+
+    def _review_twice(self, repo, tmp_path, monkeypatch, **config_kwargs):
+        args_log = tmp_path / "args.log"
+        monkeypatch.setenv("STUB_ARGS_LOG", str(args_log))
+        sha = _git(repo, "rev-parse", "HEAD")
+        change = _change(902, sha)
+        config = _config(repo, tmp_path, memory_db=tmp_path / "db",
+                         **config_kwargs)
+        monkeypatch.setenv("STUB_SESSION", "sess-1")
+        first = run_batch(config, [change])[0]
+        monkeypatch.setenv("STUB_SESSION", "sess-2")
+        second = run_batch(config, [change])[0]
+        return first, second, _invocations(args_log)
+
+    def test_second_run_resumes_a_fork(self, repo, tmp_path, stub_claude,
+                                       monkeypatch):
+        from lreview.memory import read_session
+        _claude_session_file(tmp_path, monkeypatch, "sess-1")
+        first, second, runs = self._review_twice(repo, tmp_path,
+                                                 monkeypatch)
+        assert "--resume" not in runs[0]
+        assert runs[1][runs[1].index("--resume") + 1] == "sess-1"
+        assert "--fork-session" in runs[1]
+        assert "--settings" in runs[0] and "--settings" in runs[1]
+        assert second.status == STATUS_CLEAN
+        assert read_session(second.memory_path, "full").session_id \
+            == "sess-2"
+
+    def test_no_resume_starts_fresh(self, repo, tmp_path, stub_claude,
+                                    monkeypatch):
+        from lreview.memory import read_session
+        _claude_session_file(tmp_path, monkeypatch, "sess-1")
+        _, second, runs = self._review_twice(repo, tmp_path, monkeypatch,
+                                             resume=False)
+        assert "--resume" not in runs[1]
+        assert read_session(second.memory_path, "full").session_id \
+            == "sess-2"
+
+    def test_a_session_claude_no_longer_has_is_not_resumed(
+            self, repo, tmp_path, stub_claude, monkeypatch):
+        from lreview.memory import read_session
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "empty"))
+        _, second, runs = self._review_twice(repo, tmp_path, monkeypatch)
+        assert "--resume" not in runs[1]
+        assert second.status == STATUS_CLEAN
+        assert read_session(second.memory_path, "full").session_id \
+            == "sess-2"
+
+    def test_a_failed_resume_retries_fresh(self, repo, tmp_path,
+                                           stub_claude, monkeypatch):
+        from lreview.memory import read_session
+        _claude_session_file(tmp_path, monkeypatch, "sess-1")
+        monkeypatch.setenv("STUB_NO_SESSION", "1")
+        _, second, runs = self._review_twice(repo, tmp_path, monkeypatch)
+        assert "--resume" in runs[1] and "--resume" not in runs[2]
+        assert second.status == STATUS_CLEAN
+        assert read_session(second.memory_path, "full").session_id \
+            == "sess-2"
+
+    def test_without_memory_nothing_is_resumed(self, repo, tmp_path,
+                                               stub_claude, monkeypatch):
+        args_log = tmp_path / "args.log"
+        monkeypatch.setenv("STUB_ARGS_LOG", str(args_log))
+        sha = _git(repo, "rev-parse", "HEAD")
+        run_batch(_config(repo, tmp_path), [_change(903, sha)])
+        (run,) = _invocations(args_log)
+        assert "--resume" not in run and "--settings" not in run

@@ -306,8 +306,38 @@ N of this change, with accumulated review memory)" — so unrepeated
 earlier findings read as tracked, not forgotten. Documents from
 before the counter existed are seeded from their History section.
 
-Without `-m` the database is neither read nor written. `-c` requires
-`-m` and deletes just that change's document before the run.
+### Resuming the review conversation (claude)
+
+With the claude agent, a completed `-m` review also records its
+conversation: the frontmatter gets a `claude-session-full:` line (or
+`claude-session-light:` for a light review) with the session ID and
+the patchset that session reviewed. The next `-m` run in that mode
+resumes a fork of that conversation (`claude --resume <id>
+--fork-session`), so the agent starts with the code it read and the
+reasoning behind its earlier findings, not only the notes; the prompt
+tells it where the code is checked out now and which patchset it is.
+The new run's session replaces the old one in the document.
+
+When the conversation outgrows the context, Claude compacts it. The
+notes are already in the document, which the protocol has the agent
+save after each area of the analysis, and a per-run hook passed with
+`--settings` tells the agent right after the compaction to re-read
+the protocol and the document.
+
+```bash
+lreview run -m --repo lustre-release 63809              # resume the conversation
+lreview run -m --no-resume --repo lustre-release 63809  # fresh session, notes only
+```
+
+`--no-resume` starts a fresh session that reads only the document, as
+before; that session is recorded all the same. A recorded session
+Claude no longer has -- it deletes sessions after 30 days, and
+another machine never had it -- falls back to a fresh one with a
+note. Other agents ignore all of this.
+
+Without `-m` the database is neither read nor written. `-c` and
+`--no-resume` require `-m`; `-c` deletes just that change's document,
+recorded sessions included, before the run.
 
 ## Local reviews (no Gerrit)
 
@@ -499,6 +529,7 @@ opencode's `--model` wants the `provider/model` form.
 | `--effort LEVEL` | agent's default (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max, plus `ultra` on the codex models that have it — claude (`--effort`) or codex (`-c model_reasoning_effort=...`); ignored for gemini/opencode. The ladder is per model and checked before the run |
 | `--memory, -m` | off | Read/update the per-change review memory document |
 | `--clear-memory, -c` | off | With `-m`: delete the change's memory document first |
+| `--no-resume` | off | With `-m` (claude): start a fresh session from the memory document instead of resuming the recorded review conversation |
 | `--db DIR` | `$LREVIEW_DB`, else `<repo>/lreview-db` | Memory database directory |
 | `--agent-arg=ARG` | — | Extra agent-CLI arg (repeatable; `--claude-arg` is a legacy alias) |
 | `--post` | off | Post findings when batch finishes |

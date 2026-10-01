@@ -494,3 +494,53 @@ class TestLastAndOutput:
             ["run", "--last", "5", "--repo", str(tmp_path)])
         assert cmd_run(args) == 1
         assert "has only 1 commit(s)" in capsys.readouterr().out
+
+
+class TestNoResume:
+    """--no-resume: with --memory, start a fresh Claude session instead
+    of resuming the recorded one."""
+
+    def _run(self, tmp_path, monkeypatch, *argv):
+        import subprocess
+        from pathlib import Path
+        from lreview.cli import cmd_run
+        from lreview.prompts import PromptsStatus
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        for cmd in (["git", "init", "-q"],
+                    ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                     "commit", "-q", "--allow-empty", "-m", "top"]):
+            subprocess.run(cmd, cwd=repo, check=True)
+        captured = {}
+
+        def fake_run_batch(config, changes, in_place=False):
+            captured["config"] = config
+            return []
+
+        monkeypatch.setattr(
+            "lreview.cli.ensure_prompts",
+            lambda args: PromptsStatus(
+                available=True, prompts_dir=Path("/p/kernel"),
+                source="test"))
+        monkeypatch.setattr("lreview.cli.run_batch", fake_run_batch)
+        args = build_parser().parse_args(
+            ["run", "--repo", str(repo), "--db", str(tmp_path / "db"),
+             *argv])
+        return cmd_run(args), captured.get("config")
+
+    def test_memory_resumes_by_default(self, tmp_path, monkeypatch):
+        rc, config = self._run(tmp_path, monkeypatch, "-m")
+        assert rc == 0
+        assert config.resume is True
+
+    def test_no_resume_starts_fresh(self, tmp_path, monkeypatch):
+        rc, config = self._run(tmp_path, monkeypatch, "-m", "--no-resume")
+        assert rc == 0
+        assert config.resume is False
+
+    def test_no_resume_needs_memory(self, tmp_path, monkeypatch, capsys):
+        rc, config = self._run(tmp_path, monkeypatch, "--no-resume")
+        assert rc == 1
+        assert config is None
+        assert "--no-resume requires --memory" in capsys.readouterr().out

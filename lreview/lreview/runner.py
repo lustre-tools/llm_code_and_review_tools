@@ -15,6 +15,7 @@ clean.
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -200,6 +201,10 @@ def parse_final_usage(log_path: Path):
     return None, None
 
 
+# What claude prints when --resume names a session it does not have.
+_NO_SESSION_TEXT = "No conversation found with session ID"
+
+
 def parse_session_id(log_path: Path) -> Optional[str]:
     """The Claude session ID a stream-json log reports, or None.
 
@@ -280,6 +285,9 @@ class BatchConfig:
     # When set, the lreview-db directory: reviews read their per-change
     # memory document before analyzing and rewrite it afterwards
     memory_db: Optional[Path] = None
+    # With memory_db and the claude agent: fork and continue the
+    # session recorded in the memory document instead of starting cold
+    resume: bool = True
     agent_args: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -302,7 +310,9 @@ class BatchConfig:
 
 
 def review_prompt(config: BatchConfig,
-                  change: Optional[ResolvedChange] = None) -> str:
+                  change: Optional[ResolvedChange] = None,
+                  session=None,
+                  worktree: Optional[Path] = None) -> str:
     """The instruction that initiates a review.
 
     This is the review-prompts README quick-start form (also what its
@@ -318,6 +328,8 @@ def review_prompt(config: BatchConfig,
 
     With memory enabled, the prompt additionally points at the
     memory-protocol instructions and the change's memory document.
+    Resuming a session, it first says where the code is now: the
+    conversation remembers the previous run's worktree, which is gone.
     """
     if getattr(change, "provider", None) == "github":
         # GitHub PR reviews use their own prompt and output contract
@@ -345,11 +357,33 @@ def review_prompt(config: BatchConfig,
                    f"{MEMORY_PROMPT_PATH} — your review memory "
                    f"document for this change is {doc}; you are "
                    f"reviewing {now}")
+        if session is not None:
+            prompt = (f"This continues your earlier review of this "
+                      f"change, which looked at {session.reviewed}. That "
+                      f"run's worktree is gone: the code is now checked "
+                      f"out in {worktree}, at {now}. Review it again: "
+                      + prompt)
     return prompt
 
 
+def compaction_settings(doc: Path) -> str:
+    """Claude settings for one review: when the conversation is
+    compacted, a SessionStart hook puts the memory instructions back."""
+    from .memory import MEMORY_PROMPT_PATH
+    text = (f"The conversation was compacted. Before continuing the "
+            f"review, re-read the memory protocol {MEMORY_PROMPT_PATH} "
+            f"and your review memory document {doc}, and keep saving "
+            f"your notes to that document as the protocol says.")
+    return json.dumps({"hooks": {"SessionStart": [{
+        "matcher": "compact",
+        "hooks": [{"type": "command", "command": "echo " + shlex.quote(text)}],
+    }]}})
+
+
 def build_agent_cmd(config: BatchConfig,
-                    change: Optional[ResolvedChange] = None) -> list[str]:
+                    change: Optional[ResolvedChange] = None,
+                    session=None,
+                    worktree: Optional[Path] = None) -> list[str]:
     """Headless review command for the configured agent.
 
     All agents receive the same instruction prompt; claude runs with
@@ -358,8 +392,16 @@ def build_agent_cmd(config: BatchConfig,
     everything until the end).
     """
     spec = get_agent(config.agent)
-    return spec.build_cmd(config.model, config.effort, config.agent_args,
-                          review_prompt(config, change))
+    settings = None
+    if (config.memory_db is not None and change is not None
+            and getattr(change, "provider", None) != "github"):
+        from .memory import ensure_doc
+        settings = compaction_settings(ensure_doc(config.memory_db, change))
+    return spec.build_cmd(
+        config.model, config.effort, config.agent_args,
+        review_prompt(config, change, session, worktree),
+        resume=session.session_id if session is not None else None,
+        settings=settings)
 
 
 def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:
@@ -616,6 +658,7 @@ def run_review(
     change: ResolvedChange,
     worktree_dir: Path,
     log_path: Optional[Path] = None,
+    session=None,
 ) -> ReviewResult:
     """Run one headless kreview in its worktree and collect the output."""
     tag = artifact_tag(config.mode)
@@ -624,7 +667,7 @@ def run_review(
                    else "gerrit-review")
     if log_path is None:
         log_path = run_log_path(config, change)
-    cmd = build_agent_cmd(config, change)
+    cmd = build_agent_cmd(config, change, session, worktree_dir)
     start = time.monotonic()
 
     _log(f"[{change.slug}] {console.color('cyan', 'review started')}: "
@@ -632,6 +675,13 @@ def run_review(
     try:
         returncode = _run_agent(cmd, worktree_dir, log_path,
                                 config.timeout)
+        if (session is not None and returncode != 0
+                and _NO_SESSION_TEXT in _read_tail(log_path, 4096)):
+            _log(f"[{change.slug}] note: Claude could not resume session "
+                 f"{session.session_id}; starting a fresh one")
+            cmd = build_agent_cmd(config, change, None, worktree_dir)
+            returncode = _run_agent(cmd, worktree_dir, log_path,
+                                    config.timeout)
     except subprocess.TimeoutExpired:
         duration = time.monotonic() - start
         _log(f"[{change.slug}] {console.color('red', 'TIMEOUT')} "
@@ -816,9 +866,24 @@ def _review_and_cleanup(
         except OSError as exc:
             _log(f"[{change.slug}] warning: memory doc unavailable: {exc}")
 
+    session = None
+    if memory_path is not None and config.agent == "claude" and config.resume:
+        from .agents import claude_session_exists
+        from .memory import read_session
+        session = read_session(memory_path, config.mode)
+        if session is not None and not claude_session_exists(
+                session.session_id):
+            _log(f"[{change.slug}] note: Claude no longer has session "
+                 f"{session.session_id}; starting a fresh one from the "
+                 "memory document")
+            session = None
+        elif session is not None:
+            _log(f"[{change.slug}] resuming Claude session "
+                 f"{session.session_id} ({session.reviewed})")
+
     try:
         result = run_review(config, change, worktree_dir,
-                            log_path=log_path)
+                            log_path=log_path, session=session)
     except Exception as exc:  # noqa: BLE001 - one bad review must not
         # abort the batch or strand the other results
         _log(f"[{change.slug}] FAILED with unexpected error: {exc!r}")

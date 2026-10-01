@@ -12,7 +12,10 @@ cost and the model name. gemini and opencode are best-effort command
 templates.
 """
 
+import os
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 
@@ -32,7 +35,12 @@ class AgentSpec:
         effort: Optional[str],
         extra_args: list[str],
         prompt_text: str,
+        resume: Optional[str] = None,
+        settings: Optional[str] = None,
     ) -> list[str]:
+        # resume and settings are claude's: a session to fork and
+        # continue, and per-run settings (hooks). Other agents ignore
+        # both.
         # effort: claude gets --effort; codex gets a config override
         # for model_reasoning_effort (Codex has no --effort flag).
         # gemini/opencode ignore it (the CLI warns when dropped).
@@ -45,6 +53,10 @@ class AgentSpec:
                 cmd += ["--model", model]
             if effort:
                 cmd += ["--effort", effort]
+            if resume:
+                cmd += ["--resume", resume, "--fork-session"]
+            if settings:
+                cmd += ["--settings", settings]
             return cmd + extra_args
         if self.name == "codex":
             # --json makes exec stream JSONL events (thread/turn/item)
@@ -120,6 +132,18 @@ class AgentSpec:
                 cmd += ["--model", model]
             return cmd + extra_args + ["--prompt", prompt_text]
         raise ValueError(f"unknown agent {self.name}")
+
+
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9-]+")
+
+
+def claude_session_exists(session_id: str) -> bool:
+    """Whether Claude Code still keeps the session: it deletes old ones
+    (cleanupPeriodDays), and another machine never had it."""
+    if not _SESSION_ID_RE.fullmatch(session_id):
+        return False
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude"
+    return any((Path(config_dir) / "projects").glob(f"*/{session_id}.jsonl"))
 
 
 AGENTS = {

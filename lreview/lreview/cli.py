@@ -416,6 +416,9 @@ def cmd_run(args) -> int:
     elif args.clear_memory:
         print("error: --clear-memory/-c requires --memory/-m")
         return 1
+    elif args.no_resume:
+        print("error: --no-resume requires --memory/-m")
+        return 1
 
     print(f"\nReviewing {len(changes)} change(s), "
           f"{args.jobs} in parallel, timeout {args.timeout}s each")
@@ -439,6 +442,7 @@ def cmd_run(args) -> int:
         model=resolve_model(args.agent, args.model),
         effort=args.effort,
         memory_db=memory_db,
+        resume=not args.no_resume,
         agent_args=args.agent_arg or [],
     )
     try:
@@ -831,6 +835,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--clear-memory", "-c", action="store_true",
         help="With --memory: delete the change's memory document "
              "first, starting its notes from scratch")
+    run_p.add_argument(
+        "--no-resume", action="store_true",
+        help="With --memory (claude agent): start a fresh session that "
+             "reads only the memory document, instead of resuming the "
+             "review conversation recorded in it")
     run_p.add_argument(
         "--db", default=None, metavar="DIR",
         help="Memory database directory (default: $LREVIEW_DB, else "
