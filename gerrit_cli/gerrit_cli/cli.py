@@ -327,7 +327,7 @@ class _JsonErrorParser(argparse.ArgumentParser):
 
     def error(self, message: str) -> None:
         envelope = error_response_from_dict(
-            "invalid_input",
+            ErrorCode.INVALID_INPUT,
             message,
             "cli",
         )

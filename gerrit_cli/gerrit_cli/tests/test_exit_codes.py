@@ -137,3 +137,20 @@ class TestHandlersExitByKind:
                 "https://example.com", 12345)
             cmd_work_on_patch(args)
         assert exc_info.value.code == ExitCode.AUTH_ERROR
+
+
+class TestParseErrors:
+    """Errors argparse finds are JSON on stdout with exit 4."""
+
+    def _run(self, argv, capsys):
+        from gerrit_cli.cli import main
+
+        with patch("sys.argv", ["gerrit", *argv]):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        return exc.value.code, capsys.readouterr().out
+
+    def test_subcommand_error_uses_the_shared_code(self, capsys):
+        code, out = self._run(["comments"], capsys)
+        assert code == ExitCode.INVALID_INPUT
+        assert json.loads(out)["code"] == ErrorCode.INVALID_INPUT
