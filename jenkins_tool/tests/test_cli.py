@@ -770,3 +770,74 @@ class TestUsageErrors:
         env = json.loads(result.stdout)
         assert env["ok"] is False
         assert env["meta"]["tool"] == "jenkins"
+
+
+class TestErrorExitCodes:
+    """Read failures exit with the contract's codes: 2 auth, 3 not found,
+    5 network -- not 1 for everything."""
+
+    @staticmethod
+    def _client(status=None, exc=None, authenticated=False):
+        import requests
+        from jenkins_tool.client import JenkinsClient
+        from jenkins_tool.config import JenkinsConfig
+
+        creds = {"user": "u", "token": "t"} if authenticated else {}
+        client = JenkinsClient(
+            JenkinsConfig(base_url="https://build.example.com", **creds)
+        )
+        client.session = MagicMock()
+        if exc is not None:
+            client.session.get.side_effect = exc
+        else:
+            resp = MagicMock(status_code=status, url="https://build.example.com/x")
+            resp.raise_for_status.side_effect = requests.HTTPError(
+                f"{status} Client Error", response=resp
+            )
+            client.session.get.return_value = resp
+        return client
+
+    @patch("jenkins_tool.cli._make_client")
+    def test_an_anonymous_refusal_is_an_auth_error_with_the_fix(
+        self, mock_make, runner
+    ):
+        mock_make.return_value = self._client(status=403)
+        result = runner.invoke(main, ["console", "lustre-master", "1"])
+        out = _parse(result)
+        assert result.exit_code == 2
+        assert out["code"] == "AUTH_MISSING"
+        assert "JENKINS_TOKEN" in out["message"]
+
+    @patch("jenkins_tool.cli._make_client")
+    def test_run_console_refusal_carries_the_fix_too(self, mock_make, runner):
+        mock_make.return_value = self._client(status=403)
+        result = runner.invoke(
+            main, ["run-console", "lustre-reviews", "1", "arch=x86_64"]
+        )
+        out = _parse(result)
+        assert result.exit_code == 2
+        assert "JENKINS_TOKEN" in out["message"]
+
+    @patch("jenkins_tool.cli._make_client")
+    def test_a_refused_credential_is_an_auth_error(self, mock_make, runner):
+        mock_make.return_value = self._client(status=401, authenticated=True)
+        result = runner.invoke(main, ["jobs"])
+        assert result.exit_code == 2
+        assert _parse(result)["code"] == "AUTH_FAILED"
+
+    @patch("jenkins_tool.cli._make_client")
+    def test_not_found_exits_3(self, mock_make, runner):
+        mock_make.return_value = self._client(status=404)
+        result = runner.invoke(main, ["build", "nosuchjob", "1"])
+        assert result.exit_code == 3
+        assert _parse(result)["code"] == "NOT_FOUND"
+
+    @patch("jenkins_tool.cli._make_client")
+    def test_unreachable_server_exits_5(self, mock_make, runner):
+        import requests
+        mock_make.return_value = self._client(
+            exc=requests.ConnectionError("refused")
+        )
+        result = runner.invoke(main, ["builds", "lustre-master"])
+        assert result.exit_code == 5
+        assert _parse(result)["code"] == "CONNECTION_ERROR"

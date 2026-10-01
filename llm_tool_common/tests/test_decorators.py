@@ -200,3 +200,49 @@ class TestNoEnvelopeDefault:
         assert out["ok"] is False
         assert "meta" in out
         assert out["error"]["code"] == "NOT_FOUND"
+
+
+def _http_error(status):
+    resp = MagicMock()
+    resp.status_code = status
+    return requests.HTTPError(f"HTTP {status}", response=resp)
+
+
+class TestExitCodes:
+    """Each failure exits with the contract's code for it, not always 1."""
+
+    @pytest.mark.parametrize("exc, code, exit_code", [
+        (_http_error(404), "NOT_FOUND", 3),
+        (_http_error(401), "AUTH_FAILED", 2),
+        (_http_error(403), "AUTH_FAILED", 2),
+        (_http_error(500), "API_ERROR", 1),
+        (requests.ConnectionError("refused"), "CONNECTION_ERROR", 5),
+        (requests.Timeout("slow"), "TIMEOUT", 5),
+        (RuntimeError("broke"), "API_ERROR", 1),
+    ])
+    def test_exit_code(self, runner, exc, code, exit_code):
+        @click.command()
+        @click.option("--pretty", is_flag=True)
+        @handle_errors("t", "c")
+        def cmd(pretty):
+            raise exc
+
+        result = runner.invoke(_make_cli(cmd), ["cmd"])
+        assert _parse(result)["code"] == code
+        assert result.exit_code == exit_code
+
+    def test_a_tool_error_keeps_its_code_message_and_exit(self, runner):
+        from llm_tool_common.errors import ExitCode, ToolError
+
+        @click.command()
+        @click.option("--pretty", is_flag=True)
+        @handle_errors("t", "c")
+        def cmd(pretty):
+            raise ToolError("AUTH_MISSING", "set the token",
+                            exit_code=ExitCode.AUTH_ERROR)
+
+        result = runner.invoke(_make_cli(cmd), ["cmd"])
+        out = _parse(result)
+        assert out["code"] == "AUTH_MISSING"
+        assert out["message"] == "set the token"
+        assert result.exit_code == 2

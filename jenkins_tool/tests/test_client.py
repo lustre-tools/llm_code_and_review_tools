@@ -383,3 +383,16 @@ class TestAnonymousAccess:
             )
         )
         assert c.session.auth == ("u", "t")
+
+
+class TestRunConsoleAnonymousRefusal:
+    def test_a_refused_run_console_says_credentials_are_the_fix(self):
+        from jenkins_tool.client import JenkinsAuthRequired
+
+        c = JenkinsClient(JenkinsConfig(base_url="https://build.example.com"))
+        c.session = MagicMock()
+        c.session.get.return_value = MagicMock(
+            status_code=403, url="https://build.example.com/job/j/c/1/consoleText"
+        )
+        with pytest.raises(JenkinsAuthRequired, match="anonymously"):
+            c.get_run_console_text("https://build.example.com/job/j/c/1")

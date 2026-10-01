@@ -4,11 +4,18 @@ from typing import Any
 
 import requests
 
+from llm_tool_common.errors import ErrorCode, ExitCode, ToolError
+
 from .config import CREDENTIAL_HINT, JenkinsConfig
 
 
-class JenkinsAuthRequired(RuntimeError):
+class JenkinsAuthRequired(ToolError):
     """An operation needs credentials that are not configured."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            ErrorCode.AUTH_MISSING, message, exit_code=ExitCode.AUTH_ERROR
+        )
 
 
 class JenkinsClient:
@@ -108,7 +115,7 @@ class JenkinsClient:
         """Get console output for a matrix run by its full URL."""
         url = run_url.rstrip("/") + "/consoleText"
         resp = self.session.get(url, timeout=self.timeout)
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         return resp.text
 
     # -- Console output --

@@ -42,7 +42,7 @@ from .config import (
     resolve_credential_set,
     resolve_env_file,
 )
-from .decorators import handle_errors
+from .decorators import error_from_exception, handle_errors
 from .click_group import JsonUsageErrorGroup
 
 __all__ = [
@@ -80,6 +80,7 @@ __all__ = [
     "resolve_credential_set",
     "resolve_env_file",
     # Decorators
+    "error_from_exception",
     "handle_errors",
     # Click
     "JsonUsageErrorGroup",
