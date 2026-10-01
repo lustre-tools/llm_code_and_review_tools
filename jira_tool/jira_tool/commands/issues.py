@@ -644,6 +644,13 @@ def register(main):
             key = extract_issue_key(key)
             client = get_client(ctx, issue_key=key)
 
+            issuetype = client.get_issue(key, fields=["issuetype"])["fields"]["issuetype"]
+            if not issuetype.get("subtask"):
+                from ..errors import ErrorCode, InvalidInputError
+                raise InvalidInputError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message=f"{key} is a {issuetype.get('name')}, not a subtask; not deleting it.",
+                )
             client.delete_issue(key)
 
             data = {

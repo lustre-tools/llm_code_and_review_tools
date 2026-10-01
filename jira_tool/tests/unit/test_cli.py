@@ -1910,6 +1910,12 @@ class TestCLIDeleteSubtask:
     def test_delete_subtask(self, runner, mock_env):
         """Should delete a subtask."""
         responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-124",
+            json={"key": "PROJ-124", "fields": {"issuetype": {"name": "Sub-task", "subtask": True}}},
+            status=200,
+        )
+        responses.add(
             responses.DELETE,
             "https://jira.example.com/rest/api/2/issue/PROJ-124",
             status=204,
@@ -1927,7 +1933,7 @@ class TestCLIDeleteSubtask:
     def test_delete_subtask_not_found(self, runner, mock_env):
         """Should return error for non-existent subtask."""
         responses.add(
-            responses.DELETE,
+            responses.GET,
             "https://jira.example.com/rest/api/2/issue/PROJ-999",
             json={"errorMessages": ["Issue Does Not Exist"]},
             status=404,
@@ -1936,6 +1942,22 @@ class TestCLIDeleteSubtask:
         result = runner.invoke(main, ["delete-subtask", "PROJ-999"])
 
         assert result.exit_code != 0
+
+    @responses.activate
+    def test_delete_subtask_refuses_other_issues(self, runner, mock_env):
+        """Should not delete an issue that is not a subtask."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"issuetype": {"name": "Task", "subtask": False}}},
+            status=200,
+        )
+
+        result = runner.invoke(main, ["delete-subtask", "PROJ-123"])
+
+        assert result.exit_code != 0
+        assert "not a subtask" in result.output
+        assert all(c.request.method != "DELETE" for c in responses.calls)
 
 
 class TestCLIDefaultNoEnvelope:
