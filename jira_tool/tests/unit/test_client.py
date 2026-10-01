@@ -1462,6 +1462,100 @@ class TestRetryBackoff:
         assert delay <= 5.0
 
 
+class TestRetryAfter:
+    """The server's Retry-After sets the wait before the next attempt."""
+
+    ISSUE = "https://jira.example.com/rest/api/2/issue/PROJ-1"
+
+    def _slept(self, config, first, **client_args):
+        client = JiraClient(config, max_retries=1, **client_args)
+        responses.add(responses.GET, self.ISSUE, **first)
+        responses.add(responses.GET, self.ISSUE, json={"key": "PROJ-1"})
+        with patch("time.sleep") as mock_sleep:
+            client.get_issue("PROJ-1")
+        return [c.args[0] for c in mock_sleep.call_args_list]
+
+    @responses.activate
+    def test_seconds_on_429(self, config):
+        assert self._slept(config, {"status": 429, "headers": {"Retry-After": "7"}}) == [7]
+
+    @responses.activate
+    def test_seconds_on_503(self, config):
+        assert self._slept(config, {"status": 503, "headers": {"Retry-After": "5"}}) == [5]
+
+    @responses.activate
+    def test_capped_at_the_max_delay(self, config):
+        slept = self._slept(
+            config, {"status": 429, "headers": {"Retry-After": "120"}}, retry_max_delay=30.0
+        )
+        assert slept == [30.0]
+
+    @responses.activate
+    def test_http_date(self, config):
+        from datetime import datetime, timedelta, timezone
+        from email.utils import format_datetime
+
+        when = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=10), usegmt=True)
+        [slept] = self._slept(config, {"status": 429, "headers": {"Retry-After": when}})
+        assert 8 <= slept <= 10
+
+    @pytest.mark.parametrize("value", ["soon", "-5", ""])
+    @responses.activate
+    def test_unusable_value_falls_back_to_backoff(self, config, value):
+        [slept] = self._slept(
+            config, {"status": 429, "headers": {"Retry-After": value}}, retry_backoff=1.0
+        )
+        assert 0.75 <= slept <= 1.25
+
+    @responses.activate
+    def test_not_used_for_a_500(self, config):
+        [slept] = self._slept(
+            config, {"status": 500, "headers": {"Retry-After": "20"}}, retry_backoff=1.0
+        )
+        assert 0.75 <= slept <= 1.25
+
+    @responses.activate
+    def test_a_later_network_error_uses_the_backoff(self, config):
+        client = JiraClient(config, max_retries=2, retry_backoff=1.0)
+        responses.add(responses.GET, self.ISSUE, status=429, headers={"Retry-After": "20"})
+        responses.add(
+            responses.GET, self.ISSUE, body=requests.exceptions.ConnectionError("reset")
+        )
+        responses.add(responses.GET, self.ISSUE, json={"key": "PROJ-1"})
+        with patch("time.sleep") as mock_sleep:
+            client.get_issue("PROJ-1")
+        first, second = (c.args[0] for c in mock_sleep.call_args_list)
+        assert first == 20
+        assert 1.5 <= second <= 2.5
+
+    @responses.activate
+    def test_attachment_download(self, config):
+        client = JiraClient(config, max_retries=1)
+        content = "https://jira.example.com/secure/attachment/1/a.txt"
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/attachment/1",
+            json={"id": "1", "size": 1, "content": content},
+        )
+        responses.add(responses.GET, content, status=429, headers={"Retry-After": "4"})
+        responses.add(responses.GET, content, body=b"x")
+        with patch("time.sleep") as mock_sleep:
+            client.get_attachment_content("1")
+        mock_sleep.assert_called_once_with(4)
+
+    @responses.activate
+    def test_upload(self, config, tmp_path):
+        client = JiraClient(config, max_retries=1)
+        upload = tmp_path / "log.txt"
+        upload.write_text("x")
+        url = "https://jira.example.com/rest/api/2/issue/PROJ-1/attachments"
+        responses.add(responses.POST, url, status=429, headers={"Retry-After": "3"})
+        responses.add(responses.POST, url, json=[{"id": "9"}])
+        with patch("time.sleep") as mock_sleep:
+            client.upload_attachment("PROJ-1", str(upload))
+        mock_sleep.assert_called_once_with(3)
+
+
 class TestRetryWithAttachments:
     """Tests for retry with attachment operations."""
 

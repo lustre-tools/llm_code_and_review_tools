@@ -3,6 +3,8 @@
 import random
 import sys
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urljoin
 
@@ -175,6 +177,22 @@ def _adf_to_text(adf: Any) -> str:
     return result
 
 
+def _retry_after_seconds(value: str | None) -> float | None:
+    """The wait a Retry-After header asks for, or None if it is unusable."""
+    if not value:
+        return None
+    value = value.strip()
+    if value.isascii() and value.isdigit():
+        return float(value)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
 # Default retry configuration
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_BACKOFF = 1.0  # Base delay in seconds
@@ -285,16 +303,27 @@ class JiraClient:
         base = f"{self.config.server}/rest/api/{api_version}/"
         return urljoin(base, endpoint.lstrip("/"))
 
-    def _calculate_retry_delay(self, attempt: int) -> float:
+    def _calculate_retry_delay(
+        self, attempt: int, response: requests.Response | None = None
+    ) -> float:
         """
         Calculate delay before next retry using exponential backoff with jitter.
 
+        A 429 or 503 with a usable Retry-After waits that long instead.
+        Both are capped at retry_max_delay.
+
         Args:
             attempt: Current attempt number (0-indexed)
+            response: The failed attempt's response, if it got one
 
         Returns:
             Delay in seconds before next retry
         """
+        if response is not None and response.status_code in (429, 503):
+            retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
+            if retry_after is not None:
+                return min(retry_after, self.retry_max_delay)
+
         # Exponential backoff: base * 2^attempt
         delay = self.retry_backoff * (2**attempt)
         # Add jitter (±25%) to prevent thundering herd
@@ -503,6 +532,7 @@ class JiraClient:
         self._debug_request(method, url, params, json_data)
 
         for attempt in range(self.max_retries + 1):
+            response: requests.Response | None = None
             try:
                 response = self._session.request(
                     method=method,
@@ -550,7 +580,7 @@ class JiraClient:
 
             # If we have retries left, wait and try again
             if attempt < self.max_retries:
-                delay = self._calculate_retry_delay(attempt)
+                delay = self._calculate_retry_delay(attempt, response)
                 time.sleep(delay)
 
         # All retries exhausted, raise the last error
@@ -593,6 +623,7 @@ class JiraClient:
         self._debug(f"{method} {url} (raw)")
 
         for attempt in range(self.max_retries + 1):
+            response: requests.Response | None = None
             try:
                 response = self._session.request(method, url, **kwargs)
                 self._debug_response(response)
@@ -641,7 +672,7 @@ class JiraClient:
 
             # If we have retries left, wait and try again
             if attempt < self.max_retries:
-                delay = self._calculate_retry_delay(attempt)
+                delay = self._calculate_retry_delay(attempt, response)
                 time.sleep(delay)
 
         # All retries exhausted
@@ -1590,6 +1621,7 @@ class JiraClient:
         self._debug(f"POST {url} (upload: {filename})")
 
         for attempt in range(self.max_retries + 1):
+            response: requests.Response | None = None
             try:
                 # Re-open file for each attempt (file handle is consumed after POST)
                 with open(file_path, "rb") as f:
@@ -1655,7 +1687,7 @@ class JiraClient:
 
             # If we have retries left, wait and try again
             if attempt < self.max_retries:
-                delay = self._calculate_retry_delay(attempt)
+                delay = self._calculate_retry_delay(attempt, response)
                 time.sleep(delay)
 
         # All retries exhausted
