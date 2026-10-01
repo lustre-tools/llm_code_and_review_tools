@@ -4,7 +4,13 @@ import sys
 
 from ..errors import ErrorCode, ExitCode
 from ..summary import truncate_review_data, truncate_series_comments
-from ._helpers import _cli, filter_threads_by_fields, output_error, output_success
+from ._helpers import (
+    _cli,
+    filter_threads_by_fields,
+    generate_review_prompt,
+    output_error,
+    output_success,
+)
 
 
 def cmd_review(args):
@@ -261,6 +267,8 @@ def cmd_series(args):
             "patches_with_comments": patches_with_comments,
             "checkout": checkout_result,
         }
+        if not getattr(args, 'no_prompt', False):
+            data["review_prompt"] = generate_review_prompt(args.url)
 
         output_success(data, command, pretty)
         sys.exit(ExitCode.SUCCESS)

@@ -242,6 +242,68 @@ class TestCmdSeries:
             MockRebaseManager.assert_not_called()
 
 
+class TestReviewSeriesParsedFlags:
+    """cmd_series driven by what the real parser produces.
+
+    The Namespace-built tests above set no_checkout by hand, which is how
+    a parser that never defined --no-checkout went unnoticed.
+    """
+
+    @staticmethod
+    def _run(capsys, *argv):
+        from gerrit_cli import cli
+        from gerrit_cli.parsers import setup_parsers
+
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(
+            dest="command", parser_class=cli._JsonErrorParser)
+        setup_parsers(subparsers, cli.build_handlers())
+        args = parser.parse_args(["review-series", *argv])
+
+        mock_patch = MagicMock(change_number=12345,
+                               url="https://example.com/12345")
+        series = MagicMock(patches=[mock_patch])
+        series.to_dict.return_value = {"patches": []}
+        with patch('gerrit_cli.cli.RebaseManager') as MockManager, \
+             patch('gerrit_cli.cli.SeriesFinder') as MockFinder, \
+             patch('gerrit_cli.cli.extract_comments') as mock_extract, \
+             patch('gerrit_cli.cli.work_on_patch') as mock_work, \
+             pytest.raises(SystemExit) as exc_info:
+            MockManager.return_value.check_git_repo.return_value = (True, "")
+            MockFinder.return_value.find_series.return_value = series
+            mock_extract.return_value = MagicMock(threads=[])
+            mock_work.return_value = (True, "checked out")
+            args.func(args)
+
+        assert exc_info.value.code == 0
+        return MockManager, mock_work, json.loads(capsys.readouterr().out)
+
+    def test_no_checkout_leaves_git_alone(self, capsys):
+        manager, work, out = self._run(capsys, "12345", "--no-checkout")
+        manager.assert_not_called()
+        work.assert_not_called()
+        assert out["checkout"] is None
+
+    def test_checkout_is_the_default(self, capsys):
+        for argv in (("12345",), ("12345", "--checkout"), ("12345", "-c")):
+            manager, work, out = self._run(capsys, *argv)
+            work.assert_called_once_with("12345", 12345)
+            assert out["checkout"]["success"] is True
+
+    def test_checkout_and_no_checkout_conflict(self, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            self._run(capsys, "12345", "--checkout", "--no-checkout")
+        assert exc_info.value.code == 4
+
+    def test_review_prompt_unless_no_prompt(self, capsys):
+        _, _, out = self._run(capsys, "12345", "--no-checkout")
+        assert "gerrit review-series 12345" in out["review_prompt"]
+
+        _, _, out = self._run(capsys, "12345", "--no-checkout",
+                              "--no-prompt")
+        assert "review_prompt" not in out
+
+
 class TestCLIImports:
     """Test that CLI imports work correctly."""
 

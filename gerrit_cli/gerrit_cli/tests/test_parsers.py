@@ -11,7 +11,7 @@ class TestParserHandlerIntegration:
         """Test review-series parser defines all attributes used by cmd_series.
 
         This test catches the bug where add_review_series_parser was missing
-        urls_only, numbers_only, include_abandoned, no_prompt, checkout args.
+        urls_only, numbers_only, include_abandoned, no_prompt, no_checkout args.
         """
         from gerrit_cli.parsers import add_review_series_parser
 
@@ -29,7 +29,7 @@ class TestParserHandlerIntegration:
         assert hasattr(args, 'numbers_only')
         assert hasattr(args, 'include_abandoned')
         assert hasattr(args, 'no_prompt')
-        assert hasattr(args, 'checkout')
+        assert hasattr(args, 'no_checkout')
 
         # Verify default values
         assert args.pretty is False
@@ -37,7 +37,7 @@ class TestParserHandlerIntegration:
         assert args.numbers_only is False
         assert args.include_abandoned is False
         assert args.no_prompt is False
-        assert args.checkout is False
+        assert args.no_checkout is False
 
     def test_review_series_parser_options(self):
         """Test review-series parser accepts all options."""
@@ -66,6 +66,10 @@ class TestParserHandlerIntegration:
         # Test --checkout
         args = parser.parse_args(['review-series', 'https://example.com/12345', '-c'])
         assert args.checkout is True
+
+        # Test --no-checkout
+        args = parser.parse_args(['review-series', 'https://example.com/12345', '--no-checkout'])
+        assert args.no_checkout is True
 
     def test_setup_parsers_creates_all_commands(self):
         """Test that setup_parsers creates all expected commands."""

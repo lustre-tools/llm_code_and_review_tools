@@ -223,6 +223,7 @@ This command:
 2. Counts unresolved comments on each patch
 3. Checks out the first patch with comments (unless --no-checkout)
 4. Starts a session for tracking your progress
+5. Returns the workflow as review_prompt (unless --no-prompt)
 """,
         "examples": [
             {

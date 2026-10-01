@@ -343,12 +343,20 @@ def add_review_series_parser(subparsers):
     parser.add_argument(
         "--no-prompt",
         action="store_true",
-        help="Skip showing AI review prompt",
+        help="Leave the AI review prompt (review_prompt) out of the output",
     )
-    parser.add_argument(
+    checkout = parser.add_mutually_exclusive_group()
+    checkout.add_argument(
         "--checkout", "-c",
         action="store_true",
-        help="Checkout the first patch with comments and start a session",
+        help="Checkout the first patch with comments and start a session "
+             "(the default)",
+    )
+    checkout.add_argument(
+        "--no-checkout",
+        action="store_true",
+        help="Only list the series: no git state check, no checkout, "
+             "no session",
     )
     return parser
 
