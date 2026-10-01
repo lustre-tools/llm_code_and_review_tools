@@ -17,6 +17,16 @@ def _detail(number=64086, ps=40, sha="a" * 40, ref=None):
     }
 
 
+def test_suite_never_sees_the_developers_gerrit_config():
+    """conftest.py pins the Gerrit configuration gerrit_cli reads at
+    import, so results do not depend on who runs the suite."""
+    import os
+    from gerrit_cli import client
+    assert client.DEFAULT_GERRIT_URL == "https://gerrit.invalid"
+    assert "GERRIT_USER" not in os.environ
+    assert "GERRIT_PASS" not in os.environ
+
+
 class TestChangeRef:
 
     def test_two_digit_suffix(self):
