@@ -155,15 +155,23 @@ class CommentExtractor:
         # Always keep patchset-level comments — they are top-level
         # review discussion and should not be silently filtered out
         # even when marked resolved.
+        shown: list[CommentThread] = []
+        hidden: list[CommentThread] = []
+        for t in threads:
+            if not t.is_resolved or t.root_comment.file_path == "/PATCHSET_LEVEL":
+                shown.append(t)
+            else:
+                hidden.append(t)
         hidden_resolved = 0
-        if not include_resolved:
-            kept = [
-                t for t in threads
-                if not t.is_resolved
-                or t.root_comment.file_path == "/PATCHSET_LEVEL"
-            ]
-            hidden_resolved = len(threads) - len(kept)
-            threads = kept
+        if include_resolved:
+            # reply, done, ack and stage index the default listing, so
+            # --all lists those threads first and in the same order: an
+            # index read off either listing names the same thread, or
+            # one those commands refuse.
+            threads = shown + hidden
+        else:
+            hidden_resolved = len(hidden)
+            threads = shown
 
         # Add code context if requested
         if include_code_context:

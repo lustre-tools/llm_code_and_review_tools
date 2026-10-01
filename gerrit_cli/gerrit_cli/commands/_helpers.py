@@ -130,6 +130,24 @@ def filter_threads_by_fields(
     return result
 
 
+def thread_index_error(result: Any, index: int) -> str | None:
+    """Why index names no thread reply/done/ack/stage can answer.
+
+    Those commands index the default listing.  `comments --all` lists
+    the same threads first and the resolved ones after them, so an index
+    past the default listing but inside --all's is one of those.
+    """
+    shown = len(result.threads)
+    if shown <= index < shown + result.hidden_resolved_count:
+        return (
+            f"Thread {index} is a resolved thread that only 'gc comments "
+            f"--all' lists; reply, done, ack and stage take the {shown} "
+            "thread(s) the default listing shows. To answer it, use "
+            "'gc batch' with its comment_id."
+        )
+    return None
+
+
 def output_result(envelope: dict[str, Any], pretty: bool) -> None:
     """Output result to stdout.
 

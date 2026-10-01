@@ -547,3 +547,47 @@ class TestThreadOrganization:
         root_id = extractor._find_root_id(reply2, comments_by_id)
 
         assert root_id == "root"
+
+
+def _change_with_mixed_threads():
+    """a.c:1 resolved, a.c:5 open, /PATCHSET_LEVEL resolved, b.c:3 open."""
+    client = MagicMock()
+    client.url = "https://review.example.com"
+    client.format_change_url.return_value = "https://review.example.com/123"
+    client.get_change_detail.return_value = {
+        "id": "test~123", "project": "test", "branch": "master",
+        "subject": "Test", "status": "NEW", "current_revision": "abc",
+        "owner": {"name": "Owner"}, "revisions": {},
+    }
+
+    def comment(cid, line, unresolved):
+        return {"id": cid, "patch_set": 1, "line": line, "message": cid,
+                "author": {"name": "R"}, "unresolved": unresolved,
+                "updated": "2025-01-01"}
+
+    client.get_comments.return_value = {
+        "a.c": [comment("a1-resolved", 1, False), comment("a5-open", 5, True)],
+        "/PATCHSET_LEVEL": [comment("ps-resolved", None, False)],
+        "b.c": [comment("b3-open", 3, True)],
+    }
+    client.get_messages.return_value = []
+    return client
+
+
+class TestThreadIndicesAcrossViews:
+    """An index taken from `comments --all` names the same thread, or none,
+    in the default listing that reply, done, ack and stage index into."""
+
+    @patch("gerrit_cli.extractor.GerritCommentsClient")
+    def test_all_lists_the_default_threads_first(self, mock_client_class):
+        mock_client_class.return_value = _change_with_mixed_threads()
+        extractor = CommentExtractor()
+
+        default = extractor.extract_from_change(123, include_code_context=False)
+        everything = extractor.extract_from_change(
+            123, include_resolved=True, include_code_context=False)
+
+        ids = [t.root_comment.id for t in everything.threads]
+        default_ids = [t.root_comment.id for t in default.threads]
+        assert ids[:len(default_ids)] == default_ids
+        assert ids[len(default_ids):] == ["a1-resolved"]

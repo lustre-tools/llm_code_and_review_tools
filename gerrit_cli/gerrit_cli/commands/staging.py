@@ -10,6 +10,7 @@ from ._helpers import (
     exit_code_for,
     output_error,
     output_success,
+    thread_index_error,
 )
 
 
@@ -44,7 +45,11 @@ def cmd_stage(args):
         )
 
         if args.thread_index >= len(result.threads):
-            print(f"Error: Thread index {args.thread_index} out of range. Only {len(result.threads)} threads.", file=sys.stderr)
+            msg = (
+                thread_index_error(result, args.thread_index)
+                or f"Thread index {args.thread_index} out of range. Only {len(result.threads)} threads."
+            )
+            print(f"Error: {msg}", file=sys.stderr)
             sys.exit(1)
 
         thread = result.threads[args.thread_index]

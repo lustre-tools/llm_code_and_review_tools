@@ -11,6 +11,7 @@ from ._helpers import (
     filter_threads_by_fields,
     output_error,
     output_success,
+    thread_index_error,
 )
 
 
@@ -114,6 +115,7 @@ def cmd_reply(args):
                 )
             else:
                 msg = f"Thread index {args.thread_index} out of range. Only {len(result.threads)} threads."
+            msg = thread_index_error(result, args.thread_index) or msg
             sys.exit(output_error(
                 ErrorCode.THREAD_INDEX_OUT_OF_RANGE,
                 msg,
@@ -199,7 +201,8 @@ def cmd_done(args):
         if args.thread_index >= len(result.threads):
             sys.exit(output_error(
                 ErrorCode.THREAD_INDEX_OUT_OF_RANGE,
-                f"Thread index {args.thread_index} out of range. Only {len(result.threads)} threads.",
+                thread_index_error(result, args.thread_index)
+                or f"Thread index {args.thread_index} out of range. Only {len(result.threads)} threads.",
                 command, pretty
             ))
 
@@ -247,7 +250,8 @@ def cmd_ack(args):
         if args.thread_index >= len(result.threads):
             sys.exit(output_error(
                 ErrorCode.THREAD_INDEX_OUT_OF_RANGE,
-                f"Thread index {args.thread_index} out of range. Only {len(result.threads)} threads.",
+                thread_index_error(result, args.thread_index)
+                or f"Thread index {args.thread_index} out of range. Only {len(result.threads)} threads.",
                 command, pretty
             ))
 

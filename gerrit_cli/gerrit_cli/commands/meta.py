@@ -15,7 +15,11 @@ The 'comments' command extracts comment threads from a Gerrit change URL.
 By default, it only shows unresolved comments. Use --all to include resolved ones.
 
 Each comment thread is assigned an index (0, 1, 2, ...) that you can use with
-other commands like 'reply' or 'stage'.
+other commands like 'reply' or 'stage'. Those commands index the default
+listing. With --all, the threads the default listing shows come first, with
+the same indices, and the resolved ones follow; 'reply', 'done', 'ack' and
+'stage' refuse an index of one of those. Answer a resolved thread with
+'gc batch' and its comment_id.
 """,
         "examples": [
             {
@@ -41,7 +45,8 @@ other commands like 'reply' or 'stage'.
         "summary": "Reply to a comment thread",
         "description": """
 The 'reply' command posts a reply to a specific comment thread. You identify
-the thread by its index from the 'comments' output.
+the thread by its index from the 'comments' output. An index of a resolved
+thread, which only 'comments --all' lists, is refused.
 
 URL is optional - if you recently ran 'gc comments URL', the URL is remembered
 and reused automatically. Use --url to override.

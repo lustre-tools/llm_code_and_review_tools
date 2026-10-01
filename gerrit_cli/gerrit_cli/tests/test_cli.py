@@ -968,6 +968,7 @@ class TestCmdReply:
 
             mock_result = MagicMock()
             mock_result.threads = []
+            mock_result.hidden_resolved_count = 0
             mock_extract.return_value = mock_result
 
             with pytest.raises(SystemExit) as exc_info:
@@ -2022,6 +2023,7 @@ class TestCmdDone:
 
             mock_result = MagicMock()
             mock_result.threads = []
+            mock_result.hidden_resolved_count = 0
             mock_extract.return_value = mock_result
 
             with pytest.raises(SystemExit) as exc_info:
@@ -2224,3 +2226,58 @@ class TestVersion:
         with patch('gerrit_cli.version',
                    side_effect=PackageNotFoundError("gerrit-cli")):
             assert gerrit_cli._installed_version() == "unknown"
+
+
+class TestIndexOfAResolvedThread:
+    """An index that only `comments --all` shows is refused, not reused."""
+
+    @staticmethod
+    def _result():
+        result = MagicMock()
+        result.threads = [MagicMock(), MagicMock()]
+        result.hidden_resolved_count = 1
+        return result
+
+    @pytest.mark.parametrize("handler", ["cmd_reply", "cmd_done", "cmd_ack"])
+    def test_reply_family_refuses(self, handler, capsys):
+        from gerrit_cli import cli
+
+        args = argparse.Namespace(
+            url="https://example.com/12345", thread_index=2,
+            message="Done", done=True, ack=False, resolve=False,
+            pretty=False,
+        )
+        with patch('gerrit_cli.cli.GerritCommentsClient') as MockClient, \
+             patch('gerrit_cli.cli.extract_comments',
+                   return_value=self._result()), \
+             patch('gerrit_cli.cli.CommentReplier') as MockReplier, \
+             pytest.raises(SystemExit) as exc_info:
+            MockClient.parse_gerrit_url.return_value = (
+                "https://example.com", 12345)
+            getattr(cli, handler)(args)
+
+        assert exc_info.value.code == 4
+        MockReplier.return_value.reply_to_thread.assert_not_called()
+        out = json.loads(capsys.readouterr().out)
+        assert out["code"] == "THREAD_INDEX_OUT_OF_RANGE"
+        assert "--all" in out["message"] and "comment_id" in out["message"]
+
+    def test_stage_refuses(self, capsys):
+        from gerrit_cli.cli import cmd_stage
+
+        args = argparse.Namespace(
+            url="https://example.com/12345", thread_index=2,
+            message=None, done=True, ack=False, resolve=False,
+        )
+        with patch('gerrit_cli.cli.GerritCommentsClient') as MockClient, \
+             patch('gerrit_cli.cli.extract_comments',
+                   return_value=self._result()), \
+             patch('gerrit_cli.cli.StagingManager') as MockStaging, \
+             pytest.raises(SystemExit) as exc_info:
+            MockClient.parse_gerrit_url.return_value = (
+                "https://example.com", 12345)
+            cmd_stage(args)
+
+        assert exc_info.value.code == 1
+        MockStaging.return_value.stage_operation.assert_not_called()
+        assert "--all" in capsys.readouterr().err
