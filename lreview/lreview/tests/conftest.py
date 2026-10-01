@@ -10,6 +10,8 @@ import atexit
 import os
 import tempfile
 
+import pytest
+
 _fd, _EMPTY_ENV_FILE = tempfile.mkstemp(prefix="lreview-tests-",
                                         suffix=".env")
 os.close(_fd)
@@ -19,3 +21,11 @@ os.environ["GERRIT_CLI_ENV_FILE"] = _EMPTY_ENV_FILE
 os.environ["GERRIT_URL"] = "https://gerrit.invalid"
 for _name in ("GERRIT_USER", "GERRIT_PASS"):
     os.environ.pop(_name, None)
+
+
+@pytest.fixture(autouse=True)
+def _keep_results_out_of_the_checkout(tmp_path, monkeypatch):
+    """By default lreview writes to the tools checkout's own
+    lreview-results/ and lreview-db/, which hold real reviews."""
+    monkeypatch.setenv("LREVIEW_RESULTS_DIR", str(tmp_path / "env-results"))
+    monkeypatch.setenv("LREVIEW_DB", str(tmp_path / "env-db"))
