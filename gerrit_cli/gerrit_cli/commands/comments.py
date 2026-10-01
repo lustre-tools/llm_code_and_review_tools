@@ -5,7 +5,13 @@ import sys
 from ..errors import ErrorCode, ExitCode
 from ..session import LastURLManager
 from ..summary import truncate_extracted_comments
-from ._helpers import _cli, filter_threads_by_fields, output_error, output_success
+from ._helpers import (
+    _cli,
+    error_code_for,
+    filter_threads_by_fields,
+    output_error,
+    output_success,
+)
 
 
 def cmd_extract(args):
@@ -69,7 +75,7 @@ def cmd_extract(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, f"Error extracting comments: {e}", command, pretty))
+        sys.exit(output_error(error_code_for(e), f"Error extracting comments: {e}", command, pretty))
 
 
 def cmd_reply(args):
@@ -170,7 +176,7 @@ def cmd_reply(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, f"Error posting reply: {e}", command, pretty))
+        sys.exit(output_error(error_code_for(e), f"Error posting reply: {e}", command, pretty))
 
 
 def cmd_done(args):
@@ -218,7 +224,7 @@ def cmd_done(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, f"Error marking comment done: {e}", command, pretty))
+        sys.exit(output_error(error_code_for(e), f"Error marking comment done: {e}", command, pretty))
 
 
 def cmd_ack(args):
@@ -266,7 +272,7 @@ def cmd_ack(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, f"Error acknowledging comment: {e}", command, pretty))
+        sys.exit(output_error(error_code_for(e), f"Error acknowledging comment: {e}", command, pretty))
 
 
 def _thread_index_by_location(threads, item):
@@ -415,4 +421,4 @@ def cmd_batch_reply(args):
         sys.exit(ExitCode.SUCCESS)
 
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))

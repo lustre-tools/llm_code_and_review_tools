@@ -7,6 +7,9 @@ circular imports while sharing code across command modules.
 import sys
 from typing import Any
 
+import requests
+
+from ..client import GerritConfigError
 from ..envelope import error_response_from_dict, format_json, success_response
 from ..errors import ErrorCode, ExitCode
 
@@ -148,11 +151,57 @@ def output_success(
     output_result(envelope, pretty)
 
 
+_EXIT_CODES: dict[str, int] = {
+    ErrorCode.AUTH_FAILED: ExitCode.AUTH_ERROR,
+    ErrorCode.AUTH_MISSING: ExitCode.AUTH_ERROR,
+    ErrorCode.NOT_FOUND: ExitCode.NOT_FOUND,
+    ErrorCode.CHANGE_NOT_FOUND: ExitCode.NOT_FOUND,
+    ErrorCode.THREAD_NOT_FOUND: ExitCode.NOT_FOUND,
+    ErrorCode.COMMENT_NOT_FOUND: ExitCode.NOT_FOUND,
+    ErrorCode.PATCH_NOT_FOUND: ExitCode.NOT_FOUND,
+    ErrorCode.SERIES_NOT_FOUND: ExitCode.NOT_FOUND,
+    ErrorCode.INVALID_INPUT: ExitCode.INVALID_INPUT,
+    ErrorCode.MISSING_REQUIRED_FIELD: ExitCode.INVALID_INPUT,
+    ErrorCode.INVALID_URL: ExitCode.INVALID_INPUT,
+    ErrorCode.THREAD_INDEX_OUT_OF_RANGE: ExitCode.INVALID_INPUT,
+    ErrorCode.CONNECTION_ERROR: ExitCode.NETWORK_ERROR,
+    ErrorCode.TIMEOUT: ExitCode.NETWORK_ERROR,
+}
+
+
+def exit_code_for(code: str) -> int:
+    """The process exit code for an error code."""
+    return _EXIT_CODES.get(code, ExitCode.GENERAL_ERROR)
+
+
+def error_code_for(exc: BaseException, default: str = ErrorCode.API_ERROR) -> str:
+    """The error code for an exception a command handler caught.
+
+    Handlers catch Exception so that a failure prints JSON rather than a
+    traceback; this keeps a missing credential, a missing change and an
+    unreachable server apart from any other failure.
+    """
+    if isinstance(exc, GerritConfigError):
+        return ErrorCode.AUTH_MISSING
+    if isinstance(exc, requests.HTTPError):
+        status = getattr(exc.response, "status_code", None)
+        if status in (401, 403):
+            return ErrorCode.AUTH_FAILED
+        if status == 404:
+            return ErrorCode.NOT_FOUND
+    # ConnectTimeout is both, and a timeout says more
+    if isinstance(exc, requests.Timeout):
+        return ErrorCode.TIMEOUT
+    if isinstance(exc, requests.ConnectionError):
+        return ErrorCode.CONNECTION_ERROR
+    return default
+
+
 def output_error(code: str, message: str, command: str, pretty: bool) -> int:
-    """Output error envelope to stdout and return exit code."""
+    """Output error envelope to stdout and return the exit code for code."""
     envelope = error_response_from_dict(code, message, command)
     output_result(envelope, pretty)
-    return ExitCode.GENERAL_ERROR
+    return exit_code_for(code)
 
 
 def generate_review_prompt(url: str) -> str:

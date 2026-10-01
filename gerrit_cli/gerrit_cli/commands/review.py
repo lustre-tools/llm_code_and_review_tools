@@ -6,6 +6,8 @@ from ..errors import ErrorCode, ExitCode
 from ..summary import truncate_review_data, truncate_series_comments
 from ._helpers import (
     _cli,
+    error_code_for,
+    exit_code_for,
     filter_threads_by_fields,
     generate_review_prompt,
     output_error,
@@ -147,7 +149,7 @@ def cmd_review(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_series_comments(args):
@@ -198,7 +200,7 @@ def cmd_series_comments(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, f"Error getting series comments: {e}", command, pretty))
+        sys.exit(output_error(error_code_for(e), f"Error getting series comments: {e}", command, pretty))
 
 
 def cmd_series(args):
@@ -276,7 +278,7 @@ def cmd_series(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, f"Error finding series: {e}", command, pretty))
+        sys.exit(output_error(error_code_for(e), f"Error finding series: {e}", command, pretty))
 
 
 def cmd_interactive(args):
@@ -289,7 +291,7 @@ def cmd_interactive(args):
         sys.exit(0)
     except Exception as e:
         print(f"Error in interactive mode: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(exit_code_for(error_code_for(e)))
 
 
 def cmd_series_status(args):
@@ -306,4 +308,4 @@ def cmd_series_status(args):
         output_success(data, command, pretty)
         sys.exit(ExitCode.SUCCESS)
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))

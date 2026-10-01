@@ -403,13 +403,15 @@ describe                         # Machine-readable API description (for LLMs)
 
 ## Error Handling
 
-Exit codes: 0=success; 1=any command failure (auth, not-found, and
-network errors all currently exit 1 — the specific kind is in the JSON
-error envelope's `code` field); 4=invalid arguments to a subcommand;
-2=usage error at the top level (unknown command or bad global flag,
-argparse's standard code). The shared llm-tool-common ExitCode enum
-also defines 2=auth, 3=not found, 5=network, but gerrit-cli does not
-currently emit those meanings.
+Exit codes: 0=success; 1=general failure; 2=auth or configuration
+(no credentials for a write, Gerrit answered 401/403, GERRIT_URL
+unset); 3=not found (Gerrit answered 404); 4=invalid input (bad
+arguments to a subcommand, a change that does not parse, a thread
+index out of range); 5=network (server unreachable or timed out). The
+JSON error's `code` field says which kind it was. 2 is also argparse's
+code for a usage error at the top level (unknown command or bad global
+flag). reply, done, ack, `review --post-comments` and push exit 1 when
+the post itself fails, whatever the reason; the message has it.
 
 Error responses include: `code` (machine-readable), `message` (human-readable),
 `http_status`, and `details`.

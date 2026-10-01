@@ -3,7 +3,7 @@
 import sys
 
 from ..errors import ErrorCode, ExitCode
-from ._helpers import _cli, output_error, output_success
+from ._helpers import _cli, error_code_for, output_error, output_success
 
 
 def cmd_abandon(args):
@@ -53,7 +53,7 @@ def cmd_abandon(args):
                 f"Change {change_number} cannot be abandoned (may already be abandoned or merged)",
                 command, pretty
             ))
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_restore(args):
@@ -90,7 +90,7 @@ def cmd_restore(args):
                 f"(may not be abandoned)",
                 command, pretty
             ))
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_rebase(args):
@@ -126,7 +126,7 @@ def cmd_rebase(args):
                 f"(may have merge conflicts or already be up to date)",
                 command, pretty
             ))
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_vote(args):
@@ -162,7 +162,7 @@ def cmd_vote(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_set_topic(args):
@@ -188,7 +188,7 @@ def cmd_set_topic(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_hashtag(args):
@@ -224,7 +224,7 @@ def cmd_hashtag(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_related(args):
@@ -266,7 +266,7 @@ def cmd_related(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_message(args):
@@ -294,4 +294,4 @@ def cmd_message(args):
         sys.exit(ExitCode.SUCCESS)
 
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))

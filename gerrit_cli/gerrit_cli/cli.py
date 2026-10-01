@@ -121,6 +121,7 @@ from .summary import (  # noqa: F401
 from .commands._helpers import (  # noqa: F401 -- re-exports
     BOT_REVIEWER_NAMES,
     _patchset_age,
+    error_code_for,
     filter_threads_by_fields,
     generate_review_prompt,
     output_error,
@@ -274,7 +275,7 @@ def cmd_graph(args):
         output_success(result, "graph", pretty)
 
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), "graph", pretty))
+        sys.exit(output_error(error_code_for(e), str(e), "graph", pretty))
 
 
 def cmd_sashiko_review(args):

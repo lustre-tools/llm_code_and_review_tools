@@ -3,7 +3,7 @@
 import sys
 
 from ..errors import ErrorCode, ExitCode
-from ._helpers import _cli, output_error, output_success
+from ._helpers import _cli, error_code_for, output_error, output_success
 
 
 def cmd_reviewers(args):
@@ -41,7 +41,7 @@ def cmd_reviewers(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_add_reviewer(args):
@@ -141,7 +141,7 @@ def cmd_add_reviewer(args):
                 "Permission denied - you may not have rights to add reviewers",
                 command, pretty
             ))
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_remove_reviewer(args):
@@ -215,7 +215,7 @@ def cmd_remove_reviewer(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_find_user(args):
@@ -256,4 +256,4 @@ def cmd_find_user(args):
         sys.exit(ExitCode.SUCCESS)
 
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))

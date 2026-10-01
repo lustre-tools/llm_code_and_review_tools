@@ -901,7 +901,7 @@ class TestCmdExtractFormatted:
             mock_extract.side_effect = ValueError("Invalid URL")
             with pytest.raises(SystemExit) as exc_info:
                 cmd_extract(args)
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == 4
 
 
 class TestCmdReply:
@@ -972,7 +972,7 @@ class TestCmdReply:
 
             with pytest.raises(SystemExit) as exc_info:
                 cmd_reply(args)
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == 4
 
     def test_reply_missing_message(self):
         """Test reply without message fails."""
@@ -999,7 +999,7 @@ class TestCmdReply:
 
             with pytest.raises(SystemExit) as exc_info:
                 cmd_reply(args)
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == 4
 
 
 class TestCmdReview:
@@ -1066,7 +1066,7 @@ class TestCmdReview:
 
             with pytest.raises(SystemExit) as exc_info:
                 cmd_review(args)
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == 4
 
 
 class TestCmdSeriesComments:
@@ -2018,7 +2018,7 @@ class TestCmdDone:
 
             with pytest.raises(SystemExit) as exc_info:
                 cmd_done(args)
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == 4
 
 
 class TestCmdAck:

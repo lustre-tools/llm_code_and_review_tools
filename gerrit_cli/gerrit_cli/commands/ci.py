@@ -3,7 +3,14 @@
 import sys
 
 from ..errors import ErrorCode, ExitCode
-from ._helpers import BOT_REVIEWER_NAMES, _cli, _patchset_age, output_error, output_success
+from ._helpers import (
+    BOT_REVIEWER_NAMES,
+    _cli,
+    _patchset_age,
+    error_code_for,
+    output_error,
+    output_success,
+)
 
 
 def _maloo_for_change(client, change_number, patchset=None):
@@ -174,7 +181,7 @@ def cmd_maloo(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def _has_negative_vote(approvals):
@@ -377,7 +384,7 @@ def cmd_info(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_series_info(args):
@@ -437,7 +444,7 @@ def cmd_series_info(args):
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_watch(args):
@@ -505,7 +512,7 @@ def cmd_watch(args):
             ErrorCode.INVALID_INPUT,
             f"Invalid JSON: {e}", command, False))
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, False))
+        sys.exit(output_error(error_code_for(e), str(e), command, False))
 
 
 def cmd_diff(args):
@@ -609,4 +616,4 @@ def cmd_diff(args):
     except SystemExit:
         raise
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))

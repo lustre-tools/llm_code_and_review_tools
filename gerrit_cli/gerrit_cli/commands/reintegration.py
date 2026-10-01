@@ -2,7 +2,7 @@
 
 import sys
 
-from ._helpers import _cli
+from ._helpers import _cli, error_code_for, exit_code_for
 
 
 def cmd_continue_reintegration(args):
@@ -16,7 +16,7 @@ def cmd_continue_reintegration(args):
             sys.exit(1)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(exit_code_for(error_code_for(e)))
 
 
 def cmd_skip_reintegration(args):
@@ -30,4 +30,4 @@ def cmd_skip_reintegration(args):
             sys.exit(1)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(exit_code_for(error_code_for(e)))

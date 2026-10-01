@@ -2,9 +2,15 @@
 
 import sys
 
-from ..errors import ErrorCode, ExitCode
+from ..errors import ExitCode
 from ..rebase import get_session_info
-from ._helpers import _cli, output_error, output_success
+from ._helpers import (
+    _cli,
+    error_code_for,
+    exit_code_for,
+    output_error,
+    output_success,
+)
 
 
 def cmd_stage(args):
@@ -92,7 +98,7 @@ def cmd_stage(args):
         sys.exit(1)
     except Exception as e:
         print(f"Error staging operation: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(exit_code_for(error_code_for(e)))
 
 
 def cmd_push(args):
@@ -112,7 +118,7 @@ def cmd_push(args):
 
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(exit_code_for(error_code_for(e)))
 
 
 def cmd_staged_list(args):
@@ -141,7 +147,7 @@ def cmd_staged_list(args):
         sys.exit(ExitCode.SUCCESS)
 
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_staged_show(args):
@@ -166,7 +172,7 @@ def cmd_staged_show(args):
         sys.exit(ExitCode.SUCCESS)
 
     except Exception as e:
-        sys.exit(output_error(ErrorCode.API_ERROR, str(e), command, pretty))
+        sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
 def cmd_staged_remove(args):
@@ -184,7 +190,7 @@ def cmd_staged_remove(args):
 
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(exit_code_for(error_code_for(e)))
 
 
 def cmd_staged_clear(args):
@@ -202,7 +208,7 @@ def cmd_staged_clear(args):
 
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(exit_code_for(error_code_for(e)))
 
 
 def cmd_staged_refresh(args):
@@ -232,4 +238,4 @@ def cmd_staged_refresh(args):
 
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(exit_code_for(error_code_for(e)))
