@@ -542,6 +542,11 @@ the exact username before adding as a reviewer.
         "description": """
 Post multiple replies at once from a JSON file. The file should contain
 an array of objects with thread_index, message, and optionally mark_resolved.
+
+The replies go up as one review. It exits 0 only when every entry was
+posted: 1 when Gerrit refused the review, 4 when an entry matched no
+thread or comment (the others are still posted). Either way the error's
+details carry posted, skipped_indices and the per-reply results.
 """,
         "examples": [
             {

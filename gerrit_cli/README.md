@@ -410,8 +410,9 @@ arguments to a subcommand, a change that does not parse, a thread
 index out of range); 5=network (server unreachable or timed out). The
 JSON error's `code` field says which kind it was. 2 is also argparse's
 code for a usage error at the top level (unknown command or bad global
-flag). reply, done, ack, `review --post-comments` and push exit 1 when
-the post itself fails, whatever the reason; the message has it.
+flag). reply, done, ack, batch, `review --post-comments` and push exit
+1 when the post itself fails, whatever the reason; the message has it.
+batch exits 4 when an entry matched no thread, after posting the rest.
 
 Error responses include: `code` (machine-readable), `message` (human-readable),
 `http_status`, and `details`.

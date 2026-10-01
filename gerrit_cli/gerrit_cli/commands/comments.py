@@ -2,14 +2,17 @@
 
 import sys
 
+from ..envelope import error_response_from_dict
 from ..errors import ErrorCode, ExitCode
 from ..session import LastURLManager
 from ..summary import truncate_extracted_comments
 from ._helpers import (
     _cli,
     error_code_for,
+    exit_code_for,
     filter_threads_by_fields,
     output_error,
+    output_result,
     output_success,
     thread_index_error,
 )
@@ -419,8 +422,10 @@ def cmd_batch_reply(args):
             sys.exit(ExitCode.SUCCESS)
 
         # Post all replies
-        replier = cli.CommentReplier()
-        results = replier.batch_reply(change_number=change_number, replies=replies)
+        results = []
+        if replies:
+            replier = cli.CommentReplier()
+            results = replier.batch_reply(change_number=change_number, replies=replies)
 
         # Build result data
         success_count = sum(1 for r in results if r.success)
@@ -431,8 +436,29 @@ def cmd_batch_reply(args):
             "results": [r.to_dict() for r in results],
         }
 
-        output_success(data, command, pretty)
-        sys.exit(ExitCode.SUCCESS)
+        failed = [r for r in results if not r.success]
+        unmatched = (
+            f"{len(skipped)} entry(ies) matched no thread or comment and "
+            f"were not posted: {skipped}." if skipped else ""
+        )
+        if failed:
+            # One review carries every reply, so they fail together.
+            code = ErrorCode.API_ERROR
+            message = (
+                f"Gerrit did not take the replies: {failed[0].error}. "
+                f"{success_count} of {len(results)} posted. {unmatched}"
+            ).strip()
+        elif skipped:
+            code = ErrorCode.INVALID_INPUT
+            message = f"{unmatched} {success_count} posted."
+        else:
+            output_success(data, command, pretty)
+            sys.exit(ExitCode.SUCCESS)
+        output_result(
+            error_response_from_dict(code, message, command, details=data),
+            pretty,
+        )
+        sys.exit(exit_code_for(code))
 
     except Exception as e:
         sys.exit(output_error(error_code_for(e), str(e), command, pretty))

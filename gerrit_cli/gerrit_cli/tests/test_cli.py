@@ -1345,7 +1345,8 @@ class TestCmdBatchReply:
             MockReplier.return_value.batch_reply.return_value = []
             with pytest.raises(SystemExit) as exc_info:
                 cmd_batch_reply(args)
-            assert exc_info.value.code == 0
+            # c-missing was not posted
+            assert exc_info.value.code == 4
 
         [call] = MockReplier.return_value.batch_reply.call_args_list
         replies = call.kwargs["replies"]
@@ -1379,13 +1380,12 @@ class TestCmdBatchReply:
 
             MockReplier.return_value.batch_reply.return_value = []
 
-            # Should not raise, just skip the invalid item - now outputs JSON with empty results
+            # The entry is skipped and reported; nothing is left to post
             with pytest.raises(SystemExit) as exc_info:
                 cmd_batch_reply(args)
-            assert exc_info.value.code == 0
+            assert exc_info.value.code == 4
 
-            # batch_reply called with empty list
-            MockReplier.return_value.batch_reply.assert_called_once()
+            MockReplier.return_value.batch_reply.assert_not_called()
 
 
 class TestCmdSeriesOutputFormats:
@@ -2362,3 +2362,71 @@ class TestNegativeThreadIndex:
         assert exc_info.value.code == 4
         MockReplier.return_value.batch_reply.assert_not_called()
         assert json.loads(capsys.readouterr().out)["code"] == "INVALID_INPUT"
+
+
+class TestBatchReplyExitStatus:
+    """batch exits nonzero unless every entry was posted."""
+
+    @staticmethod
+    def _run(tmp_path, entries, results, capsys):
+        from gerrit_cli.cli import cmd_batch_reply
+        from gerrit_cli.models import ReplyResult
+
+        replies = tmp_path / "replies.json"
+        replies.write_text(json.dumps(entries))
+        args = argparse.Namespace(url="https://example.com/12345",
+                                  file=str(replies), pretty=False)
+        with patch('gerrit_cli.cli.GerritCommentsClient') as MockClient, \
+             patch('gerrit_cli.cli.extract_comments') as mock_extract, \
+             patch('gerrit_cli.cli.CommentReplier') as MockReplier, \
+             pytest.raises(SystemExit) as exc_info:
+            MockClient.parse_gerrit_url.return_value = (
+                "https://example.com", 12345)
+            mock_extract.return_value = MagicMock(
+                threads=[MagicMock(replies=[]), MagicMock(replies=[])])
+            MockReplier.return_value.batch_reply.return_value = [
+                ReplyResult(success=ok, comment_id=f"c{i}", message="m",
+                            marked_resolved=False,
+                            error=None if ok else "403 Forbidden")
+                for i, ok in enumerate(results)
+            ]
+            cmd_batch_reply(args)
+        out = json.loads(capsys.readouterr().out)
+        return exc_info.value.code, out, MockReplier.return_value.batch_reply
+
+    def test_all_posted_exits_0(self, tmp_path, capsys):
+        code, out, _ = self._run(
+            tmp_path, [{"thread_index": 0, "message": "a"}], [True], capsys)
+        assert code == 0
+        assert out["posted"] == 1
+
+    def test_a_failed_post_exits_1(self, tmp_path, capsys):
+        code, out, _ = self._run(
+            tmp_path,
+            [{"thread_index": 0, "message": "a"},
+             {"thread_index": 1, "message": "b"}],
+            [False, False], capsys)
+        assert code == 1
+        assert out["code"] == "API_ERROR"
+        assert "403 Forbidden" in out["message"]
+        assert out["details"]["posted"] == 0
+        assert [r["error"] for r in out["details"]["results"]] == [
+            "403 Forbidden", "403 Forbidden"]
+
+    def test_a_skipped_entry_exits_4(self, tmp_path, capsys):
+        code, out, post = self._run(
+            tmp_path,
+            [{"thread_index": 0, "message": "a"},
+             {"thread_index": 99, "message": "b"}],
+            [True], capsys)
+        assert code == 4
+        assert out["code"] == "INVALID_INPUT"
+        assert out["details"]["posted"] == 1
+        assert out["details"]["skipped_indices"] == [99]
+        post.assert_called_once()
+
+    def test_nothing_to_post_posts_nothing(self, tmp_path, capsys):
+        code, out, post = self._run(
+            tmp_path, [{"thread_index": 99, "message": "b"}], [], capsys)
+        assert code == 4
+        post.assert_not_called()
