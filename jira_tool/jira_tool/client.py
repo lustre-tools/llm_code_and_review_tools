@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urljoin
 
 import requests
+from urllib3.exceptions import ConnectTimeoutError
 
 from .config import JiraConfig
 from .errors import (
@@ -327,6 +328,28 @@ class JiraClient:
 
         return False
 
+    def _may_resend(self, error: Exception, method: str, endpoint: str = "") -> bool:
+        """Whether a request that failed with *error* may be sent again.
+
+        A POST that creates something may already have been applied when
+        the reply timed out, the connection dropped after sending, or the
+        server answered 5xx, so it is resent only when the server cannot
+        have acted on it: a 429, or a failure to connect.
+        """
+        if method.upper() != "POST" or endpoint.strip("/") in self.READ_ONLY_POSTS:
+            return True
+        if isinstance(error, JiraToolError) and error.code == ErrorCode.RATE_LIMITED:
+            return True
+        cause = error.__cause__
+        if isinstance(cause, requests.exceptions.ConnectTimeout):
+            return True
+        # requests wraps a failure to connect in MaxRetryError; a failure
+        # after sending is a bare ProtocolError or ReadTimeoutError.
+        if isinstance(cause, requests.exceptions.ConnectionError) and cause.args:
+            reason = getattr(cause.args[0], "reason", None)
+            return isinstance(reason, ConnectTimeoutError)
+        return False
+
     @staticmethod
     def _not_found_code(endpoint: str) -> str:
         """The error code for a 404 from *endpoint*.
@@ -457,7 +480,8 @@ class JiraClient:
         Make an API request with error handling and automatic retry.
 
         Automatically retries on transient failures (5xx, 429 rate limit,
-        timeouts, connection errors) with exponential backoff.
+        timeouts, connection errors) with exponential backoff; see
+        _may_resend for the POSTs that are not retried.
 
         Args:
             method: HTTP method (GET, POST, PUT, DELETE)
@@ -520,6 +544,9 @@ class JiraClient:
                 last_error = e
                 if not self._is_retryable_error(e):
                     raise
+
+            if last_error is not None and not self._may_resend(last_error, method, endpoint):
+                raise last_error
 
             # If we have retries left, wait and try again
             if attempt < self.max_retries:
@@ -608,6 +635,9 @@ class JiraClient:
                     details={"url": url, "attempt": attempt + 1},
                 )
                 last_error.__cause__ = e
+
+            if last_error is not None and not self._may_resend(last_error, method):
+                raise last_error
 
             # If we have retries left, wait and try again
             if attempt < self.max_retries:
@@ -1619,6 +1649,9 @@ class JiraClient:
                     message=f"Cannot read file: {e}",
                     details={"file": file_path},
                 ) from e
+
+            if last_error is not None and not self._may_resend(last_error, "POST", endpoint):
+                raise last_error
 
             # If we have retries left, wait and try again
             if attempt < self.max_retries:

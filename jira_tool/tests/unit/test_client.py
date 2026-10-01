@@ -4,6 +4,7 @@ import json
 from unittest.mock import patch
 
 import pytest
+import requests
 import responses
 
 from jira_tool.client import (
@@ -1244,6 +1245,129 @@ class TestRetryOnTransientErrors:
         assert len(responses.calls) == 3  # Initial + 2 retries
 
 
+class TestRetryOnlyWhatCannotDuplicate:
+    """A POST that creates something is resent only if it never arrived."""
+
+    COMMENT = "https://jira.example.com/rest/api/2/issue/PROJ-1/comment"
+
+    @staticmethod
+    def _refused():
+        from urllib3.exceptions import MaxRetryError, NewConnectionError
+
+        return requests.exceptions.ConnectionError(
+            MaxRetryError(None, "/", reason=NewConnectionError(None, "refused"))
+        )
+
+    @pytest.mark.parametrize(
+        "failure, code",
+        [
+            ({"body": requests.exceptions.ReadTimeout("read timed out")},
+             ErrorCode.TIMEOUT),
+            ({"body": requests.exceptions.ConnectionError(
+                "('Connection aborted.', RemoteDisconnected())")},
+             ErrorCode.CONNECTION_ERROR),
+            ({"status": 502}, ErrorCode.SERVER_ERROR),
+        ],
+    )
+    @responses.activate
+    @patch("time.sleep")
+    def test_comment_is_sent_once_when_it_may_have_landed(
+        self, mock_sleep, config, failure, code
+    ):
+        client = JiraClient(config, max_retries=2)
+        responses.add(responses.POST, self.COMMENT, **failure)
+        responses.add(responses.POST, self.COMMENT, json={"id": "1"}, status=201)
+
+        with pytest.raises(JiraToolError) as exc_info:
+            client.add_comment("PROJ-1", "hello")
+        assert exc_info.value.code == code
+        assert len(responses.calls) == 1
+        assert not mock_sleep.called
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            {"status": 429},
+            {"body": requests.exceptions.ConnectTimeout("connect timed out")},
+            {"body": "refused"},
+        ],
+    )
+    @responses.activate
+    @patch("time.sleep")
+    def test_comment_is_resent_when_it_never_landed(self, mock_sleep, config, failure):
+        client = JiraClient(config, max_retries=2)
+        if failure.get("body") == "refused":
+            failure = {"body": self._refused()}
+        responses.add(responses.POST, self.COMMENT, **failure)
+        responses.add(responses.POST, self.COMMENT, json={"id": "1"}, status=201)
+
+        assert client.add_comment("PROJ-1", "hello") == {"id": "1"}
+        assert len(responses.calls) == 2
+
+    @responses.activate
+    @patch("time.sleep")
+    def test_search_post_is_still_retried(self, mock_sleep, config):
+        client = JiraClient(config, max_retries=2)
+        url = "https://jira.example.com/rest/api/2/search"
+        responses.add(responses.POST, url, status=502)
+        responses.add(responses.POST, url, json={"issues": [], "total": 0})
+
+        client.search_issues("project = PROJ")
+        assert len(responses.calls) == 2
+
+    @responses.activate
+    @patch("time.sleep")
+    def test_put_is_still_retried(self, mock_sleep, config):
+        client = JiraClient(config, max_retries=2)
+        url = "https://jira.example.com/rest/api/2/issue/PROJ-1"
+        responses.add(responses.PUT, url, status=502)
+        responses.add(responses.PUT, url, status=204)
+
+        client.update_issue("PROJ-1", summary="new")
+        assert len(responses.calls) == 2
+
+    @responses.activate
+    @patch("time.sleep")
+    def test_watcher_post_is_sent_once_after_a_5xx(self, mock_sleep, config):
+        client = JiraClient(config, max_retries=2)
+        url = "https://jira.example.com/rest/api/2/issue/PROJ-1/watchers"
+        responses.add(responses.POST, url, status=500)
+        responses.add(responses.POST, url, status=204)
+
+        with pytest.raises(JiraToolError) as exc_info:
+            client.add_watcher("PROJ-1", "jdoe")
+        assert exc_info.value.code == ErrorCode.SERVER_ERROR
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    @patch("time.sleep")
+    def test_upload_is_sent_once_after_a_5xx(self, mock_sleep, config, tmp_path):
+        client = JiraClient(config, max_retries=2)
+        upload = tmp_path / "log.txt"
+        upload.write_text("x")
+        url = "https://jira.example.com/rest/api/2/issue/PROJ-1/attachments"
+        responses.add(responses.POST, url, status=504)
+        responses.add(responses.POST, url, json=[{"id": "9"}])
+
+        with pytest.raises(JiraToolError) as exc_info:
+            client.upload_attachment("PROJ-1", str(upload))
+        assert exc_info.value.code == ErrorCode.SERVER_ERROR
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    @patch("time.sleep")
+    def test_upload_is_resent_after_a_429(self, mock_sleep, config, tmp_path):
+        client = JiraClient(config, max_retries=2)
+        upload = tmp_path / "log.txt"
+        upload.write_text("x")
+        url = "https://jira.example.com/rest/api/2/issue/PROJ-1/attachments"
+        responses.add(responses.POST, url, status=429)
+        responses.add(responses.POST, url, json=[{"id": "9"}])
+
+        assert client.upload_attachment("PROJ-1", str(upload)) == [{"id": "9"}]
+        assert len(responses.calls) == 2
+
+
 class TestNoRetryOnPermanentErrors:
     """Tests that permanent errors are not retried."""
 
@@ -1383,11 +1507,11 @@ class TestRetryWithAttachments:
         """Should retry add_watcher on transient errors."""
         client = JiraClient(config, max_retries=2, retry_backoff=0.1)
 
-        # First call fails with 500
+        # First call is rate limited
         responses.add(
             responses.POST,
             "https://jira.example.com/rest/api/2/issue/PROJ-123/watchers",
-            status=500,
+            status=429,
         )
         # Second call succeeds
         responses.add(
