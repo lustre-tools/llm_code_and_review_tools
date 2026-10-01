@@ -294,10 +294,14 @@ def cmd_sashiko_review(args):
         max_minutes=args.timeout,
     )
 
+    pretty = getattr(args, "pretty", False)
     if not result.get("success"):
-        output_error(result.get("error", "Review failed"), "sashiko")
-    else:
-        output_success(result, "sashiko-review", getattr(args, "pretty", False))
+        # a failed post carries "error": None
+        sys.exit(output_error(
+            ErrorCode.API_ERROR, result.get("error") or "Review failed",
+            "sashiko-review", pretty,
+        ))
+    output_success(result, "sashiko-review", pretty)
 
 
 # Module-level flag for --envelope; read by _helpers.output_result().

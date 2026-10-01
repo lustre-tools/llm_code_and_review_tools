@@ -2062,3 +2062,51 @@ class TestCmdAck:
             with pytest.raises(SystemExit) as exc_info:
                 cmd_ack(args)
             assert exc_info.value.code == 1
+
+
+class TestCmdSashikoReview:
+    """Tests for cmd_sashiko_review's result handling."""
+
+    @staticmethod
+    def _args():
+        return argparse.Namespace(
+            change="12345", sashiko_url="http://127.0.0.1:8080",
+            repo="/repo", dry_run=False, vote=False, timeout=1,
+            pretty=False,
+        )
+
+    def test_failed_review_is_a_json_error_and_nonzero_exit(self, capsys):
+        from gerrit_cli.cli import cmd_sashiko_review
+
+        with patch('gerrit_cli.sashiko_bridge.do_review',
+                   return_value={"success": False,
+                                 "error": "Review timed out"}), \
+             pytest.raises(SystemExit) as exc_info:
+            cmd_sashiko_review(self._args())
+
+        assert exc_info.value.code == 1
+        out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert out["code"] == "API_ERROR"
+        assert out["message"] == "Review timed out"
+
+    def test_failed_post_without_message_still_says_something(self, capsys):
+        from gerrit_cli.cli import cmd_sashiko_review
+
+        with patch('gerrit_cli.sashiko_bridge.do_review',
+                   return_value={"success": False, "error": None}), \
+             pytest.raises(SystemExit) as exc_info:
+            cmd_sashiko_review(self._args())
+
+        assert exc_info.value.code == 1
+        out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert out["message"] == "Review failed"
+
+    def test_successful_review_prints_result(self, capsys):
+        from gerrit_cli.cli import cmd_sashiko_review
+
+        with patch('gerrit_cli.sashiko_bridge.do_review',
+                   return_value={"success": True, "findings": []}):
+            cmd_sashiko_review(self._args())
+
+        out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert out["findings"] == []
