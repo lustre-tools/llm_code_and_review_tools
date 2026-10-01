@@ -464,3 +464,84 @@ class TestUsageErrors:
         env = json.loads(result.stdout)
         assert env["ok"] is False
         assert env["meta"]["tool"] == "janitor"
+
+
+def _real_client(get):
+    """A JanitorClient whose HTTP session is the given mock."""
+    from janitor_tool.client import JanitorClient
+    from janitor_tool.config import JanitorConfig
+
+    client = JanitorClient(JanitorConfig(
+        base_url="https://janitor.example.com",
+        gerrit_url="https://gerrit.example.com",
+    ))
+    client.session.get = get
+    return client
+
+
+class TestFetchFailuresAreNotAbsence:
+    """An unreachable server is a network error (exit 5), not a missing
+    build or test."""
+
+    def _error(self, result, code, exit_code):
+        assert result.exit_code == exit_code, result.output
+        out = json.loads(result.stdout)
+        assert out["code"] == code
+        return out
+
+    @patch("janitor_tool.cli._make_client")
+    def test_build_lookup(self, mock_make):
+        import requests
+
+        mock_make.return_value = _real_client(
+            MagicMock(side_effect=requests.ConnectionError("refused"))
+        )
+        result = CliRunner().invoke(main, ["results", "--build", "61009"])
+        self._error(result, "CONNECTION_ERROR", 5)
+
+    @patch("janitor_tool.cli._make_client")
+    def test_change_lookup(self, mock_make):
+        import requests
+
+        mock_make.return_value = _real_client(
+            MagicMock(side_effect=requests.ConnectionError("refused"))
+        )
+        result = CliRunner().invoke(main, ["results", "--change", "64440"])
+        out = self._error(result, "CONNECTION_ERROR", 5)
+        assert "Could not resolve Gerrit change 64440" in out["message"]
+
+    @patch("janitor_tool.cli._make_client")
+    def test_test_lookup(self, mock_make):
+        import requests
+
+        ref = MagicMock(status_code=200, text="refs/changes/40/64440/10")
+        mock_make.return_value = _real_client(MagicMock(side_effect=[
+            ref, requests.Timeout("slow"),
+        ]))
+        result = CliRunner().invoke(
+            main, ["detail", "--build", "61009", "sanity"]
+        )
+        self._error(result, "TIMEOUT", 5)
+
+    @patch("janitor_tool.cli._make_client")
+    def test_server_error(self, mock_make):
+        import requests
+
+        ref = MagicMock(status_code=200, text="refs/changes/40/64440/10")
+        broken = MagicMock(status_code=503)
+        broken.raise_for_status.side_effect = requests.HTTPError(
+            "503 Server Error", response=broken
+        )
+        mock_make.return_value = _real_client(
+            MagicMock(side_effect=[ref, broken])
+        )
+        result = CliRunner().invoke(main, ["results", "--build", "61009"])
+        self._error(result, "API_ERROR", 1)
+
+    @patch("janitor_tool.cli._make_client")
+    def test_a_missing_build_is_still_not_found(self, mock_make):
+        mock_make.return_value = _real_client(
+            MagicMock(return_value=MagicMock(status_code=404))
+        )
+        result = CliRunner().invoke(main, ["results", "--build", "61009"])
+        self._error(result, "BUILD_NOT_FOUND", 1)

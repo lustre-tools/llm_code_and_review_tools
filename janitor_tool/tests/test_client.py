@@ -5,6 +5,7 @@ import re
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from janitor_tool.client import JanitorClient, _ResultsParser
 from janitor_tool.config import JanitorConfig
@@ -285,6 +286,22 @@ class TestResolveChange:
         assert "cannot read Gerrit change" in client.change_lookup_error
         assert "Janitor build index" in client.change_lookup_error
 
+    def test_a_failed_lookup_keeps_its_cause(self):
+        client = _make_client()
+        refused = requests.ConnectionError("refused")
+        client.session.get = MagicMock(side_effect=refused)
+
+        assert client.resolve_change(64440) is None
+        assert client.change_lookup_failure is refused
+
+    def test_a_conclusive_lookup_has_no_cause(self):
+        client = _make_client()
+        resp = MagicMock(status_code=404)
+        client.session.get = MagicMock(return_value=resp)
+
+        assert client.resolve_change(64440) is None
+        assert client.change_lookup_failure is None
+
 
 class TestGetRef:
     """Tests for JanitorClient.get_ref()."""
@@ -322,12 +339,14 @@ class TestGetRef:
         result = client.get_ref(99999)
         assert result is None
 
-    def test_network_error(self):
+    def test_network_error_is_not_absence(self):
         client = _make_client()
-        client.session.get = MagicMock(side_effect=Exception("timeout"))
+        client.session.get = MagicMock(
+            side_effect=requests.ConnectionError("refused")
+        )
 
-        result = client.get_ref(61009)
-        assert result is None
+        with pytest.raises(requests.ConnectionError):
+            client.get_ref(61009)
 
 
 class TestGetResults:
@@ -365,12 +384,21 @@ class TestGetResults:
         result = client.get_results(99999)
         assert result is None
 
-    def test_network_error(self):
+    def test_network_error_is_not_absence(self):
         client = _make_client()
-        client.session.get = MagicMock(side_effect=Exception("fail"))
+        client.session.get = MagicMock(side_effect=requests.Timeout("slow"))
 
-        result = client.get_results(61009)
-        assert result is None
+        with pytest.raises(requests.Timeout):
+            client.get_results(61009)
+
+    def test_server_error_is_not_absence(self):
+        client = _make_client()
+        resp = MagicMock(status_code=500)
+        resp.raise_for_status.side_effect = requests.HTTPError(response=resp)
+        client.session.get = MagicMock(return_value=resp)
+
+        with pytest.raises(requests.HTTPError):
+            client.get_results(61009)
 
 
 class TestFindTestDir:
@@ -492,3 +520,39 @@ class TestFetchLog:
         result = client.fetch_log(61009, "test-dir", "big.txt", max_bytes=150)
         assert result is not None
         assert len(result) <= 150
+
+
+class TestFetchFailures:
+    """A file that is not there is None or []; a failure to fetch it
+    raises, since it says nothing about whether the file exists."""
+
+    CALLS = (
+        lambda c: c.find_test_dir(61009, "sanity"),
+        lambda c: c.list_test_files(61009, "sanity-dir"),
+        lambda c: c.get_test_yaml(61009, "sanity-dir"),
+        lambda c: c.fetch_log(61009, "sanity-dir", "console.txt"),
+    )
+
+    def test_network_errors_raise(self):
+        for call in self.CALLS:
+            client = _make_client()
+            client.session.get = MagicMock(
+                side_effect=requests.ConnectionError("refused")
+            )
+            with pytest.raises(requests.ConnectionError):
+                call(client)
+
+    def test_absence_is_still_none(self):
+        for call in self.CALLS:
+            client = _make_client()
+            client.session.get = MagicMock(
+                return_value=MagicMock(status_code=404)
+            )
+            assert not call(client)
+
+    def test_unparseable_yaml_is_still_none(self):
+        client = _make_client()
+        client.session.get = MagicMock(return_value=MagicMock(
+            status_code=200, text="Tests: [unclosed"
+        ))
+        assert client.get_test_yaml(61009, "sanity-dir") is None

@@ -214,11 +214,28 @@ class JanitorClient:
     def _build_url(self, build: int, path: str = "") -> str:
         return f"{self.config.base_url}/{build}/{path}"
 
+    def _fetch(
+        self, url: str, timeout: int, **kwargs: Any
+    ) -> requests.Response | None:
+        """GET a Janitor file, or None when it is not there (404).
+
+        A connection error, a timeout or any other HTTP error raises:
+        none of them says whether the file exists.
+        """
+        resp = self.session.get(url, timeout=timeout, **kwargs)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp
+
     # -- Build lookup --
 
     #: Set by resolve_change() when the lookup could not be performed
     #: at all, as opposed to completing and finding nothing.
     change_lookup_error: str | None = None
+    #: The exception that kept Gerrit from answering, when
+    #: change_lookup_error is set.
+    change_lookup_failure: Exception | None = None
 
     def resolve_change(self, change: int) -> int | None:
         """Find the latest Janitor build for a Gerrit change number.
@@ -237,17 +254,23 @@ class JanitorClient:
         answer.
         """
         self.change_lookup_error = None
+        self.change_lookup_failure = None
 
-        build, gerrit_error = self._resolve_change_via_gerrit(change)
+        build, failure = self._resolve_change_via_gerrit(change)
         if build is not None:
             return build
-        if gerrit_error is None:
+        if failure is None:
             # Gerrit answered: this change has no Janitor build.
             return None
+        gerrit_error = (
+            f"cannot read Gerrit change {change} at "
+            f"{self.config.gerrit_url} ({type(failure).__name__})"
+        )
 
         build, index_error = self._resolve_change_via_index(change)
         if build is not None:
             return build
+        self.change_lookup_failure = failure
         if index_error:
             self.change_lookup_error = f"{gerrit_error}; and {index_error}"
         else:
@@ -258,10 +281,10 @@ class JanitorClient:
 
     def _resolve_change_via_gerrit(
         self, change: int
-    ) -> tuple[int | None, str | None]:
+    ) -> tuple[int | None, Exception | None]:
         """Read the Janitor build number off the change's comments.
 
-        Returns (build, error).  A (None, None) result means Gerrit
+        Returns (build, failure).  A (None, None) result means Gerrit
         answered and the change has no Janitor build.
         """
         url = f"{self.config.gerrit_url}/changes/{change}/messages"
@@ -276,10 +299,7 @@ class JanitorClient:
                 body = body.split("\n", 1)[1]
             messages = json.loads(body)
         except Exception as e:
-            return None, (
-                f"cannot read Gerrit change {change} at "
-                f"{self.config.gerrit_url} ({type(e).__name__})"
-            )
+            return None, e
 
         # Latest patchset wins, and within it the latest comment: a
         # rerun on the same patchset gets a new build number.
@@ -346,37 +366,26 @@ class JanitorClient:
 
     def get_ref(self, build: int) -> dict[str, Any] | None:
         """Get the REF info for a build."""
-        try:
-            resp = self.session.get(
-                self._build_url(build, "REF"), timeout=10,
-            )
-            if resp.status_code != 200:
-                return None
-            ref = resp.text.strip()
-            # "refs/changes/40/64440/10"
-            m = re.match(r"refs/changes/\d+/(\d+)/(\d+)", ref)
-            if m:
-                return {
-                    "ref": ref,
-                    "change": int(m.group(1)),
-                    "patchset": int(m.group(2)),
-                }
-            return {"ref": ref}
-        except Exception:
+        resp = self._fetch(self._build_url(build, "REF"), timeout=10)
+        if resp is None:
             return None
+        ref = resp.text.strip()
+        # "refs/changes/40/64440/10"
+        m = re.match(r"refs/changes/\d+/(\d+)/(\d+)", ref)
+        if m:
+            return {
+                "ref": ref,
+                "change": int(m.group(1)),
+                "patchset": int(m.group(2)),
+            }
+        return {"ref": ref}
 
     # -- Results page --
 
     def get_results(self, build: int) -> dict[str, Any] | None:
         """Parse the results.html page for a build."""
-        try:
-            resp = self.session.get(
-                self._build_url(build, "results.html"),
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                return None
-        except Exception:
+        resp = self._fetch(self._build_url(build, "results.html"), timeout=15)
+        if resp is None:
             return None
 
         parser = _ResultsParser()
@@ -400,11 +409,8 @@ class JanitorClient:
     ) -> list[dict[str, str]]:
         """List files in a test result directory."""
         url = self._build_url(build, f"testresults/{test_dir}/")
-        try:
-            resp = self.session.get(url, timeout=15)
-            if resp.status_code != 200:
-                return []
-        except Exception:
+        resp = self._fetch(url, timeout=15)
+        if resp is None:
             return []
 
         files = []
@@ -432,12 +438,12 @@ class JanitorClient:
         url = self._build_url(
             build, f"testresults/{test_dir}/results.yml"
         )
+        resp = self._fetch(url, timeout=15)
+        if resp is None:
+            return None
         try:
-            resp = self.session.get(url, timeout=15)
-            if resp.status_code != 200:
-                return None
             return yaml.safe_load(resp.text)
-        except Exception:
+        except yaml.YAMLError:
             return None
 
     def fetch_log(
@@ -451,24 +457,19 @@ class JanitorClient:
         url = self._build_url(
             build, f"testresults/{test_dir}/{filename}"
         )
-        try:
-            resp = self.session.get(
-                url, timeout=30, stream=True,
-            )
-            if resp.status_code != 200:
-                return None
-            # Read up to max_bytes
-            chunks = []
-            total = 0
-            for chunk in resp.iter_content(chunk_size=65536):
-                chunks.append(chunk)
-                total += len(chunk)
-                if total >= max_bytes:
-                    break
-            data = b"".join(chunks)[:max_bytes]
-            return data.decode("utf-8", errors="replace")
-        except Exception:
+        resp = self._fetch(url, timeout=30, stream=True)
+        if resp is None:
             return None
+        # Read up to max_bytes
+        chunks = []
+        total = 0
+        for chunk in resp.iter_content(chunk_size=65536):
+            chunks.append(chunk)
+            total += len(chunk)
+            if total >= max_bytes:
+                break
+        data = b"".join(chunks)[:max_bytes]
+        return data.decode("utf-8", errors="replace")
 
     def find_test_dir(
         self, build: int, test_name: str
@@ -482,11 +483,8 @@ class JanitorClient:
         Falls back to listing the testresults/ dir and matching.
         """
         url = self._build_url(build, "testresults/")
-        try:
-            resp = self.session.get(url, timeout=15)
-            if resp.status_code != 200:
-                return None
-        except Exception:
+        resp = self._fetch(url, timeout=15)
+        if resp is None:
             return None
 
         # Normalize test name for matching:

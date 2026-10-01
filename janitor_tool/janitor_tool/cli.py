@@ -8,7 +8,8 @@ from typing import Any
 
 import click
 
-from llm_tool_common.click_group import JsonUsageErrorGroup
+from llm_tool_common.click_group import JsonErrorGroup
+from llm_tool_common.decorators import error_from_exception
 from llm_tool_common.envelope import (
     error_response_from_dict,
     format_json,
@@ -17,7 +18,7 @@ from llm_tool_common.envelope import (
 
 from .client import JanitorClient
 from .config import load_config
-from .errors import ErrorCode
+from .errors import ErrorCode, ExitCode
 
 TOOL_NAME = "janitor"
 
@@ -57,11 +58,20 @@ def _output(envelope: dict[str, Any], pretty: bool) -> None:
 
 
 def _error(
-    code: str, message: str, command: str, pretty: bool
+    code: str, message: str, command: str, pretty: bool,
+    exit_code: int = ExitCode.GENERAL_ERROR,
 ) -> None:
     env = error_response_from_dict(code, message, TOOL_NAME, command)
     _output(env, pretty)
-    sys.exit(1)
+    sys.exit(exit_code)
+
+
+def _lookup_failed(
+    client: JanitorClient, message: str, command: str, pretty: bool
+) -> None:
+    """Report a change lookup that could not be made, as what stopped it."""
+    err = error_from_exception(client.change_lookup_failure)
+    _error(err.code, message, command, pretty, err.exit_code)
 
 
 def _resolve_build(
@@ -112,8 +122,8 @@ def _resolve_build(
         if build:
             return build
         if client.change_lookup_error:
-            _error(
-                ErrorCode.BUILD_NOT_FOUND,
+            _lookup_failed(
+                client,
                 f"Could not resolve Gerrit change {val} to a build: "
                 f"{client.change_lookup_error}. The Janitor posts its "
                 f"build URL on the change (gerrit-janitor/<build>/"
@@ -165,8 +175,8 @@ def _resolve_build(
         return change_build
 
     if lookup_error:
-        _error(
-            ErrorCode.BUILD_NOT_FOUND,
+        _lookup_failed(
+            client,
             f"'{val}' is not a Janitor build, and it could not be "
             f"checked as a Gerrit change because {lookup_error}.",
             command,
@@ -182,7 +192,7 @@ def _resolve_build(
     return 0  # unreachable
 
 
-class JanitorGroup(JsonUsageErrorGroup):
+class JanitorGroup(JsonErrorGroup):
     tool_name = TOOL_NAME
 
 
