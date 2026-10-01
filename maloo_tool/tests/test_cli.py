@@ -1676,3 +1676,23 @@ class TestEscapedErrors:
             runner.invoke(main, ["session", SID_1]), "AUTH_MISSING", 2
         )
         assert "MALOO_USER" in out["message"]
+
+
+class TestSessionUrls:
+    """Session links point at the configured Maloo, not a fixed host."""
+
+    SESSION = {"id": SID_1, "test_sets_failed_count": 0}
+
+    def test_review(self, runner, mock_client):
+        mock_client.config.base_url = "https://maloo.example.com"
+        mock_client.find_sessions_by_commit.return_value = [self.SESSION]
+        result = runner.invoke(main, ["review", "54321", "--commit", "a" * 40])
+        url = _parse_output(result)["sessions"][0]["url"]
+        assert url == f"https://maloo.example.com/test_sessions/{SID_1}"
+
+    def test_sessions(self, runner, mock_client):
+        mock_client.config.base_url = "https://maloo.example.com"
+        mock_client.get_sessions.return_value = [self.SESSION]
+        result = runner.invoke(main, ["sessions"])
+        url = _parse_output(result)["sessions"][0]["url"]
+        assert url == f"https://maloo.example.com/test_sessions/{SID_1}"

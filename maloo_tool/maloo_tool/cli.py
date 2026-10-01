@@ -618,7 +618,7 @@ def review(
             "failed": s.get("test_sets_failed_count", 0),
             "total": s.get("test_sets_count", 0),
             "duration": s.get("duration"),
-            "url": f"https://testing.whamcloud.com/test_sessions/{s.get('id')}",
+            "url": f"{client.config.base_url}/test_sessions/{s.get('id')}",
         })
 
     result = {
@@ -969,7 +969,7 @@ def sessions(
             "total": s.get("test_sets_count", 0),
             "duration": s.get("duration"),
             "trigger_job": s.get("trigger_job"),
-            "url": f"https://testing.whamcloud.com/test_sessions/{s.get('id')}",
+            "url": f"{client.config.base_url}/test_sessions/{s.get('id')}",
         })
 
     filters = {}
