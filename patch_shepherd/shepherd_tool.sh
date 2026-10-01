@@ -13,7 +13,7 @@ PATCHES_FILE="${PATCHES_FILE:-/shared/support_files/patches_to_watch.json}"
 # --- Rate limiting for write actions ---
 # Counter file in /tmp. PPID is the claude process that invoked us;
 # stable across all tool calls within a single run.
-RATE_FILE="/tmp/patch_shepherd_rates.${PPID}"
+RATE_FILE="${PATCH_SHEPHERD_RATE_FILE:-/tmp/patch_shepherd_rates.${PPID}}"
 # Caps per run
 MAX_RETESTS=15
 MAX_RAISE_BUGS=5
@@ -72,9 +72,14 @@ check-patch)
 	LAST_PATCHSET="${4:-0}"
 	LAST_REVIEW_COUNT="${5:-0}"
 
+	# Retests go through this script's retest action, which honours the
+	# dry run and counts against the same per-run cap.
+	export PATCH_SHEPHERD_RATE_FILE="$RATE_FILE"
+	export PATCH_SHEPHERD_SELF="$(readlink -f "$0")"
+
 	python3 - "$GERRIT_URL" "$PATCH_INDEX" "$WATCH_STATUS" \
 		"$LAST_PATCHSET" "$LAST_REVIEW_COUNT" <<'PYEOF'
-import json, subprocess, sys, re, time
+import json, os, subprocess, sys, re, time
 
 def dbg(msg):
     """Debug log to stderr (stdout is the JSON result)."""
@@ -300,17 +305,29 @@ for test in enforced.get("tests", []):
                 bug_id = linked_bugs[0].get("ticket",
                     linked_bugs[0].get("bug_id", ""))
                 if bug_id:
-                    retest_result = run_tool([
-                        "maloo", "retest", session_id, bug_id])
-                    result["actions_taken"].append({
-                        "type": "retest",
-                        "description": (
-                            f"{test['test']} {suite_name}: "
-                            f"retest with {bug_id}"
-                        ),
-                        "session_id": session_id,
-                        "bug": bug_id,
-                    })
+                    try:
+                        r = subprocess.run(
+                            ["bash", os.environ["PATCH_SHEPHERD_SELF"],
+                             "retest", session_id, bug_id],
+                            capture_output=True, text=True, timeout=300)
+                        failure = (r.stderr.strip() or f"rc={r.returncode}"
+                                   if r.returncode else None)
+                    except subprocess.TimeoutExpired:
+                        failure = "timed out"
+                    if failure:
+                        result["errors"].append(
+                            f"retest {session_id} with {bug_id} "
+                            f"failed: {failure}")
+                    else:
+                        result["actions_taken"].append({
+                            "type": "retest",
+                            "description": (
+                                f"{test['test']} {suite_name}: "
+                                f"retest with {bug_id}"
+                            ),
+                            "session_id": session_id,
+                            "bug": bug_id,
+                        })
                 continue
 
             # No linked bug — collect failing subtests for LLM
