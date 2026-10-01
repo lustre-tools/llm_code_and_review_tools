@@ -1,5 +1,6 @@
 """Review and series commands: review, series, series-comments, series-status, interactive."""
 
+import contextlib
 import sys
 
 from ..envelope import error_response_from_dict
@@ -257,7 +258,10 @@ def cmd_series(args):
         checkout_result = None
         if not no_checkout:
             target_change = first_with_comments or series.patches[0].change_number
-            success, message = cli.work_on_patch(args.url, target_change)
+            # work_on_patch reports its progress with print(); this
+            # command's stdout is JSON
+            with contextlib.redirect_stdout(sys.stderr):
+                success, message = cli.work_on_patch(args.url, target_change)
             checkout_result = {
                 "success": success,
                 "change_number": target_change,

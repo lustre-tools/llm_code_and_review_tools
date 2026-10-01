@@ -252,7 +252,7 @@ class TestReviewSeriesParsedFlags:
     """
 
     @staticmethod
-    def _run(capsys, *argv):
+    def _run(capsys, *argv, work=None):
         from gerrit_cli import cli
         from gerrit_cli.parsers import setup_parsers
 
@@ -275,10 +275,20 @@ class TestReviewSeriesParsedFlags:
             MockFinder.return_value.find_series.return_value = series
             mock_extract.return_value = MagicMock(threads=[])
             mock_work.return_value = (True, "checked out")
+            mock_work.side_effect = work
             args.func(args)
 
         assert exc_info.value.code == 0
         return MockManager, mock_work, json.loads(capsys.readouterr().out)
+
+    def test_checkout_progress_stays_off_stdout(self, capsys):
+        """work_on_patch reports progress with print(); stdout is JSON."""
+        def work(url, change):
+            print("Change 12345 not in local history, fetching from Gerrit...")
+            return True, "checked out"
+
+        _, _, out = self._run(capsys, "12345", work=work)
+        assert out["checkout"]["success"] is True
 
     def test_no_checkout_leaves_git_alone(self, capsys):
         manager, work, out = self._run(capsys, "12345", "--no-checkout")
