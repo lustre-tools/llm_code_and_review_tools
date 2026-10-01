@@ -4,6 +4,25 @@ This module contains all the argparse subparser definitions, keeping
 the main cli.py focused on command implementations.
 """
 
+import argparse
+
+
+def thread_index(value: str) -> int:
+    """A thread index as 'comments' numbers them: 0, 1, 2, ...
+
+    type=int would take -1, which Python indexing turns into the last
+    thread.
+    """
+    try:
+        index = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid thread index: {value!r}") from None
+    if index < 0:
+        raise argparse.ArgumentTypeError(
+            f"thread index {index} is negative; 'comments' numbers "
+            "threads from 0")
+    return index
 
 
 def add_extract_parser(subparsers):
@@ -76,7 +95,7 @@ def add_reply_parser(subparsers):
     )
     parser.add_argument(
         "thread_index",
-        type=int,
+        type=thread_index,
         help="Thread index from 'comments' output",
     )
     parser.add_argument(
@@ -463,7 +482,7 @@ def add_stage_reply_parser(subparsers):
     )
     parser.add_argument(
         "thread_index",
-        type=int,
+        type=thread_index,
         help="Thread index from 'extract' output",
     )
     parser.add_argument(
@@ -986,7 +1005,7 @@ def add_done_parser(subparsers):
     parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "thread_index",
-        type=int,
+        type=thread_index,
         help="Thread index from 'comments' output",
     )
     parser.add_argument(
@@ -1014,7 +1033,7 @@ def add_ack_parser(subparsers):
     parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
         "thread_index",
-        type=int,
+        type=thread_index,
         help="Thread index from 'comments' output",
     )
     parser.add_argument(

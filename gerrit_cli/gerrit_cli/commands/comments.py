@@ -365,6 +365,16 @@ def cmd_batch_reply(args):
             # are resolved -- by file and optionally line.
             if 'thread_index' in item:
                 thread_idx = item['thread_index']
+                # -1 would index the last thread, and True thread 1
+                if (isinstance(thread_idx, bool)
+                        or not isinstance(thread_idx, int) or thread_idx < 0):
+                    sys.exit(output_error(
+                        ErrorCode.INVALID_INPUT,
+                        f"thread_index {thread_idx!r} is not a thread index; "
+                        "'comments' numbers threads 0, 1, 2, ... Nothing "
+                        "was posted.",
+                        command, pretty,
+                    ))
             else:
                 thread_idx = _thread_index_by_location(result.threads, item)
                 if thread_idx is None:

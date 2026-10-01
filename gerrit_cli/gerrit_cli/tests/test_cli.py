@@ -2281,3 +2281,55 @@ class TestIndexOfAResolvedThread:
         assert exc_info.value.code == 1
         MockStaging.return_value.stage_operation.assert_not_called()
         assert "--all" in capsys.readouterr().err
+
+
+class TestNegativeThreadIndex:
+    """-1 is not "the last thread": nobody sees negative indices."""
+
+    @pytest.mark.parametrize("argv", [
+        ["reply", "-1", "hello"],
+        ["reply", "--url", "https://example.com/12345", "-1", "hello"],
+        ["done", "https://example.com/12345", "-1"],
+        ["ack", "https://example.com/12345", "-1"],
+        ["stage", "--done", "-1"],
+    ])
+    def test_parser_refuses(self, argv, capsys):
+        from gerrit_cli import cli
+        from gerrit_cli.parsers import setup_parsers
+
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(
+            dest="command", parser_class=cli._JsonErrorParser)
+        setup_parsers(subparsers, cli.build_handlers())
+
+        with pytest.raises(SystemExit) as exc_info:
+            parser.parse_args(argv)
+
+        assert exc_info.value.code == 4
+        out = json.loads(capsys.readouterr().out)
+        assert "-1" in out["message"]
+
+    @pytest.mark.parametrize("index", [-1, True, "1"])
+    def test_batch_refuses(self, index, tmp_path, capsys):
+        from gerrit_cli.cli import cmd_batch_reply
+
+        replies = tmp_path / "replies.json"
+        replies.write_text(json.dumps(
+            [{"thread_index": 0, "message": "ok"},
+             {"thread_index": index, "message": "which one?"}]))
+        args = argparse.Namespace(url="https://example.com/12345",
+                                  file=str(replies), pretty=False)
+
+        with patch('gerrit_cli.cli.GerritCommentsClient') as MockClient, \
+             patch('gerrit_cli.cli.extract_comments') as mock_extract, \
+             patch('gerrit_cli.cli.CommentReplier') as MockReplier, \
+             pytest.raises(SystemExit) as exc_info:
+            MockClient.parse_gerrit_url.return_value = (
+                "https://example.com", 12345)
+            mock_extract.return_value = MagicMock(
+                threads=[MagicMock(replies=[]), MagicMock(replies=[])])
+            cmd_batch_reply(args)
+
+        assert exc_info.value.code == 4
+        MockReplier.return_value.batch_reply.assert_not_called()
+        assert json.loads(capsys.readouterr().out)["code"] == "INVALID_INPUT"
