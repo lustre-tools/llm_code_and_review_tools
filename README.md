@@ -69,9 +69,14 @@ Details: [lreview/README.md](lreview/README.md).
 ## Install
 
 ```bash
-./install.sh            # install all tools
+./install.sh            # install all tools, or update them
+./install.sh --reinstall  # reinstall every tool, changed or not
 ./install.sh --uninstall
 ```
+
+Running it again updates: a tool already installed from this checkout
+with the version, dependencies and commands its `pyproject.toml`
+declares is left alone, so only tools that changed go through pip.
 
 Besides the Python tools, `./install.sh` also initializes git
 submodules and installs drgn if missing (via

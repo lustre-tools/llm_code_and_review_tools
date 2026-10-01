@@ -652,6 +652,114 @@ for how in "CONFIGURE_AFTER_INSTALL=0" "CONFIGURE_AFTER_INSTALL=1"; do
     check "  and records nothing" "" "$(asked_list)"
 done
 
+# --- an install only reinstalls the tools that changed ---------------------
+echo ""
+echo "reinstalling only what changed"
+
+PY=$(bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; check_python")
+TOOL_DIR="$WORK/fake_tool"
+SITE="$WORK/site"
+PIP_LOG="$WORK/pip.log"
+
+write_project() {  # write_project <version> <dependency...>
+    local version="$1" dep sep=""
+    shift
+    mkdir -p "$TOOL_DIR"
+    {
+        printf '[project]\nname = "fake-tool"\nversion = "%s"\n' "$version"
+        printf 'dependencies = ['
+        for dep in "$@"; do printf '%s"%s"' "$sep" "$dep"; sep=", "; done
+        printf ']\n\n[project.scripts]\nfake = "fake_tool.cli:main"\n'
+    } > "$TOOL_DIR/pyproject.toml"
+}
+
+# What pip leaves behind for an editable install, on PYTHONPATH.
+write_installed() {  # write_installed <version> <installed-from> <dependency...>
+    local version="$1" from="$2" dep info
+    shift 2
+    rm -rf "$SITE"
+    info="$SITE/fake_tool-$version.dist-info"
+    mkdir -p "$info" "$SITE/fake_dep-1.0.dist-info"
+    {
+        printf 'Metadata-Version: 2.1\nName: fake-tool\nVersion: %s\n' "$version"
+        for dep in "$@"; do printf 'Requires-Dist: %s\n' "$dep"; done
+        printf 'Requires-Dist: pytest>=7.0; extra == "dev"\n'
+    } > "$info/METADATA"
+    printf '[console_scripts]\nfake = fake_tool.cli:main\n' > "$info/entry_points.txt"
+    printf '{"url": "file://%s", "dir_info": {"editable": true}}\n' "$from" \
+        > "$info/direct_url.json"
+    printf 'Metadata-Version: 2.1\nName: fake-dep\nVersion: 1.0\n' \
+        > "$SITE/fake_dep-1.0.dist-info/METADATA"
+}
+
+is_current() {
+    if env PYTHONPATH="$SITE" bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH';
+            PYTHON='$PY'; tool_installed '$TOOL_DIR'" > /dev/null 2>&1; then
+        echo current
+    else
+        echo stale
+    fi
+}
+
+if [ -n "$PY" ]; then
+    write_project 1.0.0 "fake-dep>=1.0"
+    write_installed 1.0.0 "$TOOL_DIR" "fake-dep>=1.0"
+    check "a tool installed from this checkout as it is is current" \
+        current "$(is_current)"
+
+    write_installed 1.0.0 "$TOOL_DIR" "fake-dep >=1.0"
+    check "however the requirement was spaced" current "$(is_current)"
+
+    write_project 1.0.1 "fake-dep>=1.0"
+    check "a new version is not" stale "$(is_current)"
+
+    write_project 1.0.0 "fake-dep>=1.0" "other-dep"
+    check "nor a new dependency" stale "$(is_current)"
+
+    write_project 1.0.0 "fake-dep>=1.0"
+    printf 'extra = "fake_tool.extra:main"\n' >> "$TOOL_DIR/pyproject.toml"
+    check "nor a new command" stale "$(is_current)"
+
+    write_project 1.0.0 "fake-dep>=1.0"
+    write_installed 1.0.0 "$WORK/another_checkout" "fake-dep>=1.0"
+    check "nor one installed from another checkout" stale "$(is_current)"
+
+    write_installed 1.0.0 "$TOOL_DIR" "fake-dep>=1.0"
+    rm -rf "$SITE/fake_dep-1.0.dist-info"
+    check "nor one whose dependency is gone" stale "$(is_current)"
+
+    rm -rf "$SITE"
+    check "nor one that is not installed" stale "$(is_current)"
+
+    # pip itself is never run here: a shim logs what would have been run.
+    cat > "$WORK/py-shim" <<SHIM
+#!/bin/bash
+if [ "\$1 \$2" = "-m pip" ]; then echo "\$*" >> "$PIP_LOG"; exit 0; fi
+exec "$PY" "\$@"
+SHIM
+    chmod +x "$WORK/py-shim"
+    run_install_tool() {  # run_install_tool [VAR=value ...]
+        : > "$PIP_LOG"
+        env PYTHONPATH="$SITE" "$@" bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH';
+            PYTHON='$WORK/py-shim'; install_tool fake '$TOOL_DIR'" 2>&1
+    }
+
+    write_project 1.0.0 "fake-dep>=1.0"
+    write_installed 1.0.0 "$TOOL_DIR" "fake-dep>=1.0"
+    out=$(run_install_tool)
+    check "an unchanged tool is not reinstalled" "" "$(cat "$PIP_LOG")"
+    contains "and says it is up to date" "fake up to date (1.0.0)" "$out"
+    out=$(run_install_tool REINSTALL=1)
+    contains "--reinstall installs it anyway" "-m pip install -q -e $TOOL_DIR" \
+        "$(cat "$PIP_LOG")"
+    write_project 1.0.1 "fake-dep>=1.0"
+    out=$(run_install_tool)
+    contains "a changed tool is installed" "-m pip install -q -e $TOOL_DIR" \
+        "$(cat "$PIP_LOG")"
+else
+    echo "  skip  reinstall tests (no Python 3.11+)"
+fi
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

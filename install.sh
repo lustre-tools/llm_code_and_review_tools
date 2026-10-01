@@ -86,6 +86,7 @@ usage() {
     echo "                 server"
     echo "  --status       Show which tools have credentials configured"
     echo "  --no-configure Install without offering the credential walkthrough"
+    echo "  --reinstall    Reinstall every tool, also those already up to date"
     echo "  --skills       Link this checkout's skills into ~/.claude/skills"
     echo "                 (and ~/.codex/skills if Codex is installed), then"
     echo "                 exit"
@@ -279,6 +280,59 @@ unlink_venv_tools() {
     done
 }
 
+# Whether the tool in <dir> is already installed as the checkout declares
+# it now: editable from this very directory, with the version, dependencies
+# and commands of its pyproject.toml, and those dependencies present.  Any
+# doubt answers "no", which only costs a reinstall.
+tool_installed() {
+    "$PYTHON" - "$1" <<'PY' 2>/dev/null
+import json, re, sys, tomllib
+from importlib import metadata
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
+here = Path(sys.argv[1]).resolve()
+project = tomllib.loads((here / "pyproject.toml").read_text())["project"]
+dist = metadata.distribution(project["name"])
+
+direct = json.loads(dist.read_text("direct_url.json") or "{}")
+if not direct.get("dir_info", {}).get("editable"):
+    sys.exit(1)
+if Path(unquote(urlparse(direct.get("url", "")).path)).resolve() != here:
+    sys.exit(1)
+if dist.version != project.get("version"):
+    sys.exit(1)
+
+def norm(req):  # METADATA respells requirements: spacing, quoting
+    return re.sub(r"[\s'\"]", "", req).lower()
+
+wanted = sorted(norm(r) for r in project.get("dependencies", []))
+have = sorted(r for r in map(norm, dist.requires or []) if ";extra==" not in r)
+if wanted != have:
+    sys.exit(1)
+commands = {ep.name: ep.value for ep in dist.entry_points
+            if ep.group == "console_scripts"}
+if commands != project.get("scripts", {}):
+    sys.exit(1)
+for req in project.get("dependencies", []):
+    metadata.distribution(re.split(r"[\s<>=!~;\[(]", req, maxsplit=1)[0])
+PY
+}
+
+# install_tool <label> <dir>: pip-install the tool unless it is up to date.
+install_tool() {
+    local label="$1" dir="$2"
+    echo ""
+    if [ "${REINSTALL:-0}" != "1" ] && tool_installed "$dir"; then
+        echo -e "${GREEN}✓${NC} $label up to date" \
+            "($(sed -n 's/^version = "\(.*\)"/\1/p' "$dir/pyproject.toml" | head -1))"
+        return 0
+    fi
+    echo "Installing $label..."
+    $PYTHON -m pip install -q -e "$dir"
+    echo -e "${GREEN}✓${NC} $label installed"
+}
+
 install_tools() {
     echo "========================================"
     echo "LLM Code and Review Tools - Installer"
@@ -294,41 +348,27 @@ install_tools() {
     echo -e "${GREEN}✓${NC} Found Python: $PYTHON"
 
     # Install llm_tool_common first (shared dependency)
-    echo ""
-    echo "Installing llm-tool-common..."
-    $PYTHON -m pip install -q -e "$SCRIPT_DIR/llm_tool_common"
-    echo -e "${GREEN}✓${NC} llm-tool-common installed"
+    install_tool llm-tool-common "$SCRIPT_DIR/llm_tool_common"
 
     # Install jira_tool
-    echo ""
-    echo "Installing jira..."
-    $PYTHON -m pip install -q -e "$SCRIPT_DIR/jira_tool"
-    echo -e "${GREEN}✓${NC} jira installed"
+    install_tool jira "$SCRIPT_DIR/jira_tool"
 
     # Install gerrit_cli
-    echo ""
-    echo "Installing gerrit-cli..."
-    $PYTHON -m pip uninstall -y gerrit-comments 2>/dev/null || true
-    $PYTHON -m pip install -q -e "$SCRIPT_DIR/gerrit_cli"
-    echo -e "${GREEN}✓${NC} gerrit-cli installed"
+    # gerrit-cli's old name
+    if "$PYTHON" -c 'import importlib.metadata as m; m.distribution("gerrit-comments")' \
+            2>/dev/null; then
+        $PYTHON -m pip uninstall -y gerrit-comments 2>/dev/null || true
+    fi
+    install_tool gerrit-cli "$SCRIPT_DIR/gerrit_cli"
 
     # Install gerrit_dashboard (needs gerrit_cli, installed just above)
-    echo ""
-    echo "Installing gerrit-dashboard..."
-    $PYTHON -m pip install -q -e "$SCRIPT_DIR/gerrit_dashboard"
-    echo -e "${GREEN}✓${NC} gerrit-dashboard installed"
+    install_tool gerrit-dashboard "$SCRIPT_DIR/gerrit_dashboard"
 
     # Install maloo_tool
-    echo ""
-    echo "Installing maloo..."
-    $PYTHON -m pip install -q -e "$SCRIPT_DIR/maloo_tool"
-    echo -e "${GREEN}✓${NC} maloo installed"
+    install_tool maloo "$SCRIPT_DIR/maloo_tool"
 
     # Install jenkins_tool
-    echo ""
-    echo "Installing jenkins..."
-    $PYTHON -m pip install -q -e "$SCRIPT_DIR/jenkins_tool"
-    echo -e "${GREEN}✓${NC} jenkins installed"
+    install_tool jenkins "$SCRIPT_DIR/jenkins_tool"
 
     # Initialize submodules
     echo ""
@@ -337,22 +377,13 @@ install_tools() {
     echo -e "${GREEN}✓${NC} submodules initialized"
 
     # Install lustre_crash
-    echo ""
-    echo "Installing lustre-crash..."
-    $PYTHON -m pip install -q -e "$SCRIPT_DIR/lustre_crash"
-    echo -e "${GREEN}✓${NC} lustre-crash installed"
+    install_tool lustre-crash "$SCRIPT_DIR/lustre_crash"
 
     # Install janitor_tool
-    echo ""
-    echo "Installing janitor..."
-    $PYTHON -m pip install -q -e "$SCRIPT_DIR/janitor_tool"
-    echo -e "${GREEN}✓${NC} janitor installed"
+    install_tool janitor "$SCRIPT_DIR/janitor_tool"
 
     # Install lreview
-    echo ""
-    echo "Installing lreview..."
-    $PYTHON -m pip install -q -e "$SCRIPT_DIR/lreview"
-    echo -e "${GREEN}✓${NC} lreview installed"
+    install_tool lreview "$SCRIPT_DIR/lreview"
 
     # Install drgn + lustre-drgn-tools
     if [[ "$(uname -s)" == "Darwin" && -z "${LLM_TOOLS_TRY_DRGN:-}" ]]; then
@@ -1658,6 +1689,7 @@ ONLY_TOOLS=""
 RECONFIGURE=0
 VERIFY=1
 CONFIGURE_AFTER_INSTALL=1
+REINSTALL=0
 INSTALL_SKILLS=1
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -1696,6 +1728,9 @@ while [ $# -gt 0 ]; do
             ;;
         --no-configure)
             CONFIGURE_AFTER_INSTALL=0
+            ;;
+        --reinstall)
+            REINSTALL=1
             ;;
         --skills)
             ACTION="skills"
