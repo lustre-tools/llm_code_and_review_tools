@@ -182,6 +182,42 @@ class TestRunChat:
         assert invocation["argv"][:2] == ["-m", "gpt-5"]
         assert "64616 patchset 27" in invocation["argv"][-1]
 
+    def test_cli_expands_codex_aliases(self, repo, tmp_path, monkeypatch):
+        """`chat --model sol` runs the model its effort was checked
+        against, as `run --model sol` does, not the bare alias."""
+        from lreview.cli import build_parser
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        record = tmp_path / "codex-invocation.json"
+        stub = bin_dir / "codex"
+        stub.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            f"open({str(record)!r}, 'w').write(json.dumps(sys.argv[1:]))\n")
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+        monkeypatch.setenv(
+            "PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+        monkeypatch.delenv("LREVIEW_MODEL", raising=False)
+        monkeypatch.delenv("LREVIEW_EFFORT", raising=False)
+
+        sha = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        results = tmp_path / "results"
+        results.mkdir()
+        (results / "summary.json").write_text(json.dumps({"64616": {
+            "number": 64616, "patchset": 27, "sha": sha, "mode": "full",
+            "subject": "s", "status": "clean", "repo": str(repo),
+            "base_url": "https://gerrit.invalid",
+        }}))
+
+        args = build_parser().parse_args([
+            "chat", "64616", "--agent", "codex", "--model", "sol",
+            "--results-dir", str(results), "--db", str(tmp_path / "db"),
+            "--worktrees-dir", str(tmp_path / "wt")])
+        assert args.func(args) == 0
+        assert json.loads(record.read_text())[:2] == ["-m", "gpt-6.1-sol"]
+
     def test_repo_defaults_to_manifest_entry(self, repo, tmp_path,
                                              stub_claude, monkeypatch):
         """Without --repo, chat uses the repository the change was

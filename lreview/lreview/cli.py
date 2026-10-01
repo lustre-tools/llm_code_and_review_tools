@@ -570,11 +570,12 @@ def cmd_chat(args) -> int:
         return 1
 
     from .chat import run_chat
+    from .models import canonical_model
     return run_chat(
         args.change, results_dir=results_dir,
         repo=Path(args.repo) if args.repo else None,
         worktrees_dir=worktrees_dir, db_dir=db_dir, agent=args.agent,
-        model=args.model, effort=args.effort,
+        model=canonical_model(args.agent, args.model), effort=args.effort,
         agent_args=args.agent_arg or [], local=args.local,
         keep_worktree=args.keep_worktree)
 
