@@ -2087,6 +2087,31 @@ class TestCLIDescribe:
         described = json.loads(runner.invoke(main, ["describe"]).output)
         assert {c["name"] for c in described["commands"]} == set(names(main))
 
+    def test_every_argument_matches_the_command(self, runner):
+        import click
+
+        def find(name):
+            command = main
+            for part in name.split():
+                command = command.commands[part]
+            return command
+
+        described = json.loads(runner.invoke(main, ["describe"]).output)
+        for entry in described["commands"]:
+            params = {
+                p.name if isinstance(p, click.Argument) else p.opts[0]: p
+                for p in find(entry["name"]).params
+            }
+            arguments = {a["name"]: a for a in entry.get("arguments", [])}
+            assert set(arguments) == set(params), entry["name"]
+            for name, argument in arguments.items():
+                param = params[name]
+                where = f"{entry['name']} {name}"
+                assert argument["required"] == param.required, where
+                if "default" in argument:
+                    default = False if getattr(param, "is_flag", False) else param.default
+                    assert argument["default"] == default, where
+
 
 class TestCLIErrorsWithoutAResponse:
     """Errors the commands raise themselves come out as JSON too."""

@@ -45,7 +45,7 @@ def get_tool_description() -> ToolDescription:
                 usage="jira comments <KEY> [--limit N] [--offset N]",
                 arguments=[
                     Argument(name="key", description="Issue key or JIRA URL", required=True),
-                    Argument(name="--limit", description="Maximum comments to return", type="integer", default=5),
+                    Argument(name="--limit", description="Maximum comments to return", type="integer", default=10),
                     Argument(name="--offset", description="Skip first N comments", type="integer", default=0),
                     Argument(name="--all", description="Fetch all comments", type="boolean", default=False),
                     Argument(name="--summary-only", description="Only return comment metadata, not full content", type="boolean", default=False),
@@ -80,11 +80,13 @@ def get_tool_description() -> ToolDescription:
             ),
             Command(
                 name="comment",
-                description="Add a comment to an issue, optionally with restricted visibility",
-                usage='jira comment <KEY> "<BODY>" [--visibility role:RoleName]',
+                description="Add a comment to an issue, or edit one with --update, optionally with restricted visibility",
+                usage='jira comment <KEY> "<BODY>" [--update COMMENT_ID] [--visibility role:RoleName]',
                 arguments=[
                     Argument(name="key", description="Issue key or JIRA URL", required=True),
-                    Argument(name="body", description="Comment text", required=True),
+                    Argument(name="body", description="Comment text; give it here or with --body"),
+                    Argument(name="--body", description="Comment text, for text that starts with a dash"),
+                    Argument(name="--update", description="ID of an existing comment to edit instead of adding one"),
                     Argument(
                         name="--visibility",
                         description="Restrict visibility: 'role:RoleName' or 'group:GroupName'. "
@@ -94,6 +96,8 @@ def get_tool_description() -> ToolDescription:
                 examples=[
                     'jira comment PROJ-123 "Fixed in commit abc123"',
                     'jira comment PROJ-123 "Internal note" --visibility "role:Developers"',
+                    'jira comment PROJ-123 --body "-1: breaks the build"',
+                    'jira comment PROJ-123 "Corrected text" --update 10001',
                 ],
                 output_fields=[
                     "issue_key", "comment.id", "comment.body", "comment.author",
@@ -155,13 +159,15 @@ def get_tool_description() -> ToolDescription:
             ),
             Command(
                 name="unlink",
-                description="Remove a link between two issues",
-                usage="jira unlink <LINK_ID>",
+                description="Remove an issue link by its ID, or every link between two issues",
+                usage="jira unlink <LINK_ID> | jira unlink <KEY> <TARGET_KEY> [--type TYPE]",
                 arguments=[
-                    Argument(name="link_id", description="Numeric link ID (from 'jira links' output)", required=True),
+                    Argument(name="key", description="Numeric link ID (from 'jira links' output), or the source issue key when TARGET_KEY is given", required=True),
+                    Argument(name="target_key", description="Remove the links between KEY and this issue"),
+                    Argument(name="--type", description="With TARGET_KEY, only remove links of this type (fuzzy-matched)"),
                 ],
-                examples=["jira unlink 54321"],
-                output_fields=["link_id", "deleted"],
+                examples=["jira unlink 54321", "jira unlink PROJ-123 PROJ-456 --type Blocker"],
+                output_fields=["link_id", "deleted", "source_key", "target_key"],
                 next_actions=["links"],
             ),
             Command(
