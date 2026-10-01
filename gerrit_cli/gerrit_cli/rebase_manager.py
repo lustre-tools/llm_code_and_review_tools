@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from . import client as client_module
 from . import git_utils
 from .client import GerritCommentsClient
 from .extractor import extract_comments
@@ -16,6 +17,7 @@ from .reintegration import ReintegrationManager, ReintegrationState
 from .replier import CommentReplier
 from .series import PatchInfo, SeriesFinder
 from .session import RebaseSession, SessionManager
+from .upload import upload
 
 
 class RebaseManager:
@@ -1019,7 +1021,10 @@ class RebaseManager:
             lines.append("")
 
             # Auto-push amended commit to Gerrit
-            if amended_commit != session.target_commit:
+            if amended_commit != session.target_commit and client_module.CREDENTIAL_SET:
+                lines.extend(self._upload_as_selected_account(session))
+                lines.append("")
+            elif amended_commit != session.target_commit:
                 # `branch` is named by the failure message below, so it needs a
                 # value before anything that can fail: it used to be assigned
                 # only after get_change_detail returned, and the handler that
@@ -1053,6 +1058,36 @@ class RebaseManager:
             return False, f"Error completing rebase: {e}\n\nYou may need to resolve conflicts manually."
 
         return True, "\n".join(lines)
+
+    def _upload_as_selected_account(self, session: RebaseSession) -> list[str]:
+        """Upload the series as the account --user selected.
+
+        A plain git push goes up as whoever owns the remote's credentials,
+        so under --user the series goes through `upload` instead, with its
+        Change-Id and committer checks.  A committer it rewrites moves the
+        commits the session tracks; those are remapped.
+        """
+        try:
+            data = upload(
+                self.client, change=str(session.target_change), series=True
+            )
+        # Broad for the reason the plain push's handler gives.
+        except Exception as e:
+            return [
+                f"\u26a0 Auto-push failed: {e}",
+                f"  Run manually: gc --user {client_module.CREDENTIAL_SET} "
+                f"upload {session.target_change} --series",
+            ]
+
+        moved = {a["old_sha"]: a["new_sha"] for a in data["committer_amended"]}
+        if moved:
+            for patch in session.series_patches:
+                patch["commit"] = moved.get(patch.get("commit"), patch.get("commit"))
+            self.save_session(session)
+        return [
+            f"\U0001f4e4 Uploaded to Gerrit as {data['account']} "
+            f"\u2192 {data['ref']}"
+        ]
 
     def _get_change_id_for_change(self, change_number: int) -> Optional[str]:
         """Get the Change-Id for a given change number from Gerrit."""

@@ -1128,3 +1128,109 @@ def test_upload_parser_defines_what_the_handler_reads():
             full.expect_patchset) == (
         "51164", True, True, True, "t", "/r", "b", "p", 3,
     )
+
+
+# ---------------------------------------------------------------------------
+# finish-patch's push under --user
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def finishing(gerrit, tmp_path, monkeypatch):
+    """A session on change 51164 whose commit the user just amended.
+
+    origin is a separate bare repository, standing for the developer's
+    own remote: whatever reaches it went up as the developer.
+    """
+    from gerrit_cli import client as client_module
+    from gerrit_cli.rebase_manager import RebaseManager
+    from gerrit_cli.session import RebaseSession, SessionManager
+
+    fake, bare, work = gerrit
+    operator_remote = tmp_path / "operator.git"
+    git(tmp_path, "clone", "-q", "--bare", str(bare), str(operator_remote))
+    git(work, "remote", "set-url", "origin", str(operator_remote))
+    fetched = commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)
+    git(work, "reset", "-q", "--hard", "HEAD~1")
+    monkeypatch.chdir(work)
+    monkeypatch.setattr(client_module, "CREDENTIAL_SET", "bot")
+
+    fake.get_change_detail = lambda number: {"branch": "master"}
+    manager = RebaseManager(SessionManager(tmp_path / "state"))
+    manager.client = fake
+    manager.save_session(RebaseSession(
+        series_url="https://review.example.com/51164",
+        target_change=51164, target_commit=fetched,
+        original_head=fetched, original_branch="master",
+        series_patches=[{"change_number": 51164, "subject": "fix",
+                         "commit": fetched}],
+        started_at="2026-01-01T00:00:00",
+    ))
+    return fake, bare, work, operator_remote, manager
+
+
+def test_finish_under_user_uploads_as_the_account(finishing):
+    fake, bare, work, operator_remote, manager = finishing
+    head = commit(work, "LU-1 llite: fix v2", cid=CID_A, committer=BOT)
+
+    ok, message = manager.finish_rebase()
+
+    assert ok, message
+    assert pushed_refs(operator_remote) == {}
+    assert pushed_refs(bare) == {"refs/for/master": head}
+    assert f"as {BOT_USER}" in message
+
+
+def test_finish_under_user_refuses_a_lost_change_id(finishing):
+    fake, bare, work, operator_remote, manager = finishing
+    commit(work, "LU-1 llite: fix, reworded", committer=BOT)
+
+    ok, message = manager.finish_rebase()
+
+    assert pushed_refs(operator_remote) == {}
+    assert pushed_refs(bare) == {}
+    assert "gc --user bot upload 51164 --series" in message
+
+
+def test_finish_under_user_sets_the_committer_and_tracks_it(finishing):
+    """The cherry-picked descendant is committed as the operator too; both
+    are recommitted as the account, and the session follows them."""
+    fake, bare, work, operator_remote, manager = finishing
+    session = manager.load_session()
+    target = session.target_commit
+    git(work, "checkout", "-q", target)
+    descendant = commit(work, "LU-2 osc: on top", cid=CID_B, committer=BOT)
+    fake.add_change(51165, CID_B, revisions={descendant: 1})
+    session.series_patches.append(
+        {"change_number": 51165, "subject": "on top", "commit": descendant})
+    manager.save_session(session)
+    git(work, "checkout", "-q", "master")
+    git(work, "config", "user.name", OPERATOR[0])
+    git(work, "config", "user.email", OPERATOR[1])
+    commit(work, "LU-1 llite: fix v2", cid=CID_A, committer=OPERATOR)
+
+    ok, message = manager.finish_rebase()
+
+    assert ok, message
+    head = git(work, "rev-parse", "HEAD")
+    for sha in (head, git(work, "rev-parse", "HEAD~1")):
+        assert commit_fields(work, sha)["ce"] == BOT[1]
+    assert pushed_refs(operator_remote) == {}
+    assert pushed_refs(bare) == {"refs/for/master": head}
+    assert [p["commit"] for p in manager.load_session().series_patches] == [
+        git(work, "rev-parse", "HEAD~1"), head,
+    ]
+
+
+def test_finish_without_user_still_pushes_to_the_remote(finishing,
+                                                        monkeypatch):
+    from gerrit_cli import client as client_module
+
+    fake, bare, work, operator_remote, manager = finishing
+    monkeypatch.setattr(client_module, "CREDENTIAL_SET", None)
+    head = commit(work, "LU-1 llite: fix v2", cid=CID_A, committer=BOT)
+
+    ok, message = manager.finish_rebase()
+
+    assert ok, message
+    assert pushed_refs(operator_remote) == {"refs/for/master": head}
+    assert pushed_refs(bare) == {}

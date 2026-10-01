@@ -275,7 +275,10 @@ the patch is not already in the local git history.
         "description": """
 After making changes and staging replies, use 'finish-patch' to:
 1. Rebase all dependent patches on your changes
-2. Auto-advance to the next patch with comments (unless --stay)
+2. Push the series to Gerrit if the commit changed: under --user through
+   'upload', as that account; otherwise with git push to the Gerrit remote,
+   as whoever its URL logs in as
+3. Auto-advance to the next patch with comments (unless --stay)
 
 Always commit your changes before running this command.
 """,
