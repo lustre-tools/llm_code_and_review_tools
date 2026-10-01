@@ -21,6 +21,9 @@ def validate_review_result(spec, repo, base_sha, head_sha):
             if not isinstance(path, str) or path.startswith("/") or ".." in path.split("/") or not isinstance(line, int) or line < 1:
                 raise ValueError("inline findings require a safe path and positive line")
             if line not in changed.get(path, set()): raise ValueError(f"{path}:{line} is not an added PR line")
+            side = finding.get("side", "RIGHT")
+            if not isinstance(side, str) or side.upper() != "RIGHT":
+                raise ValueError(f"{path}:{line} side must be RIGHT, the side of added PR lines, not {side!r}")
         elif kind not in ("summary", "commit_message") or path is not None or line is not None:
             raise ValueError("summary/commit_message findings require null path and line")
     return spec
