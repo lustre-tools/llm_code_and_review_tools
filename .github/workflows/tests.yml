@@ -1,0 +1,27 @@
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # patch_shepherd is not a package; its tests import it from its
+      # own directory.
+      - run: >-
+          pip install pytest responses
+          -e ./llm_tool_common -e ./jira_tool -e ./gerrit_cli
+          -e ./maloo_tool -e ./jenkins_tool -e ./janitor_tool
+          -e ./lreview -e ./lustre_crash -e ./gerrit_dashboard
+      - run: make unit-test PYTHON=python
