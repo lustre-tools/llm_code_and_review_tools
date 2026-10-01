@@ -241,8 +241,11 @@ cd jira_tool && pip install -e .
 cd gerrit_cli && pip install -e .
 ```
 
-**Testing:** `pytest` from each tool directory. Use `-m unit`
-for unit tests, `-m integration` for tests requiring network.
+**Testing:** `make unit-test` runs every tool's offline tests, each in
+its own directory; for one tool, `pytest -m 'not integration'` in its
+directory. `-m integration` selects the live tests, which need network
+and credentials and only read. No test carries the `unit` marker, so
+`-m unit` selects nothing.
 
 ## Output format
 
