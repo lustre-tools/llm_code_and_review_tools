@@ -284,19 +284,24 @@ def cmd_sashiko_review(args):
     from .sashiko_bridge import do_review
     from .client import GerritCommentsClient
 
-    change_input = args.change
-    _, change_number = GerritCommentsClient.parse_gerrit_url(change_input)
-
-    result = do_review(
-        change_number=change_number,
-        sashiko_url=args.sashiko_url,
-        repo_path=args.repo,
-        dry_run=args.dry_run,
-        vote=args.vote,
-        max_minutes=args.timeout,
-    )
-
     pretty = getattr(args, "pretty", False)
+    try:
+        _, change_number = GerritCommentsClient.parse_gerrit_url(args.change)
+        result = do_review(
+            change_number=change_number,
+            sashiko_url=args.sashiko_url,
+            repo_path=args.repo,
+            dry_run=args.dry_run,
+            vote=args.vote,
+            max_minutes=args.timeout,
+        )
+    except ValueError as e:
+        sys.exit(output_error(
+            ErrorCode.INVALID_INPUT, str(e), "sashiko-review", pretty))
+    except Exception as e:
+        sys.exit(output_error(
+            error_code_for(e), str(e), "sashiko-review", pretty))
+
     if not result.get("success"):
         # a failed post carries "error": None
         sys.exit(output_error(

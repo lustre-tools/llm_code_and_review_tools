@@ -56,6 +56,24 @@ class TestErrorCodeFor:
     def test_classifies(self, exc, expected):
         assert error_code_for(exc) == expected
 
+    def test_follows_an_explicit_cause(self):
+        try:
+            try:
+                raise requests.ConnectionError("refused")
+            except requests.ConnectionError as e:
+                raise RuntimeError("Cannot connect to Sashiko") from e
+        except RuntimeError as wrapped:
+            assert error_code_for(wrapped) == ErrorCode.CONNECTION_ERROR
+
+    def test_ignores_an_implicit_context(self):
+        try:
+            try:
+                raise requests.ConnectionError("refused")
+            except requests.ConnectionError:
+                raise RuntimeError("unrelated")
+        except RuntimeError as wrapped:
+            assert error_code_for(wrapped) == ErrorCode.API_ERROR
+
 
 class TestHandlersExitByKind:
     """A handler's catch-all reports what kind of failure it caught."""

@@ -197,8 +197,19 @@ def error_code_for(exc: BaseException, default: str = ErrorCode.API_ERROR) -> st
 
     Handlers catch Exception so that a failure prints JSON rather than a
     traceback; this keeps a missing credential, a missing change and an
-    unreachable server apart from any other failure.
+    unreachable server apart from any other failure.  An exception raised
+    `from` another is classified by that one when it says nothing itself.
     """
+    seen = set()
+    code = _own_error_code(exc)
+    while code is None and exc.__cause__ is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        exc = exc.__cause__
+        code = _own_error_code(exc)
+    return code or default
+
+
+def _own_error_code(exc: BaseException) -> str | None:
     if isinstance(exc, GerritConfigError):
         return ErrorCode.AUTH_MISSING
     if isinstance(exc, requests.HTTPError):
@@ -212,7 +223,7 @@ def error_code_for(exc: BaseException, default: str = ErrorCode.API_ERROR) -> st
         return ErrorCode.TIMEOUT
     if isinstance(exc, requests.ConnectionError):
         return ErrorCode.CONNECTION_ERROR
-    return default
+    return None
 
 
 def output_error(code: str, message: str, command: str, pretty: bool) -> int:

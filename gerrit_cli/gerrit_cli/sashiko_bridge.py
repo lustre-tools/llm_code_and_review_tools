@@ -94,13 +94,13 @@ def submit_to_sashiko(
     try:
         resp = requests.post(url, json=payload, timeout=30)
         resp.raise_for_status()
-    except requests.ConnectionError:
+    except requests.ConnectionError as e:
         raise RuntimeError(
             f"Cannot connect to Sashiko server at {sashiko_url}. "
             "Is the server running? Start it with: cd ~/sashiko/sashiko-gerrit-review && ./target/release/sashiko"
-        )
+        ) from e
     except requests.RequestException as e:
-        raise RuntimeError(f"Sashiko server error: {e}")
+        raise RuntimeError(f"Sashiko server error: {e}") from e
     data = resp.json()
     print(f"  Submitted to Sashiko: id={data.get('id', '?')}, status={data.get('status', '?')}")
     return data.get("id", sha)
@@ -353,7 +353,7 @@ def do_review(
                 break
 
         if not repo_path:
-            raise RuntimeError(
+            raise ValueError(
                 "Cannot find Lustre git repository. Use --repo to specify the path."
             )
 

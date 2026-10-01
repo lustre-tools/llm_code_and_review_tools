@@ -5,12 +5,14 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from gerrit_cli.cli import (
     cmd_series,
     filter_threads_by_fields,
     generate_review_prompt,
 )
+from gerrit_cli.client import GerritConfigError
 from gerrit_cli.models import Author, CodeContext, Comment, CommentThread
 
 
@@ -2202,6 +2204,29 @@ class TestCmdSashikoReview:
         out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
         assert out["message"] == "Review failed"
 
+    @pytest.mark.parametrize("failure, exit_code, code", [
+        (ValueError("Cannot find Lustre git repository. Use --repo"),
+         4, "INVALID_INPUT"),
+        (GerritConfigError("Missing configuration: GERRIT_URL"),
+         2, "AUTH_MISSING"),
+        (requests.ConnectionError("Gerrit refused the connection"),
+         5, "CONNECTION_ERROR"),
+        (RuntimeError("git fetch failed"), 1, "API_ERROR"),
+    ])
+    def test_a_raised_failure_is_a_classified_json_error(
+            self, failure, exit_code, code, capsys):
+        from gerrit_cli.cli import cmd_sashiko_review
+
+        with patch('gerrit_cli.sashiko_bridge.do_review',
+                   side_effect=failure), \
+             pytest.raises(SystemExit) as exc_info:
+            cmd_sashiko_review(self._args())
+
+        assert exc_info.value.code == exit_code
+        out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert out["code"] == code
+        assert str(failure) in out["message"]
+
     def test_successful_review_prints_result(self, capsys):
         from gerrit_cli.cli import cmd_sashiko_review
 
@@ -2430,3 +2455,17 @@ class TestBatchReplyExitStatus:
             tmp_path, [{"thread_index": 99, "message": "b"}], [], capsys)
         assert code == 4
         post.assert_not_called()
+
+
+class TestSashikoBridgeErrors:
+    """The bridge says what kind of failure it hit."""
+
+    def test_sashiko_down_keeps_the_connection_error(self):
+        from gerrit_cli.sashiko_bridge import submit_to_sashiko
+
+        with patch('gerrit_cli.sashiko_bridge.requests.post',
+                   side_effect=requests.ConnectionError("refused")), \
+             pytest.raises(RuntimeError) as err:
+            submit_to_sashiko("http://127.0.0.1:9", "a" * 40)
+
+        assert isinstance(err.value.__cause__, requests.ConnectionError)
