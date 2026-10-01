@@ -13,6 +13,7 @@ from typing import Any
 
 import click
 
+from llm_tool_common.click_group import JsonUsageErrorGroup
 from llm_tool_common.config import (
     CredentialSetError,
     apply_credential_set,
@@ -104,7 +105,7 @@ _HOISTABLE_FLAGS = {"--pretty", "--debug", "--envelope"}
 _HOISTABLE_OPTIONS = {"--instance", "-I", "-U"}
 
 
-class JsonErrorGroup(click.Group):
+class JsonErrorGroup(JsonUsageErrorGroup):
     """Click group that wraps usage errors in JSON envelope and hoists global flags.
 
     When an LLM passes invalid arguments, Click normally prints a
@@ -114,7 +115,12 @@ class JsonErrorGroup(click.Group):
 
     Additionally, --pretty, --debug, and --envelope are extracted from
     anywhere in the argument list so they work in any position.
+
+    Errors in the group's own options, found before any subcommand
+    runs, are reported by JsonUsageErrorGroup.make_context.
     """
+
+    tool_name = "jira"
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
         # Pull hoistable flags and options out of wherever they appear
@@ -130,7 +136,9 @@ class JsonErrorGroup(click.Group):
 
     def invoke(self, ctx: click.Context) -> Any:
         try:
-            return super().invoke(ctx)
+            # past JsonUsageErrorGroup.invoke: jira's subcommand errors
+            # keep their own shape and honour --pretty
+            return click.Group.invoke(self, ctx)
         except click.UsageError as e:
             pretty = ctx.params.get("pretty", False)
             envelope = error_response_from_dict(

@@ -2175,3 +2175,27 @@ class TestCLIErrorsWithoutAResponse:
         error = json.loads(result.stdout)
         assert error["code"] == "SERVER_ERROR"
         assert error["http_status"] == 204
+
+
+class TestCLIGroupUsageErrors:
+    """Usage errors found before any subcommand runs."""
+
+    @pytest.mark.parametrize(
+        "args", [["--bogus", "get", "X"], ["get", "X", "--instance"]]
+    )
+    def test_group_option_error_is_json(self, runner, args):
+        result = runner.invoke(main, args)
+        assert result.exit_code == 4
+        assert json.loads(result.stdout)["code"] == "INVALID_INPUT"
+
+    def test_envelope_is_honoured(self, runner):
+        result = runner.invoke(main, ["--envelope", "--bogus", "get", "X"])
+        assert result.exit_code == 4
+        data = json.loads(result.stdout)
+        assert data["ok"] is False
+        assert data["error"]["code"] == "INVALID_INPUT"
+
+    def test_bare_command_is_json(self, runner):
+        result = runner.invoke(main, [])
+        assert result.exit_code == 4
+        assert json.loads(result.stdout)["code"] == "INVALID_INPUT"
