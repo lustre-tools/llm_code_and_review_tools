@@ -86,8 +86,10 @@ def filter_threads_by_fields(
         author - Author name
         resolved - Whether thread is resolved
         patch_set - Patchset number
+        updated - When the root comment was posted
+        last_updated - When anyone last said anything in the thread
         code_context - Code context around comment
-        replies - Reply messages
+        replies - Reply messages, with their authors and times
 
     Returns:
         List of dicts with only the requested fields per thread
@@ -114,6 +116,11 @@ def filter_threads_by_fields(
                 thread_data["resolved"] = thread.is_resolved
             elif field == "patch_set":
                 thread_data["patch_set"] = root.patch_set
+            elif field == "updated":
+                thread_data["updated"] = root.updated
+            elif field == "last_updated":
+                thread_data["last_updated"] = max(
+                    [root.updated, *(reply.updated for reply in thread.replies)])
             elif field == "code_context":
                 if root.code_context:
                     thread_data["code_context"] = root.code_context.to_dict()
@@ -121,13 +128,44 @@ def filter_threads_by_fields(
                     thread_data["code_context"] = None
             elif field == "replies":
                 thread_data["replies"] = [
-                    {"author": r.author.name, "message": r.message}
+                    {"author": r.author.name, "message": r.message, "updated": r.updated}
                     for r in thread.replies
                 ]
 
         result.append(thread_data)
 
     return result
+
+
+def threads_since(threads: list, since: str) -> list:
+    """The threads anyone has said something in at or after ``since``."""
+    return [
+        thread for thread in threads
+        if max([thread.root_comment.updated, *(r.updated for r in thread.replies)]) >= since
+    ]
+
+
+def comment_timeline(threads: list, since: str = "") -> list[dict]:
+    """Every comment of ``threads``, root or reply, oldest first: who said
+    what, when, where, and in which thread."""
+    entries = []
+    for index, thread in enumerate(threads):
+        root = thread.root_comment
+        for comment in [root, *thread.replies]:
+            if since and comment.updated < since:
+                continue
+            entries.append({
+                "updated": comment.updated,
+                "patch_set": comment.patch_set,
+                "author": comment.author.name,
+                "file": root.file_path,
+                "line": root.line,
+                "thread": index,
+                "reply": comment is not root,
+                "thread_resolved": thread.is_resolved,
+                "message": comment.message,
+            })
+    return sorted(entries, key=lambda entry: entry["updated"])
 
 
 def thread_index_error(result: Any, index: int) -> str | None:

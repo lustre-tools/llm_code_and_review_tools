@@ -34,6 +34,9 @@ gc comments <url>                 # unresolved threads, with code context
 gc comments 64086 --all           # include resolved
 gc series-comments <url>          # every patch in the series at once
 gc comments 64086 --fields=index,file,message
+gc comments 64086 --all --timeline --since '2026-10-01 17:00'
+                                  # who said what when, oldest first, replies too:
+                                  # "was my comment answered?"
 ```
 
 Read **all** the feedback, human and bot. Bots -- `aireview` in particular

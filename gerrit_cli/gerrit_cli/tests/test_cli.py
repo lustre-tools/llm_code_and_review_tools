@@ -115,7 +115,7 @@ class TestFilterThreadsByFields:
         """Test filtering to replies."""
         result = filter_threads_by_fields(sample_threads, "index,replies")
         assert result[0]["replies"] == [
-            {"author": "Developer", "message": "Working on it"}
+            {"author": "Developer", "message": "Working on it", "updated": "2025-01-02"}
         ]
         assert result[1]["replies"] == []
 
@@ -124,6 +124,39 @@ class TestFilterThreadsByFields:
         result = filter_threads_by_fields(sample_threads, "file,patch_set")
         assert result[0] == {"file": "src/main.py", "patch_set": 1}
         assert result[1] == {"file": "tests/test_main.py", "patch_set": 2}
+
+
+    def test_filter_with_times(self, sample_threads):
+        result = filter_threads_by_fields(sample_threads, "updated,last_updated")
+        assert result[0] == {"updated": "2025-01-01", "last_updated": "2025-01-02"}
+        assert result[1] == {"updated": "2025-01-03", "last_updated": "2025-01-03"}
+
+    def test_timeline_lists_every_comment_oldest_first(self, sample_threads):
+        from gerrit_cli.commands._helpers import comment_timeline
+
+        timeline = comment_timeline(list(reversed(sample_threads)))
+        assert [(e["updated"], e["author"], e["reply"], e["thread"]) for e in timeline] == [
+            ("2025-01-01", "Test User", False, 1),
+            ("2025-01-02", "Developer", True, 1),
+            ("2025-01-03", "Test User", False, 0),
+        ]
+        assert timeline[1]["file"] == "src/main.py"
+        assert [e["updated"] for e in comment_timeline(sample_threads, "2025-01-02")] == [
+            "2025-01-02", "2025-01-03"]
+
+    def test_threads_since_keeps_threads_with_later_activity(self, sample_threads):
+        from gerrit_cli.commands._helpers import threads_since
+
+        assert threads_since(sample_threads, "2025-01-02") == sample_threads
+        assert threads_since(sample_threads, "2025-01-03") == [sample_threads[1]]
+
+    def test_since_is_taken_in_gerrits_own_form(self):
+        from gerrit_cli.commands.comments import normalize_since
+
+        assert normalize_since("2026-10-01T17:30:00Z") == "2026-10-01 17:30:00"
+        assert normalize_since(None) == ""
+        with pytest.raises(ValueError):
+            normalize_since("yesterday")
 
 
 class TestGenerateReviewPrompt:
@@ -1711,6 +1744,7 @@ class TestCmdReviewPostComments:
     def test_review_post_comments_nested_format_with_prefix(self, tmp_path):
         """Test --post-comments with Gerrit REST format, prefix and tag."""
         import json
+
         from gerrit_cli.cli import cmd_review
 
         review_file = tmp_path / "review.json"
@@ -1759,6 +1793,7 @@ class TestCmdReviewPostComments:
     def test_review_post_comments_dry_run(self, tmp_path, capsys):
         """Test --post-comments --dry-run previews without posting."""
         import json
+
         from gerrit_cli.cli import cmd_review
 
         review_file = tmp_path / "review.json"
@@ -1799,6 +1834,7 @@ class TestCmdReviewPostComments:
     def test_review_post_comments_cli_fallbacks(self, tmp_path):
         """CLI --message/--vote/--tag are used when the file omits them."""
         import json
+
         from gerrit_cli.cli import cmd_review
 
         review_file = tmp_path / "review.json"
@@ -1843,6 +1879,7 @@ class TestCmdReviewPostComments:
         --vote 0 counts as explicitly set (is-None check, not truthiness).
         """
         import json
+
         from gerrit_cli.cli import cmd_review
 
         review_file = tmp_path / "review.json"
@@ -1889,6 +1926,7 @@ class TestCmdReviewPostComments:
     def test_review_post_comments_file_vote_zero_used(self, tmp_path):
         """A file vote of 0 is posted when no CLI --vote is given."""
         import json
+
         from gerrit_cli.cli import cmd_review
 
         review_file = tmp_path / "review.json"

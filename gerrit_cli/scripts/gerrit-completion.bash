@@ -47,7 +47,7 @@ _gerrit_completions() {
         add-reviewer) opts="--cc --dry-run --help --pretty -h -n -p" ;;
         batch) opts="--dry-run --help --pretty -h -n -p" ;;
         checkout|co) opts="--branch --help --patchset --pretty -b -h -p -r" ;;
-        comments|extract) opts="--all --context-lines --fields --help --include-ci --include-system --no-context --pretty --summary -a -c -h -p -s" ;;
+        comments|extract) opts="--all --context-lines --fields --help --include-ci --include-system --no-context --pretty --since --summary --timeline -a -c -h -p -s" ;;
         continue-reintegration) opts="--help -h" ;;
         describe) opts="--command --help --pretty -h -p" ;;
         diff) opts="--help --pretty -h -p" ;;

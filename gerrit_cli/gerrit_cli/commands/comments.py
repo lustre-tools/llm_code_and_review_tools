@@ -8,6 +8,7 @@ from ..session import LastURLManager
 from ..summary import truncate_extracted_comments
 from ._helpers import (
     _cli,
+    comment_timeline,
     error_code_for,
     exit_code_for,
     filter_threads_by_fields,
@@ -15,7 +16,21 @@ from ._helpers import (
     output_result,
     output_success,
     thread_index_error,
+    threads_since,
 )
+
+
+def normalize_since(value):
+    """A --since time in Gerrit's own form ("2026-10-01 17:30:00"), or ""."""
+    if not value:
+        return ""
+    text = str(value).strip().replace("T", " ")
+    for suffix in ("Z", "+00:00"):
+        if text.endswith(suffix):
+            text = text[:-len(suffix)]
+    if len(text) < 10 or not text[:4].isdigit():
+        raise ValueError(f"--since wants a UTC time like 2026-10-01 or '2026-10-01 17:30', not {value!r}")
+    return text
 
 
 def cmd_extract(args):
@@ -42,11 +57,21 @@ def cmd_extract(args):
             exclude_ci_bots=not include_ci,
         )
 
-        if fields:
+        since = normalize_since(getattr(args, 'since', None))
+        if getattr(args, 'timeline', False):
+            entries = comment_timeline(result.threads, since)
+            data = {"timeline": entries, "count": len(entries)}
+            if result.hidden_resolved_count:
+                data["hint"] = (
+                    f"{result.hidden_resolved_count} resolved thread(s) are not in the "
+                    "timeline; add --all for them."
+                )
+        elif fields:
+            threads = threads_since(result.threads, since) if since else result.threads
             # Output filtered flat list of threads (--fields takes precedence)
             data = {
-                "threads": filter_threads_by_fields(result.threads, fields),
-                "count": len(result.threads),
+                "threads": filter_threads_by_fields(threads, fields),
+                "count": len(threads),
             }
             # --fields builds its own payload, so carry over the note
             # about threads the default filter dropped.
