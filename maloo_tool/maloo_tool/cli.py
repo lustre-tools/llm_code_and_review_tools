@@ -10,12 +10,13 @@ from typing import Any
 
 import click
 
-from llm_tool_common.click_group import JsonUsageErrorGroup
+from llm_tool_common.click_group import JsonErrorGroup
 from llm_tool_common.config import (
     CredentialSetError,
     apply_credential_set,
     hoist_args,
 )
+from llm_tool_common.decorators import error_from_exception
 from llm_tool_common.envelope import (
     error_response_from_dict,
     format_json,
@@ -24,7 +25,7 @@ from llm_tool_common.envelope import (
 
 from .client import MalooClient, resolve_patchset_commit
 from .config import load_config
-from .errors import ErrorCode
+from .errors import ErrorCode, ExitCode, ToolError
 
 TOOL_NAME = "maloo"
 
@@ -49,7 +50,12 @@ def _extract_session_id(url_or_id: str) -> str:
 
 
 def _make_client() -> MalooClient:
-    config = load_config()
+    try:
+        config = load_config()
+    except ValueError as e:
+        raise ToolError(
+            ErrorCode.AUTH_MISSING, str(e), exit_code=ExitCode.AUTH_ERROR
+        ) from e
     return MalooClient(config)
 
 
@@ -60,15 +66,22 @@ def _output(envelope: dict[str, Any], pretty: bool) -> None:
 def _error(
     code: str, message: str, command: str, pretty: bool,
     details: dict[str, Any] | None = None,
+    exit_code: int = ExitCode.GENERAL_ERROR,
 ) -> None:
     env = error_response_from_dict(
         code, message, TOOL_NAME, command, details=details
     )
     _output(env, pretty)
-    sys.exit(1)
+    sys.exit(exit_code)
 
 
-class MalooGroup(JsonUsageErrorGroup):
+def _fail(exc: Exception, command: str, pretty: bool) -> None:
+    """Report an exception the way an unhandled one would be."""
+    err = error_from_exception(exc)
+    _error(err.code, err.message, command, pretty, exit_code=err.exit_code)
+
+
+class MalooGroup(JsonErrorGroup):
     """Click group whose global options work in any position.
 
     Click reads a group's own options only before the subcommand name,
@@ -580,7 +593,7 @@ def review(
         else:
             sessions = client.find_sessions_by_commit(commit_id)
     except Exception as exc:
-        _error(ErrorCode.API_ERROR, str(exc), "review", pretty)
+        _fail(exc, "review", pretty)
         return
 
     if not sessions:
@@ -883,7 +896,7 @@ def raise_bug(
     except RuntimeError as exc:
         _error(ErrorCode.RAISE_BUG_FAILED, str(exc), "raise-bug", pretty)
     except Exception as exc:
-        _error(ErrorCode.API_ERROR, str(exc), "raise-bug", pretty)
+        _fail(exc, "raise-bug", pretty)
 
 
 @main.command()
@@ -938,7 +951,7 @@ def sessions(
     try:
         raw = client.get_sessions(params, max_records=limit)
     except Exception as exc:
-        _error(ErrorCode.API_ERROR, str(exc), "sessions", pretty)
+        _fail(exc, "sessions", pretty)
         return
 
     items = []
@@ -1052,7 +1065,7 @@ def test_history(
             max_sessions=max_sessions,
         )
     except Exception as exc:
-        _error(ErrorCode.API_ERROR, str(exc), "test-history", pretty)
+        _fail(exc, "test-history", pretty)
         return
 
     # Compute summary stats
@@ -1364,7 +1377,7 @@ def queue(
     try:
         raw = client.get_test_queues(params, max_records=limit)
     except Exception as exc:
-        _error(ErrorCode.API_ERROR, str(exc), "queue", pretty)
+        _fail(exc, "queue", pretty)
         return
 
     items = []
@@ -1462,7 +1475,7 @@ def top_failures(
             max_sessions=max_sessions,
         )
     except Exception as exc:
-        _error(ErrorCode.API_ERROR, str(exc), "top-failures", pretty)
+        _fail(exc, "top-failures", pretty)
         return  # unreachable, _error calls sys.exit
 
     top = failures[:limit]

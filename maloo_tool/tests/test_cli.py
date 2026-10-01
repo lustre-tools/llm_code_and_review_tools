@@ -1575,3 +1575,104 @@ class TestUsageErrors:
         assert env["error"]["code"] == "INVALID_INPUT"
         assert env["meta"]["tool"] == "maloo"
         assert env["meta"]["command"] == "session"
+
+
+def _http_error(status):
+    import requests
+
+    resp = MagicMock(status_code=status)
+    return requests.HTTPError(f"{status} Error", response=resp)
+
+
+class TestEscapedErrors:
+    """A failure no command handles is a JSON error with the contract's
+    exit code, not a Python traceback."""
+
+    def _error(self, result, code, exit_code):
+        assert result.exit_code == exit_code, result.output
+        out = json.loads(result.stdout)
+        assert out["code"] == code
+        return out
+
+    def test_unreachable_server(self, runner, mock_client):
+        import requests
+
+        mock_client.get_session.side_effect = requests.ConnectionError("refused")
+        out = self._error(
+            runner.invoke(main, ["session", SID_1]), "CONNECTION_ERROR", 5
+        )
+        assert "refused" in out["message"]
+
+    def test_timeout(self, runner, mock_client):
+        import requests
+
+        mock_client.get_test_set.side_effect = requests.Timeout("slow")
+        self._error(runner.invoke(main, ["subtests", TSID_1]), "TIMEOUT", 5)
+
+    def test_server_error(self, runner, mock_client):
+        mock_client.get_test_set.side_effect = _http_error(500)
+        self._error(runner.invoke(main, ["subtests", TSID_1]), "API_ERROR", 1)
+
+    def test_refused_credentials(self, runner, mock_client):
+        mock_client.get_bug_links.side_effect = _http_error(401)
+        self._error(runner.invoke(main, ["bugs", TSID_1]), "AUTH_FAILED", 2)
+
+    def test_write_commands(self, runner, mock_client):
+        import requests
+
+        mock_client.create_bug_link.side_effect = requests.ConnectionError("x")
+        mock_client.retest.side_effect = requests.ConnectionError("x")
+        self._error(
+            runner.invoke(main, ["link-bug", TSID_1, "LU-1"]),
+            "CONNECTION_ERROR", 5,
+        )
+        self._error(
+            runner.invoke(main, ["retest", SID_1, "LU-1"]),
+            "CONNECTION_ERROR", 5,
+        )
+
+    def test_commands_with_a_catch_all_map_the_same_way(
+        self, runner, mock_client
+    ):
+        import requests
+
+        mock_client.get_sessions.side_effect = requests.ConnectionError("x")
+        self._error(
+            runner.invoke(main, ["sessions"]), "CONNECTION_ERROR", 5
+        )
+        mock_client.get_sessions.side_effect = RuntimeError("odd reply")
+        out = self._error(runner.invoke(main, ["sessions"]), "API_ERROR", 1)
+        assert out["message"] == "odd reply"
+
+    def test_specific_errors_keep_their_codes(self, runner, mock_client):
+        import requests
+
+        mock_client.download_logs.side_effect = requests.ConnectionError("x")
+        self._error(
+            runner.invoke(main, ["logs", TSID_1]), "DOWNLOAD_FAILED", 1
+        )
+        mock_client.raise_bug.side_effect = RuntimeError("Raise bug failed: no")
+        self._error(
+            runner.invoke(main, ["raise-bug", TSID_1]), "RAISE_BUG_FAILED", 1
+        )
+
+    def test_envelope(self, runner, mock_client):
+        import requests
+
+        mock_client.get_session.side_effect = requests.ConnectionError("x")
+        result = runner.invoke(main, ["--envelope", "session", SID_1])
+        assert result.exit_code == 5
+        env = json.loads(result.stdout)
+        assert env["ok"] is False
+        assert env["meta"]["command"] == "session"
+
+    def test_missing_credentials(self, runner, tmp_path, monkeypatch):
+        env_file = tmp_path / ".env"
+        env_file.write_text("MALOO_URL=http://127.0.0.1:9\n")
+        monkeypatch.setenv("MALOO_TOOL_ENV_FILE", str(env_file))
+        monkeypatch.delenv("MALOO_USER", raising=False)
+        monkeypatch.delenv("MALOO_PASS", raising=False)
+        out = self._error(
+            runner.invoke(main, ["session", SID_1]), "AUTH_MISSING", 2
+        )
+        assert "MALOO_USER" in out["message"]

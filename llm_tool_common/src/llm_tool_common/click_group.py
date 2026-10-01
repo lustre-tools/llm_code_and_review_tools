@@ -1,8 +1,9 @@
-"""A click group that keeps usage errors inside the JSON output contract.
+"""Click groups that keep failures inside the JSON output contract.
 
 Click reports a usage error -- an unknown command or option, a missing
 or malformed argument -- as text on stderr with exit status 2, which
-the contract reserves for an authentication failure.
+the contract reserves for an authentication failure, and an exception
+a command does not handle as a traceback.
 """
 
 from typing import Any, NoReturn
@@ -10,6 +11,7 @@ from typing import Any, NoReturn
 import click
 from click.exceptions import NoArgsIsHelpError
 
+from .decorators import error_from_exception
 from .envelope import error_response_from_dict, format_json
 from .errors import ErrorCode, ExitCode
 
@@ -51,6 +53,31 @@ class JsonUsageErrorGroup(click.Group):
             )
 
 
+class JsonErrorGroup(JsonUsageErrorGroup):
+    """Also report any exception a command lets escape as a JSON error.
+
+    It is mapped by error_from_exception, so a ToolError keeps its own
+    code and exit status.  Click's exceptions -- help, exit, abort --
+    pass through.
+    """
+
+    def invoke(self, ctx: click.Context) -> Any:
+        try:
+            return super().invoke(ctx)
+        except (click.ClickException, click.exceptions.Exit, click.Abort):
+            raise
+        except Exception as e:
+            err = error_from_exception(e)
+            _emit(
+                err.code,
+                err.message,
+                self.tool_name,
+                ctx.invoked_subcommand or "cli",
+                bool(ctx.params.get("envelope")),
+                err.exit_code,
+            )
+
+
 def _usage_error(
     error: click.UsageError, tool: str, command: str, envelope: bool
 ) -> NoReturn:
@@ -64,8 +91,21 @@ def _usage_error(
             "usage": error.ctx.get_usage(),
             "help": f"{error.ctx.command_path} --help",
         }
-    env = error_response_from_dict(
-        ErrorCode.INVALID_INPUT, message, tool, command, details=details
+    _emit(
+        ErrorCode.INVALID_INPUT, message, tool, command, envelope,
+        ExitCode.INVALID_INPUT, details,
     )
+
+
+def _emit(
+    code: str,
+    message: str,
+    tool: str,
+    command: str,
+    envelope: bool,
+    exit_code: int,
+    details: dict[str, Any] | None = None,
+) -> NoReturn:
+    env = error_response_from_dict(code, message, tool, command, details=details)
     click.echo(format_json(env, full_envelope=envelope))
-    raise click.exceptions.Exit(int(ExitCode.INVALID_INPUT))
+    raise click.exceptions.Exit(int(exit_code))
