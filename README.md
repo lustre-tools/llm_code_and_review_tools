@@ -394,7 +394,8 @@ llm_code_and_review_tools/
 ```bash
 ./install.sh                       # Install all tools (editable/dev mode)
 cd <tool_dir> && pip install -e .  # Or install a single tool in dev mode
-pytest                             # Run all tests (from repo root)
+make unit-test                     # Run every tool's offline tests
+cd <tool_dir> && pytest            # Or one tool's
 ```
 
 Code style: dataclasses, type hints, functions under ~60 lines,

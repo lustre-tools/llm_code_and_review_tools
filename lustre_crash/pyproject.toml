@@ -31,6 +31,10 @@ lustre-crash = "lustre_crash.cli:main"
 [tool.setuptools.packages.find]
 include = ["lustre_crash*"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+
 [tool.ruff]
 line-length = 100
 target-version = "py39"
