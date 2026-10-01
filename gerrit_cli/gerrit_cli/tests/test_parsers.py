@@ -102,6 +102,26 @@ class TestParserHandlerIntegration:
             assert hasattr(args, 'func'), f"Command {cmd_name} has no func attribute"
 
 
+class TestTicketModeHelp:
+    """Only gc graph resolves a JIRA ticket to changes."""
+
+    def test_only_graph_url_help_offers_a_ticket(self):
+        from gerrit_cli import cli as cli_module
+        from gerrit_cli.parsers import setup_parsers
+
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest='command')
+        setup_parsers(subparsers,
+                      {name: MagicMock() for name in cli_module.build_handlers()})
+
+        offering = set()
+        for name, sub in subparsers.choices.items():
+            for action in sub._actions:
+                if action.dest == 'url' and 'ticket' in (action.help or ''):
+                    offering.add(name)
+        assert offering == {'graph'}
+
+
 class TestReviewParserPostAttributes:
     """Test that the review parser defines all attributes cmd_review uses."""
 

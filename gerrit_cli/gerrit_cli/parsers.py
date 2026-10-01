@@ -243,12 +243,7 @@ def add_series_comments_parser(subparsers):
     parser.add_argument(
         "url",
         help="Gerrit change URL, number or Change-Id (any patch in "
-             "the series), "
-             "or a JIRA ticket like LU-18222. Ticket form picks the "
-             "anchor automatically: the in-flight patch whose series "
-             "has the most in-flight members (newest merged patch "
-             "when the ticket has nothing in flight) and pulls in "
-             "every change whose subject starts with the ticket.",
+             "the series)",
     )
     parser.add_argument(
         "--pretty", "-p",
@@ -313,12 +308,7 @@ def add_review_series_parser(subparsers):
     parser.add_argument(
         "url",
         help="Gerrit change URL, number or Change-Id (any patch in "
-             "the series), "
-             "or a JIRA ticket like LU-18222. Ticket form picks the "
-             "anchor automatically: the in-flight patch whose series "
-             "has the most in-flight members (newest merged patch "
-             "when the ticket has nothing in flight) and pulls in "
-             "every change whose subject starts with the ticket.",
+             "the series)",
     )
     parser.add_argument(
         "--pretty", "-p",
@@ -842,12 +832,7 @@ def add_series_info_parser(subparsers):
     parser.add_argument(
         "url",
         help="Gerrit change URL, number or Change-Id (any patch in "
-             "the series), "
-             "or a JIRA ticket like LU-18222. Ticket form picks the "
-             "anchor automatically: the in-flight patch whose series "
-             "has the most in-flight members (newest merged patch "
-             "when the ticket has nothing in flight) and pulls in "
-             "every change whose subject starts with the ticket.",
+             "the series)",
     )
     parser.add_argument(
         "--show-bots",
