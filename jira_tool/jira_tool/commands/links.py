@@ -5,7 +5,7 @@ import sys
 import click
 
 from ..envelope import success_response
-from ..errors import ConfigError, ExitCode, JiraToolError
+from ..errors import ConfigError, ErrorCode, ExitCode, JiraToolError, NotFoundError
 from ._helpers import (
     extract_issue_key,
     get_client,
@@ -153,10 +153,10 @@ def register(main):
                     })
 
                 if not deleted:
-                    raise JiraToolError(
-                        f"No link found between {source} and {target}"
+                    raise NotFoundError(
+                        code=ErrorCode.NOT_FOUND,
+                        message=f"No link found between {source} and {target}"
                         + (f" of type '{link_type}'" if link_type else ""),
-                        http_status=404,
                     )
 
                 data = {

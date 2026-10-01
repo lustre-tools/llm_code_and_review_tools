@@ -2086,3 +2086,67 @@ class TestCLIDescribe:
 
         described = json.loads(runner.invoke(main, ["describe"]).output)
         assert {c["name"] for c in described["commands"]} == set(names(main))
+
+
+class TestCLIErrorsWithoutAResponse:
+    """Errors the commands raise themselves come out as JSON too."""
+
+    @responses.activate
+    def test_unlink_with_no_link_between_the_issues(self, runner, mock_env):
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-1",
+            json={"key": "PROJ-1", "fields": {"issuelinks": []}},
+        )
+
+        result = runner.invoke(main, ["unlink", "PROJ-1", "PROJ-2"])
+
+        assert result.exit_code == 3
+        error = json.loads(result.output)
+        assert error["code"] == "NOT_FOUND"
+        assert "No link found between PROJ-1 and PROJ-2" in error["message"]
+
+    @responses.activate
+    def test_filter_list_by_owner_without_filter_search(self, runner, mock_env):
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/filter/search",
+            json={"errorMessages": ["null for uri"]},
+            status=404,
+        )
+
+        result = runner.invoke(main, ["filter", "list", "--owner", "jdoe"])
+
+        assert result.exit_code == 3
+        error = json.loads(result.output)
+        assert error["code"] == "NOT_FOUND"
+        assert "jira filter favourites" in error["message"]
+
+    @responses.activate
+    def test_filter_scrape_when_the_page_is_refused(self, runner, mock_env):
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/secure/ManageFilters.jspa",
+            body="<html>Forbidden</html>",
+            status=403,
+        )
+
+        result = runner.invoke(main, ["filter", "scrape", "--skip-verify"])
+
+        assert result.exit_code == 2
+        assert json.loads(result.stdout)["code"] == "AUTH_FAILED"
+
+    @responses.activate
+    def test_filter_scrape_needs_a_200(self, runner, mock_env):
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/secure/ManageFilters.jspa",
+            status=204,
+        )
+
+        result = runner.invoke(main, ["filter", "scrape", "--skip-verify"])
+
+        assert result.exit_code == 1
+        error = json.loads(result.stdout)
+        assert error["code"] == "SERVER_ERROR"
+        assert error["http_status"] == 204

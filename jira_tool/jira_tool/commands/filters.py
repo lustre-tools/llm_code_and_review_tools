@@ -120,12 +120,18 @@ def register(main):
                 # filter/search not available — fall back to favourites
                 if owner or filter_name:
                     # Can't filter by owner/name without search endpoint
+                    if not isinstance(search_err, JiraToolError):
+                        raise
                     raise JiraToolError(
+                        code=search_err.code,
                         message=(
                             f"filter/search endpoint not available on this server "
                             f"(got: {search_err}). "
                             f"Use 'jira filter favourites' or try from JIRA Cloud."
                         ),
+                        http_status=search_err.http_status,
+                        details=search_err.details,
+                        exit_code=search_err.exit_code,
                     ) from search_err
                 raw_filters = client.get_favourite_filters()
                 source = "favourites"
@@ -468,8 +474,12 @@ def register(main):
                 )
                 resp = session.get(url, timeout=client.timeout)
                 if resp.status_code != 200:
+                    client._handle_response(resp, "ManageFilters.jspa")
+                    from ..errors import ErrorCode
                     raise JiraToolError(
+                        code=ErrorCode.SERVER_ERROR,
                         message=f"ManageFilters.jspa returned HTTP {resp.status_code}",
+                        http_status=resp.status_code,
                     )
 
                 page_text = resp.text
