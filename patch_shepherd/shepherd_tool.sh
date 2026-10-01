@@ -88,6 +88,9 @@ def dbg(msg):
 def run_tool(args):
     """Run a CLI tool, return parsed JSON or raw text."""
     label = " ".join(args[:3])
+    # the checks below read {ok, data}, which the tools print only
+    # when asked
+    args = [args[0], "--envelope", *args[1:]]
     t0 = time.monotonic()
     try:
         r = subprocess.run(args, capture_output=True, text=True, timeout=300)
@@ -351,17 +354,17 @@ PYEOF
 
 check-status)
 	[[ $# -ge 1 ]] || die "check-status requires <gerrit_url>"
-	exec gerrit info "$1"
+	exec gerrit --envelope info "$1"
 	;;
 
 check-ci)
 	[[ $# -ge 1 ]] || die "check-ci requires <gerrit_url>"
-	exec gerrit maloo "$1"
+	exec gerrit --envelope maloo "$1"
 	;;
 
 check-reviews)
 	[[ $# -ge 1 ]] || die "check-reviews requires <gerrit_url>"
-	exec gerrit comments "$1"
+	exec gerrit --envelope comments "$1"
 	;;
 
 search-bug)
@@ -369,12 +372,12 @@ search-bug)
 	TEST_NAME="$1"
 	# Search for open bugs matching this test name
 	JQL="project in (LU, EX) AND summary ~ \"${TEST_NAME}\" AND status in (New, \"To Do\", Open, \"In Progress\")"
-	exec jira search "$JQL"
+	exec jira --envelope search "$JQL"
 	;;
 
 check-linked-bugs)
 	[[ $# -ge 1 ]] || die "check-linked-bugs requires <test_set_id>"
-	exec maloo bugs "$1"
+	exec maloo --envelope bugs "$1"
 	;;
 
 link-bug)
@@ -384,7 +387,7 @@ link-bug)
 		exit 0
 	fi
 	rate_check link_bug "$MAX_LINK_BUGS"
-	exec maloo link-bug "$1" "$2"
+	exec maloo --envelope link-bug "$1" "$2"
 	;;
 
 raise-bug)
@@ -394,7 +397,7 @@ raise-bug)
 		exit 0
 	fi
 	rate_check raise_bug "$MAX_RAISE_BUGS"
-	exec maloo raise-bug "$@"
+	exec maloo --envelope raise-bug "$@"
 	;;
 
 retest)
@@ -404,12 +407,12 @@ retest)
 		exit 0
 	fi
 	rate_check retest "$MAX_RETESTS"
-	exec maloo retest "$1" "$2"
+	exec maloo --envelope retest "$1" "$2"
 	;;
 
 get-failures)
 	[[ $# -ge 1 ]] || die "get-failures requires <session_id>"
-	exec maloo failures "$1"
+	exec maloo --envelope failures "$1"
 	;;
 
 update-patch)
