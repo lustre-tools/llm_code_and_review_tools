@@ -14,6 +14,15 @@ PASS=0
 FAIL=0
 TRASH=""
 
+# The walkthrough offers what the shell already exports as defaults, so
+# credentials exported by whoever runs this would change what it sees.
+for var in $(compgen -e); do
+    case "$var" in
+        GERRIT_*|JIRA_*|MALOO_*|JENKINS_*|JANITOR_*|*_TOOL_ENV_FILE|*_CLI_ENV_FILE)
+            unset "$var" ;;
+    esac
+done
+
 # Run from a scratch directory: the tools' loader also reads ./.env, so a
 # stray one in the checkout would change what these tests see.
 WORK=$(mktemp -d)
