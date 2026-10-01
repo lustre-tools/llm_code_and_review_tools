@@ -53,6 +53,7 @@ python3 dk.py --vmcore ... --vmlinux ... --pretty
 |--------|-------------|
 | `osc_stats.py` | OSC grant, dirty pages, and lost grant per OST connection |
 | `lustre_waitq.py` | Find D-state tasks blocked in Lustre code, grouped by wait point |
+| `mdt_request_owner.py` | Show the client NID, UID/GID, job ID, names and parent FIDs of the request an MDT thread was handling (for example the request behind an `osd_olc_save()` name-length LBUG). Standalone; needs only drgn |
 
 ### Libraries
 
