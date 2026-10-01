@@ -179,5 +179,5 @@ For each patch:
 
 For substantive issues, ask me before making changes.
 
-When done: gerrit end-session
-To abort: gerrit abort-session (discards all changes)"""
+When done: gerrit abort --keep-changes
+To abort: gerrit abort (discards all changes)"""

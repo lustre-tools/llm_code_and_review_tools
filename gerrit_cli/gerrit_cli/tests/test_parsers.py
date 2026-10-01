@@ -122,6 +122,56 @@ class TestTicketModeHelp:
         assert offering == {'graph'}
 
 
+class TestSuggestedCommandsExist:
+    """Every command a message tells the user to run is a real subcommand."""
+
+    NOT_COMMANDS = {
+        "workflows",  # "typical gerrit workflows" (examples description)
+        "gc",         # "Use 'gc' or 'gerrit-cli' as short aliases" (describe)
+    }
+
+    def test_suggested_commands_are_registered(self):
+        import io
+        import pathlib
+        import re
+        import tokenize
+
+        import gerrit_cli
+        from gerrit_cli import cli as cli_module
+        from gerrit_cli.parsers import setup_parsers
+
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest='command')
+        setup_parsers(subparsers,
+                      {name: MagicMock() for name in cli_module.build_handlers()})
+        known = set(subparsers.choices) | self.NOT_COMMANDS
+
+        string_tokens = {tokenize.STRING}
+        if hasattr(tokenize, "FSTRING_MIDDLE"):
+            string_tokens.add(tokenize.FSTRING_MIDDLE)
+        suggestion = re.compile(
+            r"(?<![\w-])(?:gerrit|gc) ([a-z][a-z-]*[a-z])"
+            r"|\b(?:[Rr]un|[Uu]se) '([a-z][a-z-]*[a-z])'"
+        )
+
+        package = pathlib.Path(gerrit_cli.__file__).parent
+        unknown = []
+        for path in sorted(package.rglob("*.py")):
+            if "tests" in path.relative_to(package).parts:
+                continue
+            tokens = tokenize.generate_tokens(
+                io.StringIO(path.read_text()).readline)
+            for tok in tokens:
+                if tok.type not in string_tokens:
+                    continue
+                for m in suggestion.finditer(tok.string):
+                    name = m.group(1) or m.group(2)
+                    if name not in known:
+                        unknown.append(
+                            f"{path.name}:{tok.start[0]}: {m.group(0)}")
+        assert unknown == []
+
+
 class TestReviewParserPostAttributes:
     """Test that the review parser defines all attributes cmd_review uses."""
 

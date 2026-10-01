@@ -140,8 +140,8 @@ class TestGenerateReviewPrompt:
         prompt = generate_review_prompt(url)
         assert "stage" in prompt
         assert "finish-patch" in prompt
-        assert "end-session" in prompt
-        assert "abort-session" in prompt
+        assert "gerrit abort --keep-changes" in prompt
+        assert "gerrit abort (discards all changes)" in prompt
 
 
 class TestCmdSeries:

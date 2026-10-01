@@ -253,7 +253,7 @@ class InteractiveSession:
             print("  2. Re-run: gerrit interactive <url>")
             print("")
             print("To abort the edit:")
-            print("  Run: gerrit abort-patch")
+            print("  Run: gerrit abort")
             print("")
             print("=" * 70)
             print("\nExiting interactive mode...")
@@ -324,7 +324,7 @@ class InteractiveSession:
             self._push_all()
         else:
             print("\nStaged operations saved. You can push later with:")
-            print("  gerrit staged-list")
+            print("  gerrit staged list")
             for patch in staged_patches:
                 print(f"  gerrit push {patch.change_number}")
 

@@ -53,7 +53,7 @@ def finish_patch(auto_next: bool = True) -> tuple[bool, str]:
 
     if current_index == -1 or current_index >= len(session.series_patches) - 1:
         # At the end
-        return success, message + "\n\n\u2192 Last patch in series. Run 'end-session' when done."
+        return success, message + "\n\n\u2192 Last patch in series. Run 'gerrit abort --keep-changes' when done."
 
     # Check for next patch with comments
     from .extractor import extract_comments
@@ -74,7 +74,7 @@ def finish_patch(auto_next: bool = True) -> tuple[bool, str]:
         except Exception:
             continue
 
-    return success, message + "\n\n\u2192 No more patches with comments. Run 'end-session' when done."
+    return success, message + "\n\n\u2192 No more patches with comments. Run 'gerrit abort --keep-changes' when done."
 
 
 def abort_patch() -> tuple[bool, str]:
@@ -142,7 +142,7 @@ def next_patch(with_comments: bool = False) -> tuple[bool, str]:
     manager = RebaseManager()
     session = manager.load_session()
     if not session:
-        return False, "No active rebase session. Start one with: gerrit work-on-patch <change> <url>"
+        return False, "No active rebase session. Start one with: gerrit work-on-patch <change>"
 
     # Find current patch index
     current_index = -1
@@ -179,7 +179,7 @@ def next_patch(with_comments: bool = False) -> tuple[bool, str]:
     else:
         # Just get the next patch
         if current_index >= len(session.series_patches) - 1:
-            return False, "Already at the last patch in the series. Use 'end-session' when done."
+            return False, "Already at the last patch in the series. Use 'gerrit abort --keep-changes' when done."
 
         next_patch_info = session.series_patches[current_index + 1]
 

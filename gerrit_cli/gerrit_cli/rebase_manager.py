@@ -980,7 +980,7 @@ class RebaseManager:
                         lines.append("  3. gerrit finish-patch")
                         lines.append("")
                         lines.append("To skip this commit: git cherry-pick --skip")
-                        lines.append("To abort: gerrit abort-patch")
+                        lines.append("To abort: git cherry-pick --abort, then gerrit abort")
 
                         # Save progress (keep pending_cherry_pick set)
                         session.series_patches = self._update_commits_in_patches(
@@ -1170,7 +1170,7 @@ class RebaseManager:
         lines.append("")
         lines.append("Next steps:")
         lines.append("  gerrit finish-patch    # Complete the rebase")
-        lines.append("  gerrit abort-patch     # Abort and return to original state")
+        lines.append("  gerrit abort           # Abort and return to original state")
         lines.append("=" * 70)
 
         return True, "\n".join(lines)
