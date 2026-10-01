@@ -87,7 +87,9 @@ def _post_one(results_dir: Path, entry: dict, prefix: Optional[str]):
         change_number=entry["number"],
         comments=spec.get("comments"),
         message=message,
-        vote=spec.get("vote"),
+        # the review itself must not vote (review-prompts
+        # gerrit-review.md), whatever the agent wrote into its JSON
+        vote=None,
         revision=entry["sha"],
         prefix=prefix,
         tag=spec.get("tag") or DEFAULT_TAG,

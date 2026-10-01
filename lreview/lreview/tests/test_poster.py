@@ -87,6 +87,18 @@ class TestPostResults:
         assert summary["101"]["posted"] is True
         assert summary["101"]["posted_prefix"] == "[Marc Bot]"
 
+    def test_review_json_cannot_vote(self, results_dir):
+        """The review must not vote (review-prompts gerrit-review.md);
+        a vote in the agent's JSON never reaches Gerrit."""
+        (results_dir / "gerrit-review-101_ps4.json").write_text(
+            json.dumps({**REVIEW_SPEC, "vote": -1}))
+        with patch("gerrit_cli.client.GerritCommentsClient") as client:
+            outcomes = post_results(results_dir, changes=[101])
+        assert outcomes[0].status == "posted"
+        body = client.return_value.rest.post.call_args[1]["json"]
+        assert "labels" not in body
+        assert body["comments"]["a.c"][0]["line"] == 1
+
     def test_already_posted_skipped_unless_force(self, results_dir):
         summary = load_summary(results_dir)
         summary["101"]["posted"] = True
