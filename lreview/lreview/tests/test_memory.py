@@ -169,3 +169,50 @@ class TestMemoryProtocolContract:
         assert "must not shrink the document" in text
         # the iteration counter belongs to lreview, not the agent
         assert "never edit or remove it" in text
+
+
+class TestClaudeSession:
+    """lreview records the review's Claude session per mode in the
+    frontmatter, so a later --memory run can resume the conversation."""
+
+    def test_recorded_and_read_back(self, tmp_path):
+        from lreview.memory import read_session, record_session
+        doc = ensure_doc(tmp_path, _gerrit_change())
+        assert read_session(doc, "full") is None
+        record_session(doc, "full", "sess-1", "ps54 aaaaaaaaaaaa")
+        session = read_session(doc, "full")
+        assert session.session_id == "sess-1"
+        assert session.reviewed == "ps54 aaaaaaaaaaaa"
+        head = doc.read_text().split("---")[1]
+        assert "claude-session-full: sess-1 ps54 aaaaaaaaaaaa " in head
+
+    def test_a_new_session_replaces_the_old(self, tmp_path):
+        from lreview.memory import read_session, record_session
+        doc = ensure_doc(tmp_path, _gerrit_change())
+        record_session(doc, "full", "sess-1", "ps54 aaaaaaaaaaaa")
+        record_session(doc, "full", "sess-2", "ps55 cccccccccccc")
+        assert read_session(doc, "full").session_id == "sess-2"
+        assert doc.read_text().count("claude-session-full:") == 1
+
+    def test_modes_are_kept_apart(self, tmp_path):
+        from lreview.memory import read_session, record_session
+        doc = ensure_doc(tmp_path, _gerrit_change())
+        record_session(doc, "full", "deep", "ps54 aaaaaaaaaaaa")
+        record_session(doc, "light", "quick", "ps54 aaaaaaaaaaaa")
+        assert read_session(doc, "full").session_id == "deep"
+        assert read_session(doc, "light").session_id == "quick"
+
+    def test_a_doc_rewritten_without_frontmatter(self, tmp_path):
+        from lreview.memory import read_session, record_session
+        doc = tmp_path / "x.md"
+        doc.write_text("# notes only\n")
+        record_session(doc, "full", "sess-1", "ps1 aaaaaaaaaaaa")
+        assert read_session(doc, "full").session_id == "sess-1"
+        assert "# notes only" in doc.read_text()
+
+    def test_the_body_is_not_searched(self, tmp_path):
+        from lreview.memory import read_session
+        doc = ensure_doc(tmp_path, _gerrit_change())
+        doc.write_text(doc.read_text()
+                       + "\nclaude-session-full: quoted ps1 x 2026-01-01\n")
+        assert read_session(doc, "full") is None

@@ -200,6 +200,37 @@ def parse_final_usage(log_path: Path):
     return None, None
 
 
+def parse_session_id(log_path: Path) -> Optional[str]:
+    """The Claude session ID a stream-json log reports, or None.
+
+    Every claude event carries it; the init event opens the log and the
+    result event closes it, so the head and the tail are enough.
+    """
+    try:
+        with open(log_path, errors="replace") as f:
+            head = f.read(65536)
+    except OSError:
+        return None
+    for text in (head, _read_tail(log_path, 65536)):
+        for line in text.splitlines():
+            if '"session_id"' not in line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and obj.get("session_id"):
+                return obj["session_id"]
+    return None
+
+
+def reviewed_label(change) -> str:
+    """What a review run looked at: "ps<N> <sha12>" or "commit <sha12>"."""
+    if change.patchset:
+        return f"ps{change.patchset} {change.sha[:12]}"
+    return f"commit {change.sha[:12]}"
+
+
 def artifact_tag(mode: str) -> str:
     """Filename/manifest-key suffix separating review modes.
 
@@ -228,6 +259,7 @@ class ReviewResult:
     memory_path: Optional[Path] = None
     memory_updated: bool = False
     memory_reviews: Optional[int] = None
+    session_id: Optional[str] = None
     log_path: Optional[Path] = None
     error: Optional[str] = None
 
@@ -800,6 +832,8 @@ def _review_and_cleanup(
 
     result.agent = config.agent
     result.effort = config.effort
+    if config.agent == "claude" and result.log_path:
+        result.session_id = parse_session_id(result.log_path)
     if memory_path is not None:
         result.memory_path = memory_path
         try:
@@ -823,6 +857,14 @@ def _review_and_cleanup(
             except OSError as exc:
                 _log(f"[{change.slug}] warning: could not bump the "
                      f"memory review counter: {exc}")
+            if result.session_id:
+                from .memory import record_session
+                try:
+                    record_session(memory_path, config.mode,
+                                   result.session_id, reviewed_label(change))
+                except OSError as exc:
+                    _log(f"[{change.slug}] warning: could not record the "
+                         f"Claude session: {exc}")
     return result
 
 

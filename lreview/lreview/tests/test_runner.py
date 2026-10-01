@@ -42,6 +42,7 @@ REVIEW_SPEC = {
 # analysis always writes review-metadata.json (as review-core.md
 # mandates); NO_METADATA simulates a claude run that bailed out early.
 STUB_CLAUDE = """#!/bin/bash
+echo '{"type":"system","subtype":"init","session_id":"'"${STUB_SESSION:-sess-1}"'"}'
 if [ -f FAIL_MARKER ]; then echo "boom"; exit 3; fi
 if [ -f SLEEP_MARKER ]; then sleep 30; exit 0; fi
 if [ -f NO_METADATA_MARKER ]; then echo "bailed early"; exit 0; fi
@@ -862,10 +863,10 @@ class TestRunBatch:
         assert results[0].memory_path == doc
         assert results[0].memory_updated is True
         # the stub wrote a bare doc; the runner restored a minimal
-        # frontmatter for the iteration counter around it
+        # frontmatter for the iteration counter and the session around it
         text = doc.read_text()
         assert "notes" in text
-        assert text.startswith("---\nreviews: 1\n---")
+        assert text.startswith("---\nreviews: 1\nclaude-session-full: sess-1 ")
 
     def test_no_memory_without_flag(self, repo, tmp_path, stub_claude):
         from lreview.runner import review_prompt
@@ -1005,3 +1006,72 @@ def _dead_pid() -> int:
         os._exit(0)
     os.waitpid(pid, 0)
     return pid
+
+
+class TestClaudeSessionRecording:
+    """A completed --memory review records its Claude session in the
+    memory document, per mode; nothing else records one."""
+
+    def test_parse_session_id(self, tmp_path):
+        from lreview.runner import parse_session_id
+        log = tmp_path / "x.log"
+        log.write_text('{"type":"system","subtype":"init","session_id":"a1"}\n'
+                       '{"type":"result","session_id":"a1"}\n')
+        assert parse_session_id(log) == "a1"
+        log.write_text('noise\n{"type":"result","session_id":"b2"}\n')
+        assert parse_session_id(log) == "b2"
+        log.write_text("no events at all\n")
+        assert parse_session_id(log) is None
+
+    def test_completed_review_records_its_session(self, repo, tmp_path,
+                                                  stub_claude, monkeypatch):
+        from lreview.memory import read_session
+        monkeypatch.setenv("STUB_SESSION", "sess-abc")
+        sha = _git(repo, "rev-parse", "HEAD")
+        config = _config(repo, tmp_path, memory_db=tmp_path / "db")
+        results = run_batch(config, [_change(801, sha)])
+        assert results[0].session_id == "sess-abc"
+        session = read_session(results[0].memory_path, "full")
+        assert session.session_id == "sess-abc"
+        assert session.reviewed == f"ps1 {sha[:12]}"
+
+    def test_light_review_records_the_light_session(self, repo, tmp_path,
+                                                    stub_claude,
+                                                    monkeypatch):
+        from lreview.memory import read_session
+        monkeypatch.setenv("STUB_SESSION", "sess-light")
+        sha = _git(repo, "rev-parse", "HEAD")
+        config = _config(repo, tmp_path, mode="light",
+                         memory_db=tmp_path / "db")
+        results = run_batch(config, [_change(802, sha)])
+        assert read_session(results[0].memory_path, "light").session_id \
+            == "sess-light"
+        assert read_session(results[0].memory_path, "full") is None
+
+    def test_failed_review_records_nothing(self, repo, tmp_path,
+                                           stub_claude):
+        from lreview.memory import read_session
+        sha = _commit_with_marker(repo, "FAIL_MARKER")
+        config = _config(repo, tmp_path, memory_db=tmp_path / "db")
+        results = run_batch(config, [_change(803, sha)])
+        assert results[0].status == STATUS_FAILED
+        assert read_session(results[0].memory_path, "full") is None
+
+    def test_no_memory_records_nothing(self, repo, tmp_path, stub_claude):
+        sha = _git(repo, "rev-parse", "HEAD")
+        config = _config(repo, tmp_path)
+        results = run_batch(config, [_change(804, sha)])
+        assert results[0].memory_path is None
+        assert not (tmp_path / "db").exists()
+
+    def test_other_agents_record_nothing(self, repo, tmp_path, stub_claude):
+        from lreview.memory import read_session
+        codex = tmp_path / "bin" / "codex"
+        codex.write_text(STUB_CLAUDE)
+        codex.chmod(codex.stat().st_mode | stat.S_IEXEC)
+        sha = _git(repo, "rev-parse", "HEAD")
+        config = _config(repo, tmp_path, agent="codex",
+                         memory_db=tmp_path / "db")
+        results = run_batch(config, [_change(805, sha)])
+        assert results[0].status == STATUS_CLEAN
+        assert read_session(results[0].memory_path, "full") is None

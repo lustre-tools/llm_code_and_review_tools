@@ -14,6 +14,7 @@ Without --memory the database is neither read nor written.
 
 import os
 import re
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -171,3 +172,64 @@ def bump_review_count(path: Path,
             head, tail = f"---\n{line}---\n\n", text
     path.write_text(head + tail)
     return count
+
+
+@dataclass(frozen=True)
+class ClaudeSession:
+    """The Claude session of the last completed review in one mode."""
+    session_id: str
+    # what that session reviewed: "ps<N> <sha12>" or "commit <sha12>"
+    reviewed: str
+
+
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _split_frontmatter(text: str) -> tuple[str, str]:
+    """(frontmatter up to its closing ---, the rest); ("", text) if none."""
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end >= 0:
+            return text[:end + 1], text[end + 1:]
+    return "", text
+
+
+def _session_line_re(mode: str) -> re.Pattern:
+    return re.compile(rf"^claude-session-{re.escape(mode)}:[ \t]*(.*?)[ \t]*$",
+                      re.MULTILINE)
+
+
+def read_session(path: Path, mode: str) -> Optional[ClaudeSession]:
+    """The session recorded for `mode`, from the frontmatter only."""
+    try:
+        head, _ = _split_frontmatter(path.read_text(errors="replace"))
+    except OSError:
+        return None
+    match = _session_line_re(mode).search(head)
+    if not match or not match.group(1):
+        return None
+    session_id, _, rest = match.group(1).partition(" ")
+    words = rest.split()
+    if words and _DATE_RE.fullmatch(words[-1]):
+        words = words[:-1]
+    return ClaudeSession(session_id, " ".join(words))
+
+
+def record_session(path: Path, mode: str, session_id: str,
+                   reviewed: str) -> None:
+    """Record the review's Claude session for `mode`, replacing any
+    earlier one. Like `reviews:`, the line is lreview's, not the
+    agent's."""
+    line = (f"claude-session-{mode}: {session_id} {reviewed} "
+            f"{date.today().isoformat()}")
+    text = path.read_text()
+    head, tail = _split_frontmatter(text)
+    pattern = _session_line_re(mode)
+    if pattern.search(head):
+        head = pattern.sub(line, head, count=1)
+    elif head:
+        head = head.rstrip("\n") + "\n" + line + "\n"
+    else:
+        # the agent rewrote the doc without any frontmatter
+        head, tail = f"---\n{line}\n", "---\n\n" + text
+    path.write_text(head + tail)

@@ -156,7 +156,9 @@ finding with a stale line number lands the Gerrit comment on the
 wrong code.
 
 The frontmatter's `reviews:` line is a completed-iteration counter
-maintained by lreview itself — never edit or remove it.
+maintained by lreview itself — never edit or remove it. The same goes
+for the `claude-session-full:` and `claude-session-light:` lines, where
+lreview records the review conversation a later run resumes.
 
 Update the frontmatter's `last-reviewed:` line before finishing, in
 exactly this form (it drives the next run's patchset diff):
