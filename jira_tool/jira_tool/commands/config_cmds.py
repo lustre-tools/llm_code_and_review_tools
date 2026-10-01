@@ -4,7 +4,12 @@ import sys
 
 import click
 
-from ..config import DEFAULT_CONFIG_PATH, create_sample_config, load_config
+from ..config import (
+    DEFAULT_CONFIG_PATH,
+    config_file_path,
+    create_sample_config,
+    load_config,
+)
 from ..envelope import success_response
 from ..errors import ConfigError, ExitCode, JiraToolError
 from ._helpers import (
@@ -41,7 +46,7 @@ def register(main):
                 "server": cfg.server,
                 "auth_type": cfg.auth_type,
                 "token": f"{cfg.token[:8]}...{cfg.token[-4:]}" if len(cfg.token) > 12 else "***",
-                "config_path": str(DEFAULT_CONFIG_PATH),
+                "config_path": str(config_file_path(ctx.obj.get("config_path"))),
             }
             if cfg.email:
                 config_data["email"] = cfg.email

@@ -193,6 +193,13 @@ def _resolve_instance(
     return instances[instance]
 
 
+def config_file_path(config_path: Path | str | None = None) -> Path:
+    """The config file load_config reads, given its *config_path*."""
+    if config_path is not None:
+        return Path(config_path)
+    return Path(os.environ.get(CONFIG_PATH_VARIABLE) or DEFAULT_CONFIG_PATH)
+
+
 def load_config(
     config_path: Path | str | None = None,
     server_override: str | None = None,
@@ -225,19 +232,15 @@ def load_config(
     # Load from config file if it exists
     if config_path is None:
         pointer = os.environ.get(CONFIG_PATH_VARIABLE)
-        if pointer:
-            config_path = Path(pointer)
-            if not config_path.is_file():
-                raise ConfigError(
-                    f"{CONFIG_PATH_VARIABLE} points at {pointer}, which is not "
-                    "a readable file. Refusing to fall back to the default "
-                    "configuration.",
-                    details={"path": pointer},
-                )
-        else:
-            config_path = DEFAULT_CONFIG_PATH
+        if pointer and not Path(pointer).is_file():
+            raise ConfigError(
+                f"{CONFIG_PATH_VARIABLE} points at {pointer}, which is not "
+                "a readable file. Refusing to fall back to the default "
+                "configuration.",
+                details={"path": pointer},
+            )
 
-    config_path = Path(config_path)
+    config_path = config_file_path(config_path)
 
     if config_path.exists():
         try:

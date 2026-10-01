@@ -750,6 +750,37 @@ class TestCLIConfigShow:
         # Short tokens show as ***, longer tokens show partial with ...
         assert "..." in data["data"]["token"] or "***" in data["data"]["token"]
 
+    def test_reports_the_default_file(self, runner, mock_env, monkeypatch):
+        from jira_tool.config import DEFAULT_CONFIG_PATH
+
+        monkeypatch.delenv("JIRA_TOOL_CONFIG", raising=False)
+
+        result = runner.invoke(main, ["config", "show"])
+
+        assert result.exit_code == 0
+        assert json.loads(result.output)["config_path"] == str(DEFAULT_CONFIG_PATH)
+
+    def test_reports_the_file_given_with_config(self, runner, mock_env, tmp_path):
+        config_file = tmp_path / "alt.json"
+        config_file.write_text(json.dumps({"server": "https://alt.example.com"}))
+
+        result = runner.invoke(main, ["--config", str(config_file), "config", "show"])
+
+        assert result.exit_code == 0
+        assert json.loads(result.output)["config_path"] == str(config_file)
+
+    def test_reports_the_file_jira_tool_config_names(
+        self, runner, mock_env, monkeypatch, tmp_path
+    ):
+        config_file = tmp_path / "pointer.json"
+        config_file.write_text(json.dumps({"server": "https://alt.example.com"}))
+        monkeypatch.setenv("JIRA_TOOL_CONFIG", str(config_file))
+
+        result = runner.invoke(main, ["config", "show"])
+
+        assert result.exit_code == 0
+        assert json.loads(result.output)["config_path"] == str(config_file)
+
 
 class TestCLIIssueAttachments:
     """Tests for 'jira attachments' command."""
