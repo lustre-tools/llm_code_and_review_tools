@@ -368,3 +368,45 @@ class TestDryRun:
     def test_unknown_change_raises(self, results_dir):
         with pytest.raises(KeyError):
             post_results(results_dir, changes=[999], dry_run=True)
+
+    def test_github_reports_what_the_post_sends(self, results_dir,
+                                                monkeypatch):
+        """Only inline findings become GitHub review comments; general
+        and commit-message findings go into the review body."""
+        name = f"review-result-github_acme_widget_7_{'b' * 7}.json"
+        (results_dir / name).write_text(json.dumps({
+            "version": 1, "message": "m", "findings": [
+                {"path": "src.c", "line": 2, "message": "inline one"},
+                {"location_kind": "summary", "path": None, "line": None,
+                 "message": "general one"},
+                {"location_kind": "commit_message", "path": None,
+                 "line": None, "message": "subject one"}]}))
+        summary = load_summary(results_dir)
+        key = "github:acme/widget#7"
+        summary[key] = {
+            "provider": "github", "number": 7, "patchset": None,
+            "sha": "b" * 40, "head_sha": "b" * 40,
+            "repository": "acme/widget", "status": "findings",
+            "findings": 3, "model": "opus", "json": name, "posted": False,
+        }
+        (results_dir / "summary.json").write_text(json.dumps(summary))
+        expected = (f"1 inline comment(s) pinned to {'b' * 12}, "
+                    "2 more finding(s) in the review body")
+
+        dry, = post_results(results_dir, changes=[key], dry_run=True)
+        assert (dry.status, dry.detail) == ("would post", expected)
+
+        sent = []
+
+        def fake_request(path, method="GET", data=None, token=None):
+            if method == "GET":
+                return {"head": {"sha": "b" * 40}}
+            sent.append(data)
+            return {}
+
+        monkeypatch.setattr("lreview.github.github_request", fake_request)
+        real, = post_results(results_dir, changes=[key])
+        assert (real.status, real.detail) == ("posted", f"posted {expected}")
+        assert [c["body"] for c in sent[0]["comments"]] == ["inline one"]
+        assert "general one" in sent[0]["body"]
+        assert "subject one" in sent[0]["body"]

@@ -103,16 +103,9 @@ def _post_one(results_dir: Path, entry: dict, prefix: Optional[str]):
     return False, result.error or "unknown error", prefix
 
 
-def _post_github(results_dir: Path, entry: dict, prefix: Optional[str]):
-    """Post one neutral artifact, refusing a PR whose head moved."""
-    from .github import github_request
-    prefix = resolve_prefix(prefix, entry)
-    owner_repo = entry["repository"]
-    number = entry["number"]
-    current = github_request(f"/repos/{owner_repo}/pulls/{number}")
-    if current["head"]["sha"] != entry["head_sha"]:
-        return False, "PR head changed since review; refusing stale post", prefix
-    spec = json.loads((results_dir / entry["json"]).read_text())
+def _github_review(spec: dict, head_sha: str, prefix: Optional[str]):
+    """The GitHub review a post sends, and a description of it: only
+    inline findings become line comments, the rest join the body."""
     body = (prefix + "\n\n" if prefix else "") + spec.get("message", "")
     summary = []
     comments = []
@@ -125,22 +118,39 @@ def _post_github(results_dir: Path, entry: dict, prefix: Optional[str]):
             summary.append("- " + text)
     if summary:
         body += "\n\nAdditional findings:\n" + "\n".join(summary)
-    payload = {"body": body, "commit_id": entry["head_sha"], "event": "COMMENT"}
+    payload = {"body": body, "commit_id": head_sha, "event": "COMMENT"}
     if comments: payload["comments"] = comments
+    detail = f"{len(comments)} inline comment(s) pinned to {head_sha[:12]}"
+    if summary:
+        detail += f", {len(summary)} more finding(s) in the review body"
+    return payload, detail
+
+
+def _post_github(results_dir: Path, entry: dict, prefix: Optional[str]):
+    """Post one neutral artifact, refusing a PR whose head moved."""
+    from .github import github_request
+    prefix = resolve_prefix(prefix, entry)
+    owner_repo = entry["repository"]
+    number = entry["number"]
+    current = github_request(f"/repos/{owner_repo}/pulls/{number}")
+    if current["head"]["sha"] != entry["head_sha"]:
+        return False, "PR head changed since review; refusing stale post", prefix
+    spec = json.loads((results_dir / entry["json"]).read_text())
+    payload, detail = _github_review(spec, entry["head_sha"], prefix)
     github_request(f"/repos/{owner_repo}/pulls/{number}/reviews", "POST", payload)
-    return True, f"posted {len(comments)} inline comment(s) pinned to {entry['head_sha'][:12]}", prefix
+    return True, f"posted {detail}", prefix
 
 
 def _would_post_detail(results_dir: Path, entry: dict) -> str:
     """Describe what a real post would send, without contacting anyone."""
     spec = json.loads((results_dir / entry["json"]).read_text())
+    if entry.get("provider") == "github":
+        return _github_review(spec, entry["head_sha"], None)[1]
     comments = spec.get("comments") or {}
     if isinstance(comments, dict):
         count = sum(len(v) for v in comments.values())
     else:
         count = len(comments)
-    if not count:
-        count = len(spec.get("findings") or [])
     where = (f"ps{entry['patchset']}" if entry.get("patchset")
              else entry.get("head_sha", "")[:12])
     return f"{count} comment(s) on {where}"
