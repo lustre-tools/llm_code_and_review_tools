@@ -642,6 +642,45 @@ class TestRunBatch:
         assert "(1) src.c (line 2)" in text
         assert "(2) general" in text
 
+    @pytest.mark.parametrize("markers", [
+        {},  # review-metadata.json only
+        {"HAS_FINDINGS": json.dumps(REVIEW_SPEC)},  # gerrit-review.json
+    ], ids=["metadata-only", "gerrit-review-json"])
+    def test_github_without_review_result_is_not_clean(
+            self, repo, tmp_path, stub_claude, markers):
+        """review-result.json is the GitHub contract for every completed
+        review, clean or not; without it the run did not deliver."""
+        pr = _github_pr(repo, {"src.c": "int a;\n", **markers})
+        config = _config(repo, tmp_path)
+        config.results_dir.mkdir(parents=True)
+        earlier = config.results_dir / f"review-result-{pr.slug}.json"
+        earlier.write_text(json.dumps(GITHUB_RESULT))
+        result, = run_batch(config, [pr])
+        assert result.status == STATUS_FAILED
+        assert "no review-result.json" in result.error
+        if markers:
+            assert "gerrit-review.json instead" in result.error
+        assert earlier.is_file()  # not superseded by a failed run
+
+    def test_github_invalid_result_is_never_postable(self, repo, tmp_path,
+                                                     stub_claude):
+        """Output that fails validation must not land under the name a
+        manifest entry of an earlier run of the same head points at."""
+        invalid = {"version": 1, "message": "m", "findings": [
+            {"path": "base.txt", "line": 1, "message": "not added"}]}
+        pr = _github_pr(repo, {"src.c": "int a;\n",
+                               "RESULT_MARKER": json.dumps(invalid)})
+        config = _config(repo, tmp_path)
+        config.results_dir.mkdir(parents=True)
+        earlier = config.results_dir / f"review-result-{pr.slug}.json"
+        earlier.write_text(json.dumps(GITHUB_RESULT))
+        result, = run_batch(config, [pr])
+        assert result.status == STATUS_INVALID_JSON
+        assert "base.txt:1 is not an added PR line" in result.error
+        assert json.loads(earlier.read_text()) == GITHUB_RESULT
+        kept = earlier.with_suffix(".invalid")
+        assert json.loads(kept.read_text()) == invalid
+
     def test_top_level_array_is_invalid_not_crash(self, repo, tmp_path,
                                                   stub_claude):
         sha = _commit_with_marker(repo, "ARRAY_MARKER")

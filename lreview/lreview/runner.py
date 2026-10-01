@@ -530,8 +530,13 @@ def _run_agent(cmd: list[str], cwd: Path, log_path: Path,
                 _RUNNING_PGIDS.discard(proc.pid)
 
 
-def _collect_json(source: Path, dest: Path):
-    """Load and copy a JSON artifact; returns (spec, error)."""
+def _collect_json(source: Path, dest: Path, validate=None):
+    """Load and copy a JSON artifact; returns (spec, error).
+
+    Output that does not parse or that `validate` rejects is kept as
+    dest.invalid, never under dest: an earlier run's manifest entry
+    may name dest, and `post` would send whatever is there.
+    """
     try:
         spec = json.loads(source.read_text())
     except (json.JSONDecodeError, OSError) as exc:
@@ -546,6 +551,15 @@ def _collect_json(source: Path, dest: Path):
         except OSError:
             pass
         return None, f"expected a JSON object, got {type(spec).__name__}"
+    if validate is not None:
+        try:
+            validate(spec)
+        except Exception as exc:  # noqa: BLE001 - any rejection
+            try:
+                shutil.copy(source, dest.with_suffix(".invalid"))
+            except OSError:
+                pass
+            return None, str(exc)
     try:
         shutil.copy(source, dest)
     except OSError as exc:
@@ -645,6 +659,19 @@ def run_review(
                 log_path=log_path, model=model, tokens=tokens,
                 cost_usd=cost_usd,
                 error=f"{config.agent} exited {returncode}")
+        if getattr(change, "provider", None) == "github":
+            # A PR review writes review-result.json even when clean;
+            # review-metadata.json alone is the Gerrit contract, which
+            # the review-core.md prompt can lead the agent to follow.
+            error = f"no {REVIEW_RESULT_NAME} produced"
+            if (worktree_dir / REVIEW_JSON_NAME).is_file():
+                error += f" (the agent wrote {REVIEW_JSON_NAME} instead)"
+            _log(f"[{change.slug}] {console.color('red', 'FAILED')} — "
+                 f"{error}, see {log_path}")
+            return ReviewResult(
+                change, STATUS_FAILED, mode=config.mode, duration=duration,
+                log_path=log_path, model=model, tokens=tokens,
+                cost_usd=cost_usd, error=error)
         if not metadata_json.is_file():
             _log(f"[{change.slug}] {console.color('red', 'FAILED')} — "
                  f"review did not complete (no {METADATA_JSON_NAME}), "
@@ -688,7 +715,12 @@ def run_review(
 
     dest_json = (config.results_dir /
                  f"{json_prefix}-{change.slug}{tag}.json")
-    spec, error = _collect_json(review_json, dest_json)
+    validate = None
+    if getattr(change, "provider", None) == "github":
+        def validate(spec):
+            validate_review_result(spec, worktree_dir, change.base_sha,
+                                   change.sha)
+    spec, error = _collect_json(review_json, dest_json, validate)
     if spec is None:
         _log(f"[{change.slug}] {console.color('red', 'INVALID JSON')} "
              f"output: {error}")
@@ -697,15 +729,6 @@ def run_review(
             duration=duration,
             log_path=log_path, model=model, tokens=tokens,
             cost_usd=cost_usd, error=error)
-    if getattr(change, "provider", None) == "github":
-        try:
-            validate_review_result(spec, worktree_dir, change.base_sha,
-                                   change.sha)
-        except Exception as exc:
-            return ReviewResult(
-                change, STATUS_INVALID_JSON, mode=config.mode,
-                duration=duration, log_path=log_path, model=model,
-                tokens=tokens, cost_usd=cost_usd, error=str(exc))
 
     findings = count_findings(spec)
     markdown_path = None
