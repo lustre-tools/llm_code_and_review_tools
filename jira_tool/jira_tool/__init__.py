@@ -1,5 +1,7 @@
 """JIRA tool - LLM-agent-focused CLI for JIRA REST API."""
 
+import importlib.metadata
+
 from .client import JiraClient
 from .config import JiraConfig, load_config
 from .envelope import error_response, format_json, success_response
@@ -15,7 +17,11 @@ from .errors import (
     ToolError,
 )
 
-__version__ = "0.2.0"
+try:
+    __version__ = importlib.metadata.version("jira-tool")
+except importlib.metadata.PackageNotFoundError:
+    __version__ = "unknown"
+
 __all__ = [
     "JiraClient",
     "JiraConfig",
