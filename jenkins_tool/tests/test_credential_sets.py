@@ -102,3 +102,49 @@ def test_unknown_user_lists_the_sets(tmp_path, monkeypatch, runner):
     result = runner.invoke(main, ["--user", "nobody", "jobs"])
     assert result.exit_code == 1
     assert "bot" in json.dumps(json.loads(result.output))
+
+
+def _run_cli(env_file, *args):
+    """Run jenkins in a fresh interpreter: the env file is read at import."""
+    import subprocess
+    import sys
+
+    env = {
+        key: value for key, value in os.environ.items()
+        if key not in ("JENKINS_URL", "JENKINS_USER", "JENKINS_TOKEN")
+    }
+    env["JENKINS_TOOL_ENV_FILE"] = str(env_file)
+    env["PYTHONPATH"] = os.pathsep.join(sys.path)
+    return subprocess.run(
+        [sys.executable, "-c", "from jenkins_tool.cli import main; main()", *args],
+        capture_output=True, text=True, env=env, timeout=60,
+    )
+
+
+class TestMissingEnvFile:
+    """JENKINS_TOOL_ENV_FILE naming no file is a JSON CONFIG_ERROR, and no
+    read falls back to running anonymously."""
+
+    def _config_error(self, proc):
+        assert "Traceback" not in proc.stderr, proc.stderr
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        return json.loads(proc.stdout)
+
+    def test_a_read(self, tmp_path):
+        missing = tmp_path / "missing.env"
+        out = self._config_error(_run_cli(missing, "jobs"))
+        assert out["code"] == "CONFIG_ERROR"
+        assert str(missing) in out["message"]
+
+    def test_envelope_and_user(self, tmp_path):
+        env = self._config_error(
+            _run_cli(tmp_path / "missing.env", "--envelope", "--user", "bot", "jobs")
+        )
+        assert env["ok"] is False
+        assert env["error"]["code"] == "CONFIG_ERROR"
+
+    def test_help_and_describe_still_work(self, tmp_path):
+        assert _run_cli(tmp_path / "missing.env", "--help").returncode == 0
+        proc = _run_cli(tmp_path / "missing.env", "describe")
+        assert proc.returncode == 0
+        assert json.loads(proc.stdout)["name"] == "jenkins"

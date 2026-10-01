@@ -119,7 +119,7 @@ def main(ctx: click.Context, envelope: bool, user: str | None) -> None:
     if user:
         try:
             apply_credential_set("maloo-tool", user)
-        except CredentialSetError as e:
+        except (CredentialSetError, FileNotFoundError) as e:
             _error(ErrorCode.CONFIG_ERROR, str(e), "cli", False)
 
 

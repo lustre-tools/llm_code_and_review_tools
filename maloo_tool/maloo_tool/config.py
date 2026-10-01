@@ -4,8 +4,15 @@ import os
 from dataclasses import dataclass
 
 from llm_tool_common.config import load_env_files
+from llm_tool_common.errors import ConfigError
 
-load_env_files("maloo-tool")
+# This runs at import, before a command can report anything, so a
+# MALOO_TOOL_ENV_FILE naming no file is raised by load_config() instead.
+try:
+    load_env_files("maloo-tool")
+    _ENV_FILE_ERROR: str | None = None
+except FileNotFoundError as e:
+    _ENV_FILE_ERROR = str(e)
 
 
 @dataclass
@@ -33,6 +40,8 @@ def load_config(
     password_override: str | None = None,
 ) -> MalooConfig:
     """Load Maloo configuration from environment."""
+    if _ENV_FILE_ERROR:
+        raise ConfigError(_ENV_FILE_ERROR)
     base_url = os.environ.get(
         "MALOO_URL", "https://testing.whamcloud.com"
     )

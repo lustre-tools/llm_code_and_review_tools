@@ -86,3 +86,50 @@ def test_unknown_user_is_a_json_error(tmp_path, monkeypatch, runner):
     assert "nobody" in json.dumps(payload)
     # The error names what could have been typed instead.
     assert "bot" in json.dumps(payload)
+
+
+def _run_cli(env_file, *args):
+    """Run maloo in a fresh interpreter: the env file is read at import."""
+    import subprocess
+    import sys
+
+    env = {
+        key: value for key, value in os.environ.items()
+        if key not in ("MALOO_URL", "MALOO_USER", "MALOO_PASS")
+    }
+    env["MALOO_TOOL_ENV_FILE"] = str(env_file)
+    env["PYTHONPATH"] = os.pathsep.join(sys.path)
+    return subprocess.run(
+        [sys.executable, "-c", "from maloo_tool.cli import main; main()", *args],
+        capture_output=True, text=True, env=env, timeout=60,
+    )
+
+
+class TestMissingEnvFile:
+    """MALOO_TOOL_ENV_FILE naming no file is a JSON CONFIG_ERROR from the
+    command, not a traceback before any command runs."""
+
+    def _config_error(self, proc):
+        assert "Traceback" not in proc.stderr, proc.stderr
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        return json.loads(proc.stdout)
+
+    def test_a_command(self, tmp_path):
+        missing = tmp_path / "missing.env"
+        out = self._config_error(
+            _run_cli(missing, "session", "11111111-1111-1111-1111-111111111111")
+        )
+        assert out["code"] == "CONFIG_ERROR"
+        assert str(missing) in out["message"]
+
+    def test_envelope_and_user(self, tmp_path):
+        env = self._config_error(
+            _run_cli(tmp_path / "missing.env", "--envelope", "--user", "bot", "queue")
+        )
+        assert env["ok"] is False
+        assert env["error"]["code"] == "CONFIG_ERROR"
+
+    def test_help_still_works(self, tmp_path):
+        proc = _run_cli(tmp_path / "missing.env", "--help")
+        assert proc.returncode == 0
+        assert "Usage:" in proc.stdout
