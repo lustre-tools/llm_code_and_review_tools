@@ -587,7 +587,7 @@ def cmd_chat(args) -> int:
         worktrees_dir=worktrees_dir, db_dir=db_dir, agent=args.agent,
         model=model, effort=args.effort,
         agent_args=args.agent_arg or [], local=args.local,
-        keep_worktree=args.keep_worktree)
+        keep_worktree=args.keep_worktree, resume=not args.no_resume)
 
 
 def cmd_models(args) -> int:
@@ -916,6 +916,11 @@ def build_parser() -> argparse.ArgumentParser:
     chat_p.add_argument(
         "--keep-worktree", action="store_true",
         help="Keep the discussion worktree after the session ends")
+    chat_p.add_argument(
+        "--no-resume", action="store_true",
+        help="Claude agent: start a fresh session primed with the review "
+             "artifacts and the memory document, instead of continuing a "
+             "fork of the review's own session")
     chat_p.add_argument(
         "--agent-arg", "--claude-arg", action="append", dest="agent_arg",
         metavar="ARG",

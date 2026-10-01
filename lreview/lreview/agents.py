@@ -87,6 +87,7 @@ class AgentSpec:
         extra_args: list[str],
         prompt_text: str,
         effort: Optional[str] = None,
+        resume: Optional[str] = None,
     ) -> list[str]:
         """Interactive session seeded with an initial prompt.
 
@@ -96,6 +97,8 @@ class AgentSpec:
         approval-bypass flags: interactive sessions run with the
         CLI's normal permission prompts (file reads in the cwd are
         allowed by default in all four).
+
+        resume, claude only: start from a fork of that session.
         """
         if self.name == "claude":
             cmd = ["claude"]
@@ -103,6 +106,8 @@ class AgentSpec:
                 cmd += ["--model", model]
             if effort:
                 cmd += ["--effort", effort]
+            if resume:
+                cmd += ["--resume", resume, "--fork-session"]
             return cmd + extra_args + [prompt_text]
         if self.name == "codex":
             # Bare `codex` is the TUI; the positional prompt is

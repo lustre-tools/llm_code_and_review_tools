@@ -67,7 +67,11 @@ def artifact_lines(results_dir: Path, db_dir: Optional[Path],
     return lines
 
 
-def chat_prompt(change, artifacts: list[str]) -> str:
+def chat_prompt(change, artifacts: list[str], session=None,
+                worktree: Optional[Path] = None) -> str:
+    """The chat's first message. Continuing the review's own session,
+    it says where the code is now: the conversation remembers the
+    review's worktree, which is gone."""
     if change.number is None:
         ref_name = getattr(change, "ref_name", "local")
         what = (f"local commit {ref_name} ({change.sha[:12]}) — "
@@ -80,6 +84,13 @@ def chat_prompt(change, artifacts: list[str]) -> str:
     header = (f"Interactive discussion of {what}. The change is checked "
               "out at HEAD of this worktree; `git show HEAD` is the "
               "patch under discussion.")
+    if session is not None:
+        header = (f"You are continuing your earlier review of {what} "
+                  f"(it looked at {session.reviewed}), now as an "
+                  "interactive discussion with the user. The review's "
+                  "worktree is gone: the change is checked out at HEAD "
+                  f"of {worktree}; `git show HEAD` is the patch under "
+                  "discussion.")
     if artifacts:
         listing = ("Artifacts from earlier lreview runs of this "
                    "change:\n" + "\n".join(artifacts))
@@ -87,6 +98,11 @@ def chat_prompt(change, artifacts: list[str]) -> str:
                    "(when listed), then give a short summary of what "
                    "the patch does and the current findings, and wait "
                    "for questions.")
+        if session is not None:
+            opening = ("Give a short summary of what the patch does and "
+                       "the current findings, reading the report and the "
+                       "memory document for anything you no longer have, "
+                       "and wait for questions.")
     else:
         listing = ("No collected review artifacts were found for this "
                    "change — work from the checkout alone.")
@@ -162,6 +178,7 @@ def run_chat(
     agent_args: Optional[list[str]] = None,
     local: bool = False,
     keep_worktree: bool = False,
+    resume: bool = True,
 ) -> int:
     from .agents import get_agent
     agent_spec = get_agent(agent)  # fail fast on unknown agents
@@ -192,7 +209,7 @@ def run_chat(
             return 1
         return _launch(agent_spec, change, entries, repo, results_dir,
                        worktrees_dir, db_dir, model, effort, agent_args,
-                       keep_worktree)
+                       keep_worktree, resume)
 
     from gerrit_cli.client import GerritCommentsClient
     try:
@@ -253,12 +270,12 @@ def run_chat(
 
     return _launch(agent_spec, change, entries, repo, results_dir,
                    worktrees_dir, db_dir, model, effort, agent_args,
-                   keep_worktree)
+                   keep_worktree, resume)
 
 
 def _launch(agent_spec, change, entries, repo, results_dir,
             worktrees_dir, db_dir, model, effort, agent_args,
-            keep_worktree) -> int:
+            keep_worktree, resume=True) -> int:
     if worktrees_dir is None:
         from .cli import default_worktrees_dir
         worktrees_dir = default_worktrees_dir(repo, results_dir)
@@ -278,10 +295,28 @@ def _launch(agent_spec, change, entries, repo, results_dir,
         print(f"error: cannot check the change out: {exc}")
         return 1
 
+    session = None
+    if agent_spec.name == "claude" and resume and db_dir is not None:
+        from .agents import claude_session_exists
+        from .memory import find_doc, read_session
+        doc = find_doc(db_dir, change)
+        mode = entries[0][1].get("mode", "full") if entries else "full"
+        session = read_session(doc, mode) if doc else None
+        if session is not None and not claude_session_exists(
+                session.session_id):
+            print(f"  note: Claude no longer has the review session "
+                  f"{session.session_id}; starting a fresh one")
+            session = None
+        elif session is not None:
+            print(f"  continuing a fork of the review session "
+                  f"{session.session_id} ({session.reviewed})")
+
     prompt = chat_prompt(
-        change, artifact_lines(results_dir, db_dir, change, entries))
+        change, artifact_lines(results_dir, db_dir, change, entries),
+        session=session, worktree=worktree_dir)
     cmd = agent_spec.build_interactive_cmd(
-        model, list(agent_args or []), prompt, effort=effort)
+        model, list(agent_args or []), prompt, effort=effort,
+        resume=session.session_id if session is not None else None)
 
 
     print(f"\nStarting interactive session in {worktree_dir}\n")

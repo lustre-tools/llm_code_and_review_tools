@@ -346,3 +346,98 @@ class TestRunChat:
                       worktrees_dir=tmp_path / "wt")
         assert rc == 1
         assert not stub_claude.exists()
+
+    def _reviewed(self, repo, tmp_path, monkeypatch, sessions=(),
+                  mode="full", on_disk=True):
+        """A reviewed change whose memory doc records `sessions`
+        ((mode, id) pairs); Claude keeps those files when on_disk."""
+        from lreview.memory import ensure_doc, record_session
+        sha = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        results = tmp_path / "results"
+        results.mkdir()
+        key = "64616" if mode == "full" else "64616-light"
+        (results / "summary.json").write_text(json.dumps({key: {
+            "number": 64616, "patchset": 27, "sha": sha, "mode": mode,
+            "subject": "LU-1 lod: subject", "status": "findings",
+            "base_url": "https://gerrit.invalid",
+            "repository": "fs/lustre-release",
+        }}))
+        db = tmp_path / "db"
+        doc = ensure_doc(db, _change(sha=sha))
+        config_dir = tmp_path / "claude-config"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+        for session_mode, session_id in sessions:
+            record_session(doc, session_mode, session_id,
+                           f"ps27 {sha[:12]}")
+            if on_disk:
+                path = config_dir / "projects" / "-wt" / f"{session_id}.jsonl"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}\n")
+        return results, db, doc
+
+    def _chat(self, repo, tmp_path, results, db, **kwargs):
+        rc = run_chat("64616", repo=repo, results_dir=results,
+                      worktrees_dir=tmp_path / "wt", db_dir=db, **kwargs)
+        assert rc == 0
+        return json.loads((tmp_path / "invocation.json").read_text())
+
+    def test_resumes_a_fork_of_the_review_session(self, repo, tmp_path,
+                                                  stub_claude, monkeypatch):
+        from lreview.memory import read_session
+        results, db, doc = self._reviewed(repo, tmp_path, monkeypatch,
+                                          sessions=[("full", "sess-9")])
+        invocation = self._chat(repo, tmp_path, results, db)
+        argv = invocation["argv"]
+        assert argv[argv.index("--resume") + 1] == "sess-9"
+        assert "--fork-session" in argv
+        prompt = argv[-1]
+        assert "continuing your earlier review" in prompt
+        assert invocation["cwd"] in prompt
+        # the chat's own session is a fork that is never recorded
+        assert read_session(doc, "full").session_id == "sess-9"
+
+    def test_no_resume_starts_a_fresh_chat(self, repo, tmp_path,
+                                           stub_claude, monkeypatch):
+        results, db, _ = self._reviewed(repo, tmp_path, monkeypatch,
+                                        sessions=[("full", "sess-9")])
+        argv = self._chat(repo, tmp_path, results, db,
+                          resume=False)["argv"]
+        assert "--resume" not in argv
+        assert argv[-1].startswith("Interactive discussion of")
+
+    def test_a_session_claude_lost_starts_fresh(self, repo, tmp_path,
+                                                stub_claude, monkeypatch):
+        results, db, _ = self._reviewed(repo, tmp_path, monkeypatch,
+                                        sessions=[("full", "sess-9")],
+                                        on_disk=False)
+        argv = self._chat(repo, tmp_path, results, db)["argv"]
+        assert "--resume" not in argv
+        assert argv[-1].startswith("Interactive discussion of")
+
+    def test_a_light_review_resumes_its_light_session(
+            self, repo, tmp_path, stub_claude, monkeypatch):
+        results, db, _ = self._reviewed(
+            repo, tmp_path, monkeypatch, mode="light",
+            sessions=[("full", "deep"), ("light", "quick")])
+        argv = self._chat(repo, tmp_path, results, db)["argv"]
+        assert argv[argv.index("--resume") + 1] == "quick"
+
+    def test_other_agents_ignore_resume(self):
+        from lreview.agents import get_agent
+        cmd = get_agent("codex").build_interactive_cmd(
+            None, [], "PROMPT", resume="sess-9")
+        assert "--resume" not in cmd
+
+    def test_cli_no_resume(self, monkeypatch):
+        from lreview.cli import build_parser, cmd_chat
+        captured = {}
+        monkeypatch.setattr("lreview.chat.run_chat",
+                            lambda *a, **kw: captured.update(kw) or 0)
+        args = build_parser().parse_args(["chat", "64616", "--no-resume"])
+        assert cmd_chat(args) == 0
+        assert captured["resume"] is False
+        args = build_parser().parse_args(["chat", "64616"])
+        cmd_chat(args)
+        assert captured["resume"] is True

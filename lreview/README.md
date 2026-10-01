@@ -490,6 +490,17 @@ document only when explicitly asked to record something. The
 worktree is removed when the session ends (`--keep-worktree` to
 keep it); `--model` and `--agent-arg` pass through to the agent CLI.
 
+When the review was a claude `-m` review, chat continues a fork of
+that review's own conversation (`claude --resume <id>
+--fork-session`, for the mode of the review it discusses), so the
+agent already has the code it read and the reasoning behind its
+findings; the first message says where the code is checked out now.
+The fork is never recorded: anything worth keeping goes into the
+memory document, and the next `run -m` resumes the review's
+conversation as the review left it. `--no-resume`, or a session
+Claude no longer has, starts a fresh session primed with the
+artifacts as above.
+
 `chat --local [REF]` (default HEAD) discusses a **local review**
 instead: the ref is resolved in `--repo` (or the cwd) and matched
 against local review results by commit; when the ref has moved since
