@@ -2190,3 +2190,29 @@ class TestCmdGraphErrors:
         assert exc_info.value.code == 1
         out = json.loads(capsys.readouterr().out)
         assert "Could not parse" in out["message"]
+
+
+class TestVersion:
+    """describe and __version__ report the installed package's version."""
+
+    def test_describe_and_version_match_the_package(self):
+        from importlib.metadata import PackageNotFoundError, version
+
+        import gerrit_cli
+        from gerrit_cli.describe import get_tool_description
+
+        try:
+            installed = version("gerrit-cli")
+        except PackageNotFoundError:
+            pytest.skip("gerrit-cli is not installed")
+        assert gerrit_cli.__version__ == installed
+        assert get_tool_description().version == installed
+
+    def test_unknown_when_not_installed(self):
+        from importlib.metadata import PackageNotFoundError
+
+        import gerrit_cli
+
+        with patch('gerrit_cli.version',
+                   side_effect=PackageNotFoundError("gerrit-cli")):
+            assert gerrit_cli._installed_version() == "unknown"

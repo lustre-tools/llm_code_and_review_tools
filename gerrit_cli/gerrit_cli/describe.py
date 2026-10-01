@@ -6,12 +6,14 @@ without parsing --help text.
 
 from llm_tool_common import Argument, Command, ToolDescription
 
+from . import __version__
+
 
 def get_tool_description() -> ToolDescription:
     """Return the complete gerrit-cli tool API description."""
     return ToolDescription(
         name="gerrit-cli",
-        version="0.1.0",
+        version=__version__,
         description=(
             "Gerrit code review tool for LLM agents. "
             "Extract comments, reply, review diffs, and manage patch series. "
