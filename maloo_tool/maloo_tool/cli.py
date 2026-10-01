@@ -22,10 +22,11 @@ from llm_tool_common.envelope import (
     format_json,
     success_response,
 )
+from llm_tool_common.errors import exit_code_for
 
 from .client import MalooClient, resolve_patchset_commit
 from .config import load_config
-from .errors import ErrorCode, ExitCode, ToolError
+from .errors import EXIT_CODES, ErrorCode, ExitCode, ToolError
 
 TOOL_NAME = "maloo"
 
@@ -66,12 +67,14 @@ def _output(envelope: dict[str, Any], pretty: bool) -> None:
 def _error(
     code: str, message: str, command: str, pretty: bool,
     details: dict[str, Any] | None = None,
-    exit_code: int = ExitCode.GENERAL_ERROR,
+    exit_code: int | None = None,
 ) -> None:
     env = error_response_from_dict(
         code, message, TOOL_NAME, command, details=details
     )
     _output(env, pretty)
+    if exit_code is None:
+        exit_code = exit_code_for(code, EXIT_CODES)
     sys.exit(exit_code)
 
 

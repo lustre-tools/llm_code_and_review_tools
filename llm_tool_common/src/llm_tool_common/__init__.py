@@ -21,6 +21,8 @@ from .errors import (
     InvalidInputError,
     NetworkError,
     ConfigError,
+    EXIT_CODES,
+    exit_code_for,
 )
 from .describe import (
     Argument,
@@ -60,6 +62,8 @@ __all__ = [
     "InvalidInputError",
     "NetworkError",
     "ConfigError",
+    "EXIT_CODES",
+    "exit_code_for",
     # Describe helpers
     "Argument",
     "Command",

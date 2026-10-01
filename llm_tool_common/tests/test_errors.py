@@ -148,3 +148,34 @@ class TestConfigError:
         error = ConfigError(message="Config error", details={"file": "config.json"})
         assert error.details == {"file": "config.json"}
 
+
+
+class TestExitCodeFor:
+    """The contract's exit status for an error code."""
+
+    def test_base_codes(self):
+        from llm_tool_common.errors import exit_code_for
+
+        assert exit_code_for(ErrorCode.AUTH_FAILED) == ExitCode.AUTH_ERROR
+        assert exit_code_for(ErrorCode.AUTH_MISSING) == ExitCode.AUTH_ERROR
+        assert exit_code_for(ErrorCode.NOT_FOUND) == ExitCode.NOT_FOUND
+        assert exit_code_for(ErrorCode.INVALID_INPUT) == ExitCode.INVALID_INPUT
+        assert exit_code_for(ErrorCode.MISSING_REQUIRED_FIELD) == ExitCode.INVALID_INPUT
+        assert exit_code_for(ErrorCode.CONNECTION_ERROR) == ExitCode.NETWORK_ERROR
+        assert exit_code_for(ErrorCode.TIMEOUT) == ExitCode.NETWORK_ERROR
+
+    def test_everything_else_is_a_general_error(self):
+        from llm_tool_common.errors import exit_code_for
+
+        for code in (ErrorCode.API_ERROR, ErrorCode.SERVER_ERROR,
+                     ErrorCode.CONFIG_ERROR, ErrorCode.CONFIG_NOT_FOUND,
+                     "RESOLVE_FAILED"):
+            assert exit_code_for(code) == ExitCode.GENERAL_ERROR
+
+    def test_a_tool_adds_its_own_codes(self):
+        from llm_tool_common.errors import exit_code_for
+
+        tool_codes = {"BUILD_NOT_FOUND": ExitCode.NOT_FOUND}
+        assert exit_code_for("BUILD_NOT_FOUND", tool_codes) == ExitCode.NOT_FOUND
+        assert exit_code_for("BUILD_NOT_FOUND") == ExitCode.GENERAL_ERROR
+        assert exit_code_for(ErrorCode.TIMEOUT, tool_codes) == ExitCode.NETWORK_ERROR

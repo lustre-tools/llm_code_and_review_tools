@@ -15,10 +15,11 @@ from llm_tool_common.envelope import (
     format_json,
     success_response,
 )
+from llm_tool_common.errors import exit_code_for
 
 from .client import JanitorClient
 from .config import load_config
-from .errors import ErrorCode, ExitCode
+from .errors import EXIT_CODES, ErrorCode
 
 TOOL_NAME = "janitor"
 
@@ -59,10 +60,12 @@ def _output(envelope: dict[str, Any], pretty: bool) -> None:
 
 def _error(
     code: str, message: str, command: str, pretty: bool,
-    exit_code: int = ExitCode.GENERAL_ERROR,
+    exit_code: int | None = None,
 ) -> None:
     env = error_response_from_dict(code, message, TOOL_NAME, command)
     _output(env, pretty)
+    if exit_code is None:
+        exit_code = exit_code_for(code, EXIT_CODES)
     sys.exit(exit_code)
 
 
@@ -113,7 +116,6 @@ def _resolve_build(
             f"change number or a Gerrit change URL (.../+/<change>).",
             command,
             pretty,
-            ExitCode.INVALID_INPUT,
         )
 
     if as_build:
@@ -156,7 +158,7 @@ def _resolve_build(
 
     if ref and change_build:
         _error(
-            ErrorCode.BUILD_NOT_FOUND,
+            ErrorCode.INVALID_INPUT,
             f"'{val}' is both Janitor build {val} (which tested Gerrit "
             f"change {ref.get('change')}) and Gerrit change {val} (tested "
             f"by build {change_build}). These are different patches. "
@@ -526,7 +528,6 @@ def fetch(
                 f"Invalid --grep regex {grep_pattern!r}: {e}",
                 "fetch",
                 pretty,
-                ExitCode.INVALID_INPUT,
             )
     client = _make_client()
     build = _resolve_build(client, build_or_change, "fetch", pretty,

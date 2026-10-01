@@ -237,7 +237,7 @@ class TestResultsCommand:
         runner = CliRunner()
         result = runner.invoke(main, ["results", "99999"])
 
-        assert result.exit_code == 1
+        assert result.exit_code == 3
 
 
 class TestDetailCommand:
@@ -284,7 +284,7 @@ class TestDetailCommand:
         runner = CliRunner()
         result = runner.invoke(main, ["detail", "61009", "nonexistent"])
 
-        assert result.exit_code == 1
+        assert result.exit_code == 3
 
 
 class TestLogsCommand:
@@ -431,7 +431,7 @@ class TestCrashCommand:
         runner = CliRunner()
         result = runner.invoke(main, ["crash", "61009", "nonexistent"])
 
-        assert result.exit_code == 1
+        assert result.exit_code == 3
 
 
 # Need pytest for the SystemExit test
@@ -544,7 +544,7 @@ class TestFetchFailuresAreNotAbsence:
             MagicMock(return_value=MagicMock(status_code=404))
         )
         result = CliRunner().invoke(main, ["results", "--build", "61009"])
-        self._error(result, "BUILD_NOT_FOUND", 1)
+        self._error(result, "BUILD_NOT_FOUND", 3)
 
 
 class TestBadInput:
@@ -576,3 +576,53 @@ class TestBadInput:
         ]))
         assert "[" in out["message"]
         mock_make.assert_not_called()
+
+
+class TestExplicitErrorExitCodes:
+    """Not-found errors exit 3 and an ambiguous number 4, as the contract
+    says, rather than 1."""
+
+    def _error(self, result, code, exit_code):
+        assert result.exit_code == exit_code, result.output
+        out = json.loads(result.stdout)
+        assert out["code"] == code
+        return out
+
+    @patch("janitor_tool.cli._make_client")
+    def test_not_found(self, mock_make):
+        client = MagicMock()
+        mock_make.return_value = client
+        client.get_ref.return_value = None
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
+        self._error(
+            CliRunner().invoke(main, ["results", "--build", "61010"]),
+            "BUILD_NOT_FOUND", 3,
+        )
+
+        client.get_ref.return_value = {"ref": "x"}
+        client.find_test_dir.return_value = "sanity-dir"
+        client.fetch_log.return_value = None
+        self._error(
+            CliRunner().invoke(main, ["fetch", "--build", "61009", "sanity", "x.txt"]),
+            "LOG_NOT_FOUND", 3,
+        )
+
+        client.find_test_dir.return_value = None
+        self._error(
+            CliRunner().invoke(main, ["detail", "--build", "61009", "nosuch"]),
+            "TEST_NOT_FOUND", 3,
+        )
+
+    @patch("janitor_tool.cli._make_client")
+    def test_an_ambiguous_number(self, mock_make):
+        client = MagicMock()
+        mock_make.return_value = client
+        client.get_ref.return_value = {"ref": "refs/changes/40/64440/10",
+                                       "change": 64440, "patchset": 10}
+        client.resolve_change.return_value = 61500
+        client.change_lookup_error = None
+        out = self._error(
+            CliRunner().invoke(main, ["results", "61009"]), "INVALID_INPUT", 4
+        )
+        assert "--build 61009 or --change 61009" in out["message"]

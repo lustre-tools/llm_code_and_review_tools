@@ -1696,3 +1696,35 @@ class TestSessionUrls:
         result = runner.invoke(main, ["sessions"])
         url = _parse_output(result)["sessions"][0]["url"]
         assert url == f"https://maloo.example.com/test_sessions/{SID_1}"
+
+
+class TestExplicitErrorExitCodes:
+    """Errors the commands report themselves exit with the contract's code
+    for them; Maloo's own codes keep exit 1."""
+
+    def _error(self, result, code, exit_code):
+        assert result.exit_code == exit_code, result.output
+        assert json.loads(result.stdout)["code"] == code
+
+    def test_not_found(self, runner, mock_client):
+        mock_client.get_session.return_value = None
+        mock_client.get_test_set.return_value = None
+        self._error(runner.invoke(main, ["session", SID_1]), "NOT_FOUND", 3)
+        self._error(runner.invoke(main, ["failures", SID_1]), "NOT_FOUND", 3)
+        self._error(runner.invoke(main, ["subtests", TSID_1]), "NOT_FOUND", 3)
+
+    def test_invalid_input(self, runner, mock_client):
+        mock_client.get_bug_links.return_value = []
+        mock_client.get_session.return_value = {"id": SID_1}
+        self._error(runner.invoke(main, ["bugs", SID_1]), "INVALID_INPUT", 4)
+        self._error(runner.invoke(main, ["queue"]), "MISSING_FILTER", 4)
+
+    def test_maloo_codes_keep_exit_1(self, runner, mock_client):
+        mock_client.create_bug_link.return_value = "ERROR no such ticket"
+        self._error(
+            runner.invoke(main, ["link-bug", TSID_1, "LU-1"]), "LINK_FAILED", 1
+        )
+        with patch("maloo_tool.cli.resolve_patchset_commit", return_value=None):
+            self._error(
+                runner.invoke(main, ["review", "54321"]), "RESOLVE_FAILED", 1
+            )

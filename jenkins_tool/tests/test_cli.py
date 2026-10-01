@@ -868,3 +868,23 @@ class TestDescribeVersion:
             result = runner.invoke(main, ["describe"])
         assert result.exit_code == 0
         assert _parse(result)["version"] == "unknown"
+
+
+class TestInvalidInputExitCodes:
+    def _invalid(self, result):
+        assert result.exit_code == 4, result.output
+        out = _parse(result)
+        assert out["code"] == "INVALID_INPUT"
+        return out
+
+    def test_describe_an_unknown_command(self, runner):
+        out = self._invalid(runner.invoke(main, ["describe", "--command", "nosuch"]))
+        assert "nosuch" in out["message"]
+
+    @patch("jenkins_tool.cli._make_client")
+    def test_a_bad_grep_regex(self, mock_make, runner):
+        self._invalid(runner.invoke(main, ["console", "job", "1", "--grep", "["]))
+        self._invalid(runner.invoke(
+            main, ["run-console", "job", "1", "cfg", "--grep", "["]
+        ))
+        mock_make.assert_not_called()

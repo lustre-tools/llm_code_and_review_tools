@@ -5,6 +5,7 @@ between different tools. Tools can extend these base classes with
 their own specific error codes.
 """
 
+from collections.abc import Mapping
 from enum import IntEnum
 from typing import Any
 
@@ -57,6 +58,33 @@ class ErrorCode:
     # Config errors
     CONFIG_ERROR = "CONFIG_ERROR"
     CONFIG_NOT_FOUND = "CONFIG_NOT_FOUND"
+
+
+#: The exit status the contract gives each base error code.  Every
+#: other code -- API_ERROR, CONFIG_ERROR, a tool's own -- exits
+#: GENERAL_ERROR unless the tool maps it.
+EXIT_CODES: dict[str, ExitCode] = {
+    ErrorCode.AUTH_FAILED: ExitCode.AUTH_ERROR,
+    ErrorCode.AUTH_MISSING: ExitCode.AUTH_ERROR,
+    ErrorCode.NOT_FOUND: ExitCode.NOT_FOUND,
+    ErrorCode.INVALID_INPUT: ExitCode.INVALID_INPUT,
+    ErrorCode.MISSING_REQUIRED_FIELD: ExitCode.INVALID_INPUT,
+    ErrorCode.CONNECTION_ERROR: ExitCode.NETWORK_ERROR,
+    ErrorCode.TIMEOUT: ExitCode.NETWORK_ERROR,
+}
+
+
+def exit_code_for(
+    code: str, tool_codes: Mapping[str, ExitCode] | None = None
+) -> ExitCode:
+    """The exit status for an error code.
+
+    ``tool_codes`` maps a tool's own codes, such as BUILD_NOT_FOUND, to
+    the status they share with a base code.
+    """
+    if tool_codes and code in tool_codes:
+        return tool_codes[code]
+    return EXIT_CODES.get(code, ExitCode.GENERAL_ERROR)
 
 
 class ToolError(Exception):

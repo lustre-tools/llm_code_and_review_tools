@@ -34,8 +34,18 @@ class ErrorCode(BaseErrorCode):
     MISSING_FILTER = "MISSING_FILTER"
 
 
+#: Exit status of the Maloo codes that mean what a base code does; the
+#: rest exit GENERAL_ERROR.
+EXIT_CODES = {
+    ErrorCode.SESSION_NOT_FOUND: ExitCode.NOT_FOUND,
+    ErrorCode.TEST_SET_NOT_FOUND: ExitCode.NOT_FOUND,
+    ErrorCode.MISSING_FILTER: ExitCode.INVALID_INPUT,
+}
+
+
 # Re-export all base classes
 __all__ = [
+    "EXIT_CODES",
     "ExitCode",
     "ErrorCode",
     "ToolError",

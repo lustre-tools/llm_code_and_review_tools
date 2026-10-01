@@ -20,7 +20,7 @@ from llm_tool_common.envelope import (
     success_response,
 )
 from llm_tool_common.decorators import handle_errors
-from llm_tool_common.errors import ErrorCode, ExitCode
+from llm_tool_common.errors import ErrorCode, ExitCode, exit_code_for
 
 from .client import JenkinsClient
 from .config import CREDENTIAL_HINT, load_config
@@ -48,10 +48,12 @@ def _error(
     message: str,
     command: str,
     pretty: bool,
-    exit_code: int = ExitCode.GENERAL_ERROR,
+    exit_code: int | None = None,
 ) -> None:
     env = error_response_from_dict(code, message, TOOL_NAME, command)
     _output(env, pretty)
+    if exit_code is None:
+        exit_code = exit_code_for(code)
     sys.exit(exit_code)
 
 
@@ -782,11 +784,12 @@ def describe(command_name: str | None, pretty: bool) -> None:
     if command_name:
         matching = [c for c in tool_desc.commands if c.name == command_name]
         if not matching:
-            env = error_response_from_dict(
-                "NOT_FOUND", f"Command '{command_name}' not found", TOOL_NAME, "describe"
+            _error(
+                ErrorCode.INVALID_INPUT,
+                f"Command '{command_name}' not found",
+                "describe",
+                pretty,
             )
-            click.echo(format_json(env, pretty=pretty, full_envelope=_FULL_ENVELOPE))
-            sys.exit(1)
             return
         data = matching[0].to_dict()
     else:
