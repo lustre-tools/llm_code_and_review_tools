@@ -90,6 +90,25 @@ class TestParser:
         monkeypatch.setenv("LREVIEW_MODEL", "luna")
         assert resolve_model("codex") == "gpt-5.6-luna"
 
+    def test_env_model_of_another_agent_is_not_sent(self, monkeypatch):
+        """One $LREVIEW_MODEL serves every agent; a name another
+        agent's catalog lists falls back to this agent's default."""
+        from lreview.cli import resolve_model
+        monkeypatch.setenv("LREVIEW_MODEL", "opus")
+        assert resolve_model("codex") == "gpt-6.1-sol"
+        assert resolve_model("gemini") is None
+        assert resolve_model("claude") == "opus"
+        monkeypatch.setenv("LREVIEW_MODEL", "sol")
+        assert resolve_model("claude") == "opus"
+        assert resolve_model("opencode") is None
+        assert resolve_model("codex") == "gpt-6.1-sol"
+        # names in no catalog reach every agent untouched
+        monkeypatch.setenv("LREVIEW_MODEL", "gpt-7-nova")
+        assert resolve_model("codex") == "gpt-7-nova"
+        assert resolve_model("claude") == "gpt-7-nova"
+        # an explicit --model is never second-guessed
+        assert resolve_model("codex", "opus") == "opus"
+
     def test_check_selection_rejects_an_impossible_pair(self, capsys):
         from lreview.cli import check_selection
         args = build_parser().parse_args(

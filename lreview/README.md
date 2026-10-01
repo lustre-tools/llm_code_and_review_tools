@@ -522,7 +522,7 @@ already-posted review.
 | Variable | Effect |
 |---|---|
 | `LREVIEW_AGENT` | Default for `--agent` (else `claude`) |
-| `LREVIEW_MODEL` | Default for `--model` (else `opus` for claude, `gpt-6-astra` for codex) |
+| `LREVIEW_MODEL` | Default for `--model` (else `opus` for claude, `gpt-6-astra` for codex); a name from another agent's models, such as `opus` under `--agent codex`, gives way to that agent's default |
 | `LREVIEW_EFFORT` | Default for `--effort` (else the agent's own) |
 | `LREVIEW_DB` | Default for `--db` (memory database directory) |
 | `LREVIEW_RESULTS_DIR` | Default for `--results-dir` |

@@ -66,7 +66,9 @@ def default_worktrees_dir(repo: Path, results_dir: Path) -> Path:
 def resolve_model(agent: str, model: str = None) -> str:
     """Model to run reviews with.
 
-    Explicit --model wins, then $LREVIEW_MODEL; claude defaults to
+    Explicit --model wins, then $LREVIEW_MODEL unless another agent's
+    catalog lists that name: the variable is shared by every agent,
+    and `codex -m opus` only fails. claude defaults to
     opus and codex to gpt-6.1-sol,
     gemini and opencode to whatever their own CLI defaults to.
 
@@ -74,9 +76,13 @@ def resolve_model(agent: str, model: str = None) -> str:
     `--model sol` runs — and is posted and recorded as —
     gpt-5.6-sol. An unrecognized name is passed through untouched.
     """
-    from .models import DEFAULT_MODELS, canonical_model
+    from .models import DEFAULT_MODELS, canonical_model, catalog_agent
     if not model:
-        model = os.environ.get("LREVIEW_MODEL") or DEFAULT_MODELS.get(agent)
+        env = os.environ.get("LREVIEW_MODEL")
+        if env and catalog_agent(env) in (None, agent):
+            model = env
+        else:
+            model = DEFAULT_MODELS.get(agent)
     return canonical_model(agent, model)
 
 

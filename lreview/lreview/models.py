@@ -116,6 +116,8 @@ CODEX_DEFAULT_MODEL = "gpt-6.1-sol"
 
 CLAUDE_DEFAULT_MODEL = "opus"
 
+CLAUDE_MODELS = ("opus", "sonnet", "fable", "haiku")
+
 DEFAULT_MODELS = {
     "claude": CLAUDE_DEFAULT_MODEL,
     "codex": CODEX_DEFAULT_MODEL,
@@ -130,6 +132,17 @@ def codex_model(name: Optional[str]) -> Optional[CodexModel]:
     for model in CODEX_MODELS:
         if key == model.slug or key in model.aliases:
             return model
+    return None
+
+
+def catalog_agent(name: Optional[str]) -> Optional[str]:
+    """The agent whose catalog lists a model name, or None."""
+    if not name:
+        return None
+    if name.strip().lower() in CLAUDE_MODELS:
+        return "claude"
+    if codex_model(name):
+        return "codex"
     return None
 
 
