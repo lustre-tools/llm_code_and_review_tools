@@ -160,3 +160,15 @@ class TestParseErrors:
         code, out = self._run(argv, capsys)
         assert code == ExitCode.INVALID_INPUT
         assert json.loads(out)["code"] == ErrorCode.INVALID_INPUT
+
+    @pytest.mark.parametrize("argv", [
+        ["--envelope", "comments"],
+        ["comments", "--envelope"],
+        ["--envelope", "not-a-command"],
+    ])
+    def test_envelope_is_honoured(self, argv, capsys):
+        code, out = self._run(argv, capsys)
+        assert code == ExitCode.INVALID_INPUT
+        envelope = json.loads(out)
+        assert envelope["ok"] is False
+        assert envelope["error"]["code"] == ErrorCode.INVALID_INPUT

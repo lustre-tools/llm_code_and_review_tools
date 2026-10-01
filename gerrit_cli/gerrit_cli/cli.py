@@ -331,7 +331,9 @@ class _JsonErrorParser(argparse.ArgumentParser):
             message,
             "cli",
         )
-        print(format_json(envelope, full_envelope=FULL_ENVELOPE))
+        # main() learns --envelope only from a parse that succeeded
+        full = FULL_ENVELOPE or "--envelope" in sys.argv[1:]
+        print(format_json(envelope, full_envelope=full))
         sys.exit(ExitCode.INVALID_INPUT)
 
 
