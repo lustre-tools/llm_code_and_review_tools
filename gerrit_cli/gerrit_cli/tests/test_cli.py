@@ -2110,3 +2110,21 @@ class TestCmdSashikoReview:
 
         out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
         assert out["findings"] == []
+
+
+class TestCmdGraphErrors:
+    """cmd_graph reports a failure as JSON instead of crashing."""
+
+    def test_unparseable_change_is_a_json_error(self, capsys):
+        from gerrit_cli.cli import cmd_graph
+
+        args = argparse.Namespace(url="not a change", pretty=False)
+        with patch('gerrit_cli.cli.GerritCommentsClient') as MockClient, \
+             pytest.raises(SystemExit) as exc_info:
+            MockClient.parse_gerrit_url.side_effect = ValueError(
+                "Could not parse Gerrit URL, change number or Change-Id")
+            cmd_graph(args)
+
+        assert exc_info.value.code == 1
+        out = json.loads(capsys.readouterr().out)
+        assert "Could not parse" in out["message"]

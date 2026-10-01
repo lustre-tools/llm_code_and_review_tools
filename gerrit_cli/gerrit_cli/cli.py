@@ -274,7 +274,7 @@ def cmd_graph(args):
         output_success(result, "graph", pretty)
 
     except Exception as e:
-        sys.exit(output_error(ErrorCode.GENERAL_ERROR, str(e), "graph", pretty))
+        sys.exit(output_error(ErrorCode.API_ERROR, str(e), "graph", pretty))
 
 
 def cmd_sashiko_review(args):
