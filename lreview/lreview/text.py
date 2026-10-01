@@ -51,6 +51,9 @@ def _headline(change) -> str:
     if change.number is None:
         ref_name = getattr(change, "ref_name", None) or "local"
         return f"{ref_name}  {change.sha[:12]}  {change.subject}"
+    if getattr(change, "provider", None) == "github":
+        return (f"{change.project}#{change.number}  {change.sha[:12]}  "
+                f"{change.subject}")
     return (f"change {change.number} ps{change.patchset}  "
             f"{change.sha[:12]}  {change.subject}")
 

@@ -8,6 +8,13 @@ from lreview.markdown import (
 )
 
 
+def _pr():
+    from lreview.github import ResolvedGitHubPullRequest
+    return ResolvedGitHubPullRequest(
+        "acme", "widget", 7, "Fix the widget", "b" * 40, "a" * 40, "fix",
+        "acme/widget", "https://github.com/acme/widget/pull/7")
+
+
 def _change():
     return ResolvedChange(
         number=63809, project="fs/lustre-release",
@@ -40,6 +47,10 @@ class TestFilename:
         name = markdown_filename(_change())
         assert name == ("63809_LU-19852_lod_raidset_aware_stripe"
                         "_allocator_ps54.md")
+
+    def test_github_pr(self):
+        assert markdown_filename(_pr()) == (
+            f"github_acme_widget_7_{'b' * 7}_Fix_the_widget.md")
 
     def test_odd_characters(self):
         change = _change()
@@ -109,6 +120,15 @@ class TestReviewMarkdown:
             memory="/db/64620-subject.md")
         assert "- **Review memory:** `/db/64620-subject.md`" in md
         assert "3 finding(s), severity **high**" in md
+
+    def test_github_pr_header(self):
+        md = review_markdown(_pr(), {"version": 1, "message": "m",
+                                     "findings": []}, model="opus")
+        assert md.startswith("# acme/widget#7 — Fix the widget\n")
+        assert ("- **Pull request:** https://github.com/acme/widget/pull/7"
+                f" (head `{'b' * 12}`, base `{'a' * 12}`)") in md
+        assert "None" not in md
+        assert "/c/" not in md
 
     def test_github_findings_render(self):
         """review-result.json keeps its findings in a flat `findings`

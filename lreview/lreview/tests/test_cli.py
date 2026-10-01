@@ -273,6 +273,41 @@ class TestParser:
         assert captured["changes"][0].subject == "top subject"
         assert "(in place)" in capsys.readouterr().out
 
+    def test_github_already_posted_note_names_the_pr(self, tmp_path,
+                                                     monkeypatch, capsys):
+        import json
+        import subprocess
+        from lreview.cli import cmd_run
+        from lreview.github import ResolvedGitHubPullRequest
+        from lreview.prompts import PromptsStatus
+
+        subprocess.run(["git", "init", "-q", str(tmp_path / "repo")],
+                       check=True)
+        pr = ResolvedGitHubPullRequest(
+            "acme", "widget", 7, "Fix", "b" * 40, "a" * 40, "fix",
+            "acme/widget", "https://github.com/acme/widget/pull/7")
+        results = tmp_path / "results"
+        results.mkdir()
+        (results / "summary.json").write_text(json.dumps({
+            "github:acme/widget#7": {"posted": True, "sha": "b" * 40}}))
+        monkeypatch.setattr("lreview.github.resolve_pull_request",
+                            lambda url: pr)
+        monkeypatch.setattr(
+            "lreview.cli.ensure_prompts",
+            lambda args: PromptsStatus(
+                available=True, prompts_dir=tmp_path, source="test"))
+        monkeypatch.setattr("lreview.cli.run_batch",
+                            lambda config, changes, in_place=False: [])
+
+        args = build_parser().parse_args([
+            "run", "--github", pr.url, "--repo", str(tmp_path / "repo"),
+            "--results-dir", str(results)])
+        assert cmd_run(args) == 0
+        out = capsys.readouterr().out
+        assert (f"note: acme/widget#7 at {'b' * 12} was already posted"
+                in out)
+        assert "psNone" not in out
+
     def test_jobs_must_be_positive(self):
         with pytest.raises(SystemExit):
             build_parser().parse_args(["run", "1", "--jobs", "0"])

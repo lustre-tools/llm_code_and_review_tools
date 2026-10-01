@@ -395,8 +395,11 @@ def cmd_run(args) -> int:
                else str(change.number))
         old = previous.get(f"{key}{mode_tag}")
         if old and old.get("posted") and old.get("sha") == change.sha:
-            print(f"  note: {change.number} ps{change.patchset} was already "
-                  "posted; posting a fresh result needs 'post --force'")
+            what = (f"{change.project}#{change.number} at {change.sha[:12]}"
+                    if getattr(change, "provider", None) == "github"
+                    else f"{change.number} ps{change.patchset}")
+            print(f"  note: {what} was already posted; posting a fresh "
+                  "result needs 'post --force'")
 
     memory_db = None
     if args.memory:

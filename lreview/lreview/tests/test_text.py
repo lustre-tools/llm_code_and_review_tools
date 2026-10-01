@@ -84,6 +84,16 @@ class TestResultText:
         assert "(2) general" in text
         assert "    (suggestion) add a test" in text
 
+    def test_github_pr_headline(self):
+        from lreview.github import ResolvedGitHubPullRequest
+        pr = ResolvedGitHubPullRequest(
+            "acme", "widget", 7, "Fix the widget", "b" * 40, "a" * 40,
+            "fix", "acme/widget", "https://github.com/acme/widget/pull/7")
+        text = batch_text([ReviewResult(pr, STATUS_CLEAN)])
+        assert "  1. acme/widget#7  bbbbbbbbbbbb  Fix the widget" in text
+        assert "[1/1] acme/widget#7  bbbbbbbbbbbb  Fix the widget" in text
+        assert "None" not in text
+
     def test_gerrit_change_headline(self):
         change = ResolvedChange(
             number=64086, project="fs/lustre-release", subject="LU-2 lov: x",

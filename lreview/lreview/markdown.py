@@ -32,7 +32,9 @@ def _sanitize(text: str, max_len: int = 60) -> str:
 def markdown_filename(change, tag: str = "") -> str:
     """Report filename; `tag` is the review-mode suffix ("" for full,
     "-light" for light) so modes keep separate reports."""
-    if change.number is None:  # local review: keyed by ref + sha
+    # local reviews and GitHub PRs have no patchset: their slug carries
+    # the ref or PR plus the sha
+    if change.number is None or getattr(change, "provider", None) == "github":
         return f"{change.slug}_{_sanitize(change.subject)}{tag}.md"
     return (f"{change.number}_{_sanitize(change.subject)}"
             f"_ps{change.patchset}{tag}.md")
@@ -116,6 +118,14 @@ def review_markdown(
             "",
             f"- **Commit:** `{change.sha[:12]}` ({ref_name}, local "
             "review — not tied to a Gerrit change)",
+            f"- **Review:** {', '.join(review_bits)}",
+        ]
+    elif getattr(change, "provider", None) == "github":
+        lines = [
+            f"# {change.project}#{change.number} — {change.subject}",
+            "",
+            f"- **Pull request:** {change.url} (head `{change.sha[:12]}`, "
+            f"base `{change.base_sha[:12]}`)",
             f"- **Review:** {', '.join(review_bits)}",
         ]
     else:
