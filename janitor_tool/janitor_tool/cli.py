@@ -104,7 +104,17 @@ def _resolve_build(
         build_or_change = m.group(1)
         as_change = True
 
-    val = int(build_or_change)
+    try:
+        val = int(build_or_change)
+    except ValueError:
+        _error(
+            ErrorCode.INVALID_INPUT,
+            f"'{build_or_change}' is not a Janitor build number, a Gerrit "
+            f"change number or a Gerrit change URL (.../+/<change>).",
+            command,
+            pretty,
+            ExitCode.INVALID_INPUT,
+        )
 
     if as_build:
         if client.get_ref(val):
@@ -506,6 +516,18 @@ def fetch(
       janitor fetch 61009 "sanity3@zfs" "results.yml"
       janitor fetch 61009 "sanity2@ldiskfs+DNE" "console.txt" --grep "LBUG"
     """
+    pattern = None
+    if grep_pattern:
+        try:
+            pattern = re.compile(grep_pattern, re.IGNORECASE)
+        except re.error as e:
+            _error(
+                ErrorCode.INVALID_INPUT,
+                f"Invalid --grep regex {grep_pattern!r}: {e}",
+                "fetch",
+                pretty,
+                ExitCode.INVALID_INPUT,
+            )
     client = _make_client()
     build = _resolve_build(client, build_or_change, "fetch", pretty,
                            as_build=as_build, as_change=as_change)
@@ -527,9 +549,8 @@ def fetch(
         )
 
     lines = content.splitlines()
-    if grep_pattern:
-        pat = re.compile(grep_pattern, re.IGNORECASE)
-        lines = [l for l in lines if pat.search(l)]
+    if pattern is not None:
+        lines = [l for l in lines if pattern.search(l)]
     if tail:
         lines = lines[-tail:]
 

@@ -545,3 +545,34 @@ class TestFetchFailuresAreNotAbsence:
         )
         result = CliRunner().invoke(main, ["results", "--build", "61009"])
         self._error(result, "BUILD_NOT_FOUND", 1)
+
+
+class TestBadInput:
+    """Input that cannot be read is INVALID_INPUT with exit 4, before any
+    request is made."""
+
+    def _invalid(self, result):
+        assert result.exit_code == 4, result.output
+        out = json.loads(result.stdout)
+        assert out["code"] == "INVALID_INPUT"
+        return out
+
+    @patch("janitor_tool.cli._make_client")
+    def test_a_build_that_is_not_a_number(self, mock_make):
+        for args, bad in (
+            (["results", "abc"], "abc"),
+            (["results", "--build", "12x"], "12x"),
+            (["detail", "--change", "64440x", "sanity"], "64440x"),
+        ):
+            out = self._invalid(CliRunner().invoke(main, args))
+            assert f"'{bad}'" in out["message"]
+        mock_make.return_value.get_ref.assert_not_called()
+        mock_make.return_value.resolve_change.assert_not_called()
+
+    @patch("janitor_tool.cli._make_client")
+    def test_a_bad_grep_regex(self, mock_make):
+        out = self._invalid(CliRunner().invoke(main, [
+            "fetch", "61009", "sanity@ldiskfs", "console.txt", "--grep", "[",
+        ]))
+        assert "[" in out["message"]
+        mock_make.assert_not_called()
