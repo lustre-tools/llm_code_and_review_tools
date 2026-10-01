@@ -236,8 +236,8 @@ class JiraClient:
 
         Reads are served anonymously by a public Jira; a write without a
         token fails at the server with a 401 whose body does not say
-        that a token is the fix.  Both request paths pass through here,
-        so a new write cannot bypass it.
+        that a token is the fix.  _request, _raw_request_with_retry and
+        upload_attachment each call it before sending.
         """
         if method.upper() in ("GET", "HEAD", "OPTIONS"):
             return
@@ -1553,6 +1553,7 @@ class JiraClient:
             filename = os.path.basename(file_path)
 
         endpoint = f"issue/{key}/attachments"
+        self._require_auth("POST", endpoint)
         url = self._build_url(endpoint)
         headers = {"X-Atlassian-Token": "no-check"}
         last_error: Exception | None = None

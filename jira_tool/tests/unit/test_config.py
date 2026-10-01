@@ -668,3 +668,28 @@ class TestAnonymousAccess:
         client = self._client()
         with pytest.raises(AuthError):
             client._require_auth("POST", "issue/LU-1/comment")
+
+    def test_every_request_path_refuses_before_sending(self, tmp_path):
+        import responses
+
+        from jira_tool.errors import AuthError
+
+        upload = tmp_path / "log.txt"
+        upload.write_text("x")
+        client = self._client()
+        writes = {
+            "comment": lambda: client.add_comment("LU-1", "text"),
+            "watcher": lambda: client.add_watcher("LU-1", "jdoe"),
+            "attachment": lambda: client.upload_attachment("LU-1", str(upload)),
+        }
+        with responses.RequestsMock(assert_all_requests_are_fired=False) as rs:
+            for path in ("comment", "watchers", "attachments"):
+                rs.add(
+                    responses.POST,
+                    f"https://jira.example.com/rest/api/2/issue/LU-1/{path}",
+                    status=401,
+                )
+            for name, write in writes.items():
+                with pytest.raises(AuthError, match="token is required"):
+                    write()
+                assert len(rs.calls) == 0, f"{name} reached the server"
