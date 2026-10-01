@@ -121,15 +121,14 @@ if several are open the error lists them.
 - **Reviewers:** `gc reviewers <url>`, `gc add-reviewer <url> <name>`,
   `gc remove-reviewer <url> <name>`, `gc find-user <name>`
 
-**Configuration:** Environment variables in `.env` file, loaded
-from (in priority order, highest first):
-1. `./.env`
+**Configuration:** environment variables, or a `.env` file.
+Variables already set in the environment always win. Only one file
+is read, the first that exists of:
+1. `$GERRIT_CLI_ENV_FILE`, if set (an error if it doesn't exist)
 2. `~/.config/gerrit-cli/.env`
 3. `/etc/gerrit-cli/.env`
 4. `/shared/support_files/.env`
-
-All matching files are loaded; higher-priority files override
-values from lower-priority ones.
+5. `./.env`
 
 **Required env vars:**
 ```bash

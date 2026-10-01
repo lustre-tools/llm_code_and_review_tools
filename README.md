@@ -210,11 +210,11 @@ Credentials are optional for reading. `gc comments`, `info`, `search`,
 `GERRIT_URL` set; replying, voting, pushing and anything else that
 changes a patch needs `GERRIT_USER` and `GERRIT_PASS`.
 
-Set environment variables directly or in a `.env` file. All
-existing files from these locations are loaded, highest priority
-first (earlier-listed files override later ones): `./.env`,
+Set environment variables directly or in a `.env` file. Variables
+already in the environment always win, and only one file is read: the
+first that exists of `$GERRIT_CLI_ENV_FILE`,
 `~/.config/gerrit-cli/.env`, `/etc/gerrit-cli/.env`,
-`/shared/support_files/.env`:
+`/shared/support_files/.env` and `./.env`:
 
 ```bash
 GERRIT_URL=https://review.whamcloud.com
