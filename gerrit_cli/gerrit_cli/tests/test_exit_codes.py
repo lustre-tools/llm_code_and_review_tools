@@ -26,6 +26,7 @@ class TestOutputErrorExitCode:
         (ErrorCode.GIT_ERROR, ExitCode.GENERAL_ERROR),
         (ErrorCode.AUTH_MISSING, ExitCode.AUTH_ERROR),
         (ErrorCode.AUTH_FAILED, ExitCode.AUTH_ERROR),
+        (ErrorCode.CONFIG_ERROR, ExitCode.AUTH_ERROR),
         (ErrorCode.NOT_FOUND, ExitCode.NOT_FOUND),
         (ErrorCode.CHANGE_NOT_FOUND, ExitCode.NOT_FOUND),
         (ErrorCode.INVALID_INPUT, ExitCode.INVALID_INPUT),
@@ -42,7 +43,7 @@ class TestErrorCodeFor:
 
     @pytest.mark.parametrize("exc, expected", [
         (GerritAuthRequired("no credentials"), ErrorCode.AUTH_MISSING),
-        (GerritConfigError("no GERRIT_URL"), ErrorCode.AUTH_MISSING),
+        (GerritConfigError("no GERRIT_URL"), ErrorCode.CONFIG_ERROR),
         (_http_error(401), ErrorCode.AUTH_FAILED),
         (_http_error(403), ErrorCode.AUTH_FAILED),
         (_http_error(404), ErrorCode.NOT_FOUND),

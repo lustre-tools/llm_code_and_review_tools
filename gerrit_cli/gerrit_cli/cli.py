@@ -64,12 +64,14 @@ def _preselect_credential_set() -> None:
         return
     try:
         selected = apply_credential_set("gerrit-cli", user)
-    except CredentialSetError as e:
+    # FileNotFoundError: GERRIT_CLI_ENV_FILE names no file
+    except (CredentialSetError, FileNotFoundError) as e:
         envelope = error_response_from_dict(
             ErrorCode.CONFIG_ERROR, str(e), "cli"
         )
-        print(format_json(envelope, pretty=False, full_envelope=False))
-        sys.exit(ExitCode.GENERAL_ERROR)
+        print(format_json(envelope, pretty=False,
+                          full_envelope="--envelope" in args))
+        sys.exit(ExitCode.AUTH_ERROR)
 
     from . import client as _client
 
@@ -123,6 +125,7 @@ from .commands._helpers import (  # noqa: F401 -- re-exports
     BOT_REVIEWER_NAMES,
     _patchset_age,
     error_code_for,
+    exit_code_for,
     filter_threads_by_fields,
     generate_review_prompt,
     output_error,
@@ -465,13 +468,11 @@ def main():
         try:
             args.func(args)
         except GerritConfigError as e:
-            # Previously this reached the user as a traceback.
-            envelope = error_response_from_dict(
-                ErrorCode.AUTH_MISSING, str(e), args.command
-            )
+            code = error_code_for(e)
+            envelope = error_response_from_dict(code, str(e), args.command)
             print(format_json(envelope, pretty=False,
                               full_envelope=FULL_ENVELOPE))
-            sys.exit(ExitCode.AUTH_ERROR)
+            sys.exit(exit_code_for(code))
 
 
 if __name__ == "__main__":

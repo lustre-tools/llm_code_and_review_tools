@@ -405,7 +405,8 @@ describe                         # Machine-readable API description (for LLMs)
 
 Exit codes: 0=success; 1=general failure; 2=auth or configuration
 (no credentials for a write, Gerrit answered 401/403, GERRIT_URL
-unset); 3=not found (Gerrit answered 404); 4=invalid input (bad
+unset, GERRIT_CLI_ENV_FILE naming no file, an unknown --user set);
+3=not found (Gerrit answered 404); 4=invalid input (bad
 arguments to a subcommand, a change that does not parse, a thread
 index out of range); 5=network (server unreachable or timed out). The
 JSON error's `code` field says which kind it was. 2 is also argparse's

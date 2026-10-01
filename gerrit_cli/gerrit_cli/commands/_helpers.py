@@ -9,7 +9,7 @@ from typing import Any
 
 import requests
 
-from ..client import GerritConfigError
+from ..client import GerritAuthRequired, GerritConfigError
 from ..envelope import error_response_from_dict, format_json, success_response
 from ..errors import ErrorCode, ExitCode
 
@@ -172,6 +172,7 @@ def output_success(
 _EXIT_CODES: dict[str, int] = {
     ErrorCode.AUTH_FAILED: ExitCode.AUTH_ERROR,
     ErrorCode.AUTH_MISSING: ExitCode.AUTH_ERROR,
+    ErrorCode.CONFIG_ERROR: ExitCode.AUTH_ERROR,
     ErrorCode.NOT_FOUND: ExitCode.NOT_FOUND,
     ErrorCode.CHANGE_NOT_FOUND: ExitCode.NOT_FOUND,
     ErrorCode.THREAD_NOT_FOUND: ExitCode.NOT_FOUND,
@@ -210,8 +211,10 @@ def error_code_for(exc: BaseException, default: str = ErrorCode.API_ERROR) -> st
 
 
 def _own_error_code(exc: BaseException) -> str | None:
-    if isinstance(exc, GerritConfigError):
+    if isinstance(exc, GerritAuthRequired):
         return ErrorCode.AUTH_MISSING
+    if isinstance(exc, GerritConfigError):
+        return ErrorCode.CONFIG_ERROR
     if isinstance(exc, requests.HTTPError):
         status = getattr(exc.response, "status_code", None)
         if status in (401, 403):

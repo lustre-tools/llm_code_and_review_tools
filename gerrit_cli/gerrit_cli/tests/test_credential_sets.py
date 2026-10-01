@@ -210,3 +210,61 @@ def test_ssh_fallback_without_user_is_unchanged(tmp_path):
     assert ssh_fallback_user(
         no_ssh_user, ["gc", "abandon", "123"]
     ) == ["dev@review.example.com"]
+
+
+def run_cli(env_file, argv, cwd):
+    """The real CLI in a fresh interpreter: the env file is read at import."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GERRIT_")}
+    env["GERRIT_CLI_ENV_FILE"] = str(env_file)
+    env["HOME"] = str(cwd)
+    code = (
+        "import sys\n"
+        f"sys.argv = {['gerrit', *argv]!r}\n"
+        "import gerrit_cli.cli as cli\n"
+        "cli.main()\n"
+    )
+    return subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True,
+        env=env, cwd=cwd,
+    )
+
+
+class TestMissingEnvFile:
+    """GERRIT_CLI_ENV_FILE naming no file is reported by the command that
+    needs the configuration, as JSON -- not a traceback at import."""
+
+    def _config_error(self, result):
+        import json
+
+        assert "Traceback" not in result.stderr, result.stderr
+        assert result.returncode == 2, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    def test_help_still_works(self, tmp_path):
+        result = run_cli(tmp_path / "missing.env", ["--help"], tmp_path)
+        assert result.returncode == 0, result.stderr
+        assert "usage:" in result.stdout
+
+    def test_a_command_reports_it(self, tmp_path):
+        out = self._config_error(
+            run_cli(tmp_path / "missing.env", ["info", "123"], tmp_path))
+        assert out["code"] == "CONFIG_ERROR"
+        assert "GERRIT_CLI_ENV_FILE" in out["message"]
+
+    def test_with_envelope(self, tmp_path):
+        out = self._config_error(run_cli(
+            tmp_path / "missing.env", ["--envelope", "info", "123"], tmp_path))
+        assert out["ok"] is False
+        assert out["error"]["code"] == "CONFIG_ERROR"
+
+    def test_with_user(self, tmp_path):
+        out = self._config_error(run_cli(
+            tmp_path / "missing.env", ["--user", "bot", "info", "123"],
+            tmp_path))
+        assert out["code"] == "CONFIG_ERROR"
+        assert "GERRIT_CLI_ENV_FILE" in out["message"]
+
+    def test_a_command_that_needs_no_configuration_runs(self, tmp_path):
+        result = run_cli(tmp_path / "missing.env", ["status"], tmp_path)
+        assert "Traceback" not in result.stderr, result.stderr
+        assert "No active rebase session" in result.stdout

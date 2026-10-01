@@ -2208,7 +2208,7 @@ class TestCmdSashikoReview:
         (ValueError("Cannot find Lustre git repository. Use --repo"),
          4, "INVALID_INPUT"),
         (GerritConfigError("Missing configuration: GERRIT_URL"),
-         2, "AUTH_MISSING"),
+         2, "CONFIG_ERROR"),
         (requests.ConnectionError("Gerrit refused the connection"),
          5, "CONNECTION_ERROR"),
         (RuntimeError("git fetch failed"), 1, "API_ERROR"),

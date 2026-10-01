@@ -23,7 +23,15 @@ from pygerrit2 import (  # type: ignore[import-untyped]
 # every location, which meant the .env file BEAT the real environment -- so a
 # parent process could not choose the identity of a gerrit it spawned, and
 # exporting GERRIT_USER by hand silently did nothing.
-load_env_files("gerrit-cli")
+#
+# This runs at import, before a command can report anything, so a
+# GERRIT_CLI_ENV_FILE naming no file is kept and raised as a
+# GerritConfigError where the configuration is first needed.
+try:
+    load_env_files("gerrit-cli")
+    ENV_FILE_ERROR: str | None = None
+except FileNotFoundError as e:
+    ENV_FILE_ERROR = str(e)
 
 
 # Config file location for error messages
@@ -112,6 +120,8 @@ class GerritCommentsClient:
         Raises:
             GerritConfigError: If required credentials are not configured.
         """
+        if ENV_FILE_ERROR:
+            raise GerritConfigError(ENV_FILE_ERROR)
         self.url = url or os.environ.get("GERRIT_URL")
         self.username = username or os.environ.get("GERRIT_USER")
         self.password = password or os.environ.get("GERRIT_PASS")
@@ -241,6 +251,8 @@ class GerritCommentsClient:
         # Check if it's just a number
         if url.isdigit():
             base = default_base_url or DEFAULT_GERRIT_URL
+            if not base and ENV_FILE_ERROR:
+                raise GerritConfigError(ENV_FILE_ERROR)
             if not base:
                 raise ValueError(
                     f"Could not parse Gerrit URL or change number: {url}. "
@@ -261,6 +273,8 @@ class GerritCommentsClient:
         change_id = cls.extract_change_id(url)
         if change_id:
             base = default_base_url or DEFAULT_GERRIT_URL
+            if not base and ENV_FILE_ERROR:
+                raise GerritConfigError(ENV_FILE_ERROR)
             if not base:
                 raise ValueError(
                     f"Could not resolve Change-Id {change_id}. "
