@@ -110,23 +110,26 @@ class TestParser:
         assert resolve_model("codex", "opus") == "opus"
 
     def test_check_selection_rejects_an_impossible_pair(self, capsys):
-        from lreview.cli import check_selection
+        from lreview.cli import check_selection, resolve_model
         args = build_parser().parse_args(
             ["run", "1", "--agent", "codex", "--model", "luna",
              "--effort", "ultra"])
-        assert check_selection(args) is False
+        assert check_selection(
+            args, resolve_model(args.agent, args.model)) is False
         assert "gpt-5.6-luna" in capsys.readouterr().out
 
         args = build_parser().parse_args(
             ["run", "1", "--agent", "codex", "--model", "sol",
              "--effort", "ultra"])
-        assert check_selection(args) is True
+        assert check_selection(
+            args, resolve_model(args.agent, args.model)) is True
 
     def test_check_selection_notes_agents_without_effort(self, capsys):
-        from lreview.cli import check_selection
+        from lreview.cli import check_selection, resolve_model
         args = build_parser().parse_args(
             ["run", "1", "--agent", "gemini", "--effort", "high"])
-        assert check_selection(args) is True
+        assert check_selection(
+            args, resolve_model(args.agent, args.model)) is True
         assert "not supported for 'gemini'" in capsys.readouterr().out
 
     def test_run_options(self):

@@ -182,9 +182,9 @@ class TestRunChat:
         assert invocation["argv"][:2] == ["-m", "gpt-5"]
         assert "64616 patchset 27" in invocation["argv"][-1]
 
-    def test_cli_expands_codex_aliases(self, repo, tmp_path, monkeypatch):
-        """`chat --model sol` runs the model its effort was checked
-        against, as `run --model sol` does, not the bare alias."""
+    def _codex_chat(self, repo, tmp_path, monkeypatch):
+        """A stub codex recording its argv, a manifest entry for 64616,
+        and a runner for `lreview chat 64616 --agent codex ARGS`."""
         from lreview.cli import build_parser
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -211,12 +211,33 @@ class TestRunChat:
             "base_url": "https://gerrit.invalid",
         }}))
 
-        args = build_parser().parse_args([
-            "chat", "64616", "--agent", "codex", "--model", "sol",
-            "--results-dir", str(results), "--db", str(tmp_path / "db"),
-            "--worktrees-dir", str(tmp_path / "wt")])
-        assert args.func(args) == 0
+        def chat(*extra):
+            args = build_parser().parse_args([
+                "chat", "64616", "--agent", "codex", *extra,
+                "--results-dir", str(results), "--db", str(tmp_path / "db"),
+                "--worktrees-dir", str(tmp_path / "wt")])
+            return args.func(args)
+        return chat, record
+
+    def test_cli_expands_codex_aliases(self, repo, tmp_path, monkeypatch):
+        """`chat --model sol` runs the model its effort was checked
+        against, as `run --model sol` does, not the bare alias."""
+        chat, record = self._codex_chat(repo, tmp_path, monkeypatch)
+        assert chat("--model", "sol") == 0
         assert json.loads(record.read_text())[:2] == ["-m", "gpt-6.1-sol"]
+
+    def test_cli_checks_effort_against_the_session_model(
+            self, repo, tmp_path, monkeypatch):
+        """Without --model, chat starts codex on its own default, so a
+        $LREVIEW_MODEL meant for `run` must not veto the effort."""
+        chat, record = self._codex_chat(repo, tmp_path, monkeypatch)
+        monkeypatch.setenv("LREVIEW_MODEL", "luna")
+        assert chat("--effort", "ultra") == 0
+        argv = json.loads(record.read_text())
+        assert "-m" not in argv
+        assert 'model_reasoning_effort="ultra"' in argv
+        # the model chat does pass is still checked
+        assert chat("--model", "luna", "--effort", "ultra") == 1
 
     def test_repo_defaults_to_manifest_entry(self, repo, tmp_path,
                                              stub_claude, monkeypatch):

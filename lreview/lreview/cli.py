@@ -86,8 +86,10 @@ def resolve_model(agent: str, model: str = None) -> str:
     return canonical_model(agent, model)
 
 
-def check_selection(args) -> bool:
+def check_selection(args, model) -> bool:
     """Report an impossible model/effort pair before any review runs.
+
+    `model` is the name the agent will actually be given.
 
     Returns False when the run should not start.
     """
@@ -97,8 +99,7 @@ def check_selection(args) -> bool:
               f"ignored ({'/'.join(EFFORT_AGENTS)} only)")
         return True
     try:
-        validate_selection(args.agent, resolve_model(args.agent, args.model),
-                           args.effort)
+        validate_selection(args.agent, model, args.effort)
     except ValueError as exc:
         print(f"error: {exc}")
         return False
@@ -285,7 +286,7 @@ def cmd_run(args) -> int:
         print(f"note: the '{args.agent}' backend is best-effort and not "
               "yet verified end-to-end; claude and codex are. Use "
               "--agent-arg to adjust flags if needed.")
-    if not check_selection(args):
+    if not check_selection(args, resolve_model(args.agent, args.model)):
         return 1
 
     results_dir = Path(args.results_dir).expanduser().resolve()
@@ -564,7 +565,10 @@ def cmd_chat(args) -> int:
     if not get_agent(args.agent).verified:
         print(f"note: the '{args.agent}' backend is best-effort and "
               "not yet verified end-to-end; claude and codex are.")
-    if not check_selection(args):
+    # chat passes --model alone, never a run default
+    from .models import canonical_model
+    model = canonical_model(args.agent, args.model)
+    if not check_selection(args, model):
         return 1
 
     if not args.local and not args.change:
@@ -573,12 +577,11 @@ def cmd_chat(args) -> int:
         return 1
 
     from .chat import run_chat
-    from .models import canonical_model
     return run_chat(
         args.change, results_dir=results_dir,
         repo=Path(args.repo) if args.repo else None,
         worktrees_dir=worktrees_dir, db_dir=db_dir, agent=args.agent,
-        model=canonical_model(args.agent, args.model), effort=args.effort,
+        model=model, effort=args.effort,
         agent_args=args.agent_arg or [], local=args.local,
         keep_worktree=args.keep_worktree)
 
