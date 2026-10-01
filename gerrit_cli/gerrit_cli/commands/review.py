@@ -2,6 +2,7 @@
 
 import sys
 
+from ..envelope import error_response_from_dict
 from ..errors import ErrorCode, ExitCode
 from ..summary import truncate_review_data, truncate_series_comments
 from ._helpers import (
@@ -11,6 +12,7 @@ from ._helpers import (
     filter_threads_by_fields,
     generate_review_prompt,
     output_error,
+    output_result,
     output_success,
 )
 
@@ -271,6 +273,15 @@ def cmd_series(args):
         }
         if not getattr(args, 'no_prompt', False):
             data["review_prompt"] = generate_review_prompt(args.url)
+
+        if checkout_result and not checkout_result["success"]:
+            # The listing is still worth having; it goes in details.
+            output_result(error_response_from_dict(
+                ErrorCode.GIT_ERROR,
+                f"Could not check out change {target_change}: {message}",
+                command, details=data,
+            ), pretty)
+            sys.exit(exit_code_for(ErrorCode.GIT_ERROR))
 
         output_success(data, command, pretty)
         sys.exit(ExitCode.SUCCESS)

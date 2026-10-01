@@ -295,6 +295,35 @@ class TestReviewSeriesParsedFlags:
             self._run(capsys, "12345", "--checkout", "--no-checkout")
         assert exc_info.value.code == 4
 
+    def test_failed_checkout_is_an_error(self, capsys):
+        from gerrit_cli import cli
+        from gerrit_cli.parsers import setup_parsers
+
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(
+            dest="command", parser_class=cli._JsonErrorParser)
+        setup_parsers(subparsers, cli.build_handlers())
+        args = parser.parse_args(["review-series", "12345"])
+
+        series = MagicMock(patches=[MagicMock(change_number=12345)])
+        series.to_dict.return_value = {"total_patches": 1}
+        with patch('gerrit_cli.cli.RebaseManager') as MockManager, \
+             patch('gerrit_cli.cli.SeriesFinder') as MockFinder, \
+             patch('gerrit_cli.cli.extract_comments',
+                   return_value=MagicMock(threads=[])), \
+             patch('gerrit_cli.cli.work_on_patch',
+                   return_value=(False, "Error fetching change 12345")), \
+             pytest.raises(SystemExit) as exc_info:
+            MockManager.return_value.check_git_repo.return_value = (True, "")
+            MockFinder.return_value.find_series.return_value = series
+            args.func(args)
+
+        assert exc_info.value.code == 1
+        out = json.loads(capsys.readouterr().out)
+        assert out["code"] == "GIT_ERROR"
+        assert "Error fetching change 12345" in out["message"]
+        assert out["details"]["series"] == {"total_patches": 1}
+
     def test_review_prompt_unless_no_prompt(self, capsys):
         _, _, out = self._run(capsys, "12345", "--no-checkout")
         assert "gerrit review-series 12345" in out["review_prompt"]
