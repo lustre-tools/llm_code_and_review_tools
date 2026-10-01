@@ -130,8 +130,11 @@ replaced -- the installer says so and skips it.
 
 ## Configuration
 
-The installer sets all of this up for you, and offers to as soon as it
-finishes installing:
+The installer sets all of this up for you. A first install walks through
+every tool as soon as it finishes; later installs, run to update the
+tools and skills, only show what is set up and ask about a tool only if
+it was added since (the tools already asked about are listed in
+`~/.config/llm-tools/asked`). To go through them again:
 
 ```bash
 ./install.sh --configure                      # every tool, one at a time

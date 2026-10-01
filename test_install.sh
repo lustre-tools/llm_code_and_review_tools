@@ -578,6 +578,80 @@ repo=$(hook_repo)
 check "only the first version line is bumped" \
     "0.2.1 0.2.0" "$(tool_version "$repo" lreview | tr '\n' ' ' | sed 's/ $//')"
 
+# --- after an install: ask about each tool's credentials once ---------------
+echo ""
+echo "credentials after an install"
+
+after_install() {  # after_install <stdin> [VAR=value ...]
+    local answers="$1"
+    shift
+    printf '%b' "$answers" | env HOME="$HOME_DIR" VERIFY=0 "$@" bash -c \
+        "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; offer_credentials" 2>&1
+}
+asked_list() {
+    sort "$HOME_DIR/.config/llm-tools/asked" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'
+}
+sections() {  # how many tools the walkthrough showed
+    printf '%s\n' "$1" | grep -c '(used by:'
+}
+ALL_TOOLS="gerrit jenkins jira jira-cloud maloo"
+
+fresh_home
+out=$(after_install 'n\nn\nn\nn\nn\nn\n')
+check "a first install asks about every tool" "5" "$(sections "$out")"
+contains "and offers a second account" "A second account" "$out"
+check "and remembers it asked" "$ALL_TOOLS" "$(asked_list)"
+
+out=$(after_install '')
+check "the next install asks about none" "0" "$(sections "$out")"
+contains "and shows the status instead" "Credential status:" "$out"
+contains "with the flag that asks again" "./install.sh --configure" "$out"
+
+grep -vx jenkins "$HOME_DIR/.config/llm-tools/asked" > "$HOME_DIR/asked.tmp"
+mv "$HOME_DIR/asked.tmp" "$HOME_DIR/.config/llm-tools/asked"
+out=$(after_install 'n\n')
+check "a tool not asked about yet is asked once" "1" "$(sections "$out")"
+case "$out" in
+    *"A second account"*) bad "without the second-account question" ;;
+    *) ok "without the second-account question" ;;
+esac
+check "and is remembered" "$ALL_TOOLS" "$(asked_list)"
+out=$(after_install '')
+check "and not asked again" "0" "$(sections "$out")"
+
+# An install from before the list existed: credentials already set up.
+fresh_home
+mkdir -p "$HOME_DIR/.config/gerrit-cli"
+printf 'GERRIT_URL=https://gerrit.example\nGERRIT_USER=alice\nGERRIT_PASS=pw\n' \
+    > "$HOME_DIR/.config/gerrit-cli/.env"
+out=$(after_install '')
+check "an existing install is asked about nothing" "0" "$(sections "$out")"
+check "and its tools count as asked" "$ALL_TOOLS" "$(asked_list)"
+
+out=$(printf 'n\nn\nn\nn\nn\nn\n' | env HOME="$HOME_DIR" VERIFY=0 bash -c \
+    "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; configure_tools ''" 2>&1)
+check "--configure still walks through every tool" "5" "$(sections "$out")"
+
+# The list is a convenience: failing to write it must not stop the install.
+fresh_home
+mkdir -p "$HOME_DIR/.config/llm-tools"
+touch "$HOME_DIR/.config/llm-tools/asked"
+chmod 444 "$HOME_DIR/.config/llm-tools/asked"
+out=$(printf 'n\nn\nn\nn\nn\nn\n' | env HOME="$HOME_DIR" VERIFY=0 bash -c \
+    "set -e; INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; offer_credentials; echo finished" 2>&1)
+contains "an unwritable list does not stop the installer" "finished" "$out"
+chmod 644 "$HOME_DIR/.config/llm-tools/asked"
+
+for how in "CONFIGURE_AFTER_INSTALL=0" "CONFIGURE_AFTER_INSTALL=1"; do
+    fresh_home
+    # stdin is a pipe here, so the second case is an install run without
+    # a terminal
+    out=$(printf 'n\nn\nn\nn\nn\nn\n' | env HOME="$HOME_DIR" VERIFY=0 "$how" \
+        bash -c "INSTALL_SH_NO_MAIN=1 source '$INSTALL_SH'; credentials_after_install" 2>&1)
+    check "$how without a terminal asks nothing" "0" "$(sections "$out")"
+    check "  and records nothing" "" "$(asked_list)"
+done
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

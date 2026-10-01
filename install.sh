@@ -76,7 +76,9 @@ usage() {
     echo "  --configure    Walk through the credentials the tools need:"
     echo "                 what each one is for, where to get it, and"
     echo "                 \"not now\" as an answer. Writes only"
-    echo "                 ~/.config/<tool>/.env, mode 0600."
+    echo "                 ~/.config/<tool>/.env, mode 0600. A first"
+    echo "                 install walks through it by itself; later"
+    echo "                 installs ask only about tools added since."
     echo "  --only TOOL    Configure just one tool (gerrit, jira,"
     echo "                 jira-cloud, maloo, jenkins); repeatable"
     echo "  --reconfigure  Prompt for values that are already set too"
@@ -1462,8 +1464,66 @@ configure_summary() {
     echo "                maloo queue                jenkins jobs"
 }
 
+# The tools a plain install has already asked about.  A first install walks
+# through all of them; later installs ask only about a tool added since, so
+# re-running the installer to update does not re-ask what was turned down.
+ASKED_FILE="$HOME/.config/llm-tools/asked"
+
+tool_asked() {
+    grep -qxF "$1" "$ASKED_FILE" 2>/dev/null
+}
+
+record_asked() {
+    local tool
+    mkdir -p "$(dirname "$ASKED_FILE")" || return 0
+    for tool in "$@"; do
+        tool_asked "$tool" || echo "$tool" 2>/dev/null >> "$ASKED_FILE" || return 0
+    done
+}
+
+show_credential_status() {
+    configure_summary
+    echo ""
+    echo "Set them up any time with:  ./install.sh --configure"
+}
+
+offer_credentials() {
+    local tool new=""
+    if [ ! -f "$ASKED_FILE" ]; then
+        for tool in $CONFIG_TOOLS; do
+            # credentials written before the installer kept this list: not
+            # a first install
+            if [ "$(tool_status "$tool")" != "missing" ]; then
+                record_asked $CONFIG_TOOLS
+                break
+            fi
+        done
+    fi
+    for tool in $CONFIG_TOOLS; do
+        tool_asked "$tool" || new="$new $tool"
+    done
+    new="${new# }"
+    if [ -z "$new" ]; then
+        show_credential_status
+    elif [ "$new" = "$CONFIG_TOOLS" ]; then
+        configure_tools ""
+    else
+        echo ""
+        echo "Not asked about before: $new"
+        configure_tools "$new" no-extra-users
+    fi
+}
+
+credentials_after_install() {
+    if [ "${CONFIGURE_AFTER_INSTALL:-1}" = "1" ] && [ -t 0 ]; then
+        offer_credentials
+    else
+        show_credential_status
+    fi
+}
+
 configure_tools() {
-    local only="$1" tool
+    local only="$1" extra_users="${2:-}" tool
     echo ""
     echo "========================================"
     echo "Credentials"
@@ -1478,8 +1538,9 @@ configure_tools() {
             esac
         fi
         configure_one_tool "$tool" || true
+        record_asked "$tool"
     done
-    configure_extra_users || true
+    [ "$extra_users" = "no-extra-users" ] || configure_extra_users || true
     configure_summary
 }
 
@@ -1701,13 +1762,7 @@ case "$ACTION" in
             echo ""
             install_skills
         fi
-        if [ "$CONFIGURE_AFTER_INSTALL" = "1" ] && [ -t 0 ]; then
-            configure_tools "$ONLY_TOOLS"
-        else
-            configure_summary
-            echo ""
-            echo "Set them up any time with:  ./install.sh --configure"
-        fi
+        credentials_after_install
         # The Python tools are installed either way, but the operator asked
         # for ltvm and agents cannot create VMs without it, so do not report
         # success.
