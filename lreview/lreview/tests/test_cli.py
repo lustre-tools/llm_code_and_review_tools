@@ -9,7 +9,9 @@ from lreview.cli import build_parser, default_worktrees_dir
 
 class TestParser:
 
-    def test_run_defaults(self, monkeypatch):
+    def test_run_defaults(self, tmp_path, monkeypatch):
+        (tmp_path / ".git").mkdir()
+        monkeypatch.setattr("lreview.prompts._REPO_ROOT", tmp_path)
         monkeypatch.delenv("LREVIEW_PREFIX", raising=False)
         monkeypatch.delenv("LREVIEW_AGENT", raising=False)
         monkeypatch.delenv("LREVIEW_EFFORT", raising=False)
@@ -20,10 +22,8 @@ class TestParser:
         assert args.jobs == 5
         assert args.timeout == 7200
         assert args.repo == "."
-        # editable checkout: results default into the llm tools repo,
-        # not the cwd
-        from lreview.prompts import _REPO_ROOT
-        assert args.results_dir == str(_REPO_ROOT / "lreview-results")
+        # a tools checkout: results default into it, not the cwd
+        assert args.results_dir == str(tmp_path / "lreview-results")
         assert args.worktrees_dir is None
         assert args.keep_worktrees is False
         assert args.post is False
@@ -31,12 +31,14 @@ class TestParser:
         assert args.model is None
         assert args.agent == "claude"
 
-    def test_default_results_dir(self, monkeypatch):
+    def test_default_results_dir(self, tmp_path, monkeypatch):
         from lreview.cli import default_results_dir
-        from lreview.prompts import _REPO_ROOT
+        monkeypatch.setattr("lreview.prompts._REPO_ROOT", tmp_path)
         monkeypatch.delenv("LREVIEW_RESULTS_DIR", raising=False)
-        # this test runs from an editable checkout, so the repo wins
-        assert default_results_dir() == str(_REPO_ROOT / "lreview-results")
+        # installed without a checkout (CI's pip install): cwd-relative
+        assert default_results_dir() == "./lreview-results"
+        (tmp_path / ".git").mkdir()
+        assert default_results_dir() == str(tmp_path / "lreview-results")
         monkeypatch.setenv("LREVIEW_RESULTS_DIR", "/tmp/x")
         assert default_results_dir() == "/tmp/x"
 
