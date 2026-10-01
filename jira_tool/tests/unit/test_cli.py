@@ -2073,3 +2073,16 @@ class TestCLIDescribe:
         assert described["version"] == installed
         assert jira_tool.__version__ == installed
         assert runner.invoke(main, ["--version"]).output.split()[-1] == installed
+
+    def test_every_command_is_described(self, runner):
+        import click
+
+        def names(group, prefix=""):
+            for name, cmd in group.commands.items():
+                if isinstance(cmd, click.Group):
+                    yield from names(cmd, f"{prefix}{name} ")
+                else:
+                    yield f"{prefix}{name}"
+
+        described = json.loads(runner.invoke(main, ["describe"]).output)
+        assert {c["name"] for c in described["commands"]} == set(names(main))
