@@ -70,6 +70,20 @@ class TestResultText:
         assert "status: findings (0 finding(s)), severity none" in text
         assert "Findings (0)" in text
 
+    def test_github_findings_listed(self):
+        spec = {"version": 1, "message": "One problem.", "findings": [
+            {"path": "src/widget.c", "line": 12,
+             "message": "(bug) rc is leaked here"},
+            {"location_kind": "summary", "path": None, "line": None,
+             "message": "(suggestion) add a test"},
+        ]}
+        text = result_text(_local_result(), spec)
+        assert "Findings (2)" in text
+        assert "(1) src/widget.c (line 12)" in text
+        assert "    (bug) rc is leaked here" in text
+        assert "(2) general" in text
+        assert "    (suggestion) add a test" in text
+
     def test_gerrit_change_headline(self):
         change = ResolvedChange(
             number=64086, project="fs/lustre-release", subject="LU-2 lov: x",

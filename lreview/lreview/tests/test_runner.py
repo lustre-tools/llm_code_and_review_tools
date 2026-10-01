@@ -53,6 +53,7 @@ printf '{"author":"a","sha":"s","subject":"t","issues-found":0,\
 if [ -f INVALID_MARKER ]; then printf '{oops' > gerrit-review.json; exit 0; fi
 if [ -f ARRAY_MARKER ]; then printf '[]' > gerrit-review.json; exit 0; fi
 if [ -f HAS_FINDINGS ]; then cp HAS_FINDINGS gerrit-review.json; fi
+if [ -f RESULT_MARKER ]; then cp RESULT_MARKER review-result.json; fi
 echo '{"type":"system","subtype":"estimated_tokens","estimated_tokens":123456}'
 echo "Assisted-by: ClaudeCode:claude-fable-5"
 echo '{"type":"result","result":"done","total_cost_usd":1.23,"usage":{"input_tokens":10,"cache_creation_input_tokens":1000,"cache_read_input_tokens":50000,"output_tokens":2000}}'
@@ -108,6 +109,32 @@ def _change(number: int, sha: str) -> ResolvedChange:
         number=number, project="test/repo", subject=f"change {number}",
         sha=sha, patchset=1, ref=change_ref(number, 1),
         base_url="https://gerrit.invalid")
+
+
+GITHUB_RESULT = {
+    "version": 1,
+    "message": "Some concerns.",
+    "findings": [
+        {"path": "src.c", "line": 2, "message": "b is unused",
+         "unresolved": True},
+        {"location_kind": "summary", "path": None, "line": None,
+         "message": "needs a test"},
+    ],
+}
+
+
+def _github_pr(repo: Path, files: dict):
+    """A pull request whose head commit adds `files` on top of HEAD."""
+    from lreview.github import ResolvedGitHubPullRequest
+    base = _git(repo, "rev-parse", "HEAD")
+    for name, content in files.items():
+        (repo / name).write_text(content)
+        _git(repo, "add", name)
+    _git(repo, "commit", "-q", "-m", "PR head")
+    head = _git(repo, "rev-parse", "HEAD")
+    return ResolvedGitHubPullRequest(
+        "acme", "widget", 7, "Fix the widget", head, base, "fix",
+        "acme/widget", "https://github.com/acme/widget/pull/7")
 
 
 def _config(repo: Path, tmp_path: Path, **kwargs) -> BatchConfig:
@@ -596,6 +623,24 @@ class TestRunBatch:
         results = run_batch(config, [_change(111, sha)])
         assert results[0].status == STATUS_FAILED
         assert "did not run to completion" in results[0].error
+
+    def test_github_findings_reach_the_reports(self, repo, tmp_path,
+                                               stub_claude):
+        from lreview.text import batch_text
+        pr = _github_pr(repo, {"src.c": "int a;\nint b;\n",
+                               "RESULT_MARKER": json.dumps(GITHUB_RESULT)})
+        config = _config(repo, tmp_path)
+        result, = run_batch(config, [pr])
+        assert result.status == STATUS_FINDINGS
+        assert result.findings == 2
+        md = result.markdown_path.read_text()
+        assert "2 finding(s)" in md
+        assert "### 1. `src.c` (line 2)" in md
+        assert "### 2. general" in md
+        text = batch_text([result])
+        assert "Findings (2)" in text
+        assert "(1) src.c (line 2)" in text
+        assert "(2) general" in text
 
     def test_top_level_array_is_invalid_not_crash(self, repo, tmp_path,
                                                   stub_claude):

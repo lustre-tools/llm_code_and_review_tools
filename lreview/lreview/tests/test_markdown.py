@@ -110,6 +110,25 @@ class TestReviewMarkdown:
         assert "- **Review memory:** `/db/64620-subject.md`" in md
         assert "3 finding(s), severity **high**" in md
 
+    def test_github_findings_render(self):
+        """review-result.json keeps its findings in a flat `findings`
+        list; general and commit-message findings carry no path."""
+        spec = {"version": 1, "message": "Some concerns.", "findings": [
+            {"path": "src/widget.c", "line": 12, "side": "RIGHT",
+             "message": "(defect) leaks the buffer", "unresolved": True},
+            {"location_kind": "commit_message", "path": None,
+             "line": None, "message": "(typo) subjcet"},
+            {"location_kind": "summary", "path": None, "line": None,
+             "message": "needs a test", "unresolved": False},
+        ]}
+        md = review_markdown(_change(), spec)
+        assert "3 finding(s)" in md
+        assert "### 1. `src/widget.c` (line 12)" in md
+        assert "(defect) leaks the buffer" in md
+        assert "### 2. commit message" in md
+        assert "### 3. general *(informational)*" in md
+        assert "None" not in md
+
     def test_write_creates_markdown_dir(self, tmp_path):
         path = write_review_markdown(tmp_path, _change(), SPEC,
                                      severity="high")

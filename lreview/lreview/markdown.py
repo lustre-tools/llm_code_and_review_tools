@@ -39,7 +39,14 @@ def markdown_filename(change, tag: str = "") -> str:
 
 
 def iter_findings(spec: dict):
-    """Yield (path, comment) in file order for both JSON shapes."""
+    """Yield (path, comment) for every JSON shape: the Gerrit comments
+    map or flat list, and review-result.json's findings list, whose
+    general and commit-message findings have a None path."""
+    findings = spec.get("findings")
+    if isinstance(findings, list):
+        for entry in findings:
+            yield entry.get("path"), entry
+        return
     comments = spec.get("comments") or {}
     if isinstance(comments, dict):
         for path, entries in comments.items():
@@ -50,7 +57,16 @@ def iter_findings(spec: dict):
             yield entry.get("path", "?"), entry
 
 
-def _anchor(path: str, entry: dict) -> str:
+def pathless_anchor(entry: dict) -> str:
+    """Where a review-result.json finding without a file belongs."""
+    if entry.get("location_kind") == "commit_message":
+        return "commit message"
+    return "general"
+
+
+def _anchor(path: Optional[str], entry: dict) -> str:
+    if path is None:
+        return pathless_anchor(entry)
     rng = entry.get("range")
     if rng:
         loc = f"lines {rng.get('start_line')}–{rng.get('end_line')}"

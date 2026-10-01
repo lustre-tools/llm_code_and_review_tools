@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from .markdown import iter_findings
+from .markdown import iter_findings, pathless_anchor
 from .ui import elapsed, format_tokens
 
 # Imported for the count-vs-status wording below; runner does not
@@ -24,7 +24,9 @@ RULE = "=" * 72
 THIN = "-" * 72
 
 
-def _location(path: str, entry: dict) -> str:
+def _location(path: Optional[str], entry: dict) -> str:
+    if path is None:
+        return pathless_anchor(entry)
     rng = entry.get("range")
     if rng:
         loc = f"lines {rng.get('start_line')}-{rng.get('end_line')}"
