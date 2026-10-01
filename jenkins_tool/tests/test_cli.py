@@ -732,3 +732,41 @@ def _anonymous_client():
     client = MagicMock()
     client.config = JenkinsConfig(base_url="https://build.example.com")
     return client
+
+
+class TestUsageErrors:
+    """A usage error is JSON INVALID_INPUT with exit 4, not click's text and 2.
+
+    Exit 2 is the contract's auth error, which a caller would act on.
+    """
+
+    def _invalid(self, result):
+        assert result.exit_code == 4, result.output
+        out = json.loads(result.stdout)
+        assert out["code"] == "INVALID_INPUT"
+        return out
+
+    def test_unknown_command(self, runner):
+        out = self._invalid(runner.invoke(main, ["nosuchcmd"], env=_make_env()))
+        assert "nosuchcmd" in out["message"]
+
+    def test_missing_argument(self, runner):
+        out = self._invalid(runner.invoke(main, ["builds"], env=_make_env()))
+        assert "JOB_NAME" in out["message"]
+
+    def test_bad_build_number(self, runner):
+        out = self._invalid(runner.invoke(
+            main, ["run-console", "lustre-reviews", "notanint", "cfg"],
+            env=_make_env(),
+        ))
+        assert "BUILD_NUMBER" in out["message"]
+
+    def test_unknown_group_option(self, runner):
+        self._invalid(runner.invoke(main, ["--bogus", "jobs"], env=_make_env()))
+
+    def test_envelope_wraps_a_usage_error(self, runner):
+        result = runner.invoke(main, ["--envelope", "builds"], env=_make_env())
+        assert result.exit_code == 4
+        env = json.loads(result.stdout)
+        assert env["ok"] is False
+        assert env["meta"]["tool"] == "jenkins"

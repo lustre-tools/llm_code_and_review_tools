@@ -10,6 +10,7 @@ from typing import Any
 
 import click
 
+from llm_tool_common.click_group import JsonUsageErrorGroup
 from llm_tool_common.config import (
     CredentialSetError,
     apply_credential_set,
@@ -67,13 +68,15 @@ def _error(
     sys.exit(1)
 
 
-class MalooGroup(click.Group):
+class MalooGroup(JsonUsageErrorGroup):
     """Click group whose global options work in any position.
 
     Click reads a group's own options only before the subcommand name,
     so `maloo session <url> --user bob` would otherwise be a usage
     error while `maloo --user bob session <url>` works.
     """
+
+    tool_name = TOOL_NAME
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
         return super().parse_args(

@@ -1537,3 +1537,41 @@ class TestNoEnvelopeDefault:
         assert out["ok"] is True
         assert "data" in out
         assert "meta" in out
+
+
+class TestUsageErrors:
+    """A usage error is JSON INVALID_INPUT with exit 4, not click's text and 2."""
+
+    def _invalid(self, result):
+        assert result.exit_code == 4, result.output
+        out = json.loads(result.stdout)
+        assert out["code"] == "INVALID_INPUT"
+        return out
+
+    def test_unknown_command(self, runner):
+        out = self._invalid(runner.invoke(main, ["nosuchcmd"]))
+        assert "nosuchcmd" in out["message"]
+
+    def test_missing_argument(self, runner):
+        out = self._invalid(runner.invoke(main, ["session"]))
+        assert "SESSION_URL" in out["message"]
+        assert "session" in out["details"]["usage"]
+
+    def test_bad_option_type(self, runner):
+        self._invalid(runner.invoke(main, ["review", "notanumber"]))
+
+    def test_unknown_group_option(self, runner):
+        self._invalid(runner.invoke(main, ["--bogus", "session", SID_1]))
+
+    def test_unparseable_session_id(self, runner, mock_client):
+        out = self._invalid(runner.invoke(main, ["session", "not-a-uuid"]))
+        assert "not-a-uuid" in out["message"]
+
+    def test_envelope_wraps_a_usage_error(self, runner):
+        result = runner.invoke(main, ["session", "--envelope"])
+        assert result.exit_code == 4
+        env = json.loads(result.stdout)
+        assert env["ok"] is False
+        assert env["error"]["code"] == "INVALID_INPUT"
+        assert env["meta"]["tool"] == "maloo"
+        assert env["meta"]["command"] == "session"

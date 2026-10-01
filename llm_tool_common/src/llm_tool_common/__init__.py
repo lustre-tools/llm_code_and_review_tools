@@ -43,6 +43,7 @@ from .config import (
     resolve_env_file,
 )
 from .decorators import handle_errors
+from .click_group import JsonUsageErrorGroup
 
 __all__ = [
     # Envelope functions
@@ -80,5 +81,7 @@ __all__ = [
     "resolve_env_file",
     # Decorators
     "handle_errors",
+    # Click
+    "JsonUsageErrorGroup",
 ]
 

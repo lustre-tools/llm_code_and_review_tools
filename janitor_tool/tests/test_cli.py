@@ -436,3 +436,31 @@ class TestCrashCommand:
 
 # Need pytest for the SystemExit test
 import pytest
+
+
+class TestUsageErrors:
+    """A usage error is JSON INVALID_INPUT with exit 4, not click's text and 2."""
+
+    def _invalid(self, result):
+        assert result.exit_code == 4, result.output
+        out = json.loads(result.stdout)
+        assert out["code"] == "INVALID_INPUT"
+        return out
+
+    def test_unknown_command(self):
+        out = self._invalid(CliRunner().invoke(main, ["nosuchcmd"]))
+        assert "nosuchcmd" in out["message"]
+
+    def test_missing_argument(self):
+        out = self._invalid(CliRunner().invoke(main, ["detail", "61009"]))
+        assert "TEST_NAME" in out["message"]
+
+    def test_unknown_option(self):
+        self._invalid(CliRunner().invoke(main, ["results", "61009", "--bogus"]))
+
+    def test_envelope_wraps_a_usage_error(self):
+        result = CliRunner().invoke(main, ["--envelope", "results"])
+        assert result.exit_code == 4
+        env = json.loads(result.stdout)
+        assert env["ok"] is False
+        assert env["meta"]["tool"] == "janitor"

@@ -8,6 +8,7 @@ from typing import Any
 import click
 import requests
 
+from llm_tool_common.click_group import JsonUsageErrorGroup
 from llm_tool_common.config import (
     CredentialSetError,
     apply_credential_set,
@@ -245,13 +246,15 @@ def _normalize_build(
 
 # ---- Commands ----
 
-class JenkinsGroup(click.Group):
+class JenkinsGroup(JsonUsageErrorGroup):
     """Click group whose global options work in any position.
 
     Click reads a group's own options only before the subcommand
     name, so `jenkins jobs --user bot` would otherwise be a usage
     error while `jenkins --user bot jobs` works.
     """
+
+    tool_name = TOOL_NAME
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
         return super().parse_args(

@@ -8,6 +8,7 @@ from typing import Any
 
 import click
 
+from llm_tool_common.click_group import JsonUsageErrorGroup
 from llm_tool_common.envelope import (
     error_response_from_dict,
     format_json,
@@ -181,7 +182,11 @@ def _resolve_build(
     return 0  # unreachable
 
 
-@click.group()
+class JanitorGroup(JsonUsageErrorGroup):
+    tool_name = TOOL_NAME
+
+
+@click.group(cls=JanitorGroup)
 @click.version_option(package_name="janitor-tool", prog_name="janitor")
 @click.option(
     "--envelope", is_flag=True,
