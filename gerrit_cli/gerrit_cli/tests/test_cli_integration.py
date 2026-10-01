@@ -166,8 +166,7 @@ class TestCLIEntryPoint:
         with patch('sys.argv', ['gerrit-cli', 'not-a-command']):
             with pytest.raises(SystemExit) as exc_info:
                 main()
-            # argparse exits with 2 for invalid arguments
-            assert exc_info.value.code == 2
+            assert exc_info.value.code == 4  # INVALID_INPUT
 
     def test_status_command_no_session(self):
         """Test status command when no session exists."""

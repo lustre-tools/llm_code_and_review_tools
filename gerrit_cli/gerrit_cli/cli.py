@@ -321,8 +321,8 @@ FULL_ENVELOPE = False
 class _JsonErrorParser(argparse.ArgumentParser):
     """ArgumentParser that outputs errors as JSON instead of stderr.
 
-    Used as parser_class for subparsers so that argument errors from
-    any subcommand produce structured JSON output.
+    Used for the top-level parser and as parser_class for subparsers, so
+    that every argument error produces structured JSON output.
     """
 
     def error(self, message: str) -> None:
@@ -407,7 +407,7 @@ def build_parser() -> argparse.ArgumentParser:
     except Exception:
         _ver = "unknown"
 
-    parser = argparse.ArgumentParser(
+    parser = _JsonErrorParser(
         description="Extract and reply to Gerrit review comments. "
                     "Run 'gc describe' for machine-readable API documentation.",
         formatter_class=argparse.RawDescriptionHelpFormatter,

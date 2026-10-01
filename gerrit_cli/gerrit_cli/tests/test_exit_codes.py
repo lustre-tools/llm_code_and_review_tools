@@ -154,3 +154,9 @@ class TestParseErrors:
         code, out = self._run(["comments"], capsys)
         assert code == ExitCode.INVALID_INPUT
         assert json.loads(out)["code"] == ErrorCode.INVALID_INPUT
+
+    @pytest.mark.parametrize("argv", [["--bogus"], ["not-a-command"]])
+    def test_top_level_error_is_json(self, argv, capsys):
+        code, out = self._run(argv, capsys)
+        assert code == ExitCode.INVALID_INPUT
+        assert json.loads(out)["code"] == ErrorCode.INVALID_INPUT

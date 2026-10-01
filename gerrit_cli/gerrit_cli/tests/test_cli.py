@@ -845,7 +845,7 @@ class TestMainFunction:
     def test_main_no_args_with_session(self):
         """Test main shows status when no args and session active."""
         from gerrit_cli.cli import main
-        with patch('argparse.ArgumentParser') as MockParser, \
+        with patch('gerrit_cli.cli._JsonErrorParser') as MockParser, \
              patch('gerrit_cli.parsers.setup_parsers'), \
              patch('gerrit_cli.rebase.RebaseManager') as MockManager, \
              patch('gerrit_cli.cli.cmd_status') as mock_status:
@@ -862,7 +862,7 @@ class TestMainFunction:
     def test_main_no_args_no_session(self):
         """Test main shows help when no args and no session."""
         from gerrit_cli.cli import main
-        with patch('argparse.ArgumentParser') as MockParser, \
+        with patch('gerrit_cli.cli._JsonErrorParser') as MockParser, \
              patch('gerrit_cli.parsers.setup_parsers'), \
              patch('gerrit_cli.rebase.RebaseManager') as MockManager, \
              pytest.raises(SystemExit) as exc_info:
@@ -879,7 +879,7 @@ class TestMainFunction:
     def test_main_with_command(self):
         """Test main calls command handler when command given."""
         from gerrit_cli.cli import main
-        with patch('argparse.ArgumentParser') as MockParser, \
+        with patch('gerrit_cli.cli._JsonErrorParser') as MockParser, \
              patch('gerrit_cli.parsers.setup_parsers'):
             mock_args = MagicMock()
             mock_args.command = "status"
