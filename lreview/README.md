@@ -414,6 +414,8 @@ anything to Gerrit. `lreview render` (re)generates the reports for
 review JSONs that already exist — from older runs predating this
 feature, or after hand-editing — pulling stats from `summary.json`
 when it matches and the `review-metadata-*.json` sidecar otherwise.
+A GitHub `review-result-*.json` is rendered while `summary.json` still
+names it, since the pull request it reviewed is recorded only there.
 
 The logs are JSONL event streams; useful jq one-liners:
 

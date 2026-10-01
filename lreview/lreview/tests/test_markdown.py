@@ -214,6 +214,50 @@ class TestRenderExisting:
         assert "LU-19852 from metadata" in text
         assert "$7.92" not in text
 
+    def _github_results(self, tmp_path, with_summary=True):
+        import json
+        d = tmp_path / "results"
+        d.mkdir()
+        # an underscore in the repo name: the slug cannot be split back
+        name = f"review-result-github_acme_my_widget_7_{'b' * 7}.json"
+        (d / name).write_text(json.dumps({
+            "version": 1, "message": "One concern.", "findings": [
+                {"path": "src.c", "line": 2, "message": "b is unused"}]}))
+        if with_summary:
+            (d / "summary.json").write_text(json.dumps({
+                "github:acme/my_widget#7": {
+                    "provider": "github", "number": 7, "patchset": None,
+                    "sha": "b" * 40, "head_sha": "b" * 40,
+                    "base_sha": "a" * 40, "repository": "acme/my_widget",
+                    "web_url": "https://github.com/acme/my_widget/pull/7",
+                    "subject": "Fix the widget", "base_url": "",
+                    "status": "findings", "findings": 1, "model": "opus",
+                    "tokens": 6_500_000, "duration_s": 61, "json": name,
+                }}))
+        return d, d / name
+
+    def test_render_github_result(self, tmp_path):
+        from lreview.markdown import render_existing
+        d, _ = self._github_results(tmp_path)
+        written, skipped = render_existing(results_dir=d)
+        assert skipped == []
+        assert [p.name for p in written] == [
+            f"github_acme_my_widget_7_{'b' * 7}_Fix_the_widget.md"]
+        text = written[0].read_text()
+        assert text.startswith("# acme/my_widget#7 — Fix the widget")
+        assert "https://github.com/acme/my_widget/pull/7" in text
+        assert "1 finding(s)" in text
+        assert "### 1. `src.c` (line 2)" in text
+        assert "opus, 6.5M tokens" in text
+
+    def test_render_github_result_needs_its_manifest_entry(self, tmp_path):
+        from lreview.markdown import render_existing
+        d, path = self._github_results(tmp_path, with_summary=False)
+        written, skipped = render_existing(files=[path])
+        assert written == []
+        assert skipped[0][0] == path
+        assert "summary.json" in skipped[0][1]
+
     def test_render_explicit_files_and_skips(self, tmp_path):
         from lreview.markdown import render_existing
         d = self._results(tmp_path)

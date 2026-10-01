@@ -15,12 +15,14 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .gerrit import ResolvedChange, change_ref
+from .github import ResolvedGitHubPullRequest
 from .ui import elapsed, format_tokens
 
 MARKDOWN_SUBDIR = "markdown"
 
 _REVIEW_JSON_RE = re.compile(
     r"gerrit-review-(\d+)_ps(\d+)(-[a-z]+)?\.json$")
+_GITHUB_JSON_RE = re.compile(r"review-result-github_.+\.json$")
 
 
 def _sanitize(text: str, max_len: int = 60) -> str:
@@ -219,21 +221,47 @@ def _reconstruct(json_path: Path, number: int, patchset: int,
         subject=subject or f"change {number}",
         sha=sha or "0" * 40, patchset=patchset,
         ref=change_ref(number, patchset), base_url=base_url)
-    stats = {
+    return change, _entry_stats(entry)
+
+
+def _entry_stats(entry: dict) -> dict:
+    return {
         "severity": entry.get("severity"),
         "model": entry.get("model"),
         "tokens": entry.get("tokens"),
         "cost_usd": entry.get("cost_usd"),
         "duration": entry.get("duration_s"),
     }
-    return change, stats
+
+
+def _reconstruct_github(json_path: Path):
+    """(change, stats) for a GitHub review JSON from the summary.json
+    entry that names it, or None. The PR's identity is recorded only
+    there: owner and repo names may contain the underscores that join
+    them in the file's slug."""
+    try:
+        summary = json.loads((json_path.parent / "summary.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    for entry in summary.values():
+        if (entry.get("provider") != "github"
+                or entry.get("json") != json_path.name):
+            continue
+        owner, _, repo_name = (entry.get("repository") or "").partition("/")
+        change = ResolvedGitHubPullRequest(
+            owner, repo_name, entry["number"], entry.get("subject") or "",
+            entry["sha"], entry.get("base_sha") or "", "",
+            entry["repository"], entry.get("web_url") or "")
+        return change, _entry_stats(entry)
+    return None
 
 
 def render_existing(
     files: Optional[list[Path]] = None,
     results_dir: Optional[Path] = None,
 ):
-    """Render existing gerrit-review-*.json files to Markdown.
+    """Render existing gerrit-review-*.json and GitHub
+    review-result-*.json files to Markdown.
 
     Returns (written_paths, skipped) where skipped is a list of
     (path, reason) for files that could not be rendered.
@@ -241,16 +269,19 @@ def render_existing(
     if files:
         targets = [Path(f) for f in files]
     else:
-        targets = sorted((results_dir or Path(".")).glob(
-            "gerrit-review-*.json"))
+        base = results_dir or Path(".")
+        targets = (sorted(base.glob("gerrit-review-*.json"))
+                   + sorted(base.glob("review-result-*.json")))
 
     written: list[Path] = []
     skipped: list[tuple] = []
     for json_path in targets:
         match = _REVIEW_JSON_RE.search(json_path.name)
-        if not match:
+        github = _GITHUB_JSON_RE.search(json_path.name)
+        if not match and not github:
             skipped.append((json_path,
-                            "name is not gerrit-review-<N>_ps<M>.json"))
+                            "name is not gerrit-review-<N>_ps<M>.json "
+                            "or review-result-github_<slug>.json"))
             continue
         try:
             spec = json.loads(json_path.read_text())
@@ -260,9 +291,19 @@ def render_existing(
         if not isinstance(spec, dict):
             skipped.append((json_path, "not a JSON object"))
             continue
-        tag = match.group(3) or ""
-        change, stats = _reconstruct(
-            json_path, int(match.group(1)), int(match.group(2)), tag)
+        if github:
+            found = _reconstruct_github(json_path)
+            if found is None:
+                skipped.append((json_path,
+                                "no summary.json entry names this file; "
+                                "the PR it reviewed is recorded only there"))
+                continue
+            change, stats = found
+            tag = ""
+        else:
+            tag = match.group(3) or ""
+            change, stats = _reconstruct(
+                json_path, int(match.group(1)), int(match.group(2)), tag)
         written.append(write_review_markdown(
             json_path.parent, change, spec, tag=tag, **stats))
     return written, skipped

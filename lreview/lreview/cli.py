@@ -617,7 +617,8 @@ def cmd_render(args) -> int:
     for path, reason in skipped:
         print(f"  skipped {path}: {reason}")
     if not written and not skipped:
-        print(f"no gerrit-review-*.json files found in {results_dir}")
+        print("no gerrit-review-*.json or review-result-*.json files "
+              f"found in {results_dir}")
         return 1
     return 0 if written or not skipped else 1
 
@@ -922,7 +923,8 @@ def build_parser() -> argparse.ArgumentParser:
         "render", help="Render existing review JSONs to Markdown reports")
     render_p.add_argument(
         "files", nargs="*",
-        help="gerrit-review-*.json files (default: all in --results-dir)")
+        help="gerrit-review-*.json or review-result-*.json files "
+             "(default: all in --results-dir)")
     render_p.add_argument(
         "--results-dir", default=default_results_dir(),
         help="Results directory to render (default: as for run)")
