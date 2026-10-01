@@ -1,5 +1,6 @@
 """Tests for the rebase module."""
 
+import argparse
 import subprocess
 from unittest.mock import MagicMock, Mock, call, patch
 
@@ -15,6 +16,7 @@ from gerrit_cli.rebase import (
     work_on_patch,
 )
 from gerrit_cli.series import PatchInfo
+from gerrit_cli.session import SessionManager
 
 
 class TestRebaseSession:
@@ -1351,3 +1353,52 @@ class TestReintegration:
         assert len(state.stale_changes) == 2
         # First stale is 101 (D), so pending changes are C, B, A (102, 103, 104)
         assert state.pending_descendants == [102, 103, 104]
+
+
+class TestWithoutGerritConfigured:
+    """Session bookkeeping is local: it must not need GERRIT_URL."""
+
+    @pytest.fixture(autouse=True)
+    def _no_gerrit_url(self, monkeypatch):
+        from gerrit_cli import client as client_module
+
+        monkeypatch.delenv("GERRIT_URL")
+        monkeypatch.setattr(client_module, "DEFAULT_GERRIT_URL", None)
+
+    def test_status_and_abort_without_a_session(self, tmp_path):
+        manager = RebaseManager(SessionManager(tmp_path))
+        assert manager.get_status() == (False, "No active rebase session")
+        assert manager.abort_rebase() == (False, "No active rebase session")
+
+    def test_status_of_a_session(self, tmp_path):
+        manager = RebaseManager(SessionManager(tmp_path))
+        manager.save_session(RebaseSession(
+            series_url="https://review.example.com/62640",
+            target_change=62640, target_commit="a" * 40,
+            original_head="b" * 40, original_branch="main",
+            series_patches=[], started_at="2026-01-01T00:00:00",
+        ))
+        ok, message = manager.get_status()
+        assert ok
+        assert "Target Change: 62640" in message
+
+    def test_gerrit_is_still_needed_where_it_is_used(self, tmp_path):
+        from gerrit_cli.client import GerritConfigError
+
+        manager = RebaseManager(SessionManager(tmp_path))
+        with pytest.raises(GerritConfigError):
+            manager.client.get_change_detail(1)
+
+    def test_cli_status_and_bare_gc(self, monkeypatch, capsys):
+        from gerrit_cli import cli
+
+        with pytest.raises(SystemExit) as exc_info:
+            cli.cmd_status(argparse.Namespace())
+        assert exc_info.value.code == 1
+        assert "No active rebase session" in capsys.readouterr().out
+
+        monkeypatch.setattr("sys.argv", ["gerrit"])
+        with pytest.raises(SystemExit) as exc_info:
+            cli.main()
+        assert exc_info.value.code == 1
+        assert "usage:" in capsys.readouterr().out

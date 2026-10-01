@@ -24,11 +24,42 @@ class RebaseManager:
     """Manages git rebase operations for working on patches."""
 
     def __init__(self, session_manager: SessionManager | None = None):
-        self.series_finder = SeriesFinder()
-        self.client = GerritCommentsClient()
+        self._series_finder: SeriesFinder | None = None
+        self._client: GerritCommentsClient | None = None
         self._session_mgr = session_manager or SessionManager()
         self._git = git_utils.GitRunner()
         self._reintegration = ReintegrationManager(self._git)
+
+    # Built on first use: status, abort and the check for a session are
+    # local and must work with no Gerrit configured.  The setters and
+    # deleters let callers assign them and tests patch them.
+    @property
+    def client(self) -> GerritCommentsClient:
+        if self._client is None:
+            self._client = GerritCommentsClient()
+        return self._client
+
+    @client.setter
+    def client(self, value: GerritCommentsClient) -> None:
+        self._client = value
+
+    @client.deleter
+    def client(self) -> None:
+        self._client = None
+
+    @property
+    def series_finder(self) -> SeriesFinder:
+        if self._series_finder is None:
+            self._series_finder = SeriesFinder()
+        return self._series_finder
+
+    @series_finder.setter
+    def series_finder(self, value: SeriesFinder) -> None:
+        self._series_finder = value
+
+    @series_finder.deleter
+    def series_finder(self) -> None:
+        self._series_finder = None
 
     @property
     def state_file(self) -> Path:
