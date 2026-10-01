@@ -238,6 +238,13 @@ Rules that matter:
   passed; a second request does not make the first go faster.
 - Retest pre-existing failures. A failure caused by the patch will fail
   again.
+- `maloo retest` answering "This build does not exist" means the
+  patchset's build is gone (Jenkins keeps them only so long), and no
+  retest of it can ever run. Give it a new build: if the change is behind
+  its branch, rebase onto the tip and upload the new patchset; if it is
+  already current, or a rebase would drop unmerged parents in a series,
+  post exactly `BUILD` as a change comment
+  (`gerrit --user patrickbot message <change> BUILD`).
 
 ## Build failures go to Jenkins
 
