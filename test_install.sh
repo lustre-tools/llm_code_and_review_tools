@@ -221,7 +221,8 @@ server = http.server.HTTPServer(("127.0.0.1", 0), H)
 print(server.server_port, flush=True)
 server.serve_forever()
 SERVER
-    exec 4< <(python3 "$WORK/fake_gerrit.py")
+    # exec, so that $! is the server itself and the kill below reaches it
+    exec 4< <(exec python3 "$WORK/fake_gerrit.py")
     read -r PORT <&4
     SERVER_PID=$!
     fresh_home
