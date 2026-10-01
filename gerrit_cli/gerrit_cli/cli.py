@@ -394,8 +394,8 @@ def build_handlers():
     }
 
 
-def main():
-    """Main entry point."""
+def build_parser() -> argparse.ArgumentParser:
+    """The whole command line: global options and every subcommand."""
     from .parsers import setup_parsers
 
     from importlib.metadata import version as _pkg_version
@@ -439,7 +439,12 @@ def main():
     handlers = build_handlers()
 
     setup_parsers(subparsers, handlers)
+    return parser
 
+
+def main():
+    """Main entry point."""
+    parser = build_parser()
     args = parser.parse_args()
 
     global FULL_ENVELOPE
