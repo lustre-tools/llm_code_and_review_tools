@@ -63,7 +63,7 @@ def _preselect_credential_set() -> None:
     if not user:
         return
     try:
-        apply_credential_set("gerrit-cli", user)
+        selected = apply_credential_set("gerrit-cli", user)
     except CredentialSetError as e:
         envelope = error_response_from_dict(
             ErrorCode.CONFIG_ERROR, str(e), "cli"
@@ -74,6 +74,7 @@ def _preselect_credential_set() -> None:
     from . import client as _client
 
     _client.DEFAULT_GERRIT_URL = os.environ.get("GERRIT_URL")
+    _client.CREDENTIAL_SET = selected
 
 
 _preselect_credential_set()

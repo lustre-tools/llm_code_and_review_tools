@@ -33,6 +33,11 @@ CONFIG_PATH = Path.home() / ".config" / "gerrit-cli" / ".env"
 # Falls back to GERRIT_URL environment variable
 DEFAULT_GERRIT_URL: str | None = os.environ.get("GERRIT_URL")
 
+# The credential set --user selected; cli.py sets it before any client
+# exists.  A set inherits GERRIT_SSH_USER from the default one, so it is
+# no evidence of whose SSH login the set wants.
+CREDENTIAL_SET: str | None = None
+
 
 # A Change-Id as the commit-msg hook writes it: 'I' plus a 40-character
 # SHA1.  Prefixes are accepted too, since Gerrit's change: operator
@@ -110,6 +115,11 @@ class GerritCommentsClient:
         self.url = url or os.environ.get("GERRIT_URL")
         self.username = username or os.environ.get("GERRIT_USER")
         self.password = password or os.environ.get("GERRIT_PASS")
+        # An account chosen for this client, by argument or by --user, is
+        # the one its SSH fallbacks act as too.
+        self._chosen_user = username or (
+            self.username if CREDENTIAL_SET else None
+        )
 
         if not self.url:
             raise GerritConfigError(
@@ -587,10 +597,7 @@ class GerritCommentsClient:
         parsed = urlparse(self.url)
         host = parsed.hostname
         ssh_port = os.environ.get("GERRIT_SSH_PORT", "29418")
-        ssh_user = os.environ.get("GERRIT_SSH_USER", "")
-
-        if not ssh_user:
-            ssh_user = self._discover_ssh_user(host)
+        ssh_user = self._ssh_user(host)
 
         if not ssh_user:
             raise Exception(
@@ -666,10 +673,7 @@ class GerritCommentsClient:
         parsed = urlparse(self.url)
         host = parsed.hostname
         ssh_port = os.environ.get("GERRIT_SSH_PORT", "29418")
-        ssh_user = os.environ.get("GERRIT_SSH_USER", "")
-
-        if not ssh_user:
-            ssh_user = self._discover_ssh_user(host)
+        ssh_user = self._ssh_user(host)
 
         if not ssh_user:
             raise Exception(
@@ -802,10 +806,7 @@ class GerritCommentsClient:
         parsed = urlparse(self.url)
         host = parsed.hostname
         ssh_port = os.environ.get("GERRIT_SSH_PORT", "29418")
-        ssh_user = os.environ.get("GERRIT_SSH_USER", "")
-
-        if not ssh_user:
-            ssh_user = self._discover_ssh_user(host)
+        ssh_user = self._ssh_user(host)
 
         if not ssh_user:
             raise Exception(
@@ -874,10 +875,7 @@ class GerritCommentsClient:
         parsed = urlparse(self.url)
         host = parsed.hostname
         ssh_port = os.environ.get("GERRIT_SSH_PORT", "29418")
-        ssh_user = os.environ.get("GERRIT_SSH_USER", "")
-
-        if not ssh_user:
-            ssh_user = self._discover_ssh_user(host)
+        ssh_user = self._ssh_user(host)
 
         if not ssh_user:
             raise Exception(
@@ -961,6 +959,19 @@ class GerritCommentsClient:
         return self.rest.get(
             f"/changes/{change_number}/revisions/{patchset_b}"
             f"/files?base={patchset_a}"
+        )
+
+    def _ssh_user(self, host: str) -> str:
+        """Who a REST-to-SSH fallback logs in as.
+
+        The account chosen for this client, so that a fallback never acts
+        as someone else; otherwise GERRIT_SSH_USER, then discovery.
+        """
+        if self._chosen_user:
+            return self._chosen_user
+        return (
+            os.environ.get("GERRIT_SSH_USER", "")
+            or self._discover_ssh_user(host)
         )
 
     @staticmethod

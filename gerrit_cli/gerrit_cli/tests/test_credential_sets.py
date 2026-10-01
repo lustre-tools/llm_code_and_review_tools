@@ -129,3 +129,84 @@ def test_unknown_user_exits_with_a_json_error(tmp_path):
     assert result.returncode != 0
     assert "nobody" in result.stdout
     assert "exa" in result.stdout
+
+
+SSH_ENV = """\
+GERRIT_URL=https://review.example.com
+GERRIT_USER=dev
+GERRIT_PASS=dev-secret
+GERRIT_SSH_USER=dev-ssh
+
+[bot]
+GERRIT_USER=bot
+GERRIT_PASS=bot-secret
+"""
+
+
+def ssh_fallback_user(env_file, argv, extra_env=None):
+    """Who the abandon SSH fallback would log in as, under argv.
+
+    subprocess.run is stubbed in the probe: git remote -v names the
+    developer's account and ssh itself is never run.
+    """
+    code = (
+        "import sys, json\n"
+        f"sys.argv = {argv!r}\n"
+        "from unittest.mock import MagicMock, patch\n"
+        "import gerrit_cli.cli\n"
+        "from gerrit_cli import client\n"
+        "ssh = []\n"
+        "def run(cmd, **kwargs):\n"
+        "    if cmd[0] == 'ssh':\n"
+        "        ssh.append(cmd[3])\n"
+        "    out = b''\n"
+        "    if cmd[:2] == ['git', 'remote']:\n"
+        "        out = b'origin\\tssh://dev@review.example.com:29418/p (push)\\n'\n"
+        "    return MagicMock(returncode=0, stdout=out, stderr=b'')\n"
+        "with patch('subprocess.run', side_effect=run):\n"
+        "    client.GerritCommentsClient()._abandon_via_ssh(123)\n"
+        "print(json.dumps(ssh))\n"
+    )
+    env = dict(os.environ)
+    for key in [k for k in env if k.startswith("GERRIT_")]:
+        env.pop(key)
+    env["GERRIT_CLI_ENV_FILE"] = str(env_file)
+    # discovery's last resort reads ~/.config/gerrit-cli/.env
+    env["HOME"] = str(env_file.parent)
+    env.update(extra_env or {})
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    import json
+
+    return json.loads(result.stdout)
+
+
+def test_ssh_fallback_acts_as_the_selected_set(tmp_path):
+    """--user bot must not fall back to the developer's SSH identity,
+    whether it would come from GERRIT_SSH_USER (which the bot set
+    inherits from the default one) or from the git remote."""
+    env_file = write_env(tmp_path, SSH_ENV)
+    assert ssh_fallback_user(
+        env_file, ["gc", "--user", "bot", "abandon", "123"]
+    ) == ["bot@review.example.com"]
+
+    no_ssh_user = write_env(
+        tmp_path, SSH_ENV.replace("GERRIT_SSH_USER=dev-ssh\n", ""))
+    assert ssh_fallback_user(
+        no_ssh_user, ["gc", "--user", "bot", "abandon", "123"]
+    ) == ["bot@review.example.com"]
+
+
+def test_ssh_fallback_without_user_is_unchanged(tmp_path):
+    env_file = write_env(tmp_path, SSH_ENV)
+    assert ssh_fallback_user(
+        env_file, ["gc", "abandon", "123"]
+    ) == ["dev-ssh@review.example.com"]
+
+    no_ssh_user = write_env(
+        tmp_path, SSH_ENV.replace("GERRIT_SSH_USER=dev-ssh\n", ""))
+    assert ssh_fallback_user(
+        no_ssh_user, ["gc", "abandon", "123"]
+    ) == ["dev@review.example.com"]

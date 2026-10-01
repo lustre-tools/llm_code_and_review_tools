@@ -395,3 +395,31 @@ class TestGerritCommentsClientWithMocks:
         comments = call_args[1]["json"]["comments"]
         assert comments["test.py"][0]["message"] == "Done"
         assert comments["test.py"][0]["unresolved"] is False
+
+
+class TestSshFallbackIdentity:
+    """A REST-to-SSH fallback acts as the account the client was given."""
+
+    @staticmethod
+    def _ssh_logins(client):
+        logins = []
+
+        def run(cmd, **kwargs):
+            if cmd[0] == "ssh":
+                logins.append(cmd[3])
+            return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+        with patch("subprocess.run", side_effect=run):
+            client._abandon_via_ssh(123)
+        return logins
+
+    def test_an_explicit_username_wins(self, monkeypatch):
+        monkeypatch.setenv("GERRIT_SSH_USER", "dev-ssh")
+        client = GerritCommentsClient(
+            url="https://review.example.com", username="bot", password="pw")
+        assert self._ssh_logins(client) == ["bot@review.example.com"]
+
+    def test_default_identity_uses_gerrit_ssh_user(self, monkeypatch):
+        monkeypatch.setenv("GERRIT_SSH_USER", "dev-ssh")
+        client = GerritCommentsClient(url="https://review.example.com")
+        assert self._ssh_logins(client) == ["dev-ssh@review.example.com"]
