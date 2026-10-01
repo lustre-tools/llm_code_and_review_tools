@@ -31,8 +31,12 @@ prefix or falls back to the default instance.
 **Cloud vs Server:** The tool auto-detects JIRA Cloud instances
 (`.atlassian.net`) and handles API differences transparently:
 - Uses REST API v3 for Cloud, v2 for Server
-- Converts description/comment text to Atlassian Document Format
-  (ADF) on write, and ADF back to plain text on read
+- Converts description/comment Markdown to Atlassian Document Format
+  (ADF) on write, and ADF back to the same Markdown on read: code
+  fences, lists (nested), `>` quotes, tables, `code`, `**bold**`,
+  `*italic*`, `[text](url)`, and `@[Display Name]` mentions
+- Threaded replies: `jira comment KEY --reply-to <comment id> "..."`;
+  comments in a thread carry `parent_id` (the thread's root comment)
 - Uses `accountId` instead of `username` for Cloud (GDPR mode)
 - Resolves display names to `accountId` automatically for
   assign, watch, and unwatch commands

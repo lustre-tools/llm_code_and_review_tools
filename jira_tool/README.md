@@ -111,7 +111,7 @@ or `jira describe` for machine-readable API documentation.
 | `jira attachments <key>` | List attachments |
 | `jira search <jql>` | Search with JQL |
 | `jira create` | Create a new issue |
-| `jira comment <key> <body>` | Add a comment |
+| `jira comment <key> <body>` | Add a comment (Markdown on Cloud; `--reply-to ID` replies in a thread) |
 | `jira transitions <key>` | List available transitions |
 | `jira transition <key> <id>` | Transition to new state |
 

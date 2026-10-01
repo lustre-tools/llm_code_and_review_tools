@@ -91,6 +91,12 @@ def register(main):
     @click.option("--body", "body_opt", default=None, help="Comment text (alternative to positional BODY)")
     @click.option("--update", "comment_id", default=None, help="Edit existing comment by ID instead of adding new")
     @click.option(
+        "--reply-to",
+        "reply_to",
+        default=None,
+        help="Cloud only: post as a reply in the thread of this comment ID",
+    )
+    @click.option(
         "--visibility",
         default=None,
         help="Restrict comment visibility. Format: 'role:RoleName' or 'group:GroupName'. "
@@ -98,7 +104,7 @@ def register(main):
     )
     @click.pass_context
     def issue_comment_add(ctx: click.Context, key: str, body: str | None, body_opt: str | None,
-                          comment_id: str | None, visibility: str | None) -> None:
+                          comment_id: str | None, reply_to: str | None, visibility: str | None) -> None:
         """
         Add or edit a comment on an issue.
 
@@ -107,10 +113,17 @@ def register(main):
 
         Use --body when the comment text starts with a dash.
         Use --update COMMENT_ID to edit an existing comment.
+        Use --reply-to COMMENT_ID to reply in that comment's thread (Cloud).
+
+        On Cloud the text is Markdown: code fences, lists, > quotes, tables,
+        `code`, **bold**, *italic*, [text](url), and @[Display Name] mentions
+        are converted to JIRA formatting.
         """
         body = body_opt or body
         if not body:
             raise click.UsageError("Missing comment text. Provide BODY as argument or via --body.")
+        if comment_id and reply_to:
+            raise click.UsageError("--update and --reply-to cannot be combined.")
         command = "edit-comment" if comment_id else "comment"
         pretty = ctx.obj.get("pretty", False)
 
@@ -122,7 +135,14 @@ def register(main):
             if comment_id:
                 raw_comment = client.edit_comment(key, comment_id, body, visibility=visibility_dict)
             else:
-                raw_comment = client.add_comment(key, body, visibility=visibility_dict)
+                parent_id = None
+                if reply_to:
+                    if not client.config.is_cloud:
+                        raise click.UsageError("--reply-to needs a JIRA Cloud instance.")
+                    # threads are one level deep: a reply to a reply joins the root's thread
+                    target = client.get_comment(key, reply_to)
+                    parent_id = str(target.get("parentId") or target["id"])
+                raw_comment = client.add_comment(key, body, visibility=visibility_dict, parent_id=parent_id)
 
             # Normalize response
             comment_data = {

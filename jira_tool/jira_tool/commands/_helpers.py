@@ -352,6 +352,8 @@ def _normalize_comment(raw_comment: dict[str, Any]) -> dict[str, Any]:
         "updated": raw_comment.get("updated"),
         "update_author": update_author.get("displayName") if update_author else None,
     }
+    if raw_comment.get("parentId"):
+        result["parent_id"] = str(raw_comment["parentId"])
 
     visibility = raw_comment.get("visibility")
     if visibility:

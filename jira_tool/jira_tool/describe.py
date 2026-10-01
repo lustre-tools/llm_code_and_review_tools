@@ -80,13 +80,22 @@ def get_tool_description() -> ToolDescription:
             ),
             Command(
                 name="comment",
-                description="Add a comment to an issue, or edit one with --update, optionally with restricted visibility",
-                usage='jira comment <KEY> "<BODY>" [--update COMMENT_ID] [--visibility role:RoleName]',
+                description="Add a comment to an issue, or edit one with --update, optionally with "
+                "restricted visibility. On Cloud the body is Markdown (code fences, lists, > quotes, "
+                "tables, `code`, **bold**, *italic*, [text](url), @[Display Name] mentions) and is "
+                "converted to JIRA formatting; reads return the same Markdown.",
+                usage='jira comment <KEY> "<BODY>" [--update COMMENT_ID] [--reply-to COMMENT_ID] '
+                '[--visibility role:RoleName]',
                 arguments=[
                     Argument(name="key", description="Issue key or JIRA URL", required=True),
                     Argument(name="body", description="Comment text; give it here or with --body"),
                     Argument(name="--body", description="Comment text, for text that starts with a dash"),
                     Argument(name="--update", description="ID of an existing comment to edit instead of adding one"),
+                    Argument(
+                        name="--reply-to",
+                        description="Cloud only: post as a reply in the thread of this comment "
+                        "(a reply to a reply joins the root comment's thread)",
+                    ),
                     Argument(
                         name="--visibility",
                         description="Restrict visibility: 'role:RoleName' or 'group:GroupName'. "
@@ -98,10 +107,11 @@ def get_tool_description() -> ToolDescription:
                     'jira comment PROJ-123 "Internal note" --visibility "role:Developers"',
                     'jira comment PROJ-123 --body "-1: breaks the build"',
                     'jira comment PROJ-123 "Corrected text" --update 10001',
+                    'jira comment HRT-12 --reply-to 14437 "@[Steve Crusan] see **69338**"',
                 ],
                 output_fields=[
                     "issue_key", "comment.id", "comment.body", "comment.author",
-                    "comment.created", "comment.visibility",
+                    "comment.created", "comment.visibility", "comment.parent_id",
                 ],
                 next_actions=["get", "transition", "roles"],
             ),

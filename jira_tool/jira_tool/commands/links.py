@@ -13,6 +13,14 @@ from ._helpers import (
     output_result,
 )
 
+_LINK_TYPE_ALIASES = {
+    "related": ("relates",),
+    "relates": ("related",),
+    "blocker": ("blocks",),
+    "blocks": ("blocker",),
+    "duplicates": ("duplicate",),
+}
+
 
 def _resolve_link_type(client, user_type: str) -> str:
     """Fuzzy-match a user-provided link type against available JIRA link types.
@@ -40,6 +48,13 @@ def _resolve_link_type(client, user_type: str) -> str:
         # Substring match (e.g., "blocks" matches "is blocking")
         for c in candidates:
             if user_lower in c or c in user_lower:
+                return lt["name"]
+
+    # Server and Cloud name the same types differently ("Related" on
+    # jira.whamcloud.com, "Relates" on Cloud); try the other spelling.
+    for alias in _LINK_TYPE_ALIASES.get(user_lower, ()):
+        for lt in link_types:
+            if lt["name"].lower() == alias:
                 return lt["name"]
 
     # No match — return as-is and let JIRA reject it with a clear error

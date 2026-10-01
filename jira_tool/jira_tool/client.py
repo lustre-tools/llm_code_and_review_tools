@@ -11,6 +11,7 @@ from urllib.parse import urljoin
 import requests
 from urllib3.exceptions import ConnectTimeoutError
 
+from .adf import MentionResolver, adf_to_markdown, markdown_to_adf
 from .config import JiraConfig
 from .errors import (
     AuthError,
@@ -22,159 +23,23 @@ from .errors import (
 )
 
 
-def _text_to_adf(text: str) -> dict[str, Any]:
-    """Convert plain text to Atlassian Document Format (ADF).
+def _text_to_adf(text: str, resolve_mention: MentionResolver | None = None) -> dict[str, Any]:
+    """Convert comment or description text to Atlassian Document Format (ADF).
 
     Cloud v3 API requires ADF for description and comment body fields
-    instead of plain text strings.
+    instead of plain text strings.  Markdown markup is converted; see
+    jira_tool.adf for what is supported.
     """
-    # Split into paragraphs on double newlines; single newlines become hardBreak
-    paragraphs = text.split("\n\n")
-    content = []
-    for para in paragraphs:
-        inline: list[dict[str, Any]] = []
-        lines = para.split("\n")
-        for i, line in enumerate(lines):
-            if line:
-                inline.append({"type": "text", "text": line})
-            if i < len(lines) - 1:
-                inline.append({"type": "hardBreak"})
-        if inline:
-            content.append({"type": "paragraph", "content": inline})
-    return {"version": 1, "type": "doc", "content": content or [
-        {"type": "paragraph", "content": [{"type": "text", "text": ""}]}
-    ]}
+    return markdown_to_adf(text, resolve_mention)
 
 
-def _adf_to_text(adf: Any) -> str:
-    """Convert Atlassian Document Format (ADF) to plain text.
+def _adf_to_text(adf: Any) -> Any:
+    """Convert Atlassian Document Format (ADF) to Markdown text.
 
     Cloud v3 API returns ADF dicts for description and comment body
-    fields. This extracts readable text, preserving paragraph breaks.
-    Returns the input unchanged if it's already a string or None.
-
-    Handles all common ADF node types: paragraphs, headings, lists,
-    code blocks, tables, panels, mentions, emoji, inline cards,
-    and media references. Marks (bold, italic, links, etc.) are
-    rendered as plain text with link URLs appended in parentheses.
+    fields.  Returns the input unchanged if it's already a string or None.
     """
-    if adf is None:
-        return None
-    if isinstance(adf, str):
-        return adf
-    if not isinstance(adf, dict) or adf.get("type") != "doc":
-        return str(adf)
-
-    def _extract(node: Any, list_depth: int = 0, ordered_index: int = 0) -> str:
-        if isinstance(node, str):
-            return node
-        if not isinstance(node, dict):
-            return ""
-        node_type = node.get("type", "")
-        attrs = node.get("attrs", {})
-        children = node.get("content", [])
-
-        # --- Inline nodes ---
-        if node_type == "text":
-            text = node.get("text", "")
-            # Handle link marks — append URL
-            for mark in node.get("marks", []):
-                if mark.get("type") == "link":
-                    href = mark.get("attrs", {}).get("href", "")
-                    if href and href != text:
-                        text = f"{text} ({href})"
-            return text
-        if node_type == "hardBreak":
-            return "\n"
-        if node_type == "mention":
-            return attrs.get("text", "@unknown")
-        if node_type == "emoji":
-            return attrs.get("shortName", attrs.get("text", ""))
-        if node_type == "inlineCard":
-            return attrs.get("url", "")
-        if node_type == "media":
-            # Media nodes have an ID but no readable text
-            alt = attrs.get("alt", "")
-            return f"[media: {alt}]" if alt else "[media]"
-
-        # --- Block nodes ---
-        text = "".join(
-            _extract(child, list_depth, i)
-            for i, child in enumerate(children)
-        )
-
-        if node_type in ("paragraph", "mediaSingle", "mediaGroup"):
-            return text + "\n"
-        if node_type == "heading":
-            level = attrs.get("level", 1)
-            return "#" * level + " " + text + "\n"
-        if node_type == "codeBlock":
-            lang = attrs.get("language", "")
-            header = f"```{lang}\n" if lang else "```\n"
-            return header + text + "```\n"
-        if node_type == "blockquote":
-            lines = text.rstrip("\n").split("\n")
-            return "\n".join("> " + line for line in lines) + "\n"
-        if node_type in ("bulletList", "orderedList"):
-            # Children are listItems; pass depth for indentation
-            items = []
-            for i, child in enumerate(children):
-                items.append(_extract(child, list_depth + 1, i))
-            return "".join(items)
-        if node_type == "listItem":
-            indent = "  " * (list_depth - 1)
-            # Check parent type from context — ordered_index is the
-            # position within the parent list
-            prefix = f"{ordered_index + 1}. "
-            # If we're inside a bulletList, use "- " instead
-            # We detect this by checking if ordered_index matters;
-            # callers pass the index for both types, but bulletList
-            # items should use "- "
-            # Simple heuristic: if the text starts with a number prefix
-            # from a nested orderedList, keep it. Otherwise use "- ".
-            # Actually, we just use "- " always and let orderedList
-            # override below.
-            return indent + "- " + text
-        if node_type == "table":
-            return text + "\n"
-        if node_type == "tableRow":
-            # Join cells with " | "
-            cells = [_extract(c, list_depth).strip() for c in children]
-            return "| " + " | ".join(cells) + " |\n"
-        if node_type == "tableCell":
-            return text.strip()
-        if node_type == "panel":
-            panel_type = attrs.get("panelType", "info")
-            return f"[{panel_type}] {text}"
-        if node_type == "rule":
-            return "---\n"
-
-        # Default: just recurse
-        return text
-
-    # Handle orderedList items properly — patch listItem rendering
-    def _extract_block(node: Any) -> str:
-        if not isinstance(node, dict):
-            return _extract(node)
-        if node.get("type") == "orderedList":
-            items = []
-            start = node.get("attrs", {}).get("order", 1)
-            indent = ""
-            for i, child in enumerate(node.get("content", [])):
-                child_text = "".join(
-                    _extract(grandchild, 1, i)
-                    for grandchild in child.get("content", [])
-                )
-                items.append(f"{indent}{start + i}. {child_text}")
-            return "".join(items)
-        return _extract(node)
-
-    parts = [_extract_block(block) for block in adf.get("content", [])]
-    result = "".join(parts).strip()
-    # Collapse triple+ newlines
-    while "\n\n\n" in result:
-        result = result.replace("\n\n\n", "\n\n")
-    return result
+    return adf_to_markdown(adf)
 
 
 def _retry_after_seconds(value: str | None) -> float | None:
@@ -833,11 +698,25 @@ class JiraClient:
             "comments": all_comments,
         }
 
+    def get_comment(self, key: str, comment_id: str) -> dict[str, Any]:
+        """Get one comment of an issue."""
+        return self._request(
+            "GET",
+            f"issue/{key}/comment/{comment_id}",
+            context=f"{key}/comment/{comment_id}",
+        )
+
+    def _resolve_mention(self, name: str) -> str:
+        from .commands._helpers import resolve_cloud_user
+
+        return resolve_cloud_user(self, name)
+
     def add_comment(
         self,
         key: str,
         body: str,
         visibility: dict[str, str] | None = None,
+        parent_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Add a comment to an issue.
@@ -847,14 +726,17 @@ class JiraClient:
             body: Comment body text
             visibility: Optional visibility restriction dict with "type" ("role" or "group")
                         and "value" (role/group name), e.g. {"type": "role", "value": "Developers"}
+            parent_id: Cloud only: the root comment of the thread to reply in
 
         Returns:
             Created comment data
         """
-        comment_body = _text_to_adf(body) if self.config.is_cloud else body
+        comment_body = _text_to_adf(body, self._resolve_mention) if self.config.is_cloud else body
         json_data: dict[str, Any] = {"body": comment_body}
         if visibility:
             json_data["visibility"] = visibility
+        if parent_id:
+            json_data["parentId"] = int(parent_id)
         return self._request(
             "POST",
             f"issue/{key}/comment",
@@ -882,7 +764,7 @@ class JiraClient:
         Returns:
             Updated comment data
         """
-        comment_body = _text_to_adf(body) if self.config.is_cloud else body
+        comment_body = _text_to_adf(body, self._resolve_mention) if self.config.is_cloud else body
         json_data: dict[str, Any] = {"body": comment_body}
         if visibility:
             json_data["visibility"] = visibility
@@ -1222,7 +1104,8 @@ class JiraClient:
         }
 
         if comment:
-            body["update"] = {"comment": [{"add": {"body": comment}}]}
+            comment_body = _text_to_adf(comment, self._resolve_mention) if self.config.is_cloud else comment
+            body["update"] = {"comment": [{"add": {"body": comment_body}}]}
 
         if fields:
             body["fields"] = fields
@@ -1270,7 +1153,7 @@ class JiraClient:
 
         if description:
             body["fields"]["description"] = (
-                _text_to_adf(description) if self.config.is_cloud else description
+                _text_to_adf(description, self._resolve_mention) if self.config.is_cloud else description
             )
 
         return self._request("POST", "issue", json_data=body)
@@ -1306,7 +1189,7 @@ class JiraClient:
             update_fields["summary"] = summary
         if description is not None:
             update_fields["description"] = (
-                _text_to_adf(description) if self.config.is_cloud else description
+                _text_to_adf(description, self._resolve_mention) if self.config.is_cloud else description
             )
         if assignee is not None:
             if self.config.is_cloud:
