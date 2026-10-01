@@ -943,6 +943,67 @@ class TestResponseParsing:
             client.get_issue("PROJ-123")
 
 
+class TestNotFoundCodes:
+    """A 404 names the resource that is missing."""
+
+    @pytest.mark.parametrize(
+        "call, method, path, code",
+        [
+            (lambda c: c.get_issue("PROJ-9"), "GET", "issue/PROJ-9",
+             ErrorCode.ISSUE_NOT_FOUND),
+            (lambda c: c.get_comments("PROJ-9"), "GET", "issue/PROJ-9/comment",
+             ErrorCode.ISSUE_NOT_FOUND),
+            (lambda c: c.add_watcher("PROJ-9", "jdoe"), "POST",
+             "issue/PROJ-9/watchers", ErrorCode.ISSUE_NOT_FOUND),
+            (lambda c: c.delete_comment("PROJ-1", "777"), "DELETE",
+             "issue/PROJ-1/comment/777", ErrorCode.NOT_FOUND),
+            (lambda c: c.get_filter("99999"), "GET", "filter/99999",
+             ErrorCode.NOT_FOUND),
+            (lambda c: c.get_attachment("99999"), "GET", "attachment/99999",
+             ErrorCode.NOT_FOUND),
+            (lambda c: c.delete_link("4242"), "DELETE", "issueLink/4242",
+             ErrorCode.NOT_FOUND),
+            (lambda c: c.get_project_components("NOPE"), "GET",
+             "project/NOPE/components", ErrorCode.PROJECT_NOT_FOUND),
+            (lambda c: c.get_project_versions("NOPE"), "GET",
+             "project/NOPE/versions", ErrorCode.PROJECT_NOT_FOUND),
+            (lambda c: c.get_project_roles("NOPE"), "GET",
+             "project/NOPE/role", ErrorCode.PROJECT_NOT_FOUND),
+            (lambda c: c.get_issue_types("NOPE"), "GET", "project/NOPE",
+             ErrorCode.PROJECT_NOT_FOUND),
+            (lambda c: c.get_user("nobody"), "GET", "user",
+             ErrorCode.USER_NOT_FOUND),
+        ],
+    )
+    @responses.activate
+    def test_code_matches_resource(self, client, call, method, path, code):
+        responses.add(
+            getattr(responses, method),
+            f"https://jira.example.com/rest/api/2/{path}",
+            json={"errorMessages": ["gone"]},
+            status=404,
+        )
+
+        with pytest.raises(NotFoundError) as exc_info:
+            call(client)
+        assert exc_info.value.code == code
+
+    @responses.activate
+    def test_upload_to_missing_issue(self, client, tmp_path):
+        upload = tmp_path / "log.txt"
+        upload.write_text("x")
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue/PROJ-9/attachments",
+            json={"errorMessages": ["Issue Does Not Exist"]},
+            status=404,
+        )
+
+        with pytest.raises(NotFoundError) as exc_info:
+            client.upload_attachment("PROJ-9", str(upload))
+        assert exc_info.value.code == ErrorCode.ISSUE_NOT_FOUND
+
+
 class TestGetWatchers:
     """Tests for get_watchers method."""
 

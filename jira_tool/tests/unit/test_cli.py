@@ -337,6 +337,20 @@ class TestCLIIssueGet:
         assert "ISSUE_NOT_FOUND" in data["error"]["code"]
 
     @responses.activate
+    def test_missing_filter_is_not_a_missing_issue(self, runner, mock_env):
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/filter/99999",
+            json={"errorMessages": ["The selected filter is not available to you"]},
+            status=404,
+        )
+
+        result = runner.invoke(main, ["filter", "get", "99999"])
+
+        assert result.exit_code == 3
+        assert json.loads(result.output)["code"] == "NOT_FOUND"
+
+    @responses.activate
     def test_issue_get_pretty(self, runner, mock_env):
         """Should format with indentation when --pretty."""
         responses.add(

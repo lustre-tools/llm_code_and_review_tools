@@ -327,13 +327,33 @@ class JiraClient:
 
         return False
 
-    def _handle_response(self, response: requests.Response, context: str = "") -> Any:
+    @staticmethod
+    def _not_found_code(endpoint: str) -> str:
+        """The error code for a 404 from *endpoint*.
+
+        Below issue/<KEY>/<collection>, as in issue/<KEY>/comment/<ID>, the
+        404 may be for the item rather than the issue.
+        """
+        parts = endpoint.strip("/").split("/")
+        if parts[0] == "issue" and len(parts) in (2, 3):
+            return ErrorCode.ISSUE_NOT_FOUND
+        if parts[0] == "project" and len(parts) >= 2:
+            return ErrorCode.PROJECT_NOT_FOUND
+        return ErrorCode.NOT_FOUND
+
+    def _handle_response(
+        self,
+        response: requests.Response,
+        context: str = "",
+        not_found_code: str = ErrorCode.NOT_FOUND,
+    ) -> Any:
         """
         Handle API response, raising appropriate errors for non-success statuses.
 
         Args:
             response: The requests Response object
             context: Optional context string for error messages
+            not_found_code: Error code to report for a 404
 
         Returns:
             Parsed JSON response data
@@ -383,7 +403,7 @@ class JiraClient:
 
         if response.status_code == 404:
             raise NotFoundError(
-                code=ErrorCode.ISSUE_NOT_FOUND,
+                code=not_found_code,
                 message=f"Resource not found{': ' + context if context else ''}{': ' + error_detail if error_detail else ''}",
                 http_status=404,
                 details={"jira_errors": jira_errors} if jira_errors else None,
@@ -468,7 +488,9 @@ class JiraClient:
                     timeout=self.timeout,
                 )
                 self._debug_response(response)
-                return self._handle_response(response, context)
+                return self._handle_response(
+                    response, context, self._not_found_code(endpoint)
+                )
 
             except requests.exceptions.Timeout as e:
                 last_error = NetworkError(
@@ -1464,14 +1486,19 @@ class JiraClient:
         import json
 
         # JIRA expects the username/accountId as a raw JSON string, not an object
-        url = self._build_url(f"issue/{key}/watchers")
+        endpoint = f"issue/{key}/watchers"
+        url = self._build_url(endpoint)
         response = self._raw_request_with_retry(
             "POST",
             url,
             data=json.dumps(username),
             context=f"add watcher {username} to {key}",
         )
-        return self._handle_response(response, f"add watcher {username} to {key}")
+        return self._handle_response(
+            response,
+            f"add watcher {username} to {key}",
+            self._not_found_code(endpoint),
+        )
 
     def remove_watcher(self, key: str, username: str) -> dict[str, Any]:
         """
@@ -1525,7 +1552,8 @@ class JiraClient:
         if filename is None:
             filename = os.path.basename(file_path)
 
-        url = self._build_url(f"issue/{key}/attachments")
+        endpoint = f"issue/{key}/attachments"
+        url = self._build_url(endpoint)
         headers = {"X-Atlassian-Token": "no-check"}
         last_error: Exception | None = None
         self._debug(f"POST {url} (upload: {filename})")
@@ -1563,7 +1591,11 @@ class JiraClient:
                         http_status=response.status_code,
                     )
                 else:
-                    return self._handle_response(response, f"upload to {key}")
+                    return self._handle_response(
+                        response,
+                        f"upload to {key}",
+                        self._not_found_code(endpoint),
+                    )
 
             except requests.exceptions.Timeout as e:
                 last_error = NetworkError(
