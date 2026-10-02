@@ -720,6 +720,23 @@ def _known_on_gerrit(client: Any, shas: list[str]) -> set[str]:
     return known
 
 
+def _with_ancestors(commits: list[Commit], known: set[str]) -> set[str]:
+    """known, and every commit in the range below one of them.
+
+    Gerrit has every ancestor of a commit it has, though search does not
+    show the ones in changes the account cannot see, such as private ones.
+    """
+    by_sha = {c.sha: c for c in commits}
+    out = set(known)
+    stack = [sha for sha in known if sha in by_sha]
+    while stack:
+        for parent in by_sha[stack.pop()].parents:
+            if parent in by_sha and parent not in out:
+                out.add(parent)
+                stack.append(parent)
+    return out
+
+
 def _patchset_of(
     client: Any, change_id: str, project: str, branch: str, sha: str,
     number: int | None,
@@ -1200,7 +1217,9 @@ def upload(
                 "probably based on another branch -- check --branch.",
             )
 
-        known = _known_on_gerrit(client, [c.sha for c in commits])
+        known = _with_ancestors(
+            commits, _known_on_gerrit(client, [c.sha for c in commits])
+        )
         new = [c for c in commits if c.sha not in known]
         if not new:
             raise UploadError(

@@ -501,6 +501,20 @@ def test_a_parent_gerrit_already_has_is_not_checked(gerrit):
     assert git(work, "rev-parse", "HEAD~1") == parent
 
 
+def test_a_commit_below_one_gerrit_has_is_on_gerrit_too(gerrit):
+    """An ancestor search cannot find (a private change) is still Gerrit's."""
+    fake, bare, work = gerrit
+    commit(work, "LU-3 lod: hidden", cid=change_id("c"), committer=OPERATOR)
+    parent = commit(work, "LU-2 osc: parent", cid=CID_B, committer=OPERATOR)
+    fake.add_change(60000, CID_B, revisions={parent: 4})
+    commit(work, "LU-1 llite: fix", cid=CID_A, committer=OPERATOR)
+
+    data = upload(fake, repo=str(work), change="51164")
+
+    assert data["pushed"] is True
+    assert [c["action"] for c in data["commits"]] == ["none", "none", "update"]
+
+
 # ---------------------------------------------------------------------------
 # More than one commit, and --series
 # ---------------------------------------------------------------------------
