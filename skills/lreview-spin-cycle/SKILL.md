@@ -116,7 +116,7 @@ double-posting. Posted messages carry a prefix (`--prefix`, default
 ## Setup and health
 
 ```bash
-lreview check     # agent CLI, review prompts, Gerrit credentials
+lreview check     # agent CLI and its login, review prompts, Gerrit
 lreview setup     # guided first-time setup; offers to clone review-prompts
 ```
 

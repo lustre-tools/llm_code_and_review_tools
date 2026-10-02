@@ -52,7 +52,10 @@ exact instructions for anything missing:
    with a real read-only API call.
 
 `lreview check` runs the same checks non-interactively (for scripts
-and CI).
+and CI), and also checks the agent is logged in: claude is asked one
+prompt on haiku with no tools (about 1.5 cents, a few seconds), codex
+runs `codex login status`. A failed login is "NOT ready" and exit 2.
+`--no-login` skips it.
 
 **Prompt freshness:** before a run, lreview checks the prompts
 checkout against its upstream and fast-forwards it automatically

@@ -61,24 +61,29 @@ def check_gerrit(live: bool = True) -> Tuple[bool, str]:
                        f"verification failed: {exc}")
 
 
-LOGIN_TIMEOUT = 90
+LOGIN_TIMEOUT = 30
 LOGIN_PROMPT = "Reply with the single word ok."
+# What claude and codex say when the account is not logged in or the
+# credential is refused.
+_AUTH_FAILURES = ("not logged in", "/login", "authentication_failed",
+                  "invalid api key", "oauth token")
 
 
 def check_agent_login(agent: str) -> Tuple[bool, str]:
     """Verify the agent CLI is logged in, as a review would find it.
 
     Being on PATH says nothing about the login: a review then fails
-    authentication before producing anything. Claude is asked one short
-    turn; codex has "login status", which spends nothing. The other
-    backends are not checked.
+    authentication before producing anything. Claude is asked one turn
+    on haiku with no tools, about 1.5 cents; codex has "login status",
+    which spends nothing. The other backends are not checked.
     """
     import json
     import subprocess
 
     if agent == "claude":
         cmd = ["claude", "-p", LOGIN_PROMPT, "--output-format", "json",
-               "--max-turns", "1"]
+               "--max-turns", "1", "--model", "haiku", "--tools", "",
+               "--no-session-persistence"]
     elif agent == "codex":
         cmd = ["codex", "login", "status"]
     else:
@@ -93,7 +98,7 @@ def check_agent_login(agent: str) -> Tuple[bool, str]:
     except FileNotFoundError:
         return False, f"'{agent}' not found on PATH"
     except subprocess.TimeoutExpired:
-        return False, f"no answer from {agent} in {LOGIN_TIMEOUT}s"
+        return False, f"{agent} did not answer in {LOGIN_TIMEOUT}s"
     said = " ".join((done.stdout + " " + done.stderr).split())
     if agent == "claude":
         try:
@@ -107,7 +112,12 @@ def check_agent_login(agent: str) -> Tuple[bool, str]:
             said = str(result["result"])
     elif done.returncode == 0:
         return True, said[:200] or "logged in"
-    return False, f"not logged in or not usable: {said[-300:] or f'exit {done.returncode}'}"
+    said = said[-300:] or f"exit {done.returncode}"
+    if any(marker in said.lower() for marker in _AUTH_FAILURES):
+        return False, f"{agent} is not logged in: {said}"
+    if agent == "claude":
+        return False, f"{agent} did not answer a test prompt: {said}"
+    return False, f"{agent} login status failed: {said}"
 
 
 def check_github() -> Tuple[bool, str]:

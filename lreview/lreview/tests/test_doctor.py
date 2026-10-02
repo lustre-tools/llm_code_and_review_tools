@@ -148,3 +148,82 @@ class TestAgentLogin:
             ok, _ = check_agent_login("gemini")
         assert ok
         run.assert_not_called()
+
+    def test_claude_ping_is_cheap(self):
+        with self._run(0, '{"is_error": false, "result": "ok"}') as run:
+            check_agent_login("claude")
+        cmd = run.call_args[0][0]
+        assert cmd[cmd.index("--model") + 1] == "haiku"
+        assert cmd[cmd.index("--tools") + 1] == ""
+        assert "--no-session-persistence" in cmd
+        assert run.call_args.kwargs["timeout"] == 30
+
+    def test_claude_not_logged_in_says_so(self):
+        out = ('{"is_error": true, "result": "Not logged in · '
+               'Please run /login", "terminal_reason": "api_error"}')
+        with self._run(1, out):
+            ok, detail = check_agent_login("claude")
+        assert not ok
+        assert detail.startswith("claude is not logged in: Not logged in")
+
+    def test_claude_other_failure_is_not_called_a_login(self):
+        with self._run(1, '{"is_error": true, "result": "Overloaded"}'):
+            ok, detail = check_agent_login("claude")
+        assert not ok
+        assert detail == "claude did not answer a test prompt: Overloaded"
+
+    def test_claude_timeout(self):
+        import subprocess
+
+        with patch("subprocess.run",
+                   side_effect=subprocess.TimeoutExpired("claude", 30)):
+            ok, detail = check_agent_login("claude")
+        assert not ok
+        assert detail == "claude did not answer in 30s"
+
+    def test_codex_not_logged_in_says_so(self):
+        with self._run(1, "Not logged in\n"):
+            ok, detail = check_agent_login("codex")
+        assert not ok
+        assert detail == "codex is not logged in: Not logged in"
+
+    def test_codex_logged_in(self):
+        with self._run(0, "Logged in using ChatGPT\n"):
+            ok, detail = check_agent_login("codex")
+        assert ok
+        assert detail == "Logged in using ChatGPT"
+
+
+class TestCmdCheck:
+
+    def _check(self, argv, login):
+        from lreview.cli import build_parser
+
+        status = PromptsStatus(available=True, agent_cli="/usr/bin/claude",
+                               prompts_dir=Path("/p"), source="test")
+        args = build_parser().parse_args(argv)
+        with patch("lreview.cli.check_prompts", return_value=status), \
+                patch("lreview.doctor.check_gerrit",
+                      return_value=(True, "ok")), \
+                patch("lreview.cli.check_prompts_freshness"), \
+                patch("lreview.doctor.check_agent_login",
+                      return_value=login) as probe:
+            return args.func(args), probe
+
+    def test_not_logged_in_is_not_ready(self, capsys):
+        rc, _ = self._check(
+            ["check"], (False, "claude is not logged in: Not logged in"))
+        out = capsys.readouterr().out
+        assert rc == 2
+        assert "lreview is NOT ready for claude:" in out
+        assert "  - claude is not logged in: Not logged in" in out
+
+    def test_logged_in_is_ready(self, capsys):
+        rc, _ = self._check(["check"], (True, "logged in"))
+        assert rc == 0
+        assert "login:     logged in" in capsys.readouterr().out
+
+    def test_no_login_skips_the_probe(self, capsys):
+        rc, probe = self._check(["check", "--no-login"], (False, "x"))
+        assert rc == 0
+        probe.assert_not_called()

@@ -235,7 +235,7 @@ def cmd_check(args) -> int:
     for problem in status.problems:
         print(f"  - {problem}")
     if not login_ok:
-        print(f"  - {args.agent} login: {login_detail}")
+        print(f"  - {login_detail}")
     if not gerrit_ok:
         print(f"  - {provider_name}: {gerrit_detail}")
     print()
@@ -749,7 +749,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--prompts-dir", default=default_prompts, help=prompts_help)
     check_p.add_argument(
         "--no-login", action="store_true",
-        help="skip the live login check (for claude, one short prompt)")
+        help="skip the login check (for claude, one prompt to haiku)")
     check_p.add_argument("--github", action="store_true",
         help="check GitHub token (GH_TOKEN, falling back to GITHUB_TOKEN) instead of Gerrit")
     check_p.set_defaults(func=cmd_check)
