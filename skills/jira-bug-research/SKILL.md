@@ -127,7 +127,11 @@ Multi-instance configuration lives in `~/.jira-tool.json`, with an
 A second account -- a bot, another Jira -- is an `[alias]` section in
 the same `.env`, selected with `jira --user <alias>`. `--user` searches
 the `.env` sections and the `instances` map both, so one flag reaches
-either store; `-I` still selects an instance only. A Server set has no
+either store; `-I` still selects an instance only. Both choose the
+account, so giving both is refused unless `--user` names that same
+instance. A search the server rejects is `INVALID_JQL` (exit 4), naming
+the server and any project the query names that it does not have --
+an EX ticket is not on the LU server. A Server set has no
 username, so reach it by its alias unless it carries a `JIRA_USER=`
 line, which exists only for this matching; Cloud sets also match on
 `JIRA_CLOUD_EMAIL`.

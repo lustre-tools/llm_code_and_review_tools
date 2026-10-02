@@ -1,6 +1,7 @@
 """JIRA REST API client."""
 
 import random
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -62,6 +63,33 @@ def _retry_after_seconds(value: str | None) -> float | None:
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_BACKOFF = 1.0  # Base delay in seconds
 DEFAULT_RETRY_MAX_DELAY = 30.0  # Maximum delay between retries
+
+
+def _is_html(response: requests.Response) -> bool:
+    content_type = response.headers.get("Content-Type") or ""
+    if isinstance(content_type, str) and "html" in content_type.lower():
+        return True
+    text = response.text
+    return isinstance(text, str) and text.lstrip()[:15].lower().startswith(
+        ("<!doctype", "<html")
+    )
+
+
+_JQL_PROJECTS = re.compile(
+    r"\bproject\s*(?:=|\bin\b)\s*(\([^)]*\)|\"[^\"]*\"|'[^']*'|[\w-]+)",
+    re.IGNORECASE,
+)
+
+
+def _jql_projects(jql: str) -> list[str]:
+    """The project keys a JQL query names with `project =` or `project in`."""
+    keys: list[str] = []
+    for match in _JQL_PROJECTS.finditer(jql):
+        for key in match.group(1).strip("()").split(","):
+            key = key.strip().strip("\"'")
+            if key and key not in keys:
+                keys.append(key)
+    return keys
 
 
 class JiraClient:
@@ -281,11 +309,15 @@ class JiraClient:
             InvalidInputError: For 400 responses
             JiraToolError: For other error responses
         """
+        html_page = not response.ok and _is_html(response)
         # Try to parse JSON body for error details
-        try:
-            body = response.json() if response.text else {}
-        except ValueError:
-            body = {"raw": response.text[:500] if response.text else ""}
+        if html_page:
+            body = {}
+        else:
+            try:
+                body = response.json() if response.text else {}
+            except ValueError:
+                body = {"raw": response.text[:500] if response.text else ""}
 
         # Extract JIRA error messages if present
         jira_errors = []
@@ -297,8 +329,14 @@ class JiraClient:
                     jira_errors.append(f"{field}: {msg}")
 
         error_detail = "; ".join(jira_errors) if jira_errors else ""
+        if html_page:
+            # A front end replaced Jira's error with its own HTML page.
+            error_detail = (
+                f"HTTP {response.status_code} from {self.config.server}, "
+                "an HTML error page with no Jira error in it"
+            )
         # Fallback: include raw body when no structured errors extracted
-        if not error_detail and isinstance(body, dict) and body:
+        elif not error_detail and isinstance(body, dict) and body:
             raw = str(body)
             if len(raw) > 500:
                 raw = raw[:500] + "..."
@@ -610,8 +648,7 @@ class JiraClient:
             }
             if next_page_token:
                 body["nextPageToken"] = next_page_token
-            result = self._request("POST", "search/jql", json_data=body,
-                                   context=f"JQL: {jql[:50]}")
+            result = self._search_request("search/jql", body, jql)
             # Normalize Cloud v3 response to match v2 shape for callers
             result.setdefault("startAt", 0)
             result.setdefault("maxResults", max_results)
@@ -625,8 +662,56 @@ class JiraClient:
             }
             if fields:
                 body["fields"] = fields
-            return self._request("POST", "search", json_data=body,
+            return self._search_request("search", body, jql)
+
+    def _search_request(
+        self, endpoint: str, body: dict[str, Any], jql: str
+    ) -> dict[str, Any]:
+        """POST a search, reporting a 400 as INVALID_JQL.
+
+        When the server gives no reason, the projects the query names are
+        looked up, so a project the server lacks is reported as such.
+        """
+        try:
+            return self._request("POST", endpoint, json_data=body,
                                  context=f"JQL: {jql[:50]}")
+        except InvalidInputError as e:
+            server = self.config.server
+            jira_errors = (e.details or {}).get("jira_errors") or []
+            missing = []
+            if not jira_errors:
+                for key in _jql_projects(jql):
+                    try:
+                        self._request("GET", f"project/{key}", context=key)
+                    except NotFoundError:
+                        missing.append(key)
+                    except JiraToolError:
+                        pass
+            if jira_errors:
+                reason = "; ".join(jira_errors)
+            elif len(missing) == 1:
+                reason = (
+                    f"project {missing[0]} does not exist there, or this "
+                    "account cannot see it"
+                )
+            elif missing:
+                reason = (
+                    f"projects {', '.join(missing)} do not exist there, or "
+                    "this account cannot see them"
+                )
+            else:
+                reason = (
+                    "the server did not say why; check the query's project "
+                    "keys, fields and values against it"
+                )
+            raise InvalidInputError(
+                code=ErrorCode.INVALID_JQL,
+                message=f"JQL rejected by {server} (HTTP 400): {reason}",
+                http_status=400,
+                details={"server": server, "jql": jql,
+                         "jira_errors": jira_errors,
+                         "missing_projects": missing},
+            ) from e
 
     # =========================================================================
     # Comment Operations

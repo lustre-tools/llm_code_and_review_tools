@@ -172,10 +172,16 @@ def _resolve_instance(
     """Resolve a named instance from multi-instance config.
 
     If the config has an "instances" key, look up the named instance
-    (or the default). Otherwise return config_data unchanged.
+    (or the default). Otherwise return config_data unchanged, unless an
+    instance was asked for.
     """
     instances = config_data.get("instances")
     if not instances or not isinstance(instances, dict):
+        if instance is not None:
+            raise ConfigError(
+                f"Instance '{instance}' not found: the config file "
+                "defines no named instances"
+            )
         return config_data
 
     # Determine which instance to use
@@ -267,7 +273,13 @@ def load_config(
             ) from e
 
     # Resolve named instance if multi-instance config
-    config_data = _resolve_instance(config_data, instance)
+    try:
+        config_data = _resolve_instance(config_data, instance)
+    except ConfigError as e:
+        raise ConfigError(
+            f"{e.message} (config file: {config_path})",
+            details={"config_path": str(config_path)},
+        ) from e
 
     # Apply environment variable overrides — but NOT when a named instance
     # was explicitly selected, since the instance config should take precedence.

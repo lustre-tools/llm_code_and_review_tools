@@ -207,7 +207,24 @@ def main(
     # tool shares with gerrit, maloo and jenkins, and the instances
     # map that is jira's alone.  Falling through to -I keeps one flag
     # working the same way across all four tools.
-    if user:
+    if user and instance:
+        # Both pick the account, and either one would silently replace
+        # the other: an instance ignores the environment a .env set
+        # writes, and an instance --user names replaces -I.
+        named = _instance_named(user, config_path)
+        if named != instance:
+            if named is None:
+                what = "is not an instance in the Jira config"
+            else:
+                what = f"is instance '{named}'"
+            _fail_config(
+                ctx,
+                f"--user {user} and -I {instance} both choose the Jira "
+                f"account and do not agree: --user {user} {what}. Give one "
+                "of them.",
+                pretty, envelope,
+            )
+    elif user:
         try:
             apply_credential_set("jira-tool", user)
         except FileNotFoundError as e:

@@ -129,3 +129,81 @@ def test_unknown_user_is_a_json_error(tmp_path, monkeypatch, runner):
     assert result.exit_code == 1
     assert "nobody" in result.output
     assert "acme" in result.output
+
+
+def write_instances(tmp_path, monkeypatch, *names):
+    config = tmp_path / "jira-tool.json"
+    config.write_text(json.dumps({
+        "instances": {
+            name: {"server": f"https://{name}.example.com",
+                   "auth": {"type": "bearer", "token": f"{name}-token"}}
+            for name in names
+        },
+        "default": names[0],
+    }))
+    monkeypatch.setenv("JIRA_TOOL_CONFIG", str(config))
+    return config
+
+
+def test_user_and_instance_that_disagree_are_refused(
+    tmp_path, monkeypatch, runner
+):
+    """--user naming one instance used to replace -I silently."""
+    write_env(tmp_path, monkeypatch, "")
+    write_instances(tmp_path, monkeypatch, "patrickbot", "cloud")
+    result = runner.invoke(
+        main, ["--user", "patrickbot", "-I", "cloud", "search", "project = EX"]
+    )
+    assert result.exit_code == 1
+    out = json.loads(result.output)
+    assert out["code"] == "CONFIG_ERROR"
+    assert "--user patrickbot" in out["message"]
+    assert "-I cloud" in out["message"]
+    assert "instance 'patrickbot'" in out["message"]
+
+
+def test_user_set_with_instance_is_refused(tmp_path, monkeypatch, runner):
+    """An instance ignores the environment a .env set writes."""
+    write_env(tmp_path, monkeypatch, TWO_SETS_ENV)
+    write_instances(tmp_path, monkeypatch, "lu", "cloud")
+    result = runner.invoke(main, ["--user", "acme", "-I", "cloud", "get", "EX-1"])
+    assert result.exit_code == 1
+    out = json.loads(result.output)
+    assert "not an instance" in out["message"]
+    assert os.environ.get("JIRA_TOKEN") != "acme-token"
+
+
+def test_user_and_instance_that_agree_are_accepted(
+    tmp_path, monkeypatch, runner
+):
+    write_env(tmp_path, monkeypatch, "")
+    write_instances(tmp_path, monkeypatch, "lu", "cloud")
+    result = runner.invoke(main, ["--user", "cloud", "-I", "cloud", "config", "show"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["server"] == "https://cloud.example.com"
+
+
+def test_instance_missing_from_the_config_names_the_file(
+    tmp_path, monkeypatch, runner
+):
+    write_env(tmp_path, monkeypatch, "")
+    config = write_instances(tmp_path, monkeypatch, "patrickbot")
+    result = runner.invoke(main, ["-I", "cloud", "config", "show"])
+    out = json.loads(result.output)
+    assert "Instance 'cloud' not found" in out["message"]
+    assert "patrickbot" in out["message"]
+    assert str(config) in out["message"]
+
+
+def test_instance_with_no_instances_configured_is_an_error(
+    tmp_path, monkeypatch, runner
+):
+    """-I used to be ignored when the config had no instances map."""
+    write_env(tmp_path, monkeypatch, OLD_STYLE_ENV)
+    config = tmp_path / "jira-tool.json"
+    config.write_text(json.dumps({"server": "https://jira.example.com"}))
+    monkeypatch.setenv("JIRA_TOOL_CONFIG", str(config))
+    result = runner.invoke(main, ["-I", "cloud", "config", "show"])
+    out = json.loads(result.output)
+    assert out["code"] == "CONFIG_ERROR"
+    assert "no named instances" in out["message"]

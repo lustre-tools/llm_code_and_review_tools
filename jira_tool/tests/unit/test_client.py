@@ -1617,3 +1617,143 @@ class TestRetryWithAttachments:
         result = client.add_watcher("PROJ-123", "jdoe")
         assert result == {}
         assert len(responses.calls) == 2
+
+
+APACHE_400 = (
+    '<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\n<html><head>\n'
+    "<title>400 400</title>\n</head><body>\n<h1>400</h1>\n"
+    "<p>Your browser sent a request that this server could not understand."
+    "<br />\n</p>\n</body></html>\n"
+)
+
+
+class TestHtmlErrorPages:
+    """A front end that answers with its own HTML error page in place of
+    Jira's JSON error is reported by status and server, not quoted."""
+
+    @responses.activate
+    def test_html_400_is_not_quoted(self, client):
+        responses.add(
+            responses.GET, "https://jira.example.com/rest/api/2/issue/PROJ-1",
+            body=APACHE_400, status=400, content_type="text/html",
+        )
+        with pytest.raises(InvalidInputError) as exc_info:
+            client.get_issue("PROJ-1")
+        message = exc_info.value.message
+        assert "<" not in message
+        assert "HTTP 400 from https://jira.example.com" in message
+
+    @responses.activate
+    def test_html_without_content_type_is_recognised(self, client):
+        responses.add(
+            responses.GET, "https://jira.example.com/rest/api/2/issue/PROJ-1",
+            body=APACHE_400, status=400, content_type="text/plain",
+        )
+        with pytest.raises(InvalidInputError) as exc_info:
+            client.get_issue("PROJ-1")
+        assert "DOCTYPE" not in exc_info.value.message
+
+    @responses.activate
+    def test_html_server_error_is_not_quoted(self, config):
+        client = JiraClient(config, max_retries=0)
+        responses.add(
+            responses.GET, "https://jira.example.com/rest/api/2/issue/PROJ-1",
+            body="<html><body><h1>502 Bad Gateway</h1></body></html>",
+            status=502, content_type="text/html",
+        )
+        with pytest.raises(JiraToolError) as exc_info:
+            client.get_issue("PROJ-1")
+        assert "<h1>" not in exc_info.value.message
+        assert "HTTP 502 from https://jira.example.com" in exc_info.value.message
+
+
+class TestSearchRejected:
+    SEARCH = "https://jira.example.com/rest/api/2/search"
+    PROJECT = "https://jira.example.com/rest/api/2/project/"
+
+    @responses.activate
+    def test_html_400_names_the_missing_project(self, client):
+        responses.add(responses.POST, self.SEARCH, body=APACHE_400,
+                      status=400, content_type="text/html")
+        responses.add(responses.GET, self.PROJECT + "EX",
+                      json={"errorMessages": ["No project"]}, status=404)
+        with pytest.raises(InvalidInputError) as exc_info:
+            client.search_issues('project = EX AND text ~ "conf-sanity"')
+        err = exc_info.value
+        assert err.code == ErrorCode.INVALID_JQL
+        assert err.exit_code == 4
+        assert err.message == (
+            "JQL rejected by https://jira.example.com (HTTP 400): project EX "
+            "does not exist there, or this account cannot see it"
+        )
+        assert err.details["missing_projects"] == ["EX"]
+
+    @responses.activate
+    def test_only_the_missing_projects_are_named(self, client):
+        responses.add(responses.POST, self.SEARCH, body=APACHE_400,
+                      status=400, content_type="text/html")
+        responses.add(responses.GET, self.PROJECT + "LU",
+                      json={"key": "LU"}, status=200)
+        responses.add(responses.GET, self.PROJECT + "EX", status=404)
+        responses.add(responses.GET, self.PROJECT + "ZZ", status=404)
+        with pytest.raises(InvalidInputError) as exc_info:
+            client.search_issues("Project IN (LU, \"EX\", ZZ) ORDER BY key")
+        assert exc_info.value.details["missing_projects"] == ["EX", "ZZ"]
+        assert "projects EX, ZZ do not exist" in exc_info.value.message
+
+    @responses.activate
+    def test_html_400_with_known_projects_says_the_server_gave_no_reason(
+        self, client
+    ):
+        responses.add(responses.POST, self.SEARCH, body=APACHE_400,
+                      status=400, content_type="text/html")
+        responses.add(responses.GET, self.PROJECT + "LU",
+                      json={"key": "LU"}, status=200)
+        with pytest.raises(InvalidInputError) as exc_info:
+            client.search_issues("project = LU AND nosuchfield = 1")
+        message = exc_info.value.message
+        assert message.startswith("JQL rejected by https://jira.example.com")
+        assert "did not say why" in message
+
+    @responses.activate
+    def test_jira_reason_is_kept_and_nothing_else_is_asked(self, client):
+        responses.add(
+            responses.POST, self.SEARCH,
+            json={"errorMessages": [
+                "The value 'EX' does not exist for the field 'project'."
+            ]},
+            status=400,
+        )
+        with pytest.raises(InvalidInputError) as exc_info:
+            client.search_issues("project = EX")
+        assert exc_info.value.code == ErrorCode.INVALID_JQL
+        assert exc_info.value.message == (
+            "JQL rejected by https://jira.example.com (HTTP 400): "
+            "The value 'EX' does not exist for the field 'project'."
+        )
+        assert len(responses.calls) == 1
+
+
+class TestSearchRejectedCli:
+    def test_search_400_is_reported_as_json(self, monkeypatch, tmp_path):
+        from click.testing import CliRunner
+
+        from jira_tool.cli import main
+
+        monkeypatch.setenv("JIRA_SERVER", "https://jira.example.com")
+        monkeypatch.setenv("JIRA_TOKEN", "t")
+        monkeypatch.delenv("JIRA_CLOUD_PROJECTS", raising=False)
+        monkeypatch.delenv("JIRA_TOOL_CONFIG", raising=False)
+        with responses.RequestsMock() as rsps:
+            rsps.add(responses.POST, TestSearchRejected.SEARCH,
+                     body=APACHE_400, status=400, content_type="text/html")
+            rsps.add(responses.GET, TestSearchRejected.PROJECT + "EX",
+                     status=404)
+            result = CliRunner().invoke(main, [
+                "--config", str(tmp_path / "none.json"), "search", "project = EX",
+            ])
+        assert result.exit_code == 4, result.output
+        out = json.loads(result.output)
+        assert out["code"] == "INVALID_JQL"
+        assert "project EX does not exist" in out["message"]
+        assert "DOCTYPE" not in result.output
