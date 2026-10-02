@@ -6,10 +6,12 @@ parallel, each in its own worktree.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import threading
 from pathlib import Path
+from urllib.parse import urlsplit
 
 _GIT_LOCK = threading.Lock()
 
@@ -73,10 +75,61 @@ def recent_commits(repo: Path, count: int, start: str = "HEAD") -> list[str]:
     return result.stdout.split()
 
 
-def fetch_change(repo: Path, remote_url: str, ref: str) -> None:
-    """Fetch a Gerrit change ref into the repository object store."""
+def _host_and_path(url: str) -> tuple[str, str]:
+    if "://" in url:
+        parts = urlsplit(url)
+        return parts.hostname or "", parts.path
+    # scp-like [user@]host:path
+    match = re.match(r"^(?:[^@/]+@)?([^:/]+):(.*)$", url)
+    return (match.group(1), match.group(2)) if match else ("", "")
+
+
+def _project_of(path: str) -> str:
+    path = path.strip("/")
+    if path.startswith("a/"):  # Gerrit's authenticated HTTP prefix
+        path = path[2:]
+    return path[:-4] if path.endswith(".git") else path
+
+
+def gerrit_remote_urls(repo: Path, base_url: str, project: str) -> list[str]:
+    """URLs of the repository's own remotes for this Gerrit project.
+
+    They carry the access the user set up -- an SSH key, a credential
+    helper -- which the anonymous URL lacks for a private project.
+    """
+    host = (urlsplit(base_url).hostname or "").lower()
+    result = run_git(repo, "config", "--get-regexp", r"^remote\..*\.url$",
+                     check=False)
+    urls = []
+    for line in result.stdout.splitlines():
+        url = line.partition(" ")[2].strip()
+        url_host, path = _host_and_path(url)
+        if (host and url_host.lower() == host
+                and _project_of(path) == project.strip("/")
+                and url not in urls):
+            urls.append(url)
+    return urls
+
+
+def fetch_change(repo: Path, urls: list[str], ref: str) -> None:
+    """Fetch a Gerrit change ref into the repository object store,
+    trying each URL in turn.
+
+    Prompts are off, so a URL that wants a login nobody configured
+    fails at once and the next one is tried.
+    """
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    errors = []
     with _GIT_LOCK:
-        run_git(repo, "fetch", remote_url, ref)
+        for url in urls:
+            result = subprocess.run(
+                ["git", "-C", str(repo), "fetch", url, ref],
+                capture_output=True, text=True, env=env)
+            if result.returncode == 0:
+                return
+            lines = result.stderr.strip().splitlines()
+            errors.append(f"{url}: {lines[-1] if lines else 'failed'}")
+    raise GitError(f"could not fetch {ref} -- " + "; ".join(errors))
 
 
 def add_worktree(repo: Path, dest: Path, sha: str) -> None:

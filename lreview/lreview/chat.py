@@ -284,7 +284,7 @@ def _launch(agent_spec, change, entries, repo, results_dir,
                          worktrees_dir=worktrees_dir)
     try:
         if not wt.commit_exists(config.repo, change.sha):
-            print(f"  fetching {change.ref} from {change.fetch_url()} "
+            print(f"  fetching {change.ref} "
                   "— a first fetch into this repo can take minutes...")
         print("  creating worktree...")
         worktree_dir = prepare_worktree(config, change)

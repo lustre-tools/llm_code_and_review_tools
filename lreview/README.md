@@ -229,7 +229,11 @@ lreview run --repo lustre-release -m 64086                # full gate
 
 1. Every change (number or URL) is resolved to its **current patchset**
    revision SHA up front — a typo fails fast before any review starts.
-2. The change ref is fetched into the source repo and a detached
+2. The change ref is fetched into the source repo -- through the
+   repo's own remote for that Gerrit project when it has one (the
+   SSH key or credentials set up there reach a private project),
+   else from the anonymous `https://<gerrit>/<project>` URL; git never
+   stops to ask for a login -- and a detached
    worktree is created per change (a lustre-release checkout is ~75 MB;
    worktrees share the object store). Worktrees go to
    `<repo>/../ai_worktrees/lreview/` when an `ai_worktrees`

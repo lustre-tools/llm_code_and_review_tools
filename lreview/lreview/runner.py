@@ -411,13 +411,19 @@ def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:
     invocations reviewing the same change never remove each other's
     live worktrees.
     """
+    # The repository's own remotes for the project first: a private
+    # project refuses the anonymous URL, which stays as the fallback.
+    urls = [change.fetch_url()]
+    if getattr(change, "base_url", None) and getattr(change, "project", None):
+        urls = wt.gerrit_remote_urls(config.repo, change.base_url,
+                                     change.project) + urls
     if not wt.commit_exists(config.repo, change.sha):
-        wt.fetch_change(config.repo, change.fetch_url(), change.ref)
+        wt.fetch_change(config.repo, urls, change.ref)
         if not wt.commit_exists(config.repo, change.sha):
             raise wt.GitError(
                 f"fetched {change.ref} but {change.sha} still missing")
     if getattr(change, "base_sha", None) and not wt.commit_exists(config.repo, change.base_sha):
-        wt.fetch_change(config.repo, change.fetch_url(), change.base_sha)
+        wt.fetch_change(config.repo, urls, change.base_sha)
         if not wt.commit_exists(config.repo, change.base_sha):
             raise wt.GitError(f"fetched base {change.base_sha} but it is still missing")
     dest = config.worktrees_dir / f"kreview_{change.slug}.{os.getpid()}"
