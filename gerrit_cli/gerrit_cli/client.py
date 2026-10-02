@@ -535,6 +535,14 @@ class GerritCommentsClient:
         """
         return self.rest.get(f"/changes/{change_number}/reviewers")
 
+    def get_reviewer_updates(self, change_number: int) -> list[dict[str, Any]]:
+        """Every reviewer and CC change on a change, oldest first: who was
+        added or removed, in which state, when and by whom."""
+        change = self.rest.get(
+            f"/changes/{change_number}?o=REVIEWER_UPDATES&o=DETAILED_ACCOUNTS"
+        )
+        return list(change.get("reviewer_updates") or [])
+
     def add_reviewer(
         self,
         change_number: int,

@@ -6,6 +6,26 @@ from ..errors import ErrorCode, ExitCode
 from ._helpers import _cli, error_code_for, output_error, output_success
 
 
+def reviewer_since(updates):
+    """{account_id: (added_at, added_by)}: when each account last entered the
+    state it is in now, REVIEWER or CC, and who put it there."""
+    current = {}
+    for update in sorted(updates, key=lambda item: str(item.get("updated") or "")):
+        account = (update.get("reviewer") or {}).get("_account_id")
+        state = update.get("state")
+        if account is None:
+            continue
+        if state == "REMOVED":
+            current.pop(account, None)
+        elif current.get(account, (None,))[0] != state:
+            by = update.get("updated_by") or {}
+            current[account] = (
+                state, str(update.get("updated") or ""),
+                by.get("username") or by.get("name") or by.get("_account_id"),
+            )
+    return {account: (since, by) for account, (_state, since, by) in current.items()}
+
+
 def cmd_reviewers(args):
     """List reviewers on a change."""
     cli = _cli()
@@ -16,6 +36,10 @@ def cmd_reviewers(args):
         base_url, change_number = cli.GerritCommentsClient.parse_gerrit_url(args.url)
         client = cli.GerritCommentsClient()
         reviewers = client.get_reviewers(change_number)
+        try:
+            joined = reviewer_since(client.get_reviewer_updates(change_number))
+        except Exception:
+            joined = None
 
         # Format reviewer data
         reviewer_list = []
@@ -27,6 +51,10 @@ def cmd_reviewers(args):
                 "username": r.get("username", ""),
                 "approvals": r.get("approvals", {}),
             }
+            if joined is not None:
+                added_at, added_by = joined.get(r.get("_account_id"), (None, None))
+                reviewer_info["added_at"] = added_at
+                reviewer_info["added_by"] = added_by
             reviewer_list.append(reviewer_info)
 
         data = {
