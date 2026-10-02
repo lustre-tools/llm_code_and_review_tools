@@ -305,6 +305,14 @@ class GerritCommentsClient:
             "o=ALL_REVISIONS&o=CURRENT_REVISION&o=CURRENT_COMMIT&o=DETAILED_ACCOUNTS"
         )
 
+    def get_revision_files(
+        self, change_number: int, revision_id: str
+    ) -> dict[str, Any]:
+        """The files a revision has, by path."""
+        return self.rest.get(
+            f"/changes/{change_number}/revisions/{revision_id}/files"
+        )
+
     def get_change(
         self, change_number: int, options: list[str] | None = None
     ) -> dict[str, Any]:

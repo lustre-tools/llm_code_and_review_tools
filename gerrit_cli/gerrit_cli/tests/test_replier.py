@@ -335,6 +335,73 @@ class TestCommentReplier:
         assert results[0].error == "Batch failed"
 
     @patch("gerrit_cli.replier.GerritCommentsClient")
+    def test_batch_reply_on_a_file_the_new_patchset_deleted(self, mock_client_class):
+        """51164: PS9 deleted the file PS8's comment was on, and Gerrit
+        refused the whole review posted on PS9."""
+        mock_client = MagicMock()
+        mock_client.get_change_detail.return_value = {
+            "current_revision": "ps9sha",
+            "revisions": {"ps8sha": {"_number": 8}, "ps9sha": {"_number": 9}},
+        }
+        mock_client.get_revision_files.return_value = {
+            "/COMMIT_MSG": {}, "lustre/kept.c": {},
+        }
+        mock_client_class.return_value = mock_client
+
+        def comment(cid, path, line):
+            return Comment(
+                id=cid, patch_set=8, file_path=path, line=line, message="x",
+                author=Author(name="R"), unresolved=True, updated="2026-10-02",
+            )
+
+        replier = CommentReplier()
+        results = replier.batch_reply(
+            change_number=51164,
+            replies=[
+                {"comment": comment("gone", "Documentation/man4/pinger.4", 3),
+                 "message": "Removed in PS9.", "mark_resolved": True},
+                {"comment": comment("kept", "lustre/kept.c", 10),
+                 "message": "Done."},
+                {"comment": comment("ps", "/PATCHSET_LEVEL", None),
+                 "message": "Thanks."},
+            ],
+        )
+
+        assert [r.comment_id for r in results] == ["gone", "kept", "ps"]
+        assert all(r.success for r in results)
+        posts = {
+            c.kwargs["revision_id"]: c.kwargs["comments"]
+            for c in mock_client.post_review.call_args_list
+        }
+        assert set(posts) == {"ps8sha", "ps9sha"}
+        assert list(posts["ps8sha"]) == ["Documentation/man4/pinger.4"]
+        assert sorted(posts["ps9sha"]) == ["/PATCHSET_LEVEL", "lustre/kept.c"]
+        assert posts["ps8sha"]["Documentation/man4/pinger.4"][0]["unresolved"] is False
+
+    @patch("gerrit_cli.replier.GerritCommentsClient")
+    def test_batch_reply_failure_carries_gerrits_reason(self, mock_client_class):
+        mock_client = MagicMock()
+        mock_client.get_change_detail.return_value = {"current_revision": "abc"}
+        mock_client.get_revision_files.return_value = {"test.py": {}}
+        error = Exception("400 Client Error: Bad Request")
+        error.response = MagicMock(text="file x not found in revision 51164,9\n")
+        mock_client.post_review.side_effect = error
+        mock_client_class.return_value = mock_client
+        comment = Comment(
+            id="c1", patch_set=1, file_path="test.py", line=1, message="x",
+            author=Author(name="R"), unresolved=True, updated="2026-10-02",
+        )
+
+        [result] = CommentReplier().batch_reply(
+            change_number=1, replies=[{"comment": comment, "message": "y"}],
+        )
+
+        assert result.success is False
+        assert result.error == (
+            "400 Client Error: Bad Request: file x not found in revision 51164,9"
+        )
+
+    @patch("gerrit_cli.replier.GerritCommentsClient")
     def test_reply_from_extracted(self, mock_client_class):
         """Test replying from extracted comments by index."""
         mock_client = MagicMock()

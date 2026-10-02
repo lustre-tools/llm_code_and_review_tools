@@ -6,6 +6,49 @@ from .client import GerritCommentsClient
 from .models import Comment, CommentThread, ExtractedComments, ReplyResult
 from .staging import StagingManager
 
+# Paths every revision has; an inline comment on any other names a file the
+# current revision may no longer have.
+_MAGIC_PATHS = {"/PATCHSET_LEVEL", "/COMMIT_MSG", "/MERGE_LIST"}
+
+
+def _error_text(exc: Exception) -> str:
+    """The exception, with Gerrit's own reason when the server gave one."""
+    response = getattr(exc, "response", None)
+    body = (getattr(response, "text", "") or "").strip()
+    if body and not body.lstrip().startswith("<"):
+        return f"{exc}: {' '.join(body.split())[:500]}"
+    return str(exc)
+
+
+def _reply_revisions(client, change_number, change, comments) -> list[str]:
+    """The revision to post each reply on, in order.
+
+    Gerrit refuses an inline reply on a revision that no longer has the
+    commented file, so a reply on a file the current revision deleted or
+    renamed goes on the patchset the comment was made on.
+    """
+    current = change.get("current_revision") or "current"
+    by_number = {
+        info.get("_number"): sha
+        for sha, info in (change.get("revisions") or {}).items()
+        if isinstance(info, dict)
+    }
+    files = None
+    revisions = []
+    for comment in comments:
+        revision = current
+        if comment.file_path not in _MAGIC_PATHS:
+            if files is None:
+                try:
+                    files = set(client.get_revision_files(change_number, current))
+                except Exception:
+                    files = set()
+                    by_number = {}
+            if comment.file_path not in files and comment.patch_set in by_number:
+                revision = by_number[comment.patch_set]
+        revisions.append(revision)
+    return revisions
+
 
 class CommentReplier:
     """Reply to comments on Gerrit changes."""
@@ -43,13 +86,12 @@ class CommentReplier:
             ReplyResult with success status
         """
         try:
-            # Use current revision for posting
             change = self.client.get_change_detail(change_number)
-            current_revision = change.get("current_revision", "current")
+            [revision] = _reply_revisions(self.client, change_number, change, [comment])
 
             self.client.reply_to_comment(
                 change_number=change_number,
-                revision_id=current_revision,
+                revision_id=revision,
                 file_path=comment.file_path,
                 comment_id=comment.id,
                 message=message,
@@ -70,7 +112,7 @@ class CommentReplier:
                 comment_id=comment.id,
                 message=message,
                 marked_resolved=False,
-                error=str(e),
+                error=_error_text(e),
             )
 
     def mark_done(
@@ -176,7 +218,10 @@ class CommentReplier:
         change_number: int,
         replies: list[dict[str, Any]],
     ) -> list[ReplyResult]:
-        """Post multiple replies in a single API call.
+        """Post multiple replies, in one review per revision they go on.
+
+        That is one review unless a reply is on a file the current revision
+        no longer has (see _reply_revisions).
 
         Args:
             change_number: The change number
@@ -186,63 +231,63 @@ class CommentReplier:
                 - mark_resolved: Whether to mark resolved (default False)
 
         Returns:
-            List of ReplyResult for each reply
+            List of ReplyResult for each reply, in the order given
         """
-        # Get current revision
-        change = self.client.get_change_detail(change_number)
-        current_revision = change.get("current_revision", "current")
-
-        # Build comments dict for batch posting
-        comments_dict: dict[str, list[dict[str, Any]]] = {}
-        results = []
-
-        for reply_spec in replies:
-            comment = reply_spec["comment"]
-            message = reply_spec["message"]
-            mark_resolved = reply_spec.get("mark_resolved", False)
-
-            if comment.file_path not in comments_dict:
-                comments_dict[comment.file_path] = []
-
-            comment_input = {
-                "in_reply_to": comment.id,
-                "message": message,
-                "unresolved": not mark_resolved,
-            }
-
-            if comment.line is not None:
-                comment_input["line"] = comment.line
-
-            comments_dict[comment.file_path].append(comment_input)
-
         try:
-            self.client.post_review(
-                change_number=change_number,
-                revision_id=current_revision,
-                comments=comments_dict,
+            change = self.client.get_change_detail(change_number)
+            revisions = _reply_revisions(
+                self.client, change_number, change,
+                [reply_spec["comment"] for reply_spec in replies],
             )
-
-            # All succeeded
-            for reply_spec in replies:
-                results.append(ReplyResult(
-                    success=True,
-                    comment_id=reply_spec["comment"].id,
-                    message=reply_spec["message"],
-                    marked_resolved=reply_spec.get("mark_resolved", False),
-                ))
-
         except Exception as e:
-            # All failed
-            for reply_spec in replies:
-                results.append(ReplyResult(
-                    success=False,
+            error = _error_text(e)
+            return [
+                ReplyResult(
+                    success=False, comment_id=reply_spec["comment"].id,
+                    message=reply_spec["message"], marked_resolved=False, error=error,
+                )
+                for reply_spec in replies
+            ]
+
+        groups: dict[str, list[int]] = {}
+        for index, revision in enumerate(revisions):
+            groups.setdefault(revision, []).append(index)
+
+        results: list[Optional[ReplyResult]] = [None] * len(replies)
+        for revision, indexes in groups.items():
+            comments_dict: dict[str, list[dict[str, Any]]] = {}
+            for index in indexes:
+                reply_spec = replies[index]
+                comment = reply_spec["comment"]
+                comment_input = {
+                    "in_reply_to": comment.id,
+                    "message": reply_spec["message"],
+                    "unresolved": not reply_spec.get("mark_resolved", False),
+                }
+                if comment.line is not None:
+                    comment_input["line"] = comment.line
+                comments_dict.setdefault(comment.file_path, []).append(comment_input)
+
+            error = None
+            try:
+                self.client.post_review(
+                    change_number=change_number,
+                    revision_id=revision,
+                    comments=comments_dict,
+                )
+            except Exception as e:
+                error = _error_text(e)
+            for index in indexes:
+                reply_spec = replies[index]
+                results[index] = ReplyResult(
+                    success=error is None,
                     comment_id=reply_spec["comment"].id,
                     message=reply_spec["message"],
-                    marked_resolved=False,
-                    error=str(e),
-                ))
+                    marked_resolved=error is None and reply_spec.get("mark_resolved", False),
+                    error=error,
+                )
 
-        return results
+        return [result for result in results if result is not None]
 
     def reply_from_extracted(
         self,
