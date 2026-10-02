@@ -24,6 +24,18 @@ in a `.env` file; the first existing of `~/.config/maloo-tool/.env`,
 `/shared/support_files/.env`, `./.env` is loaded (values do not override
 variables already set in the environment).
 
+API reads wait 10s to connect and 60s for a reply; `MALOO_TIMEOUT`
+overrides that, as `READ` or `CONNECT,READ` seconds (`120`, `10,120`).
+A dropped connection, a timeout or a 502/503/504 is retried, four
+attempts in all, before the command fails with `CONNECTION_ERROR` or
+`TIMEOUT` (exit 5).
+
+Suite and subtest names are cached in
+`$XDG_CACHE_HOME/maloo-tool/script-names.json` (default
+`~/.cache/maloo-tool/`), per server: a script's name never changes, and
+looking names up is most of the requests `top-failures` and
+`test-history` make. Deleting the file is always safe.
+
 ## ID Types
 
 Maloo uses two distinct UUID types:

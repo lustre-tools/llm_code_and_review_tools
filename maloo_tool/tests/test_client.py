@@ -80,7 +80,7 @@ class TestGet:
         client.session.get.assert_called_once_with(
             "https://testing.example.com/api/test_sessions",
             params={"id": "a"},
-            timeout=30,
+            timeout=(10.0, 60.0),
         )
 
     def test_get_returns_data_field(self, client):

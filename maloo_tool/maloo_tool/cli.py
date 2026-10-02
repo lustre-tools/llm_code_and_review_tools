@@ -57,7 +57,11 @@ def _make_client() -> MalooClient:
         raise ToolError(
             ErrorCode.AUTH_MISSING, str(e), exit_code=ExitCode.AUTH_ERROR
         ) from e
-    return MalooClient(config)
+    client = MalooClient(config)
+    ctx = click.get_current_context(silent=True)
+    if ctx is not None:
+        ctx.call_on_close(client.save_script_names)
+    return client
 
 
 def _output(envelope: dict[str, Any], pretty: bool) -> None:

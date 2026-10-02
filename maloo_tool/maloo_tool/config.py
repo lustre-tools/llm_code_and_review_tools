@@ -1,7 +1,7 @@
 """Configuration loading for Maloo tool."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from llm_tool_common.config import load_env_files
 from llm_tool_common.errors import ConfigError
@@ -22,6 +22,7 @@ class MalooConfig:
     base_url: str
     username: str
     password: str
+    timeout: tuple[float, float] = field(default=(10.0, 60.0))
 
     def __post_init__(self) -> None:
         self.base_url = self.base_url.rstrip("/")
@@ -33,6 +34,23 @@ class MalooConfig:
                 "  MALOO_USER=you@whamcloud.com\n"
                 "  MALOO_PASS=yourpassword"
             )
+
+
+def _parse_timeout(value: str) -> tuple[float, float]:
+    """MALOO_TIMEOUT: "READ" or "CONNECT,READ", in seconds."""
+    parts = [p.strip() for p in value.split(",")]
+    try:
+        nums = [float(p) for p in parts]
+    except ValueError:
+        nums = []
+    if len(nums) not in (1, 2) or any(n <= 0 for n in nums):
+        raise ConfigError(
+            f"MALOO_TIMEOUT={value!r}: expected seconds as READ or "
+            "CONNECT,READ, e.g. 120 or 10,120"
+        )
+    if len(nums) == 1:
+        return (10.0, nums[0])
+    return (nums[0], nums[1])
 
 
 def load_config(
@@ -48,6 +66,9 @@ def load_config(
     username = user_override or os.environ.get("MALOO_USER", "")
     password = password_override or os.environ.get("MALOO_PASS", "")
 
+    timeout = os.environ.get("MALOO_TIMEOUT", "").strip()
+
     return MalooConfig(
-        base_url=base_url, username=username, password=password
+        base_url=base_url, username=username, password=password,
+        timeout=_parse_timeout(timeout) if timeout else (10.0, 60.0),
     )

@@ -3,6 +3,9 @@
 import json
 import os
 import re
+import tempfile
+import time
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -14,6 +17,22 @@ CSRF_RE = re.compile(
 )
 
 GERRIT_URL = os.environ.get("GERRIT_URL", "https://review.whamcloud.com").rstrip("/")
+
+GET_ATTEMPTS = 4
+RETRY_STATUSES = (502, 503, 504)
+RETRY_EXCEPTIONS = (
+    requests.ConnectionError,
+    requests.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+)
+
+#: Script endpoints whose id -> name mapping is kept on disk.
+SCRIPT_ENDPOINTS = ("test_set_scripts", "sub_test_scripts")
+
+
+def _cache_path() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return Path(base) / "maloo-tool" / "script-names.json"
 
 
 def resolve_patchset_commit(
@@ -47,18 +66,119 @@ class MalooClient:
         self.config = config
         self.session = requests.Session()
         self.session.auth = (config.username, config.password)
+        self._script_names: dict[str, dict[str, str]] | None = None
+        self._script_names_dirty = False
 
     def _get(
         self, endpoint: str, params: dict[str, Any] | None = None
     ) -> list[dict[str, Any]]:
-        """Make a GET request and return the data array."""
+        """Make a GET request and return the data array.
+
+        testing.whamcloud.com drops a small fraction of connections, and a
+        command can make a thousand requests, so a dropped connection, a
+        timeout or a 502/503/504 is retried, GET_ATTEMPTS in all.
+        """
         url = f"{self.config.base_url}/api/{endpoint}"
-        resp = self.session.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        body = resp.json()
+        for attempt in range(1, GET_ATTEMPTS + 1):
+            try:
+                resp = self.session.get(
+                    url, params=params, timeout=self.config.timeout
+                )
+                if (resp.status_code in RETRY_STATUSES
+                        and attempt < GET_ATTEMPTS):
+                    time.sleep(0.5 * 2 ** (attempt - 1))
+                    continue
+                resp.raise_for_status()
+                body = resp.json()
+                break
+            except RETRY_EXCEPTIONS as exc:
+                if attempt < GET_ATTEMPTS:
+                    time.sleep(0.5 * 2 ** (attempt - 1))
+                    continue
+                msg = f"{exc} (after {GET_ATTEMPTS} attempts)"
+                if isinstance(exc, requests.exceptions.ChunkedEncodingError):
+                    raise requests.ConnectionError(msg) from exc
+                raise type(exc)(msg) from exc
         if isinstance(body, list):
             return body
         return body.get("data", [])
+
+    # -- Script name cache --
+
+    def _names(self, endpoint: str) -> dict[str, str]:
+        """The cached id -> name map for a script endpoint.
+
+        Script names never change, so they are kept on disk per server and
+        written back by save_script_names().
+        """
+        if self._script_names is None:
+            self._script_names = {e: {} for e in SCRIPT_ENDPOINTS}
+            try:
+                with open(_cache_path()) as f:
+                    stored = json.load(f).get(self.config.base_url, {})
+                for e in SCRIPT_ENDPOINTS:
+                    names = stored.get(e, {})
+                    if isinstance(names, dict):
+                        self._script_names[e].update(
+                            (k, v) for k, v in names.items()
+                            if isinstance(v, str)
+                        )
+            except (OSError, ValueError, AttributeError):
+                pass
+        return self._script_names[endpoint]
+
+    def _get_script(
+        self, endpoint: str, script_id: str
+    ) -> dict[str, Any] | None:
+        names = self._names(endpoint)
+        if script_id in names:
+            return {"id": script_id, "name": names[script_id]}
+        rows = self._get(endpoint, {"id": script_id})
+        if not rows:
+            return None
+        if isinstance(rows[0].get("name"), str):
+            names[script_id] = rows[0]["name"]
+            self._script_names_dirty = True
+        return rows[0]
+
+    def save_script_names(self) -> None:
+        """Merge the script names this client learned into the disk cache.
+
+        A cache that cannot be written is skipped.
+        """
+        if not self._script_names_dirty or self._script_names is None:
+            return
+        path = _cache_path()
+        try:
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    data = {}
+            except (OSError, ValueError):
+                data = {}
+            server = data.get(self.config.base_url)
+            if not isinstance(server, dict):
+                server = data[self.config.base_url] = {}
+            for e in SCRIPT_ENDPOINTS:
+                names = server.get(e)
+                if not isinstance(names, dict):
+                    names = server[e] = {}
+                names.update(self._script_names[e])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(
+                dir=path.parent, prefix=".script-names.", suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(data, f)
+                os.replace(tmp, path)
+            except BaseException:
+                os.unlink(tmp)
+                raise
+        except OSError:
+            return
+        self._script_names_dirty = False
 
     def _get_paginated(
         self,
@@ -226,16 +346,20 @@ class MalooClient:
     def get_test_set_script(
         self, script_id: str
     ) -> dict[str, Any] | None:
-        """Get test set script (suite name) by ID."""
-        rows = self._get("test_set_scripts", {"id": script_id})
-        return rows[0] if rows else None
+        """Get test set script (suite name) by ID.
+
+        A cached script has only its id and name.
+        """
+        return self._get_script("test_set_scripts", script_id)
 
     def get_sub_test_script(
         self, script_id: str
     ) -> dict[str, Any] | None:
-        """Get sub test script (test name) by ID."""
-        rows = self._get("sub_test_scripts", {"id": script_id})
-        return rows[0] if rows else None
+        """Get sub test script (test name) by ID.
+
+        A cached script has only its id and name.
+        """
+        return self._get_script("sub_test_scripts", script_id)
 
     # -- Batch name resolution --
 
