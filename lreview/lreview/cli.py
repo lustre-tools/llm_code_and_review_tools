@@ -208,8 +208,12 @@ def check_prompts_freshness(prompts_dir: Path, allow_update: bool = True):
 
 
 def cmd_check(args) -> int:
-    from .doctor import check_gerrit
+    from .doctor import check_agent_login, check_gerrit
     status = check_prompts(explicit=args.prompts_dir, agent=args.agent)
+    if status.agent_cli and not args.no_login:
+        login_ok, login_detail = check_agent_login(args.agent)
+    else:
+        login_ok, login_detail = True, "not checked"
     if args.github:
         from .doctor import check_github
         gerrit_ok, gerrit_detail = check_github()
@@ -218,9 +222,10 @@ def cmd_check(args) -> int:
         gerrit_ok, gerrit_detail = check_gerrit(live=True)
         provider_name = "gerrit"
 
-    if status.available and gerrit_ok:
+    if status.available and gerrit_ok and login_ok:
         print(f"lreview is ready for {args.agent}:")
         print(f"  agent CLI: {status.agent_cli}")
+        print(f"  login:     {login_detail}")
         print(f"  prompts:   {status.prompts_dir}")
         print(f"  found via: {status.source}")
         print(f"  {provider_name}:    {gerrit_detail}")
@@ -229,6 +234,8 @@ def cmd_check(args) -> int:
     print(f"lreview is NOT ready for {args.agent}:")
     for problem in status.problems:
         print(f"  - {problem}")
+    if not login_ok:
+        print(f"  - {args.agent} login: {login_detail}")
     if not gerrit_ok:
         print(f"  - {provider_name}: {gerrit_detail}")
     print()
@@ -740,6 +747,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Agent to check (default: $LREVIEW_AGENT or claude)")
     check_p.add_argument(
         "--prompts-dir", default=default_prompts, help=prompts_help)
+    check_p.add_argument(
+        "--no-login", action="store_true",
+        help="skip the live login check (for claude, one short prompt)")
     check_p.add_argument("--github", action="store_true",
         help="check GitHub token (GH_TOKEN, falling back to GITHUB_TOKEN) instead of Gerrit")
     check_p.set_defaults(func=cmd_check)

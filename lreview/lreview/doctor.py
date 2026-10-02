@@ -61,6 +61,55 @@ def check_gerrit(live: bool = True) -> Tuple[bool, str]:
                        f"verification failed: {exc}")
 
 
+LOGIN_TIMEOUT = 90
+LOGIN_PROMPT = "Reply with the single word ok."
+
+
+def check_agent_login(agent: str) -> Tuple[bool, str]:
+    """Verify the agent CLI is logged in, as a review would find it.
+
+    Being on PATH says nothing about the login: a review then fails
+    authentication before producing anything. Claude is asked one short
+    turn; codex has "login status", which spends nothing. The other
+    backends are not checked.
+    """
+    import json
+    import subprocess
+
+    if agent == "claude":
+        cmd = ["claude", "-p", LOGIN_PROMPT, "--output-format", "json",
+               "--max-turns", "1"]
+    elif agent == "codex":
+        cmd = ["codex", "login", "status"]
+    else:
+        return True, "login not checked for this backend"
+    env = os.environ.copy()
+    env.pop("GH_TOKEN", None)
+    env.pop("GITHUB_TOKEN", None)
+    try:
+        done = subprocess.run(cmd, capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL, env=env,
+                              timeout=LOGIN_TIMEOUT, check=False)
+    except FileNotFoundError:
+        return False, f"'{agent}' not found on PATH"
+    except subprocess.TimeoutExpired:
+        return False, f"no answer from {agent} in {LOGIN_TIMEOUT}s"
+    said = " ".join((done.stdout + " " + done.stderr).split())
+    if agent == "claude":
+        try:
+            result = json.loads(done.stdout)
+        except ValueError:
+            result = {}
+        if (done.returncode == 0 and isinstance(result, dict)
+                and not result.get("is_error")):
+            return True, "logged in (answered a test prompt)"
+        if isinstance(result, dict) and result.get("result"):
+            said = str(result["result"])
+    elif done.returncode == 0:
+        return True, said[:200] or "logged in"
+    return False, f"not logged in or not usable: {said[-300:] or f'exit {done.returncode}'}"
+
+
 def check_github() -> Tuple[bool, str]:
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:

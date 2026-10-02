@@ -463,7 +463,7 @@ jq -r 'select(.type=="assistant").message.content[]?
 
 ```
 lreview setup                    # guided first-time setup
-lreview check                    # verify agent CLI + prompts + Gerrit
+lreview check                    # verify agent CLI and its login, prompts, Gerrit
 lreview run <change|url>... [options]
 lreview run --repo DIR --last N  # review the newest N commits locally
 lreview render [file.json...]    # (re)generate Markdown reports from

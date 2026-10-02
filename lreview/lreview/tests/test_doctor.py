@@ -3,7 +3,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from lreview.doctor import AGENT_INSTALL, check_gerrit, run_setup
+from lreview.doctor import (AGENT_INSTALL, check_agent_login,
+                             check_gerrit, run_setup)
 from lreview.prompts import PromptsStatus
 
 
@@ -109,3 +110,41 @@ class TestRunSetup:
         out = capsys.readouterr().out
         assert "best-effort" in out
         assert "npm install -g @google/gemini-cli" in out
+
+class TestAgentLogin:
+
+    def _run(self, rc, stdout="", stderr=""):
+        done = MagicMock(returncode=rc, stdout=stdout, stderr=stderr)
+        return patch("subprocess.run", return_value=done)
+
+    def test_claude_answering_is_logged_in(self):
+        with self._run(0, '{"is_error": false, "result": "ok"}'):
+            ok, _ = check_agent_login("claude")
+        assert ok
+
+    def test_claude_auth_failure_is_not_ready(self):
+        """On PATH is not logged in: this is what a review then fails on."""
+        out = '{"is_error": true, "result": "Invalid API key - Please run /login"}'
+        with self._run(1, out):
+            ok, detail = check_agent_login("claude")
+        assert not ok
+        assert "Invalid API key" in detail
+
+    def test_claude_error_with_exit_zero_is_not_ready(self):
+        with self._run(0, '{"is_error": true, "result": "authentication_failed"}'):
+            ok, detail = check_agent_login("claude")
+        assert not ok
+        assert "authentication_failed" in detail
+
+    def test_codex_uses_login_status(self):
+        with self._run(1, "", "Not logged in") as run:
+            ok, detail = check_agent_login("codex")
+        assert not ok
+        assert "Not logged in" in detail
+        assert run.call_args[0][0] == ["codex", "login", "status"]
+
+    def test_other_backends_are_not_checked(self):
+        with patch("subprocess.run") as run:
+            ok, _ = check_agent_login("gemini")
+        assert ok
+        run.assert_not_called()
