@@ -104,6 +104,9 @@ _HOISTABLE_FLAGS = {"--pretty", "--debug", "--envelope"}
 # reaches the group; -U is unambiguous and hoists from anywhere.
 _HOISTABLE_OPTIONS = {"--instance", "-I", "-U"}
 
+# Names agents reach for that mean an existing command; hidden from --help.
+_COMMAND_ALIASES = {"view": "get"}
+
 
 class JsonErrorGroup(JsonUsageErrorGroup):
     """Click group that wraps usage errors in JSON envelope and hoists global flags.
@@ -133,6 +136,9 @@ class JsonErrorGroup(JsonUsageErrorGroup):
                 options=tuple(_HOISTABLE_OPTIONS),
             ),
         )
+
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        return super().get_command(ctx, _COMMAND_ALIASES.get(cmd_name, cmd_name))
 
     def invoke(self, ctx: click.Context) -> Any:
         try:

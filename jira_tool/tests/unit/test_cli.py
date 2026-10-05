@@ -320,6 +320,25 @@ class TestCLIIssueGet:
         assert data["meta"]["command"] == "get"
 
     @responses.activate
+    def test_view_is_get(self, runner, mock_env):
+        """'jira view' runs get, and stays out of --help."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"summary": "Test issue"}},
+            status=200,
+        )
+
+        result = runner.invoke(main, ["--envelope", "view", "PROJ-123"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["data"]["key"] == "PROJ-123"
+        assert data["meta"]["command"] == "get"
+        help_out = runner.invoke(main, ["--help"]).output
+        assert " view " not in help_out
+
+    @responses.activate
     def test_issue_get_not_found(self, runner, mock_env):
         """Should return error envelope for 404."""
         responses.add(
