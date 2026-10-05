@@ -1,0 +1,112 @@
+/*
+ * TLC base: element defaults on top of tokens.css.  Include after tokens.css.
+ * It styles bare elements only (no classes), so it is safe to drop into an
+ * existing page; components.css carries the tlc-* classes.
+ */
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--tlc-page);
+  color: var(--tlc-text);
+  font-family: var(--tlc-font);
+  font-size: var(--tlc-text-md);
+  line-height: var(--tlc-leading);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: var(--tlc-accent-border); color: var(--tlc-text); }
+
+h1, h2, h3, h4 {
+  font-family: var(--tlc-display);
+  color: var(--tlc-text);
+  line-height: var(--tlc-leading-tight);
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--tlc-space-3);
+  text-wrap: balance;
+}
+h1 { font-size: var(--tlc-text-2xl); font-weight: 700; }
+h2 { font-size: var(--tlc-text-xl); font-weight: 700; margin-top: var(--tlc-space-6); }
+h3 { font-size: var(--tlc-text-lg); font-weight: 650; margin-top: var(--tlc-space-5); }
+h4 { font-size: var(--tlc-text-md); font-weight: 650; margin-top: var(--tlc-space-4); }
+
+p, ul, ol, dl, blockquote { margin: 0 0 var(--tlc-space-4); }
+p, li, dd, blockquote { max-width: var(--tlc-measure); }
+li + li { margin-top: var(--tlc-space-1); }
+strong, b { font-weight: 700; }
+small { font-size: var(--tlc-text-sm); }
+
+/* Links in prose are always underlined: colour alone is not a cue. */
+a {
+  color: var(--tlc-accent);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+a:hover { text-decoration-thickness: 2px; }
+
+:focus-visible {
+  outline: var(--tlc-focus-width) solid var(--tlc-focus);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 calc(var(--tlc-focus-width) + 2px) var(--tlc-focus-halo);
+  border-radius: 3px;
+}
+
+code, kbd, samp, pre { font-family: var(--tlc-mono); font-size: 0.94em; }
+code {
+  overflow-wrap: anywhere;
+  background: var(--tlc-surface-2);
+  border: 1px solid var(--tlc-border);
+  border-radius: 5px;
+  padding: 0.05em 0.35em;
+}
+kbd {
+  background: var(--tlc-surface);
+  border: 1px solid var(--tlc-border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 0.05em 0.4em;
+}
+pre {
+  background: var(--tlc-surface-2);
+  border: 1px solid var(--tlc-border);
+  border-radius: var(--tlc-radius);
+  padding: var(--tlc-space-3) var(--tlc-space-4);
+  overflow: auto;
+  line-height: 1.5;
+  tab-size: 8;
+}
+pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+
+hr { border: 0; border-top: 1px solid var(--tlc-border); margin: var(--tlc-space-6) 0; }
+
+img, svg, video { max-width: 100%; height: auto; }
+
+table { border-collapse: collapse; }
+th { text-align: left; font-weight: 700; color: var(--tlc-text-2); }
+
+input, select, textarea, button { font: inherit; color: inherit; }
+input[type="checkbox"], input[type="radio"] {
+  accent-color: var(--tlc-accent-solid);
+  width: 1.15rem; height: 1.15rem;
+}
+
+details > summary { cursor: pointer; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Windows high contrast and other forced palettes: keep boundaries visible. */
+@media (forced-colors: active) {
+  :focus-visible { outline-color: Highlight; box-shadow: none; }
+}

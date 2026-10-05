@@ -19,11 +19,14 @@ worker (flask dev server, or `gunicorn -w 1 'gerrit_dashboard.app:create_app()'`
 
 from __future__ import annotations
 
+import base64
+import functools
 import logging
 import re
 import threading
 import time
 from collections import OrderedDict
+from pathlib import Path
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
 from gerrit_cli.client import GerritCommentsClient
@@ -209,10 +212,39 @@ def _refresher_loop(fetcher: GerritFetcher, store, config: Config, state: AppSta
         state.wakeup.wait(timeout=state.interval if state.interval > 0 else None)
 
 
+TLC_DIR = Path(__file__).parent / "static" / "tlc"
+
+
+@functools.lru_cache(maxsize=1)
+def tlc_inline() -> dict:
+    """The design system's stylesheets, script and icon, for a static export.
+
+    A snapshot file has to stand alone, so the CSS goes in a <style> with the
+    Latin fonts as data URIs; the Latin Extended faces are left out to keep
+    the file small, and the browser falls back for those few characters.
+    """
+    css = "\n".join((TLC_DIR / "css" / f).read_text()
+                     for f in ("tokens.css", "base.css", "components.css"))
+    css = re.sub(r"@font-face \{[^}]*latin-ext\.woff2[^}]*\}\s*", "", css)
+
+    def font(m: re.Match) -> str:
+        data = base64.b64encode((TLC_DIR / "fonts" / m.group(1)).read_bytes()).decode()
+        return f'url("data:font/woff2;base64,{data}")'
+
+    css = re.sub(r'url\("\.\./fonts/([a-z0-9-]+\.woff2)"\)', font, css)
+    icon = base64.b64encode((TLC_DIR / "icons" / "gerrit-dashboard.svg").read_bytes()).decode()
+    return {
+        "css": css,
+        "js": (TLC_DIR / "js" / "tlc-display.js").read_text(),
+        "icon": f"data:image/svg+xml;base64,{icon}",
+    }
+
+
 def create_app(config: Config | None = None, start_refresher: bool = True) -> Flask:
     cfg = config or Config.from_env()
 
     app = Flask(__name__)
+    app.jinja_env.globals["tlc_inline"] = tlc_inline
     # Honor X-Forwarded-{Proto,Host,Prefix} from the fronting nginx so
     # url_for() builds /gerrit/... URLs behind https://host/gerrit/.
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)

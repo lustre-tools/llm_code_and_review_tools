@@ -99,9 +99,10 @@ class Config:
     max_hidden: int = 2000
     # Deployment web chrome (env-only; empty/dark by default so the tool's
     # own look and the CLI/static exports are unchanged).
-    # First-visit theme when the viewer has no saved preference — the picker
-    # still lets anyone switch. "dark" keeps the built-in default.
-    default_theme: str = "dark"
+    # First-visit theme when the viewer has no saved preference: "auto"
+    # follows the viewer's system; "light" or "dark" is saved as their
+    # choice on the first visit, and the Display control changes it.
+    default_theme: str = "auto"
     # Optional "back to the parent site" link shown in the header, for when
     # the dashboard is mounted inside a larger tools site.
     site_name: str = ""
@@ -152,7 +153,9 @@ class Config:
         cfg.max_watchlist = int(os.environ.get("GD_MAX_WATCHLIST", cfg.max_watchlist))
         cfg.max_hidden = int(os.environ.get("GD_MAX_HIDDEN", cfg.max_hidden))
         theme = os.environ.get("GD_DEFAULT_THEME", "").strip().lower()
-        if theme in ("dark", "light", "gruvbox-light"):
+        if theme == "gruvbox-light":    # retired with the TLC design system
+            theme = "light"
+        if theme in ("auto", "dark", "light"):
             cfg.default_theme = theme
         cfg.site_name = os.environ.get("GD_SITE_NAME", cfg.site_name)
         cfg.site_home = os.environ.get("GD_SITE_HOME", cfg.site_home)

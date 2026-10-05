@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Gerrit Dashboard">
+  <title>Gerrit Dashboard</title>
+  <rect width="128" height="128" rx="28" fill="#27348b"/>
+  <circle cx="33" cy="40" r="9" fill="#ffb547"/>
+  <rect x="50" y="32" width="54" height="16" rx="8" fill="#ffffff"/>
+  <circle cx="33" cy="64" r="7" fill="none" stroke="#95b6e1" stroke-width="4"/>
+  <rect x="50" y="56" width="44" height="16" rx="8" fill="#95b6e1"/>
+  <circle cx="33" cy="88" r="7" fill="none" stroke="#95b6e1" stroke-width="4"/>
+  <rect x="50" y="80" width="32" height="16" rx="8" fill="#95b6e1" fill-opacity=".7"/>
+</svg>

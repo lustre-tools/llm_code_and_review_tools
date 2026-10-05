@@ -101,6 +101,8 @@ works if everyone maintains it.
 | `GD_ACTION_RECENT_DAYS` | 7 | P0/P1 older than this → "longstanding" |
 | `GD_NUDGE_DAYS` | 3 | CI-green + unreviewed age before "nudge reviewers" |
 | `GD_STALE_DAYS` | 100 | "stalled" badge threshold |
+| `GD_DEFAULT_THEME` | auto | first-visit theme: `auto` (the viewer's system), `light` or `dark`; viewers change it under Display |
+| `GD_SITE_NAME` / `GD_SITE_HOME` | *(none)* | a "back to the parent site" link in the header |
 
 Gerrit credentials come from the gerrit-cli environment layering
 (`GERRIT_URL` / `GERRIT_USER` / `GERRIT_PASS`, e.g. via a shell profile or
@@ -158,7 +160,11 @@ Layout: `fetcher.py` (bulk queries + cached `/comments` enrichment),
 `ci_parse.py` (bot-message parsers), `review_rules.py` (Code-Review gate),
 `classify.py` (attention rules → snapshot), `app.py` (Flask + per-board
 refreshers), `store.py` (per-user JSON files), `templates/dashboard.html`
-(one self-contained page, no CDN).
+(one page, no CDN). The look is the TLC design system, vendored in
+`static/tlc/` (stylesheets, fonts, the display-settings script, the icon);
+the templates' own CSS uses only its `--tlc-*` tokens, so light, dark and
+high contrast come from the tokens alone. A `snapshot` export inlines all of
+it, fonts included, so the file stands alone.
 
 Bumping `SNAPSHOT_SCHEMA` in `store.py` is required whenever the snapshot
 layout changes; stale snapshots are then discarded instead of breaking the

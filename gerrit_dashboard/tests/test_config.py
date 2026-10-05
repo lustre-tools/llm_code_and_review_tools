@@ -33,18 +33,22 @@ class TestDefaults:
 
 
 class TestWebChrome:
-    def test_theme_defaults_to_dark(self, monkeypatch):
+    def test_theme_defaults_to_auto(self, monkeypatch):
         monkeypatch.delenv("GD_DEFAULT_THEME", raising=False)
-        assert Config.from_env().default_theme == "dark"
+        assert Config.from_env().default_theme == "auto"
 
-    @pytest.mark.parametrize("value", ["light", "gruvbox-light", "dark"])
+    @pytest.mark.parametrize("value", ["light", "dark", "auto"])
     def test_theme_from_env(self, monkeypatch, value):
         monkeypatch.setenv("GD_DEFAULT_THEME", value.upper())  # case-insensitive
         assert Config.from_env().default_theme == value
 
-    def test_bad_theme_falls_back_to_dark(self, monkeypatch):
+    def test_retired_gruvbox_theme_becomes_light(self, monkeypatch):
+        monkeypatch.setenv("GD_DEFAULT_THEME", "gruvbox-light")
+        assert Config.from_env().default_theme == "light"
+
+    def test_bad_theme_falls_back_to_auto(self, monkeypatch):
         monkeypatch.setenv("GD_DEFAULT_THEME", "solarized")
-        assert Config.from_env().default_theme == "dark"
+        assert Config.from_env().default_theme == "auto"
 
     def test_site_link_empty_by_default(self, monkeypatch):
         monkeypatch.delenv("GD_SITE_NAME", raising=False)

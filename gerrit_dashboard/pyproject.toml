@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gerrit-dashboard"
-version = "0.1.0"
+version = "0.1.1"
 description = "Gerrit attention dashboard for the Lustre CI"
 license = {text = "BSD-2-Clause"}
 requires-python = ">=3.10"
@@ -29,7 +29,7 @@ gdash = "gerrit_dashboard.cli:main"
 include = ["gerrit_dashboard*"]
 
 [tool.setuptools.package-data]
-gerrit_dashboard = ["templates/*.html"]
+gerrit_dashboard = ["templates/*.html", "static/tlc/*/*", "static/tlc/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
