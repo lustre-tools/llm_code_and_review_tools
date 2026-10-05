@@ -25,13 +25,16 @@ lreview run --repo <tree> --last 2 -o /tmp/lreview1.txt
 - Local results are never posted. **Do not pass `--post` on a pre-push
   pass** -- that posts to Gerrit.
 - Per-review timeout defaults to 7200s. Run it in the background with
-  output redirected to a file; never wait on it in the foreground.
-- To wait for that background run, wait on its **pid**. Never wait on a
-  `pgrep -f` pattern naming the command: the waiting shell's own command
-  line contains the pattern, so `pgrep` matches the waiter itself and the
-  loop never ends -- reporting the run as still going long after it
-  finished. The same trap makes `pkill -f <cmd>` kill the shell that runs
-  it, before it kills anything else.
+  output redirected to a file, using the harness's own mechanism: Claude
+  Code's `run_in_background`, or whatever the run's instructions specify.
+  Where those instructions say how to run or wait on background work (for
+  example, no detached `&` jobs), they win over this skill.
+- Wait on the run's **pid** or on its output. Never wait on a `pgrep -f`
+  pattern naming the command: the waiting shell's own command line
+  contains the pattern, so `pgrep` matches the waiter itself and the loop
+  never ends -- reporting the run as still going long after it finished.
+  The same trap makes `pkill -f <cmd>` kill the shell that runs it, before
+  it kills anything else. In a plain shell with no harness rules:
 
   ```bash
   lreview run --repo <tree> --last 6 -o /tmp/r1.txt > /tmp/r1.console 2>&1 &
@@ -55,15 +58,18 @@ lreview run --repo <tree> --last 2 -o /tmp/lreview1.txt
 5. Repeat until two rounds in a row are clean.
 
 A clean round is one that turns up nothing but wording or style items and
-findings you consciously decline. A round that leads to a real fix resets
-the count to zero.
+findings you consciously decline. Applying a clean round's wording or
+style fixes does not reset the count, so the next round on that amended
+commit can be the second clean one; a round that leads to a real code fix
+resets the count to zero.
 
 ## When to stop
 
 Rounds converge on wording, not bugs. Stop after two clean rounds in a
 row, not one: runs are not deterministic, and the next pass can find what
 a clean one missed. Past that, further rounds cost roughly $10 and 25
-minutes each and mostly churn prose.
+minutes each and mostly churn prose. When the change is small and round 1
+was clean, make the second round `--mode light`.
 
 Before spending another round on the same backend, get a second opinion:
 
