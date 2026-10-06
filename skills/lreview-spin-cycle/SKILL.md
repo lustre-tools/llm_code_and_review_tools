@@ -100,8 +100,11 @@ the count.
 Rounds converge on wording, not bugs. Stop after two clean rounds in a
 row, not one: runs are not deterministic, and the next pass can find what
 a clean one missed. Past that, further rounds cost roughly $10 and 25
-minutes each and mostly churn prose. When the change is small and round 1
-was clean, the second whole-commit round may be `--mode light`.
+minutes each and mostly churn prose. When your change is small -- a few
+lines, with a check that exercises it directly, and no new locking,
+interface, or on-disk or wire format -- both whole-commit rounds may be
+`--mode light`; a light round that finds anything serious puts you back to
+full rounds.
 
 Before spending another round on the same backend, get a second opinion:
 
