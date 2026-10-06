@@ -63,6 +63,13 @@ style fixes does not reset the count, so the next round on that amended
 commit can be the second clean one; a round that leads to a real code fix
 resets the count to zero.
 
+lreview always reviews the whole commit. When your change is a small part
+of it -- answering review comments on someone else's patch, adding a man
+page -- each round also comments on code you did not touch, and those
+findings vary from run to run. Judge a round by what it finds in your own
+change: fix a finding elsewhere only if it is a real bug, and it does not
+reset the count.
+
 ## When to stop
 
 Rounds converge on wording, not bugs. Stop after two clean rounds in a
