@@ -63,25 +63,37 @@ style fixes does not reset the count, so the next round on that amended
 commit can be the second clean one; a round that leads to a real code fix
 resets the count to zero.
 
-By default lreview reviews the whole commit. When your change is a small
-part of it -- answering review comments on someone else's patch, adding a
-man page -- each round also comments on code you did not touch, and those
-findings vary from run to run. Limit the review to your change with
-`--since <the revision you started from>`:
+lreview reviews the whole commit, and each round's findings vary from run
+to run. When your change is a small part of the commit -- answering review
+comments on someone else's patch, adding a man page -- rounds that keep
+re-reviewing code you did not touch never converge. `--since REV` limits a
+round to what changed since `REV` (the reviewer reports code outside that
+only for a real bug), but it is a shortcut for after the whole commit has
+been reviewed, not a substitute for reviewing it:
+
+- The first two rounds always review the whole commit, without `--since`.
+- Keep reviewing the whole commit while a round finds anything serious: a
+  real defect (wrong behaviour, a crash or hang, data loss, a security
+  hole, a test that is wrong or does not test the fix) or a requirement
+  you missed. Wording, style, naming and optional cleanups are not serious.
+- Once a whole-commit round (the second or later) finds nothing serious,
+  that commit has been reviewed. Note its hash (`git rev-parse HEAD`)
+  *before* you amend in that round's wording and style fixes, and review
+  later rounds with `--since <that hash>`:
 
 ```bash
-lreview run --repo <tree> --last 1 --since <patchset-sha> -o /tmp/lreview1.txt
+lreview run --repo <tree> --last 1 --since <hash> -o /tmp/lreview3.txt
 ```
 
-Use the commit as it was before your first amend (the Gerrit patchset's
-revision; fetch it if the tree lacks it), not the previous round's commit,
-so every round sees your whole change. The reviewer then reports code
-outside your change only for a real bug. It takes one commit, and runs no
-review at all when nothing changed.
+- Keep the same `--since` hash on later rounds, so each one sees all that
+  you changed since the reviewed commit. It takes one commit, and runs no
+  review at all when nothing changed.
+- A serious finding in any round, `--since` or not, puts you back to
+  whole-commit rounds until one finds nothing serious.
 
-Either way, judge a round by what it finds in your own change: fix a
-finding elsewhere only if it is a real bug, and it does not reset the
-count.
+In a `--since` round, judge the round by what it finds in your own change:
+fix a finding elsewhere only if it is a real bug, and it does not reset
+the count.
 
 ## When to stop
 
@@ -89,7 +101,7 @@ Rounds converge on wording, not bugs. Stop after two clean rounds in a
 row, not one: runs are not deterministic, and the next pass can find what
 a clean one missed. Past that, further rounds cost roughly $10 and 25
 minutes each and mostly churn prose. When the change is small and round 1
-was clean, make the second round `--mode light`.
+was clean, the second whole-commit round may be `--mode light`.
 
 Before spending another round on the same backend, get a second opinion:
 
