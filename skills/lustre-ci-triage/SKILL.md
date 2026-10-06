@@ -18,9 +18,9 @@ its own CLI:
   needed.
 
 All three print JSON to stdout. Add `--envelope` for `{ok, data, meta}`.
-Do not use `--pretty`, and do not pipe output through Python. Run
-`<tool> --help` or `<tool> describe` for the full surface; this skill
-covers the order to use them in and the judgment that goes with it.
+Do not use `--pretty`. Run `<tool> --help` (and `jenkins describe` for
+its machine-readable API) for the full surface; this skill covers the
+order to use them in and the judgment that goes with it.
 
 ## Cheapest evidence first
 
@@ -244,7 +244,7 @@ Rules that matter:
   its branch, rebase onto the tip and upload the new patchset; if it is
   already current, or a rebase would drop unmerged parents in a series,
   post exactly `BUILD` as a change comment
-  (`gerrit --user patrickbot message <change> BUILD`).
+  (`gerrit message <change> BUILD`).
 
 ## Build failures go to Jenkins
 
@@ -269,11 +269,9 @@ branch has since fixed: the repair is a rebase, not a source change.
 For a build that failed on infrastructure rather than code,
 `jenkins retrigger <job> <build>` re-runs it with the same Gerrit event.
 When Jenkins has posted a Verified-1 from a flaky build, the accepted fix
-is to post `BUILD` as a Gerrit comment, which re-triggers it:
-
-```bash
-ssh -p 29418 <user>@review.whamcloud.com gerrit review -m '"BUILD"' <commit-sha>
-```
+is to post exactly `BUILD` as a change comment, which re-triggers it --
+the same `gerrit message <change> BUILD` as for a build that is gone
+(above).
 
 ## Janitor for crashes and raw logs
 

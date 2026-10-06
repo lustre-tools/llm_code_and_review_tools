@@ -196,8 +196,8 @@ violates them cannot be pushed:
 - The signoff section must be contiguous: no blank lines between
   trailers.
 - **Never `Co-Authored-By:`** -- the hook rejects it. Credit an agent with
-  `Assisted-by: AGENT_NAME:MODEL_VERSION` instead, e.g.
-  `Assisted-by: ClaudeCode:claude-opus-5`.
+  `Assisted-by: ClaudeCode:<model-id>` instead, with the id of the model
+  actually running.
 - Accepted trailers: `Assisted-by`, `Build-Parameters`, `Change-Id`,
   `CoverityID`, `Fixes`, `Linux-commit`, `Lustre-change`,
   `Lustre-commit`, `Signed-off-by`, `Test-Parameters`, plus the
@@ -224,11 +224,11 @@ of URLs and command lines, fixes a committer Gerrit would reject, and
 refuses to put HEAD on the wrong change.
 
 ```bash
-gc --user patrickbot upload 64086 --dry-run     # every check, nothing pushed
-gc --user patrickbot upload 64086               # HEAD -> next patchset of 64086
-gc --user patrickbot upload 64086 --series      # every new commit up to HEAD
-gc --user patrickbot upload 64086 --repo /abs/path/to/checkout   # from elsewhere
-gc --user patrickbot upload 64086 --expect-patchset 3   # refuse if it moved on
+gc upload 64086 --dry-run     # every check, nothing pushed
+gc upload 64086               # HEAD -> next patchset of 64086
+gc upload 64086 --series      # every new commit up to HEAD
+gc upload 64086 --repo /abs/path/to/checkout   # from elsewhere
+gc upload 64086 --expect-patchset 3   # refuse if it moved on
 gc upload --project fs/lustre-release --branch master   # HEAD as a new change
 ```
 

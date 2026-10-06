@@ -22,8 +22,9 @@ lreview run --repo <tree> --last 2 -o /tmp/lreview1.txt
 
 - `--last N` reviews the newest N commits of `--repo`, each in its own
   worktree pinned to that commit. The working tree is untouched.
-- Local results are never posted. **Do not pass `--post` on a pre-push
-  pass** -- that posts to Gerrit.
+- Local results are never posted: `--post` on a `--last`, `--local` or
+  HEAD review only prints a note. Posting is for Gerrit change numbers and
+  GitHub PRs (below).
 - Per-review timeout defaults to 7200s. Run it in the background with
   output redirected to a file, using the harness's own mechanism: Claude
   Code's `run_in_background`, or whatever the run's instructions specify.
@@ -109,19 +110,18 @@ full rounds.
 Before spending another round on the same backend, get a second opinion:
 
 ```bash
-lreview run --repo <tree> --last 2 --agent codex --model astra -o /tmp/lreview-codex.txt
+lreview run --repo <tree> --last 2 --agent codex -o /tmp/lreview-codex.txt   # codex defaults to gpt-6.1-sol
 ```
 
-On one series this found two real defects that ten opus rounds had missed,
-at about four times fewer tokens and half the wall time. Different
-backends fail differently; `lreview models` lists what each accepts
+A second backend regularly finds real defects that more rounds on the
+first keep missing. Different backends fail differently; `lreview models` lists what each accepts
 (claude: opus, sonnet, fable, haiku; codex: astra, sol, terra, luna,
 spark, with an `--effort` level).
 
 Inside a Patch Watcher run, use lreview for reviews and do not start
 `claude` or `codex` yourself. In a Claude run lreview reviews with Claude;
-`codex` is only in Codex runs, so skip the codex opinion there. In a Codex
-run lreview is not logged in yet. Results go to `$LREVIEW_RESULTS_DIR`,
+`codex` is only in Codex runs, so skip the codex opinion there. Results go
+to `$LREVIEW_RESULTS_DIR`,
 which the run sets to its own tmp.
 
 ## The comment-bloat trap
@@ -162,8 +162,10 @@ lreview setup     # guided first-time setup; offers to clone review-prompts
 ```
 
 `lreview` needs three things: an agent CLI on PATH (`claude` by default,
-each with its own login), a clone of the review-prompts repo
-(`--prompts-dir` / `$REVIEW_PROMPTS_DIR`, else `~/review-prompts`), and
+each with its own login), a review-prompts checkout
+(`--prompts-dir` / `$REVIEW_PROMPTS_DIR`, else the `review-prompts`
+submodule bundled in this repo, which `install.sh` initializes, else
+`~/review-prompts`), and
 Gerrit credentials for anything that touches Gerrit -- the same ones
 `./install.sh --configure --only gerrit` writes.
 

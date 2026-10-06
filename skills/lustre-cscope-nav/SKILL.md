@@ -41,7 +41,7 @@ This writes `cscope.out` (plus `cscope.in.out`/`cscope.po.out` for the
 inverted index) at the tree root -- already covered by Lustre's own
 `.gitignore` (`cscope.*`), so nothing to exclude by hand. It is cheap
 enough to just re-run before a navigation-heavy session, or whenever
-you `cd` into a different `$CO/N` checkout -- the database is
+you `cd` into a different checkout -- the database is
 per-directory and knows nothing about any other tree's.
 
 ## Querying

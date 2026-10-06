@@ -7,8 +7,8 @@ version: 0.1.0
 # JIRA bug research and issue work
 
 `jira` is the CLI for bug tracking and test-failure research. Output is
-JSON on stdout; add `--envelope` for `{ok, data, meta}`, skip `--pretty`,
-and do not pipe it through Python. `jira describe` emits the full
+JSON on stdout; add `--envelope` for `{ok, data, meta}`, and skip
+`--pretty`. `jira describe` emits the full
 machine-readable API; `jira --help` lists all commands.
 
 Exit codes are meaningful: 0 success, 1 general error, 2 auth, 3 not
@@ -21,8 +21,8 @@ anything, and search on the failure's own words -- the assertion text, the
 function name, the test name:
 
 ```bash
-jira search "project = LU AND text ~ 'sanity test_39b'" --limit 20
-jira search "project = LU AND text ~ 'LBUG.*ldlm_lock_decref'" --fields key,summary,status
+jira search 'project = LU AND text ~ "\"sanity test_39b\""' --limit 20
+jira search "project = LU AND text ~ 'LBUG ldlm_lock_decref'" --fields key,summary,status   # both words, any order; no regex
 jira search "project = LU AND status != Closed AND text ~ 'osc_extent'" --output key
 ```
 

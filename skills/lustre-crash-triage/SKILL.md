@@ -1,12 +1,12 @@
 ---
 name: lustre-crash-triage
-description: This skill should be used to analyse a Lustre kernel crash or vmcore - "analyse this vmcore", "the node LBUGed", "what caused this panic", "triage this crash dump", "why did the client hang", "look at the crash in /var/crash", "run the lustre crash recipe", "find the stuck RPCs in this dump". Covers lustre-crash / crash-tool, the drgn scripts behind it, and the order that gets to an answer fastest.
+description: This skill should be used to analyse a Lustre kernel crash or vmcore - "analyse this vmcore", "the node LBUGed", "what caused this panic", "triage this crash dump", "why did the client hang", "look at the crash in /var/crash", "run the lustre crash recipe", "find the stuck RPCs in this dump". Covers lustre-crash, the drgn scripts behind it, and the order that gets to an answer fastest.
 version: 0.1.0
 ---
 
 # Lustre crash triage
 
-`lustre-crash` (installed as `crash-tool` too) runs non-interactive,
+`lustre-crash` runs non-interactive,
 drgn-based analyses of a vmcore and returns structured JSON. It is the
 tool to reach for after an LBUG, LASSERT, panic or oops.
 
@@ -29,7 +29,7 @@ which locks were held, what RPCs were in flight, which tasks were stuck.
 ## Running a recipe
 
 ```bash
-crash-tool recipes lustre \
+lustre-crash recipes lustre \
     --vmcore /path/to/vmcore --vmlinux /path/to/vmlinux --mod-dir <build-tree>
 ```
 
@@ -63,7 +63,7 @@ same `--vmcore`, `--vmlinux`, `--mod-dir` and `--pretty`:
 
 ```bash
 python3 <tools-checkout>/lustre-drgn-tools/lustre_triage.py \
-    --vmcore <path> --vmlinux <path> --mod-dir <build> --pretty
+    --vmcore <path> --vmlinux <path> --mod-dir <build>
 ```
 
 For a question none of them answers, drive drgn against the same dump:
