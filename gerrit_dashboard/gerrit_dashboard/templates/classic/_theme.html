@@ -1,0 +1,89 @@
+{% include "_display_head.html" %}
+{% if static_mode | default(false) %}
+<style>{{ tlc_chrome_css() | safe }}</style>
+{% else %}
+<link rel="stylesheet" href="{{ url_for('static', filename='tlc/css/tokens.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='tlc/css/components.css') }}">
+{% endif %}
+<style>
+  /* The shared Display menu sets html[data-theme]; none means follow the
+     system. */
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #21262d; --border: #30363d;
+    --ink: #e6edf3; --muted: #8b949e; --link: #58a6ff;
+    --ok: #3fb950; --bad: #f85149; --warn: #d29922; --run: #58a6ff; --tag: #bc8cff;
+    --ok-rgb: 63,185,80; --bad-rgb: 248,81,73; --warn-rgb: 210,153,34;
+    --run-rgb: 88,166,255; --tag-rgb: 188,140,255;
+    --shadow: rgba(0,0,0,.5);
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  html[data-theme="light"] {
+    --bg: #ffffff; --panel: #f6f8fa; --panel2: #eaeef2; --border: #d0d7de;
+    --ink: #1f2328; --muted: #59636e; --link: #0969da;
+    --ok: #1a7f37; --bad: #d1242f; --warn: #9a6700; --run: #0969da; --tag: #8250df;
+    --ok-rgb: 26,127,55; --bad-rgb: 209,36,47; --warn-rgb: 154,103,0;
+    --run-rgb: 9,105,218; --tag-rgb: 130,80,223;
+    --shadow: rgba(140,149,159,.35);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: light) {
+    html:not([data-theme]) {
+      --bg: #ffffff; --panel: #f6f8fa; --panel2: #eaeef2; --border: #d0d7de;
+      --ink: #1f2328; --muted: #59636e; --link: #0969da;
+      --ok: #1a7f37; --bad: #d1242f; --warn: #9a6700; --run: #0969da; --tag: #8250df;
+      --ok-rgb: 26,127,55; --bad-rgb: 209,36,47; --warn-rgb: 154,103,0;
+      --run-rgb: 9,105,218; --tag-rgb: 130,80,223;
+      --shadow: rgba(140,149,159,.35);
+      color-scheme: light;
+    }
+  }
+
+  /* The Display menu is a TLC component: point its tokens at this palette.
+     Three :root outrank every theme and contrast block in tokens.css. */
+  :root:root:root {
+    --tlc-page: var(--bg); --tlc-surface: var(--panel); --tlc-surface-2: var(--panel2);
+    --tlc-surface-3: var(--panel2); --tlc-border: var(--border); --tlc-border-strong: var(--muted);
+    --tlc-text: var(--ink); --tlc-text-2: var(--ink); --tlc-muted: var(--muted);
+    --tlc-accent: var(--link); --tlc-accent-solid: var(--link); --tlc-accent-solid-hover: var(--link);
+    --tlc-on-accent: var(--bg); --tlc-accent-wash: rgba(var(--run-rgb), .12);
+    --tlc-shadow-pop: 0 8px 24px var(--shadow);
+    --tlc-font: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  /* This design is px-based, so text size scales the whole page; the root
+     size only sizes the menu, to match the 13px text. */
+  html:root, html:root[data-text-size] { font-size: 87.5%; }
+  html[data-text-size="s"] body { zoom: .9375; }
+  html[data-text-size="l"] body { zoom: 1.125; }
+  html[data-text-size="xl"] body { zoom: 1.25; }
+  html[data-gd-size="xs"] body { zoom: .875; }
+
+  /* base elements shared by every page */
+  * { box-sizing: border-box; }
+  html { scrollbar-color: var(--panel2) var(--bg); }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 13px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button, select {
+    background: var(--panel2); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  button:hover, select:hover { border-color: var(--muted); }
+  button:disabled { opacity: .5; cursor: default; }
+  label.ctl { color: var(--muted); font-size: 12px; }
+  /* optional "back to the parent site" crumb in the header */
+  a.site-home { font-weight: 600; color: var(--ink); }
+  a.site-home:hover { color: var(--link); text-decoration: none; }
+  .crumb-sep { color: var(--muted); }
+  .gd-mark { width: 22px; height: 22px; vertical-align: -5px; margin-right: 8px; }
+  .gd-version { white-space: nowrap; }
+</style>
+{% if tlc_branding %}
+{# TLC branding carries the design system's mark and fonts into this design too. #}
+<style>
+{{ tlc_font_faces(static_mode | default(false)) | safe }}
+  :root { --mono: "Atkinson Hyperlegible Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  :root:root:root { --tlc-font: "Atkinson Hyperlegible Next", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  body { font-family: "Atkinson Hyperlegible Next", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+</style>
+{% endif %}

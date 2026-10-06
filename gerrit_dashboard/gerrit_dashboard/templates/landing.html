@@ -63,7 +63,8 @@
 <a class="tlc-skip" href="#main">Skip to content</a>
 <header class="tlc-topbar gd-topbar">
   {% if site_name %}<a class="site-home" href="{{ site_home or '/' }}" title="Back to {{ site_name }}">{{ site_name }}</a><span class="crumb-sep" aria-hidden="true">/</span>{% endif %}
-  <a class="tlc-brand" href="{{ url_for('root') }}"><img src="{{ url_for('static', filename='tlc/icons/gerrit-dashboard.svg') }}" alt=""><span class="tlc-brand__name">Gerrit Dashboard</span></a>
+  {% if tlc_branding %}<a class="tlc-brand" href="{{ url_for('root') }}"><img src="{{ url_for('static', filename='tlc/icons/gerrit-dashboard.svg') }}" alt=""><span class="tlc-brand__name">Gerrit Dashboard</span></a>
+  {% else %}<a class="gd-brand" href="{{ url_for('root') }}">Gerrit Dashboard</a>{% endif %}
   <span class="ident">{{ gerrit_url | replace('https://', '') | replace('http://', '') }}</span>
   <div class="right">
     <div class="tlc-pop" data-tlc-display></div>
@@ -139,6 +140,7 @@
   Read-only against Gerrit: this tool never votes, comments or stars.
   Boards are built from the credentials configured on the server, so any
   user's board can be viewed here.
+  <span class="gd-version">gerrit-dashboard {{ gd_version }}</span>
 </footer>
 
 </main>

@@ -28,10 +28,12 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
+from flask import (Flask, abort, has_request_context, jsonify, redirect, render_template,
+                   request, url_for)
 from gerrit_cli.client import GerritCommentsClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from . import __version__
 from .classify import build_snapshot
 from .config import Config
 from .fetcher import GerritFetcher
@@ -240,11 +242,41 @@ def tlc_inline() -> dict:
     }
 
 
+_FONT_FACE_RE = re.compile(r"@font-face \{[^}]*\}")
+
+
+@functools.lru_cache(maxsize=1)
+def _tlc_token_css() -> str:
+    return (TLC_DIR / "css" / "tokens.css").read_text()
+
+
+def tlc_font_faces(inline: bool = False) -> str:
+    """Only the design system's @font-face rules, for a page that does not
+    load its stylesheets (the classic design under TLC branding)."""
+    if inline:
+        return "\n".join(_FONT_FACE_RE.findall(tlc_inline()["css"]))
+    return "\n".join(
+        re.sub(r'url\("\.\./fonts/([a-z0-9-]+\.woff2)"\)',
+               lambda m: f'url("{url_for("static", filename="tlc/fonts/" + m.group(1))}")',
+               face)
+        for face in _FONT_FACE_RE.findall(_tlc_token_css()))
+
+
+@functools.lru_cache(maxsize=1)
+def tlc_chrome_css() -> str:
+    """Tokens and components without fonts or base element styles: what the
+    shared Display menu needs inside the classic design's static export."""
+    css = "\n".join((TLC_DIR / "css" / f).read_text() for f in ("tokens.css", "components.css"))
+    return _FONT_FACE_RE.sub("", css)
+
+
 def create_app(config: Config | None = None, start_refresher: bool = True) -> Flask:
     cfg = config or Config.from_env()
 
     app = Flask(__name__)
     app.jinja_env.globals["tlc_inline"] = tlc_inline
+    app.jinja_env.globals["tlc_font_faces"] = tlc_font_faces
+    app.jinja_env.globals["tlc_chrome_css"] = tlc_chrome_css
     # Honor X-Forwarded-{Proto,Host,Prefix} from the fronting nginx so
     # url_for() builds /gerrit/... URLs behind https://host/gerrit/.
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
@@ -275,7 +307,20 @@ def create_app(config: Config | None = None, start_refresher: bool = True) -> Fl
             "default_theme": cfg.default_theme,
             "site_name": cfg.site_name,
             "site_home": cfg.site_home or "/",
+            "tlc_branding": cfg.tlc_branding,
+            "gd_version": __version__,
+            "gd_design": _design(),
         }
+
+    def _design() -> str:
+        # Per-viewer choice between the TLC design and the classic one it
+        # replaced; outside a request (CLI snapshot export) it is TLC.
+        if has_request_context() and request.cookies.get("gd-design") == "classic":
+            return "classic"
+        return "tlc"
+
+    def _template(name: str) -> str:
+        return f"classic/{name}" if _design() == "classic" else name
 
     def _resolver() -> GerritCommentsClient:
         # Lazy: `snapshot --cached` must work without Gerrit credentials.
@@ -406,7 +451,7 @@ def create_app(config: Config | None = None, start_refresher: bool = True) -> Fl
             b["live"] = b["username"] in live
             b["age"] = _age_since((b["summary"] or {}).get("fetched_at", 0))
         return render_template(
-            "landing.html",
+            _template("landing.html"),
             boards=boards,
             default_user=cfg.default_user,
             gerrit_url=cfg.gerrit_base_url,
@@ -439,7 +484,7 @@ def create_app(config: Config | None = None, start_refresher: bool = True) -> Fl
             refreshing = state.refreshing
             error = state.last_error
         return render_template(
-            "dashboard.html",
+            _template("dashboard.html"),
             snapshot=snapshot,
             refreshing=refreshing,
             error=error,
@@ -610,7 +655,7 @@ def create_app(config: Config | None = None, start_refresher: bool = True) -> Fl
         if snapshot is None:
             return jsonify({"error": "no snapshot yet"}), 503
         html = render_template(
-            "dashboard.html", snapshot=snapshot, refreshing=False,
+            _template("dashboard.html"), snapshot=snapshot, refreshing=False,
             error=None, form_error="", static_mode=True,
             gerrit_url=cfg.gerrit_base_url, user=user,
         )

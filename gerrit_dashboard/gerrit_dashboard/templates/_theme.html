@@ -1,31 +1,7 @@
-<meta name="color-scheme" content="light dark">
-<script>
-  // Runs before the display settings are applied, so a dark page never
-  // flashes light.  A first visit gets the deployment's default theme
-  // (GD_DEFAULT_THEME); a viewer who picked a theme in the old picker
-  // (the gd-theme cookie) keeps it.
-  (function () {
-    try {
-      if (localStorage.getItem('tlc-display')) return;
-      var old = (document.cookie.match(/(?:^|;\s*)gd-theme=([a-z-]+)/) || [])[1]
-                || localStorage.getItem('gd-theme');
-      var t = old ? (old === 'dark' ? 'dark' : 'light') : "{{ default_theme | default('auto') }}";
-      if (t !== 'dark' && t !== 'light') return;
-      var v = JSON.stringify({theme: t});
-      localStorage.setItem('tlc-display', v);
-      document.cookie = 'tlc-display=' + encodeURIComponent(v) + '; path=/; max-age=31536000; SameSite=Lax';
-    } catch (e) {}
-  })();
-</script>
+{% include "_display_head.html" %}
 {% if static_mode %}
-{% set tlc = tlc_inline() %}
-<script>{{ tlc.js | safe }}</script>
-<link rel="icon" type="image/svg+xml" href="{{ tlc.icon }}">
-<style>{{ tlc.css | safe }}</style>
+<style>{{ tlc_inline().css | safe }}</style>
 {% else %}
-<script src="{{ url_for('static', filename='tlc/js/tlc-display.js') }}"></script>
-<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='tlc/icons/gerrit-dashboard.svg') }}">
-<link rel="apple-touch-icon" href="{{ url_for('static', filename='tlc/icons/gerrit-dashboard-180.png') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='tlc/css/tokens.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='tlc/css/base.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='tlc/css/components.css') }}">
@@ -45,4 +21,19 @@
   h1.gd-title { font-size: var(--tlc-text-xl); margin: 0 0 var(--tlc-space-4); }
   h1.gd-title small { font-family: var(--tlc-font); font-weight: 400; font-size: var(--tlc-text-md); color: var(--tlc-muted); margin-left: var(--tlc-space-2); }
   .hidden { display: none !important; }
+
+  /* Smallest text: one step below TLC's Small, wins over any TLC size. */
+  html:root[data-gd-size="xs"] { font-size: 87.5%; }
+  /* Classic font: the system stack the dashboard used before TLC. */
+  html[data-gd-font="classic"] {
+    --tlc-font: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --tlc-display: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --tlc-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+
+  /* Header title when TLC branding is off. */
+  .gd-brand { font-weight: 700; font-size: var(--tlc-text-lg); color: var(--tlc-text);
+              text-decoration: none; white-space: nowrap; }
+  a.gd-brand:hover { color: var(--tlc-accent); text-decoration: none; }
+  footer.gd-foot .gd-version { white-space: nowrap; }
 </style>

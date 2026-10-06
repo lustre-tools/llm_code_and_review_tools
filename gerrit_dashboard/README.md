@@ -103,6 +103,7 @@ works if everyone maintains it.
 | `GD_STALE_DAYS` | 100 | "stalled" badge threshold |
 | `GD_DEFAULT_THEME` | auto | first-visit theme: `auto` (the viewer's system), `light` or `dark`; viewers change it under Display |
 | `GD_SITE_NAME` / `GD_SITE_HOME` | *(none)* | a "back to the parent site" link in the header |
+| `GD_TLC_BRANDING` | 0 | TLC branding: the design system's app mark in the header and as the favicon, and its fonts (no Font choice then); applies to both designs |
 
 Gerrit credentials come from the gerrit-cli environment layering
 (`GERRIT_URL` / `GERRIT_USER` / `GERRIT_PASS`, e.g. via a shell profile or
@@ -163,8 +164,17 @@ refreshers), `store.py` (per-user JSON files), `templates/dashboard.html`
 (one page, no CDN). The look is the TLC design system, vendored in
 `static/tlc/` (stylesheets, fonts, the display-settings script, the icon);
 the templates' own CSS uses only its `--tlc-*` tokens, so light, dark and
-high contrast come from the tokens alone. A `snapshot` export inlines all of
-it, fonts included, so the file stands alone.
+high contrast come from the tokens alone. The vendored files are never
+edited: `templates/_display_extras.html` adds a "Smallest" text size, a
+Font choice (Hyperlegible, or the classic system font) and a Design switch
+to the Display panel from outside. The Design switch is per viewer (the
+`gd-design` cookie): "Classic" serves the pre-TLC templates kept in
+`templates/classic/`. Both designs use the same Display menu
+(`templates/_display_head.html`) and the same saved settings; in classic
+it drops the Font and Contrast groups (one font, no high-contrast
+palette), maps the theme onto the classic dark and light palettes, and
+scales the px-based page for text size. A `snapshot` export inlines all of it, fonts included,
+so the file stands alone.
 
 Bumping `SNAPSHOT_SCHEMA` in `store.py` is required whenever the snapshot
 layout changes; stale snapshots are then discarded instead of breaking the

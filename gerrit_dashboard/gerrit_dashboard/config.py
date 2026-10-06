@@ -107,6 +107,9 @@ class Config:
     # the dashboard is mounted inside a larger tools site.
     site_name: str = ""
     site_home: str = ""
+    # The TLC design system's app mark in the header and as the favicon.
+    # The dashboard uses the design system for its look, not its branding.
+    tlc_branding: bool = False
 
     @classmethod
     def from_env(cls) -> Config:
@@ -159,6 +162,7 @@ class Config:
             cfg.default_theme = theme
         cfg.site_name = os.environ.get("GD_SITE_NAME", cfg.site_name)
         cfg.site_home = os.environ.get("GD_SITE_HOME", cfg.site_home)
+        cfg.tlc_branding = os.environ.get("GD_TLC_BRANDING", "").lower() in ("1", "true", "yes")
         if os.environ.get("GD_BOARDS"):
             cfg.boards = _split_csv(os.environ["GD_BOARDS"])
         # The bare-URL default board must be reachable within its own

@@ -1,0 +1,125 @@
+<script>
+/*
+ * Dashboard additions to the TLC Display panel, which both designs share:
+ * a "Smallest" text size, a Design switch, and a Font choice where there is
+ * one to make (the TLC design without TLC branding; the classic design has
+ * a single font and no high-contrast palette, so Font and Contrast go).
+ * The TLC script is vendored and must not be edited, so its panel is
+ * extended after it is built.  These buttons carry no data-key, which the
+ * TLC click handler ignores; this script owns them and keeps the Text size
+ * group showing exactly one pressed button.
+ */
+(function () {
+  "use strict";
+  var KEY = "gd-display";
+  var BRANDED = {{ 'true' if tlc_branding else 'false' }};
+  var DESIGN = "{{ gd_design | default('tlc') }}";
+  var FONT_CHOICE = DESIGN === "tlc" && !BRANDED;
+  var SWITCHABLE = {{ 'false' if static_mode | default(false) else 'true' }};
+  var root = document.documentElement;
+
+  function read() {
+    var s = null;
+    try { s = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
+    if (!s) {
+      var m = document.cookie.match(/(?:^|;\s*)gd-display=([^;]+)/);
+      if (m) { try { s = JSON.parse(decodeURIComponent(m[1])); } catch (e) {} }
+    }
+    return s || {};
+  }
+  function save(s) {
+    var v = JSON.stringify(s);
+    try { localStorage.setItem(KEY, v); } catch (e) {}
+    try {
+      document.cookie = KEY + "=" + encodeURIComponent(v) + "; path=/; max-age=31536000; SameSite=Lax";
+    } catch (e) {}
+  }
+  function apply(s) {
+    if (s.size === "xs") root.dataset.gdSize = "xs"; else delete root.dataset.gdSize;
+    if (s.font === "classic" && FONT_CHOICE) root.dataset.gdFont = "classic"; else delete root.dataset.gdFont;
+  }
+
+  var settings = read();
+  apply(settings);
+
+  function sync(panel) {
+    var xs = settings.size === "xs";
+    panel.querySelectorAll('button[data-gd="size"]').forEach(function (b) {
+      b.setAttribute("aria-pressed", String(xs));
+    });
+    // TLC re-marks its own current size on every click in the panel.
+    if (xs) panel.querySelectorAll('button[data-key="size"]').forEach(function (b) {
+      b.setAttribute("aria-pressed", "false");
+    });
+    var font = settings.font || "hyperlegible";
+    panel.querySelectorAll('button[data-gd="font"]').forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.dataset.value === font));
+    });
+  }
+
+  function extend(panel) {
+    var first = panel.querySelector('button[data-key="size"]');
+    if (first) {
+      var xs = document.createElement("button");
+      xs.type = "button";
+      xs.textContent = "Smallest";
+      xs.dataset.gd = "size";
+      first.parentNode.insertBefore(xs, first);
+    }
+    function group(legend, html) {
+      var fs = document.createElement("fieldset");
+      fs.className = "tlc-display__group";
+      fs.innerHTML = "<legend>" + legend + '</legend><div class="tlc-seg">' + html + "</div>";
+      panel.appendChild(fs);
+    }
+    if (DESIGN === "classic") {
+      var contrast = panel.querySelector('button[data-key="contrast"]');
+      if (contrast) contrast.closest("fieldset").remove();
+    }
+    if (FONT_CHOICE) group("Font",
+      '<button type="button" data-gd="font" data-value="hyperlegible">Hyperlegible</button>' +
+      '<button type="button" data-gd="font" data-value="classic">Classic</button>');
+    // The design is chosen server-side (gd-design cookie), so switching reloads.
+    if (SWITCHABLE) group("Design",
+      '<button type="button" data-gd="design" data-value="tlc" aria-pressed="' + (DESIGN === "tlc") + '">TLC</button>' +
+      '<button type="button" data-gd="design" data-value="classic" aria-pressed="' + (DESIGN === "classic") + '">Classic</button>');
+
+    // Registered after TLC's own listener on the same panel, so it runs
+    // second and sees TLC's state already updated.
+    panel.addEventListener("click", function (e) {
+      var mine = e.target.closest("button[data-gd]");
+      if (mine && mine.dataset.gd === "design") {
+        if (mine.dataset.value === DESIGN) return;
+        try {
+          document.cookie = mine.dataset.value === "classic"
+            ? "gd-design=classic; path=/; max-age=31536000; SameSite=Lax"
+            : "gd-design=; path=/; max-age=0; SameSite=Lax";
+        } catch (e) {}
+        location.reload();
+        return;
+      }
+      if (mine) {
+        if (mine.dataset.gd === "size") settings.size = "xs";
+        else if (mine.dataset.value === "classic") settings.font = "classic";
+        else delete settings.font;
+      } else if (e.target.closest('button[data-key="size"]')) {
+        delete settings.size;    // a TLC size was picked instead
+      } else if (!e.target.closest("button[data-key]")) {
+        return;
+      }
+      apply(settings);
+      save(settings);
+      sync(panel);
+    });
+    sync(panel);
+  }
+
+  function init() {
+    document.querySelectorAll("[data-tlc-display] .tlc-pop__panel").forEach(extend);
+  }
+  // Both scripts sit in <head>: TLC registered its DOMContentLoaded builder
+  // first, so the panel exists by the time this runs.
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+})();
+</script>

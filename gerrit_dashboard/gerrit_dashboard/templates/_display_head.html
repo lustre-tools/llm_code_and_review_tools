@@ -1,0 +1,46 @@
+{# Display settings shared by both designs: one menu, one set of saved
+   settings.  Each design's own _theme.html adds its stylesheets. #}
+<meta name="color-scheme" content="light dark">
+<script>
+  // Runs before the display settings are applied, so a dark page never
+  // flashes light.  A first visit gets the deployment's default theme
+  // (GD_DEFAULT_THEME); a viewer who picked a theme in the old picker
+  // (the gd-theme cookie) keeps it.
+  (function () {
+    try {
+      if (localStorage.getItem('tlc-display')) return;
+      var old = (document.cookie.match(/(?:^|;\s*)gd-theme=([a-z-]+)/) || [])[1]
+                || localStorage.getItem('gd-theme');
+      var t = old ? (old === 'dark' ? 'dark' : 'light') : "{{ default_theme | default('auto') }}";
+      if (t !== 'dark' && t !== 'light') return;
+      var v = JSON.stringify({theme: t});
+      localStorage.setItem('tlc-display', v);
+      document.cookie = 'tlc-display=' + encodeURIComponent(v) + '; path=/; max-age=31536000; SameSite=Lax';
+    } catch (e) {}
+  })();
+  // The dashboard's own display settings (font, Smallest text), kept apart
+  // from the vendored TLC control's; _display_extras.html adds their buttons.
+  (function () {
+    try {
+      var s = JSON.parse(localStorage.getItem('gd-display') || 'null');
+      if (!s) {
+        var m = document.cookie.match(/(?:^|;\s*)gd-display=([^;]+)/);
+        if (m) s = JSON.parse(decodeURIComponent(m[1]));
+      }
+      if (s && s.size === 'xs') document.documentElement.dataset.gdSize = 'xs';
+      if (s && s.font === 'classic' && {{ 'true' if gd_design == 'tlc' and not tlc_branding else 'false' }}) document.documentElement.dataset.gdFont = 'classic';
+    } catch (e) {}
+  })();
+</script>
+{% if static_mode %}
+{% set tlc = tlc_inline() %}
+<script>{{ tlc.js | safe }}</script>
+{% if tlc_branding %}<link rel="icon" type="image/svg+xml" href="{{ tlc.icon }}">{% endif %}
+{% else %}
+<script src="{{ url_for('static', filename='tlc/js/tlc-display.js') }}"></script>
+{% if tlc_branding %}
+<link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='tlc/icons/gerrit-dashboard.svg') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='tlc/icons/gerrit-dashboard-180.png') }}">
+{% endif %}
+{% endif %}
+{% include "_display_extras.html" %}
