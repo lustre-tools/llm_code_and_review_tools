@@ -249,6 +249,16 @@ def create_app(config: Config | None = None, start_refresher: bool = True) -> Fl
     # url_for() builds /gerrit/... URLs behind https://host/gerrit/.
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
+    # Cloudflare tells browsers to keep static files for hours, so each URL
+    # carries the file's mtime and a changed file is fetched at once.
+    @app.url_defaults
+    def _static_version(endpoint: str, values: dict) -> None:
+        if endpoint == "static" and "filename" in values and "v" not in values:
+            try:
+                values["v"] = int((Path(app.static_folder) / values["filename"]).stat().st_mtime)
+            except OSError:
+                pass
+
     users: OrderedDict[str, UserCtx] = OrderedDict()
     accounts: "OrderedDict[str, dict]" = OrderedDict()   # url token -> resolved account
     negative: "OrderedDict[str, float]" = OrderedDict()  # url token -> retry-after ts
