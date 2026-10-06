@@ -596,8 +596,10 @@ opencode's `--model` wants the `provider/model` form.
 
 `post` with no change numbers posts every unposted review with
 findings from the results dir; with numbers/URLs it posts just those.
-`--results-dir`, `--prefix` as above; `--force` reposts an
-already-posted review.
+A clean review posts a short "Looks good: the review found no issues
+in psN." message, but only when named (`lreview post 69459`, or
+`run --post`, which names its own batch). `--results-dir`,
+`--prefix` as above; `--force` reposts an already-posted review.
 
 ### Exit codes
 

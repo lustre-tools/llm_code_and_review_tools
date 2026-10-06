@@ -544,3 +544,67 @@ class TestNoResume:
         assert rc == 1
         assert config is None
         assert "--no-resume requires --memory" in capsys.readouterr().out
+
+
+class TestRunPost:
+    """`run --post` posts every reviewed change of its own batch,
+    clean ones included, and says why anything was not posted."""
+
+    def _run(self, tmp_path, monkeypatch, statuses):
+        import subprocess
+        from lreview.cli import cmd_run
+        from lreview.gerrit import ResolvedChange, change_ref
+        from lreview.prompts import PromptsStatus
+        from lreview.runner import ReviewResult
+
+        repo = tmp_path / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        changes = {
+            n: ResolvedChange(
+                number=n, project="fs/lustre-release", subject=f"s{n}",
+                sha=str(n)[0] * 40, patchset=2, ref=change_ref(n, 2),
+                base_url="https://gerrit.invalid")
+            for n in statuses}
+        posted = {}
+        monkeypatch.setenv("LREVIEW_PROMPTS_UPDATE", "off")
+        monkeypatch.setattr("lreview.cli.resolve_change",
+                            lambda spec: changes[int(spec)])
+        monkeypatch.setattr(
+            "lreview.cli.ensure_prompts",
+            lambda args: PromptsStatus(
+                available=True, prompts_dir=Path("/p/kernel"),
+                source="test"))
+        monkeypatch.setattr(
+            "lreview.cli.run_batch",
+            lambda config, chs, in_place=False: [
+                ReviewResult(c, statuses[c.number],
+                             error=("claude exited 1"
+                                    if statuses[c.number] == "failed"
+                                    else None))
+                for c in chs])
+
+        def fake_post(results_dir, changes=None, prefix=None):
+            from lreview.poster import PostOutcome
+            posted["changes"] = changes
+            return [PostOutcome(int(k), "posted", "ok") for k in changes]
+
+        monkeypatch.setattr("lreview.cli.post_results", fake_post)
+        args = build_parser().parse_args(
+            ["run", "--repo", str(repo), "--post",
+             "--results-dir", str(tmp_path / "results"),
+             *[str(n) for n in statuses]])
+        return cmd_run(args), posted
+
+    def test_clean_review_is_posted(self, tmp_path, monkeypatch, capsys):
+        rc, posted = self._run(tmp_path, monkeypatch, {69459: "clean"})
+        assert rc == 0
+        assert posted["changes"] == ["69459"]
+        assert "Posting results" in capsys.readouterr().out
+
+    def test_failed_review_says_not_posted(self, tmp_path, monkeypatch,
+                                           capsys):
+        rc, posted = self._run(tmp_path, monkeypatch,
+                               {69459: "clean", 70001: "failed"})
+        out = capsys.readouterr().out
+        assert posted["changes"] == ["69459"]
+        assert "not posted: 70001_ps2 failed — claude exited 1" in out

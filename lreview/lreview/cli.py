@@ -587,17 +587,25 @@ def cmd_run(args) -> int:
             print(f"\nerror: could not write {output}: {exc}")
             failed += 1
 
-    with_findings = [r for r in results if r.status == STATUS_FINDINGS]
-    local_findings = [r for r in with_findings if r.change.number is None]
-    with_findings = [r for r in with_findings if r.change.number is not None]
-    if local_findings and args.post:
+    # Findings post their comments, a clean review a no-issues
+    # message; failed, timed-out and invalid runs have nothing to post.
+    reviewed = [r for r in results
+                if r.status in (STATUS_FINDINGS, STATUS_CLEAN)]
+    local_reviewed = [r for r in reviewed if r.change.number is None]
+    postable = [r for r in reviewed if r.change.number is not None]
+    if local_reviewed and args.post:
         print("\nnote: local reviews are not tied to a Gerrit change "
               "and are never posted; see the reports above.")
-    if with_findings:
+    if args.post:
+        for r in results:
+            if r.status not in (STATUS_FINDINGS, STATUS_CLEAN):
+                print(f"\nnot posted: {r.change.slug} {r.status}"
+                      + (f" — {r.error}" if r.error else ""))
+    if postable:
         # Manifest keys of exactly this batch's reviews, so --post
         # never touches unposted results from earlier batches
         numbers = []
-        for r in with_findings:
+        for r in postable:
             c = r.change
             key = (f"github:{c.project}#{c.number}"
                    if getattr(c, "provider", None) == "github"
@@ -616,8 +624,8 @@ def cmd_run(args) -> int:
                       f"{outcome.detail}")
             failed += sum(1 for o in outcomes if o.status == "error")
         else:
-            print(f"\nReview JSONs saved under {results_dir}. "
-                  "Inspect them, then post with:")
+            print(f"\nResults saved under {results_dir}. "
+                  "Inspect the reports, then post with:")
             prefix_arg = f" --prefix '{args.prefix}'" if args.prefix else ""
             changes_arg = " ".join(str(n) for n in numbers)
             print(f"  lreview post {changes_arg} "
