@@ -140,6 +140,10 @@ def review_markdown(
             f"`{change.sha[:12]}`)",
             f"- **Review:** {', '.join(review_bits)}",
         ]
+    focus = getattr(change, "since", None)
+    if focus is not None:
+        from .since import focus_label
+        lines.append(f"- **Focus:** {focus_label(focus)}")
     if run_bits:
         lines.append(f"- **Run:** {', '.join(run_bits)}")
     if memory:

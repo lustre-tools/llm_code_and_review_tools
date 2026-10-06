@@ -58,6 +58,7 @@ class LocalChange:
     base_url: str = ""
     ref: str = ""
     change_id: Optional[str] = None
+    since: Optional[Any] = None  # since.SinceFocus
 
     @property
     def slug(self) -> str:

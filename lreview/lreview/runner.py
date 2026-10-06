@@ -330,6 +330,9 @@ def review_prompt(config: BatchConfig,
     memory-protocol instructions and the change's memory document.
     Resuming a session, it first says where the code is now: the
     conversation remembers the previous run's worktree, which is gone.
+
+    A change with a --since focus gets a closing section that limits
+    the review to what changed from the earlier version.
     """
     if getattr(change, "provider", None) == "github":
         # GitHub PR reviews use their own prompt and output contract
@@ -363,6 +366,10 @@ def review_prompt(config: BatchConfig,
                       f"run's worktree is gone: the code is now checked "
                       f"out in {worktree}, at {now}. Review it again: "
                       + prompt)
+    focus = getattr(change, "since", None)
+    if focus is not None:
+        from .since import focus_prompt
+        prompt += ".\n\n" + focus_prompt(focus, change.sha)
     return prompt
 
 
@@ -1080,6 +1087,8 @@ def update_summary(results_dir: Path, results: list[ReviewResult],
                 "subject": change.subject,
                 "base_url": change.base_url,
                 "repo": str(repo) if repo else None,
+                "since": ({"ref": change.since.ref, "sha": change.since.sha}
+                          if getattr(change, "since", None) else None),
                 "status": result.status,
                 "findings": result.findings,
                 "severity": result.severity,

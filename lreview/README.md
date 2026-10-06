@@ -380,6 +380,43 @@ Local results get the same collection, `summary.json` entries (keyed
 `<ref>_<sha7>`, marked `local`), and Markdown reports — but they are
 never posted; `post` skips them.
 
+### Reviewing a revision (`--since`)
+
+```bash
+lreview run --repo ~/git/lustre-release --last 1 --since <earlier-sha>
+lreview run --repo ~/git/lustre-release --since 'HEAD@{1}'   # in place
+```
+
+`--since REV` says the commit under review is a revision of the
+earlier commit REV — typically the Gerrit patchset you started from
+before amending your own change into it — and asks for a review of
+what changed from REV only. The rest of the commit is context: the
+reviewer is told to report anything outside the change only if it is
+a real bug (incorrect behaviour, crash or hang, data loss, security),
+never style or optional cleanups. Without it, every round on someone
+else's patch turns up fresh optional findings on code you did not
+touch, and the spin cycle never converges.
+
+The prompt hands the reviewer the interdiff as
+`git range-diff --creation-factor=999 REV^! SHA^!`, which compares the
+two patches rather than the two trees: it stays exact when the commit
+was rebased between versions, and it covers the commit message. When
+both versions have the same parent it also offers `git diff REV SHA`,
+the same changes as a plain diff; after a rebase that diff would also
+carry everything the new base brought in, and the prompt says so.
+
+REV is resolved to a SHA in `--repo` before the review starts, so a
+ref that only means something there (`HEAD@{1}`, `FETCH_HEAD`) is
+fine; review worktrees share the object store and see the same
+commit. It applies to one local commit (`--last 1`, one `--local`
+ref, or the checked-out HEAD). lreview refuses a REV it cannot
+resolve (fetch the patchset first), an ancestor or descendant of the
+reviewed commit (that is a base, not an earlier version), and warns
+when the two Change-Ids differ. When nothing changed — the same
+commit, or a rebase that left the patch and message identical — no
+review runs and the exit code is 0. The focus is recorded as `since`
+in `summary.json` and shown in the text dump and the Markdown report.
+
 ### Text dump (`--output`)
 
 `--output FILE` (`-o`) writes the whole batch to one plain-text file:
@@ -536,6 +573,7 @@ opencode's `--model` wants the `provider/model` form.
 | `--local` | off | Changes are git refs of `--repo`; no changes at all = checked-out HEAD, in place (no flag needed); not postable |
 | `--mode NAME` | `full` | Review depth: `full` = review-core.md deep dive, `light` = the bundled single-pass light review (see "Review modes") |
 | `--last, -n N` | — | Review the newest N commits of `--repo`, one worktree each; takes no change arguments; not postable |
+| `--since REV` | — | Review only what changed from REV, an earlier version of the one local commit under review; findings outside the change are limited to real bugs (see "Reviewing a revision") |
 | `--output, -o FILE` | — | Plain-text dump of every review in the batch (default with `--last`: `<results-dir>/review-last<N>.txt`) |
 | `--jobs, -j N` | 5 | Parallel reviews |
 | `--timeout SECS` | 7200 | Per-review timeout |

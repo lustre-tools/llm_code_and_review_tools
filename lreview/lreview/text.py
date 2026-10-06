@@ -74,6 +74,10 @@ def result_text(result, spec: Optional[dict] = None,
     if result.severity:
         status += f", severity {result.severity}"
     lines.append(f"status: {status}")
+    focus = getattr(change, "since", None)
+    if focus is not None:
+        from .since import focus_label
+        lines.append(f"focus:  {focus_label(focus)}")
 
     run_bits = []
     if result.model:

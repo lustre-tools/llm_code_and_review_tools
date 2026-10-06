@@ -63,12 +63,25 @@ style fixes does not reset the count, so the next round on that amended
 commit can be the second clean one; a round that leads to a real code fix
 resets the count to zero.
 
-lreview always reviews the whole commit. When your change is a small part
-of it -- answering review comments on someone else's patch, adding a man
-page -- each round also comments on code you did not touch, and those
-findings vary from run to run. Judge a round by what it finds in your own
-change: fix a finding elsewhere only if it is a real bug, and it does not
-reset the count.
+By default lreview reviews the whole commit. When your change is a small
+part of it -- answering review comments on someone else's patch, adding a
+man page -- each round also comments on code you did not touch, and those
+findings vary from run to run. Limit the review to your change with
+`--since <the revision you started from>`:
+
+```bash
+lreview run --repo <tree> --last 1 --since <patchset-sha> -o /tmp/lreview1.txt
+```
+
+Use the commit as it was before your first amend (the Gerrit patchset's
+revision; fetch it if the tree lacks it), not the previous round's commit,
+so every round sees your whole change. The reviewer then reports code
+outside your change only for a real bug. It takes one commit, and runs no
+review at all when nothing changed.
+
+Either way, judge a round by what it finds in your own change: fix a
+finding elsewhere only if it is a real bug, and it does not reset the
+count.
 
 ## When to stop
 

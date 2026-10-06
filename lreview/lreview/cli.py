@@ -266,8 +266,57 @@ def text_dump_path(args, results_dir: Path):
 
 def text_dump_title(args, repo: Path, count: int) -> str:
     if args.last:
-        return f"lreview: last {args.last} commit(s) of {repo.name}"
-    return f"lreview: {count} review(s)"
+        title = f"lreview: last {args.last} commit(s) of {repo.name}"
+    else:
+        title = f"lreview: {count} review(s)"
+    if getattr(args, "since", None):
+        title += f", changes since {args.since}"
+    return title
+
+
+def apply_since(args, repo: Path, changes, results_dir: Path):
+    """Attach the --since focus to the one local change under review.
+
+    Returns None to go on with the review, else the exit code: 1 for
+    a bad REV, 0 when nothing changed since it and no review is due.
+    """
+    if len(changes) != 1:
+        print("error: --since applies to a single commit: use --last 1, "
+              "one --local ref, or the checked-out HEAD")
+        return 1
+    change = changes[0]
+    from .since import resolve_since
+    try:
+        focus = resolve_since(repo, args.since, change.sha)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1
+    if focus.unchanged:
+        note = (f"{change.sha[:12]} is the same patch as --since "
+                f"{args.since} ({focus.sha[:12]}): nothing changed, "
+                "no review run")
+        print(f"\n{note}")
+        output = text_dump_path(args, results_dir)
+        if output:
+            from .text import RULE
+            try:
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text("\n".join([
+                    RULE, text_dump_title(args, repo, 0), RULE,
+                    f"repository: {repo}", "", note, ""]))
+                print(f"Full text dump: {output}")
+            except OSError as exc:
+                print(f"error: could not write {output}: {exc}")
+                return 1
+        return 0
+    from .worktree import commit_change_id
+    old_id = commit_change_id(repo, focus.sha)
+    if old_id and change.change_id and old_id != change.change_id:
+        print(f"  note: --since {args.since} has Change-Id {old_id}, the "
+              f"reviewed commit {change.change_id}; is it really an "
+              "earlier version?")
+    change.since = focus
+    return None
 
 
 def cmd_run(args) -> int:
@@ -280,6 +329,10 @@ def cmd_run(args) -> int:
     if args.last and args.changes:
         print("error: --last N reviews the newest N commits of --repo; "
               "it takes no change arguments")
+        return 1
+    if args.since and (args.github or (args.changes and not args.local)):
+        print("error: --since works on local reviews only (--last 1, a "
+              "--local ref, or the checked-out HEAD)")
         return 1
 
     prompts_status = ensure_prompts(args)
@@ -386,6 +439,11 @@ def cmd_run(args) -> int:
             print(f"  {change.number} ps{change.patchset}  "
                   f"{change.subject[:70]}")
 
+    if args.since:
+        rc = apply_since(args, repo, changes, results_dir)
+        if rc is not None:
+            return rc
+
     # Warn when a change's current patchset was already reviewed and
     # posted — a re-review is fine, but reposting needs --force.
     try:
@@ -434,6 +492,11 @@ def cmd_run(args) -> int:
     print(f"  results:   {results_dir}")
     if memory_db is not None:
         print(f"  memory db: {memory_db}")
+    if args.since:
+        from .since import focus_label
+        focus = changes[0].since
+        print(f"  focus:     {focus_label(focus)}"
+              + ("" if focus.same_base else ", rebased since"))
     print(f"  worktrees: {worktrees_dir}\n")
 
     config = BatchConfig(
@@ -705,6 +768,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  --timeout SECS   per-review limit (default: 7200)\n"
             "\n"
             "  --last N         review the newest N commits of --repo\n"
+            "  --since REV      review only what changed from REV, an\n"
+            "                   earlier version of the commit\n"
             "  --output FILE    plain-text dump of the whole batch\n"
             "\n"
             "examples:\n"
@@ -786,6 +851,14 @@ def build_parser() -> argparse.ArgumentParser:
              "each on its own in a worktree. Implies a local review: "
              "results are not postable, and a plain-text dump of the "
              "whole batch is written (see --output)")
+    run_p.add_argument(
+        "--since", default=None, metavar="REV",
+        help="The commit under review is a revision of the earlier "
+             "commit REV (e.g. the patchset you started from): review "
+             "only what changed from REV, reading the rest of the commit "
+             "as context. Findings outside the change are limited to "
+             "real bugs. One local commit only (--last 1, a --local ref, "
+             "or HEAD); no review runs when nothing changed")
     run_p.add_argument(
         "--output", "-o", default=None, metavar="FILE",
         help="Write a plain-text dump of every review in the batch to "
