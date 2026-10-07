@@ -110,6 +110,11 @@ let mainChain = new Set();
 // Nodes placed as historical base-chain context (below the anchor
 // in the linear parentOf walk). renderGraph dims these.
 let baseChainSet = new Set();
+// id -> the node it was placed directly under by the anchor column
+// or as an in-flight parent of a trunk node. An edge into a merged
+// node is history (an old patchset of it sat on this change) and is
+// drawn only where it explains such a placement.
+let heldBy = {};
 // Set of every merged-trunk node id. Used by _layoutTree to reserve
 // the x=0 column for trunk-only "continuation" steps: when a trunk
 // node's only continuation forward is another trunk node, that
@@ -1074,6 +1079,7 @@ function _layoutAnchorColumn(ctx) {
     baseChainSet.add(anchor);
 
     let belowLevel = 0;
+    let above = anchor;
     let cur = parentOf[anchor];
     const seen = new Set();
     while (cur && nodeMap[cur] && !seen.has(cur)) {
@@ -1086,6 +1092,8 @@ function _layoutAnchorColumn(ctx) {
         belowLevel -= 1;
         _placeNode(ctx, cur, 0, -belowLevel * LEVEL_H);
         baseChainSet.add(cur);
+        heldBy[cur] = above;
+        above = cur;
         cur = parentOf[cur];
     }
     return belowLevel;
@@ -1252,6 +1260,7 @@ function _layoutTrunkSideBranches(ctx) {
                 const p = parentSides[i];
                 const pX = (i % 2 === 0) ? rightX : leftX;
                 _placeNode(ctx, p, pX, -(level - 1) * LEVEL_H);
+                heldBy[p] = id;
                 for (const gk of _layoutKids(ctx, p)) {
                     if (positions[gk]) continue;
                     _layoutTree(ctx, gk, pX, level, 1);
@@ -1443,6 +1452,7 @@ function computeStacksLayout(anchorId) {
 // layout phase, and return the positions dict that renderGraph feeds
 // into vis.js.
 function computeLayout(anchorId) {
+    heldBy = {};
     if (stacksLayout()) return computeStacksLayout(anchorId);
     mainChain = computeMainChain(anchorId);
     baseChainSet = new Set();
@@ -1996,14 +2006,20 @@ function renderGraph() {
     let edgeIdx = 0;
     for (const edge of G.edges) {
         if (!positions[edge.from] || !positions[edge.to]) continue;
-        if (bestParent[edge.to] !== edge.from) continue;
-        // Merged patches landed in the order the trunk column shows;
-        // the series link two of them had in review (mostly from old
-        // patchsets, so drawn stale) only stacked lines over that
-        // column. In the stacks layout a merged node is only the base
-        // its column stands on, so no edge into it is drawn at all.
-        if (nodeMap[edge.to].status === 'MERGED'
-                && (stacks || nodeMap[edge.from].status === 'MERGED')) continue;
+        // A merged node is placed by the trunk, not by an edge. The
+        // series link two merged patches had in review (mostly from
+        // old patchsets, so drawn stale) only stacked lines over the
+        // trunk column, and an in-flight -> merged edge is history
+        // too: it is drawn only where it holds the change under that
+        // patch (heldBy), for every such change. In the stacks layout
+        // a merged node is only the base its column stands on, so no
+        // edge into it is drawn. Any other node gets the one edge
+        // from the parent it is placed next to.
+        if (nodeMap[edge.to].status === 'MERGED') {
+            if (stacks || heldBy[edge.from] !== edge.to) continue;
+        } else if (bestParent[edge.to] !== edge.from) {
+            continue;
+        }
 
         const isMainEdge = mainChain.has(edge.from) && mainChain.has(edge.to);
         // "Base" = edge points INTO a historical base-chain node —

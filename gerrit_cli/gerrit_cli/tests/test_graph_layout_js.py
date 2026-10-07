@@ -327,3 +327,28 @@ class TestTrunkEdges:
         assert _drawn(view) == {(11, 100)}
         pos = _pos(view)
         assert pos[10][0] == pos[11][0] == pos[12][0] == 0
+
+    def _history_into_merged(self):
+        """100 (the anchor) and 200 are in flight; an old patchset of
+        merged 11 once sat on each of them."""
+        nodes = [
+            _node(10, "MERGED", submitted="2026-01-01"),
+            _node(11, "MERGED", submitted="2026-02-01", current_patchset=5),
+            _node(100), _node(200),
+        ]
+        edges = [
+            _edge(10, 100),
+            _edge(100, 11, cps=1, cl=5),
+            _edge(200, 11, cps=2, cl=5),
+        ]
+        return _payload(100, nodes, edges)
+
+    def test_history_into_merged_drawn_only_where_it_places(self, tmp_path):
+        view = _render(self._history_into_merged(), tmp_path, "a0m1")["a0m1"]
+        pos = _pos(view)
+        # 200 has nothing else: it is placed under 11, and the edge says why
+        assert pos[200] == (pos[11][0] + NODE_W, pos[11][1] + LEVEL_H)
+        assert (200, 11) in _drawn(view)
+        # the anchor sits elsewhere; its history edge to 11 is not drawn
+        assert (100, 11) not in _drawn(view)
+
