@@ -1997,11 +1997,13 @@ function renderGraph() {
     for (const edge of G.edges) {
         if (!positions[edge.from] || !positions[edge.to]) continue;
         if (bestParent[edge.to] !== edge.from) continue;
-        // In the stacks layout a merged node is only the base its
-        // column stands on; an edge into it (from the merged patch
-        // below it, or from the in-flight change an old patchset of
-        // it sat on) would cut across the columns.
-        if (stacks && nodeMap[edge.to].status === 'MERGED') continue;
+        // Merged patches landed in the order the trunk column shows;
+        // the series link two of them had in review (mostly from old
+        // patchsets, so drawn stale) only stacked lines over that
+        // column. In the stacks layout a merged node is only the base
+        // its column stands on, so no edge into it is drawn at all.
+        if (nodeMap[edge.to].status === 'MERGED'
+                && (stacks || nodeMap[edge.from].status === 'MERGED')) continue;
 
         const isMainEdge = mainChain.has(edge.from) && mainChain.has(edge.to);
         // "Base" = edge points INTO a historical base-chain node —

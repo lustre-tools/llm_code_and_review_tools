@@ -305,3 +305,25 @@ class TestStacksLayout:
                       " document.getElementById('info').innerHTML")
         assert "#30" in result["eval"]
 
+
+
+class TestTrunkEdges:
+    def test_no_edges_between_merged_patches(self, tmp_path):
+        """The trunk column already shows landing order; a stale
+        series edge between two merged patches only drew over it."""
+        nodes = [
+            _node(10, "MERGED", submitted="2026-01-01", current_patchset=3),
+            _node(11, "MERGED", submitted="2026-02-01", current_patchset=5),
+            _node(12, "MERGED", submitted="2026-03-01"),
+            _node(100),
+        ]
+        edges = [
+            _edge(10, 11, pps=1, pl=3, cps=2, cl=5),
+            _edge(10, 12, pps=3, pl=3),
+            _edge(11, 100, pps=5, pl=5),
+        ]
+        view = _render(_payload(11, nodes, edges), tmp_path,
+                       "a0m1")["a0m1"]
+        assert _drawn(view) == {(11, 100)}
+        pos = _pos(view)
+        assert pos[10][0] == pos[11][0] == pos[12][0] == 0
