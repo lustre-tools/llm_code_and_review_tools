@@ -389,3 +389,48 @@ class TestTrunkEdges:
         assert pos[311] == (pos[310][0], -LEVEL_H)
         assert pos[312] == (pos[310][0], -2 * LEVEL_H)
 
+
+class TestNoFalseChains:
+    """Two nodes right above each other in one column read as parent
+    and child; unrelated nodes must not end up that way."""
+
+    def _false_chains(self, view):
+        pos = _pos(view)
+        at = {p: cn for cn, p in pos.items()}
+        drawn = _drawn(view)
+        return [(cn, at[(x, y - LEVEL_H)]) for cn, (x, y) in pos.items()
+                if (x, y - LEVEL_H) in at and x != 0
+                and (cn, at[(x, y - LEVEL_H)]) not in drawn
+                and (at[(x, y - LEVEL_H)], cn) not in drawn]
+
+    def test_side_kid_off_trunk_column_avoids_unrelated(self, tmp_path):
+        """61965's shape: 100 stands right of trunk node 20, so its side
+        kid 102 is laid out on the trunk column and bumped right; it
+        must not land right above the unrelated 120."""
+        nodes = [
+            _node(5, "MERGED", submitted="2026-01-01"),
+            _node(20, "MERGED", submitted="2026-02-01"),
+            _node(30, "MERGED", submitted="2026-03-01"),
+        ] + [_node(c) for c in (100, 101, 102, 103, 110, 120)]
+        edges = [_edge(20, k) for k in (100, 110, 120)] + [
+            _edge(100, 101), _edge(101, 103), _edge(100, 102)]
+        view = _render(_payload(5, nodes, edges), tmp_path, "a0m1")["a0m1"]
+        assert self._false_chains(view) == []
+
+    def test_trunk_parents_of_neighbouring_rows(self, tmp_path):
+        """49342's shape: 300 and 301 each once carried one of two
+        neighbouring trunk nodes and have nothing else; they must not
+        stack in one column."""
+        nodes = [
+            _node(10, "MERGED", submitted="2026-01-01", current_patchset=2),
+            _node(11, "MERGED", submitted="2026-02-01", current_patchset=2),
+            _node(300), _node(301), _node(400),
+        ]
+        edges = [_edge(300, 10, cps=1, cl=2), _edge(301, 11, cps=1, cl=2),
+                 _edge(11, 400, pps=2, pl=2)]
+        view = _render(_payload(400, nodes, edges), tmp_path, "a0m1")["a0m1"]
+        pos = _pos(view)
+        assert pos[300][1] == pos[10][1] + LEVEL_H
+        assert pos[301][1] == pos[11][1] + LEVEL_H
+        assert self._false_chains(view) == []
+

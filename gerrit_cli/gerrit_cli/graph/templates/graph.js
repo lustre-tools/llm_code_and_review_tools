@@ -958,6 +958,21 @@ function _layoutUnplacedMainSeries(ctx) {
     _placeForest(ctx, roots, kidsOf, mainMaxX + NODE_W * 2);
 }
 
+// True when a node sits right above or below (x, y) that is neither
+// `id` nor linked to it by an edge: in one column the two would read
+// as a chain that isn't one.
+function _touchesUnrelated(positions, id, x, y) {
+    for (const k in positions) {
+        const p = positions[k];
+        if (p.x !== x || Math.abs(p.y - y) !== LEVEL_H) continue;
+        const other = parseInt(k);
+        if (other === id) continue;
+        if (edgeMap[id + '->' + other] || edgeMap[other + '->' + id]) continue;
+        return true;
+    }
+    return false;
+}
+
 // Step 4: any nodes that ended up at exactly the same (x, y) — e.g.
 // because two fixup passes chose the same slot — get shifted right
 // until they find an empty coordinate.
@@ -1008,12 +1023,18 @@ function _resolveCollisions(ctx) {
             occupied.set(key, id);
             continue;
         }
+        // A side kid bumped off the trunk column also skips slots
+        // where it would stack onto an unrelated node (61965: 69493
+        // landed right above 67613).
+        const offTrunkColumn = !isTrunk && pos.x === 0 && xZeroReserved(pos.y);
         let px = pos.x + NODE_W;
         let tries = 0;
         while (tries < 30) {
             const blockedByTrunkColumn = !isTrunk && px === 0
                     && xZeroReserved(pos.y);
-            if (!occupied.has(px + ',' + pos.y) && !blockedByTrunkColumn) {
+            if (!occupied.has(px + ',' + pos.y) && !blockedByTrunkColumn
+                    && !(offTrunkColumn
+                         && _touchesUnrelated(positions, id, px, pos.y))) {
                 break;
             }
             px += NODE_W;
@@ -1226,15 +1247,24 @@ function _layoutTrunkSideBranches(ctx) {
             let rightX = pos.x + NODE_W;
             for (let i = 0; i < parentSides.length; i++) {
                 const p = parentSides[i];
-                const pX = (i % 2 === 0) ? rightX : leftX;
-                _placeNode(ctx, p, pX, -(level - 1) * LEVEL_H);
+                const pY = -(level - 1) * LEVEL_H;
+                // Take the other side when the preferred slot would
+                // stack onto an unrelated node (49342: two trunk
+                // parents of neighbouring trunk rows in one column).
+                let right = (i % 2 === 0);
+                const blocked = (x) => _touchesUnrelated(positions, p, x, pY)
+                    || Object.values(positions).some(q => q.x === x && q.y === pY);
+                if (blocked(right ? rightX : leftX)
+                        && !blocked(right ? leftX : rightX)) right = !right;
+                const pX = right ? rightX : leftX;
+                _placeNode(ctx, p, pX, pY);
                 heldBy[p] = id;
                 for (const gk of _layoutKids(ctx, p)) {
                     if (positions[gk]) continue;
                     _layoutTree(ctx, gk, pX, level, 1);
                 }
                 const ext = _subtreeExtents(ctx, p);
-                if (i % 2 === 0) rightX = pX + (ext.right + 1) * NODE_W;
+                if (right) rightX = pX + (ext.right + 1) * NODE_W;
                 else leftX = pX - (ext.left + 1) * NODE_W;
             }
         }
