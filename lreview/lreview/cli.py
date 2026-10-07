@@ -296,7 +296,8 @@ def apply_since(args, repo: Path, changes, results_dir: Path):
                 f"{args.since} ({focus.sha[:12]}): nothing changed, "
                 "no review run")
         print(f"\n{note}")
-        output = text_dump_path(args, results_dir)
+        output = (None if getattr(args, "dry_run", False)
+                  else text_dump_path(args, results_dir))
         if output:
             from .text import RULE
             try:
@@ -317,6 +318,34 @@ def apply_since(args, repo: Path, changes, results_dir: Path):
               "earlier version?")
     change.since = focus
     return None
+
+
+def print_dry_run_plan(args, changes, memory_db) -> None:
+    """What `run` would do with these resolved changes."""
+    model = resolve_model(args.agent, args.model)
+    settings = [args.agent, f"model {model or 'agent default'}",
+                f"mode {args.mode}"]
+    if args.effort:
+        settings.append(f"effort {args.effort}")
+    print(f"  agent:     {', '.join(settings)}")
+    if memory_db is not None:
+        from .memory import find_doc
+        existing = [(change, find_doc(memory_db, change))
+                    for change in changes if not args.clear_memory]
+        existing = [(change, doc) for change, doc in existing if doc]
+        fresh = len(changes) - len(existing)
+        print(f"  memory:    {len(existing)} existing document(s), "
+              f"{fresh} new")
+        for change, doc in existing:
+            print(f"    {change.slug:<16} {doc.name}")
+    if args.post:
+        from .poster import resolve_prefix
+        prefix = resolve_prefix(args.prefix,
+                                {"model": model, "agent": args.agent})
+        print(f"  post:      each reviewed Gerrit change, as '{prefix}'"
+              if prefix else "  post:      each reviewed Gerrit change")
+    print(f"\ndry run: {len(changes)} change(s) would be reviewed; "
+          "nothing was fetched, reviewed or posted.")
 
 
 def cmd_run(args) -> int:
@@ -344,7 +373,7 @@ def cmd_run(args) -> int:
     if prompts_status is None:
         return 2
     prompts_dir = prompts_status.prompts_dir
-    check_prompts_freshness(prompts_dir)
+    check_prompts_freshness(prompts_dir, allow_update=not args.dry_run)
 
     from .agents import get_agent
     if not get_agent(args.agent).verified:
@@ -496,7 +525,13 @@ def cmd_run(args) -> int:
         memory_db = (Path(args.db).expanduser().resolve() if args.db
                      else default_db_dir(_REPO_ROOT))
         if args.clear_memory:
+            from .memory import find_doc
             for change in changes:
+                if args.dry_run:
+                    doc = find_doc(memory_db, change)
+                    if doc:
+                        print(f"  would clear memory: {doc}")
+                    continue
                 removed = clear_doc(memory_db, change)
                 if removed:
                     print(f"  cleared memory: {removed}")
@@ -520,6 +555,10 @@ def cmd_run(args) -> int:
         print(f"  focus:     {focus_label(focus)}"
               + ("" if focus.same_base else ", rebased since"))
     print(f"  worktrees: {worktrees_dir}\n")
+
+    if args.dry_run:
+        print_dry_run_plan(args, changes, memory_db)
+        return 0
 
     config = BatchConfig(
         repo=repo,
@@ -862,6 +901,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--repo", default=".",
         help="Path to the source git repository (default: cwd)")
+    run_p.add_argument(
+        "--dry-run", action="store_true",
+        help="Resolve the changes (and --series children) and show "
+             "what the run would review, then stop: nothing is "
+             "fetched, reviewed, posted, cleared or updated")
     run_p.add_argument(
         "--series", action="store_true",
         help="Also review every open change stacked on each given "

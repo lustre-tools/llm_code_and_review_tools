@@ -684,3 +684,48 @@ class TestRunSeries:
         assert rc == 1
         assert "--series expands Gerrit changes" in capsys.readouterr().out
         assert "numbers" not in reviewed
+
+
+class TestRunDryRun:
+    """--dry-run resolves and shows the batch, then stops before
+    anything is fetched, reviewed, posted, cleared or updated."""
+
+    _run = TestRunSeries._run
+
+    def test_series_plan_without_running(self, tmp_path, monkeypatch,
+                                         capsys):
+        freshness = {}
+        monkeypatch.setattr(
+            "lreview.cli.check_prompts_freshness",
+            lambda d, allow_update=True: freshness.update(
+                allow_update=allow_update))
+        rc, reviewed = self._run(
+            tmp_path, monkeypatch,
+            ["--dry-run", "--series", "--post", "--prefix",
+             "[Bot - <model>]", "65382"],
+            {65382: [66955, 66956]})
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "numbers" not in reviewed  # run_batch never called
+        assert freshness == {"allow_update": False}
+        assert "model opus" in out
+        assert "as '[Bot - opus]'" in out
+        assert "dry run: 3 change(s) would be reviewed" in out
+
+    def test_clear_memory_is_not_applied(self, tmp_path, monkeypatch,
+                                         capsys):
+        from lreview.gerrit import ResolvedChange, change_ref
+        from lreview.memory import ensure_doc
+        db = tmp_path / "db"
+        doc = ensure_doc(db, ResolvedChange(
+            number=100, project="ex/lustre-release", subject="s100",
+            sha=f"{100:040d}", patchset=1, ref=change_ref(100, 1),
+            base_url="https://gerrit.invalid"))
+        rc, reviewed = self._run(
+            tmp_path, monkeypatch,
+            ["--dry-run", "-m", "-c", "--db", str(db), "100"], {})
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert doc.is_file()
+        assert f"would clear memory: {doc}" in out
+        assert "0 existing document(s), 1 new" in out
