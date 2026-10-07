@@ -715,6 +715,9 @@ function _isChainSubtree(ctx, id) {
     // Safety bound to prevent runaway in case of an unexpected
     // cycle that wasn't caught by _break_cycles.
     for (let i = 0; i < 500; i++) {
+        // A node placed by an earlier phase (a trunk node the chain
+        // leads into) lays out its own kids from where it sits.
+        if (cur !== id && ctx.positions[cur]) return true;
         const kids = _layoutKids(ctx, cur);
         if (kids.length === 0) return true;
         if (kids.length > 1) return false;

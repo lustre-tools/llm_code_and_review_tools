@@ -153,3 +153,26 @@ class TestInferredTrunkHookup:
         assert pos[100][1] == pos[10][1] - LEVEL_H
         assert _drawn(view) >= {(10, 100)}
         assert (50, 100) not in _drawn(view)
+
+
+class TestChainIntoTrunkNode:
+    def test_chain_ending_in_trunk_node_stays_straight(self, tmp_path):
+        """54459's shape: 20's live kid 21 leads through 22 into trunk
+        node 30, which has two kids of its own. 21 still continues
+        straight up from 20 instead of skipping a row."""
+        nodes = [
+            _node(10, "MERGED", submitted="2026-01-01"),
+            _node(30, "MERGED", submitted="2026-03-01"),
+            _node(20), _node(21), _node(22), _node(23),
+            _node(31), _node(32),
+        ]
+        edges = [
+            _edge(10, 20), _edge(20, 21),
+            _edge(20, 23, pps=1, pl=2),
+            _edge(21, 22), _edge(22, 30),
+            _edge(30, 31), _edge(30, 32),
+        ]
+        pos = _pos(_render(_payload(10, nodes, edges), tmp_path,
+                           "a0m1h0")["a0m1h0"])
+        assert pos[21] == (pos[20][0], pos[20][1] - LEVEL_H)
+        assert pos[22] == (pos[20][0], pos[20][1] - 2 * LEVEL_H)
