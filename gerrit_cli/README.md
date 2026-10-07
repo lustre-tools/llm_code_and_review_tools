@@ -213,7 +213,9 @@ includes:
   each in-flight subtree in its own column, side by side, standing on
   the merged patch it branches off (the only merged patches shown).
   Columns run left to right in merge order of their base, followed by
-  subtrees with no merged base; a fork widens its column to the right.
+  subtrees with no merged base. At a fork the live continuation goes
+  straight up and each other branch takes the nearest column to the
+  right with room, a free row away from any other branch there.
 - **Review health coloring** for active changes: green (verified OK + 2
   non-author CR +1s), dark red (CR veto), bright red (Maloo -1), orange
   (Jenkins -1), pink (other -1), blue (pending). Merged = purple,

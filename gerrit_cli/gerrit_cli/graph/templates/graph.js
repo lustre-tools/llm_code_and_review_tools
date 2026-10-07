@@ -1298,10 +1298,13 @@ function _layoutTrunkSideBranches(ctx) {
 // One column per in-flight subtree instead of the tall merged trunk.
 // Each subtree stands on the merged patch it branches off, which is
 // the only merged node drawn; merged patches nothing visible hangs
-// off are left out. A fork widens its subtree to the right, so a
-// subtree's columns stay contiguous. Columns run left to right by
-// the merge order of their base, then subtrees with no merged base
-// (based on a commit outside the graph, or on a hidden parent).
+// off are left out. At a fork the live continuation goes straight
+// up and each other branch takes the nearest column to the right
+// with room for it, a free row away from any other branch there, so
+// a column never reads as one chain across two branches. Stacks
+// never share columns. They run left to right by the merge order of
+// their base, then subtrees with no merged base (based on a commit
+// outside the graph, or on a hidden parent).
 //
 // A node's owner is its best-ranked visible parent, as in the full
 // layout. Merged nodes are always roots: an in-flight parent of a
@@ -1367,7 +1370,7 @@ function _stackKidOrder(parentId, kids, descOf) {
 
 function _layoutStacks(ctx) {
     const { roots, kidsOf } = _stacksForest();
-    const descMemo = {}, widthMemo = {};
+    const descMemo = {}, shapeMemo = {};
     const descOf = (id) => {
         if (descMemo[id] !== undefined) return descMemo[id];
         descMemo[id] = 0;  // cycle guard
@@ -1375,35 +1378,48 @@ function _layoutStacks(ctx) {
         for (const k of (kidsOf[id] || [])) d += 1 + descOf(k);
         return (descMemo[id] = d);
     };
-    const widthOf = (id) => {
-        if (widthMemo[id] !== undefined) return widthMemo[id];
-        widthMemo[id] = 1;  // cycle guard
-        let w = 0;
-        for (const k of (kidsOf[id] || [])) w += widthOf(k);
-        return (widthMemo[id] = Math.max(1, w));
-    };
-    // A merged base's subtrees go narrowest first, so the short ones
-    // stand next to it and only the widest one sits far out.
-    const kidOrder = (id) => {
-        const order = _stackKidOrder(id, kidsOf[id] || [], descOf);
-        if (nodeMap[id].status !== 'MERGED') return order;
-        return order.map((k, i) => [widthOf(k), i, k])
-            .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]))
-            .map(t => t[2]);
-    };
-    const place = (id, x, level) => {
-        if (ctx.positions[id] !== undefined) return;
-        _placeNode(ctx, id, x, -level * LEVEL_H);
-        let cx = x;
-        for (const k of kidOrder(id)) {
-            place(k, cx, level + 1);
-            cx += widthOf(k) * NODE_W;
+    // Cells [column, level, id] of the subtree under `id`, relative
+    // to `id` at [0, 0]; width is its number of columns.
+    const shapeOf = (id) => {
+        if (shapeMemo[id]) return shapeMemo[id];
+        shapeMemo[id] = { cells: [[0, 0, id]], width: 1 };  // cycle guard
+        const cells = [[0, 0, id]];
+        const used = new Set(['0,0']);
+        const free = (c, l) => !used.has(c + ',' + l);
+        const fits = (shape, dc) => shape.cells.every(([c, l]) =>
+            free(c + dc, l) && free(c + dc, l + 1) && free(c + dc, l + 2));
+        let kids = _stackKidOrder(id, kidsOf[id] || [], descOf);
+        // A merged base's subtrees go narrowest first, so the short
+        // ones stand next to it and only the widest one sits far out.
+        if (nodeMap[id].status === 'MERGED') {
+            kids = kids.map((k, i) => [shapeOf(k).width, i, k])
+                .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]))
+                .map(t => t[2]);
         }
+        kids.forEach((k, i) => {
+            const shape = shapeOf(k);
+            let dc = 0;
+            if (i > 0) {
+                dc = 1;
+                while (!fits(shape, dc)) dc++;
+            }
+            for (const [c, l, n] of shape.cells) {
+                cells.push([c + dc, l + 1, n]);
+                used.add((c + dc) + ',' + (l + 1));
+            }
+        });
+        const width = 1 + Math.max(...cells.map(c => c[0]));
+        return (shapeMemo[id] = { cells, width });
     };
     let x = 0;
     for (const r of roots) {
-        place(r, x, 0);
-        x += widthOf(r) * NODE_W + STACK_GAP;
+        const shape = shapeOf(r);
+        for (const [c, l, n] of shape.cells) {
+            if (ctx.positions[n] === undefined) {
+                _placeNode(ctx, n, x + c * NODE_W, -l * LEVEL_H);
+            }
+        }
+        x += shape.width * NODE_W + STACK_GAP;
     }
 }
 

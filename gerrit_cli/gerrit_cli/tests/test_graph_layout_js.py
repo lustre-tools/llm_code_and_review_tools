@@ -246,6 +246,35 @@ class TestStacksLayout:
         # 10's three columns end before 20's starts
         assert pos[20][0] >= x10 + 3 * NODE_W
 
+    def _chain_with_branches(self, branch_len: int):
+        """Chain 201..208 (no merged base); a branch of `branch_len`
+        nodes off 202 and a leaf off 205."""
+        nodes = [_node(c) for c in range(201, 209)]
+        edges = [_edge(c, c + 1) for c in range(201, 208)]
+        branch = list(range(301, 301 + branch_len))
+        nodes += [_node(c) for c in branch] + [_node(400)]
+        edges += [_edge(202, branch[0]), _edge(205, 400)]
+        edges += [_edge(a, b) for a, b in zip(branch, branch[1:])]
+        return _payload(201, nodes, edges)
+
+    def test_branches_at_different_heights_share_a_column(self, tmp_path):
+        pos = _pos(_render(self._chain_with_branches(1), tmp_path,
+                           "a0m0h0")["a0m0h0"])
+        x = pos[201][0]
+        assert pos[301] == (x + NODE_W, pos[202][1] - LEVEL_H)
+        assert pos[400] == (x + NODE_W, pos[205][1] - LEVEL_H)
+
+    def test_branches_never_touch_in_a_column(self, tmp_path):
+        """The higher branch (400, part of the main subtree) is placed
+        first; 301..303 would end right under it in the same column,
+        so they move one column further out."""
+        pos = _pos(_render(self._chain_with_branches(3), tmp_path,
+                           "a0m0h0")["a0m0h0"])
+        x = pos[201][0]
+        assert pos[400] == (x + NODE_W, pos[205][1] - LEVEL_H)
+        assert pos[301] == (x + 2 * NODE_W, pos[202][1] - LEVEL_H)
+        assert pos[303] == (x + 2 * NODE_W, pos[205][1])
+
     def test_no_edges_into_merged_nodes(self, tmp_path):
         view = _render(self._series(), tmp_path, "a0m0h1")["a0m0h1"]
         assert (10, 20) not in _drawn(view)
