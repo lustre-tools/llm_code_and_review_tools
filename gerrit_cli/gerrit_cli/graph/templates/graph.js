@@ -150,11 +150,9 @@ function showAbandonedEnabled() {
     return document.getElementById('chk-abandoned').checked;
 }
 
-// "Show merged" is checked by default. The toggle is applied at
-// render time only — layout, edges, and traversal all keep merged
-// nodes in scope so an in-flight node sitting on top of a merged
-// predecessor stays correctly positioned and connected when the
-// merged node is just visually elided.
+// "Show merged" is checked by default. Unchecked switches to the
+// stacks layout (computeStacksLayout): one column per in-flight
+// subtree, standing on the merged patch it branches off.
 function showMergedEnabled() {
     return document.getElementById('chk-merged').checked;
 }
@@ -1295,10 +1293,133 @@ function _layoutTrunkSideBranches(ctx) {
     }
 }
 
+// ─── STACKS LAYOUT ("Show merged" off) ───
+//
+// One column per in-flight subtree instead of the tall merged trunk.
+// Each subtree stands on the merged patch it branches off, which is
+// the only merged node drawn; merged patches nothing visible hangs
+// off are left out. A fork widens its subtree to the right, so a
+// subtree's columns stay contiguous. Columns run left to right by
+// the merge order of their base, then subtrees with no merged base
+// (based on a commit outside the graph, or on a hidden parent).
+//
+// A node's owner is its best-ranked visible parent, as in the full
+// layout. Merged nodes are always roots: an in-flight parent of a
+// merged patch keeps its own column and the edge crosses over.
+
+const STACK_GAP = NODE_W / 2;
+
+function _stacksForest() {
+    const kidsOf = {};
+    const owner = {};
+    const bases = new Set();
+    for (const n of G.nodes) {
+        const id = n.id;
+        if (n.status === 'MERGED' || !nodeVisible(id)) continue;
+        let best = null;
+        for (const e of (edgesTo[id] || [])) {
+            if (!nodeVisible(e.from)) continue;
+            if (best === null || _rankIncoming(e, best) < 0) best = e;
+        }
+        if (best === null) continue;
+        owner[id] = best.from;
+        if (nodeMap[best.from].status === 'MERGED') bases.add(best.from);
+    }
+    const kept = (id) => bases.has(id)
+        || (nodeMap[id].status !== 'MERGED' && nodeVisible(id));
+    for (const id in owner) {
+        const p = owner[id];
+        (kidsOf[p] = kidsOf[p] || []).push(parseInt(id));
+    }
+    const roots = [];
+    for (const n of G.nodes) {
+        if (!kept(n.id)) continue;
+        if (n.status === 'MERGED' || owner[n.id] === undefined) roots.push(n.id);
+    }
+    const trunkIdx = {};
+    (G.merged_trunk || []).forEach((id, i) => { trunkIdx[id] = i; });
+    roots.sort((a, b) => {
+        const ia = trunkIdx[a] !== undefined ? trunkIdx[a] : Infinity;
+        const ib = trunkIdx[b] !== undefined ? trunkIdx[b] : Infinity;
+        if (ia !== ib) return ia - ib;
+        return a - b;
+    });
+    return { roots, kidsOf };
+}
+
+// Same preference as _pickMainKid without the trunk rules: the live
+// continuation goes straight up, everything else to the right.
+function _stackKidOrder(parentId, kids, descOf) {
+    const rank = (k) => {
+        const e = edgeMap[parentId + '->' + k];
+        const stale = e && e.is_stale ? 1 : 0;
+        const cls = (stale === 0 && descOf(k) > 0) ? 0 : 1;
+        return [cls, mainChain.has(k) ? 0 : 1, -descOf(k), stale, k];
+    };
+    return kids.slice().sort((a, b) => {
+        const ra = rank(a), rb = rank(b);
+        for (let i = 0; i < ra.length; i++) {
+            if (ra[i] !== rb[i]) return ra[i] - rb[i];
+        }
+        return 0;
+    });
+}
+
+function _layoutStacks(ctx) {
+    const { roots, kidsOf } = _stacksForest();
+    const descMemo = {}, widthMemo = {};
+    const descOf = (id) => {
+        if (descMemo[id] !== undefined) return descMemo[id];
+        descMemo[id] = 0;  // cycle guard
+        let d = 0;
+        for (const k of (kidsOf[id] || [])) d += 1 + descOf(k);
+        return (descMemo[id] = d);
+    };
+    const widthOf = (id) => {
+        if (widthMemo[id] !== undefined) return widthMemo[id];
+        widthMemo[id] = 1;  // cycle guard
+        let w = 0;
+        for (const k of (kidsOf[id] || [])) w += widthOf(k);
+        return (widthMemo[id] = Math.max(1, w));
+    };
+    // A merged base's subtrees go narrowest first, so the short ones
+    // stand next to it and only the widest one sits far out.
+    const kidOrder = (id) => {
+        const order = _stackKidOrder(id, kidsOf[id] || [], descOf);
+        if (nodeMap[id].status !== 'MERGED') return order;
+        return order.map((k, i) => [widthOf(k), i, k])
+            .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]))
+            .map(t => t[2]);
+    };
+    const place = (id, x, level) => {
+        if (ctx.positions[id] !== undefined) return;
+        _placeNode(ctx, id, x, -level * LEVEL_H);
+        let cx = x;
+        for (const k of kidOrder(id)) {
+            place(k, cx, level + 1);
+            cx += widthOf(k) * NODE_W;
+        }
+    };
+    let x = 0;
+    for (const r of roots) {
+        place(r, x, 0);
+        x += widthOf(r) * NODE_W + STACK_GAP;
+    }
+}
+
+function computeStacksLayout(anchorId) {
+    mainChain = computeMainChain(anchorId);
+    baseChainSet = new Set();
+    const ctx = { anchorId, positions: {}, placementOrder: [] };
+    _layoutStacks(ctx);
+    return ctx.positions;
+}
+
 // Orchestrator: build the context, compute the main chain, run each
 // layout phase, and return the positions dict that renderGraph feeds
 // into vis.js.
 function computeLayout(anchorId) {
+    if (!showMergedEnabled()) return computeStacksLayout(anchorId);
     mainChain = computeMainChain(anchorId);
     baseChainSet = new Set();
     const ctx = {
@@ -1832,14 +1953,8 @@ function renderGraph() {
     const activeUp = computeActiveUp(positions, currentAnchor);
     const keptSources = computeHistoricalSuppression(positions);
     const bestParent = computeBestVisibleParent(positions);
+    const stacks = !showMergedEnabled();
     const C = getColors();
-    // Final render-time filter for the "Show merged" toggle. Layout
-    // and edges are already computed against the full node set; we
-    // just drop merged nodes and any edge touching them from the
-    // datasets the user sees. In-flight chains that traversed a
-    // merged predecessor keep their positions, so unhiding restores
-    // the previous view exactly.
-    const hideMerged = !showMergedEnabled();
 
     // Build vis.js nodes
     const visNodes = [];
@@ -1849,7 +1964,6 @@ function renderGraph() {
         const id = parseInt(idStr);
         const node = nodeMap[id];
         if (!node) continue;
-        if (hideMerged && node.status === 'MERGED') continue;
 
         const isAnchor = id === currentAnchor;
         const isMain = mainChain.has(id);
@@ -1878,12 +1992,11 @@ function renderGraph() {
         const ks = keptSources[edge.to];
         if (ks && !ks.has(edge.from)) continue;
         if (edge.inferred && bestParent[edge.to] !== edge.from) continue;
-        if (hideMerged) {
-            const fn = nodeMap[edge.from];
-            const tn = nodeMap[edge.to];
-            if ((fn && fn.status === 'MERGED')
-                    || (tn && tn.status === 'MERGED')) continue;
-        }
+        // In the stacks layout a merged node is only the base its
+        // column stands on; an edge into it (from the merged patch
+        // below it, or from the in-flight change an old patchset of
+        // it sat on) would cut across the columns.
+        if (stacks && nodeMap[edge.to].status === 'MERGED') continue;
 
         const isMainEdge = mainChain.has(edge.from) && mainChain.has(edge.to);
         // "Base" = edge points INTO a historical base-chain node —
@@ -2311,7 +2424,7 @@ function clickNode(id) {
 // the network around.
 network.on('beforeDrawing', function (canvasCtx) {
     const trunk = G.merged_trunk || [];
-    if (trunk.length < 2) return;
+    if (trunk.length < 2 || !showMergedEnabled()) return;
     const trunkPositions = network.getPositions(trunk);
     let minY = Infinity, maxY = -Infinity, lineX = 0;
     let count = 0;
