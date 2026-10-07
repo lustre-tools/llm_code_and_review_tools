@@ -92,10 +92,21 @@ class DataSet {
     forEach(fn) { this.items.forEach(v => fn(v)); }
     get length() { return this.items.size; }
 }
+// Like vis.js: selecting a node that isn't in the data set throws,
+// focusing one logs an error.
 class Network {
-    constructor() {}
-    on() {} fit() {} redraw() {} selectNodes() {} unselectAll() {}
-    focus() {} moveTo() {} getScale() { return 1; }
+    constructor(container, data) { this.data = data || {}; }
+    _has(id) { return !!(this.data.nodes && this.data.nodes.get(id)); }
+    on() {} fit() {} redraw() {} unselectAll() {}
+    selectNodes(ids) {
+        for (const id of ids) {
+            if (!this._has(id)) throw new RangeError(`Node with id "${id}" not found`);
+        }
+    }
+    focus(id) {
+        if (!this._has(id)) sandbox.console.error(`Node: ${id} cannot be found.`);
+    }
+    moveTo() {} getScale() { return 1; }
     getViewPosition() { return { x: 0, y: 0 }; }
     getPositions() { return {}; } getNodeAt() { return undefined; }
 }

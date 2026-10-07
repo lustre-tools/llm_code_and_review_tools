@@ -265,3 +265,14 @@ class TestStacksLayout:
     def test_merged_shown_keeps_the_trunk(self, tmp_path):
         pos = _pos(_render(self._series(), tmp_path, "a0m1h0")["a0m1h0"])
         assert pos[10][0] == pos[20][0] == pos[30][0] == 0
+
+    def test_undrawn_node_shows_details_without_error(self, tmp_path):
+        """The panel's chain lists merged patches the stacks layout
+        leaves out; clicking one or focusing an undrawn anchor used to
+        throw in vis.js."""
+        payload = self._series()
+        result = _run(payload, tmp_path, "a0m0h0", "--eval",
+                      "clickNode(30); actions.focusSelection();"
+                      " document.getElementById('info').innerHTML")
+        assert "#30" in result["eval"]
+

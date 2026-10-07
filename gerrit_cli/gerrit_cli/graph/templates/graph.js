@@ -2408,9 +2408,14 @@ function formatGerritDate(s) {
 }
 
 // ─── INTERACTION ───
+// The panel's chain lists nodes the current view may not draw (a
+// merged patch in the stacks layout, a hidden abandoned one); vis.js
+// throws on selecting those, so only drawn nodes are selected.
 function clickNode(id) {
-    network.selectNodes([id]);
-    network.focus(id, { scale: 1.0, animation: { duration: 300, easingFunction: 'easeInOutQuad' } });
+    if (nodesDS.get(id)) {
+        network.selectNodes([id]);
+        network.focus(id, { scale: 1.0, animation: { duration: 300, easingFunction: 'easeInOutQuad' } });
+    }
     showNodeInfo(id);
 }
 
@@ -2504,6 +2509,10 @@ const actions = {
     },
     focusSelection() {
         const target = selectedNodeId !== null ? selectedNodeId : currentAnchor;
+        if (!nodesDS.get(target)) {
+            this.fit();
+            return;
+        }
         network.focus(target, {
             scale: 1.5,
             animation: { duration: 400, easingFunction: 'easeInOutQuad' },
