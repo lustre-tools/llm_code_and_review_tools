@@ -109,3 +109,26 @@ def resolve_change(url_or_number: str, client: Optional[Any] = None) -> Resolved
         base_url=base_url,
         change_id=detail.get("change_id"),
     )
+
+
+def series_children(change: ResolvedChange,
+                    client: Optional[Any] = None) -> list[int]:
+    """Open changes stacked on `change`, base to tip.
+
+    Exactly the children Gerrit's relation chain shows from this change:
+    /related lists descendants first, then the change itself, then its
+    ancestors — so this includes children Gerrit links through an
+    outdated patchset of their parent.
+    """
+    from gerrit_cli.client import GerritCommentsClient
+
+    client = client or GerritCommentsClient(url=change.base_url)
+    related = client.rest.get(
+        f"/changes/{change.number}/revisions/{change.sha}/related"
+    ).get("changes", [])
+    numbers = [entry.get("_change_number") for entry in related]
+    if change.number not in numbers:
+        return []
+    above = related[:numbers.index(change.number)]
+    return [entry["_change_number"] for entry in reversed(above)
+            if entry.get("status") == "NEW"]

@@ -330,6 +330,11 @@ def cmd_run(args) -> int:
         print("error: --last N reviews the newest N commits of --repo; "
               "it takes no change arguments")
         return 1
+    if args.series and (args.github or args.local or args.last
+                        or not args.changes):
+        print("error: --series expands Gerrit changes; give the first "
+              "change of the series (not --local, --last or --github)")
+        return 1
     if args.since and (args.github or (args.changes and not args.local)):
         print("error: --since works on local reviews only (--last 1, a "
               "--local ref, or the checked-out HEAD)")
@@ -424,15 +429,32 @@ def cmd_run(args) -> int:
             where = "in place" if in_place else "worktree"
             print(f"  {change.slug}  {change.subject[:60]} ({where})")
     else:
-        for spec in args.changes:
+        specs = list(args.changes)
+        if args.series:
+            from .gerrit import series_children
+            expanded = []
+            for spec in specs:
+                try:
+                    anchor = resolve_change(spec)
+                    children = series_children(anchor)
+                except Exception as exc:
+                    print(f"error: cannot read the series of '{spec}': "
+                          f"{exc}")
+                    return 1
+                print(f"  series of {anchor.number}: itself + "
+                      f"{len(children)} open child change(s)")
+                expanded += [spec] + [str(n) for n in children]
+            specs = expanded
+        for spec in specs:
             try:
                 change = resolve_change(spec)
             except Exception as exc:
                 print(f"error: cannot resolve change '{spec}': {exc}")
                 return 1
             if change.number in seen:
-                print(f"  note: {change.number} given more than once, "
-                      "reviewing once")
+                if not args.series:
+                    print(f"  note: {change.number} given more than "
+                          "once, reviewing once")
                 continue
             seen.add(change.number)
             changes.append(change)
@@ -840,6 +862,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--repo", default=".",
         help="Path to the source git repository (default: cwd)")
+    run_p.add_argument(
+        "--series", action="store_true",
+        help="Also review every open change stacked on each given "
+             "change — its children in Gerrit's relation chain, as "
+             "shown from that change — in parallel like any batch")
     run_p.add_argument(
         "--local", action="store_true",
         help="Treat the change arguments as local git refs "

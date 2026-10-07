@@ -98,3 +98,44 @@ class TestResolveChange:
         assert change.slug == "64086_ps40"
         assert change.fetch_url() == (
             "https://review.whamcloud.com/fs/lustre-release")
+
+
+class TestSeriesChildren:
+    """Children are what Gerrit's /related shows above the change:
+    descendants first (newest on top), the change, then ancestors."""
+
+    def _client(self, related):
+        from unittest.mock import MagicMock
+        client = MagicMock()
+        client.rest.get.return_value = {"changes": [
+            {"_change_number": n, "status": status}
+            for n, status in related]}
+        return client
+
+    def _change(self, number=100):
+        from lreview.gerrit import ResolvedChange, change_ref
+        return ResolvedChange(
+            number=number, project="ex/lustre-release", subject="s",
+            sha="a" * 40, patchset=3, ref=change_ref(number, 3),
+            base_url="https://gerrit.invalid")
+
+    def test_children_base_to_tip_ancestors_excluded(self):
+        from lreview.gerrit import series_children
+        client = self._client([(103, "NEW"), (102, "NEW"), (101, "NEW"),
+                               (100, "NEW"), (99, "NEW"), (98, "NEW")])
+        assert series_children(self._change(), client) == [101, 102, 103]
+        # asked for the reviewed revision's relation chain
+        client.rest.get.assert_called_once_with(
+            f"/changes/100/revisions/{'a' * 40}/related")
+
+    def test_only_open_children(self):
+        from lreview.gerrit import series_children
+        client = self._client([(103, "NEW"), (102, "ABANDONED"),
+                               (101, "MERGED"), (100, "NEW")])
+        assert series_children(self._change(), client) == [103]
+
+    def test_tip_and_standalone_have_none(self):
+        from lreview.gerrit import series_children
+        assert series_children(
+            self._change(), self._client([(100, "NEW"), (99, "NEW")])) == []
+        assert series_children(self._change(), self._client([])) == []

@@ -608,3 +608,79 @@ class TestRunPost:
         out = capsys.readouterr().out
         assert posted["changes"] == ["69459"]
         assert "not posted: 70001_ps2 failed — claude exited 1" in out
+
+
+class TestRunSeries:
+
+    def _run(self, tmp_path, monkeypatch, argv, children):
+        import subprocess
+        from lreview.cli import cmd_run
+        from lreview.gerrit import ResolvedChange, change_ref
+        from lreview.prompts import PromptsStatus
+
+        repo = tmp_path / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        reviewed = {}
+
+        def resolve(spec):
+            n = int(str(spec).rstrip("/").rsplit("/", 1)[-1])
+            return ResolvedChange(
+                number=n, project="ex/lustre-release", subject=f"s{n}",
+                sha=f"{n:040d}", patchset=1, ref=change_ref(n, 1),
+                base_url="https://gerrit.invalid")
+
+        monkeypatch.setenv("LREVIEW_PROMPTS_UPDATE", "off")
+        monkeypatch.setattr("lreview.cli.resolve_change", resolve)
+        monkeypatch.setattr("lreview.gerrit.series_children",
+                            lambda change: children.get(change.number, []))
+        monkeypatch.setattr(
+            "lreview.cli.ensure_prompts",
+            lambda args: PromptsStatus(
+                available=True, prompts_dir=Path("/p/kernel"),
+                source="test"))
+
+        def fake_run_batch(config, changes, in_place=False):
+            reviewed["numbers"] = [c.number for c in changes]
+            return []
+
+        monkeypatch.setattr("lreview.cli.run_batch", fake_run_batch)
+        args = build_parser().parse_args(
+            ["run", "--repo", str(repo),
+             "--results-dir", str(tmp_path / "results"), *argv])
+        return cmd_run(args), reviewed
+
+    def test_expands_to_the_children(self, tmp_path, monkeypatch, capsys):
+        rc, reviewed = self._run(
+            tmp_path, monkeypatch,
+            ["--series", "https://review.whamcloud.com/c/ex/"
+             "lustre-release/+/65382"],
+            {65382: [66955, 66956, 66957]})
+        assert rc == 0
+        assert reviewed["numbers"] == [65382, 66955, 66956, 66957]
+        assert ("series of 65382: itself + 3 open child change(s)"
+                in capsys.readouterr().out)
+
+    def test_overlapping_series_reviewed_once(self, tmp_path, monkeypatch,
+                                              capsys):
+        rc, reviewed = self._run(
+            tmp_path, monkeypatch, ["--series", "100", "101"],
+            {100: [101, 102], 101: [102]})
+        assert reviewed["numbers"] == [100, 101, 102]
+        assert "given more than once" not in capsys.readouterr().out
+
+    def test_without_flag_no_expansion(self, tmp_path, monkeypatch):
+        rc, reviewed = self._run(tmp_path, monkeypatch, ["100"],
+                                 {100: [101, 102]})
+        assert reviewed["numbers"] == [100]
+
+    @pytest.mark.parametrize("argv", [
+        ["--series"],
+        ["--series", "--local", "branch"],
+        ["--series", "--last", "2"],
+    ])
+    def test_rejected_combinations(self, tmp_path, monkeypatch, capsys,
+                                   argv):
+        rc, reviewed = self._run(tmp_path, monkeypatch, argv, {})
+        assert rc == 1
+        assert "--series expands Gerrit changes" in capsys.readouterr().out
+        assert "numbers" not in reviewed
