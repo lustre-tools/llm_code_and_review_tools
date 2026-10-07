@@ -272,10 +272,17 @@ function computeMainChain(anchorId) {
     }
     for (let i = 0; i <= lastActive; i++) chain.add(upward[i]);
 
-    // Walk downward: follow parent chain
+    // Walk downward: follow parent chain. Stop before an abandoned
+    // parent reached only through an old patchset of its child: that
+    // is history (61965 ps23 once sat on abandoned 62508), and being
+    // in the main chain would force it visible under the anchor.
+    let below = anchorId;
     cursor = parentOf[anchorId];
     while (cursor && nodeMap[cursor]) {
+        const e = edgeMap[cursor + '->' + below];
+        if (nodeMap[cursor].status === 'ABANDONED' && e && edgeChildMoved(e)) break;
         chain.add(cursor);
+        below = cursor;
         cursor = parentOf[cursor];
     }
 

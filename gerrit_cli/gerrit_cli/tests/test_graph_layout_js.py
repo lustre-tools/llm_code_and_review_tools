@@ -155,6 +155,27 @@ class TestInferredTrunkHookup:
         assert (50, 100) not in _drawn(view)
 
 
+class TestAnchorBaseChain:
+    def _anchor_on_abandoned(self, anchor_ps_on_it: int):
+        nodes = [
+            _node(5, "MERGED", submitted="2026-01-01"),
+            _node(50, "ABANDONED"),
+            _node(10, "MERGED", submitted="2026-02-01", current_patchset=5),
+        ]
+        return _payload(10, nodes, [_edge(50, 10, cps=anchor_ps_on_it, cl=5)])
+
+    def test_abandoned_history_parent_stays_hidden(self, tmp_path):
+        """61965 ps23 once sat on abandoned 62508."""
+        views = _render(self._anchor_on_abandoned(2), tmp_path,
+                        "a0m1h0", "a1m1h0")
+        assert 50 not in _pos(views["a0m1h0"])
+        assert 50 in _pos(views["a1m1h0"])
+
+    def test_abandoned_current_parent_is_shown(self, tmp_path):
+        views = _render(self._anchor_on_abandoned(5), tmp_path, "a0m1h0")
+        assert 50 in _pos(views["a0m1h0"])
+
+
 class TestChainIntoTrunkNode:
     def test_chain_ending_in_trunk_node_stays_straight(self, tmp_path):
         """54459's shape: 20's live kid 21 leads through 22 into trunk
