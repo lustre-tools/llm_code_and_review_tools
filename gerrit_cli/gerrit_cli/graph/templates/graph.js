@@ -1189,12 +1189,19 @@ function _layoutTrunkSideBranches(ctx) {
     // /related edge 62887 -> 61962 exists, but nothing walks it
     // upward from 61962. Without a placement pass here, 62887 falls
     // into _layoutUnplacedMainSeries's floating column.
+    // Only a node with no visible parent of its own goes here: one
+    // that has one belongs with it, and its edge to the trunk node is
+    // only history (61977's 63483 sat thirty rows from its parent
+    // 63423; LU-17916's 66902, on trunk node 66901, five rows under it).
+    const hasOwnParent = (id) => (edgesTo[id] || []).some(e =>
+        _layoutShouldShow(ctx, e.from));
     const trunkParents = {};
     for (const t of trunk) {
         for (const e of (G.edges || [])) {
             if (e.to !== t) continue;
             if (trunkSet.has(e.from)) continue;
             if (!_layoutShouldShow(ctx, e.from)) continue;
+            if (hasOwnParent(e.from)) continue;
             (trunkParents[t] = trunkParents[t] || []).push(e.from);
         }
     }

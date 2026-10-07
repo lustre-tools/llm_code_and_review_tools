@@ -352,6 +352,27 @@ class TestTrunkEdges:
         # the anchor sits elsewhere; its history edge to 11 is not drawn
         assert (100, 11) not in _drawn(view)
 
+    def test_change_with_own_parent_stays_with_it(self, tmp_path):
+        """LU-17916's 66902: 300 sits on trunk node 11 and once carried
+        the older trunk node 10, which the trunk walk reaches first.
+        300 goes above 11, not under 10, and its history edge to 10
+        isn't drawn."""
+        nodes = [
+            _node(10, "MERGED", submitted="2026-01-01", current_patchset=4),
+            _node(11, "MERGED", submitted="2026-02-01", current_patchset=3),
+            _node(100), _node(300),
+        ]
+        edges = [
+            _edge(10, 100),
+            _edge(11, 300, pps=1, pl=3),
+            _edge(300, 10, cps=1, cl=4),
+        ]
+        view = _render(_payload(100, nodes, edges), tmp_path, "a0m1")["a0m1"]
+        pos = _pos(view)
+        assert pos[300][1] == pos[11][1] - LEVEL_H
+        assert (11, 300) in _drawn(view)
+        assert (300, 10) not in _drawn(view)
+
     def test_unhooked_chains_keep_their_own_columns(self, tmp_path):
         """61977's shape: 300 and the chain 310 -> 311 -> 312 are based
         on master history older than any merged patch. Each keeps its
