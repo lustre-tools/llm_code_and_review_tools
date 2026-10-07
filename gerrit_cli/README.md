@@ -203,6 +203,12 @@ includes:
 
 - **Vertical tree layout** growing upward from the anchor change, with
   the dominant main-chain centered and side branches spread left/right.
+- **Merged trunk**: merged patches form one column in landing order.
+  A chain with no visible parent (its base is a master commit, or its
+  only parents are abandoned and hidden) hangs off the merged patch it
+  was based on, with a dashed edge since the link is inferred from
+  dates. A chain based on master history older than every merged
+  patch in the graph stays in a column of its own on the right.
 - **Review health coloring** for active changes: green (verified OK + 2
   non-author CR +1s), dark red (CR veto), bright red (Maloo -1), orange
   (Jenkins -1), pink (other -1), blue (pending). Merged = purple,

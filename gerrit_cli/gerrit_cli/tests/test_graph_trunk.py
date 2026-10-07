@@ -12,6 +12,8 @@ from typing import Any
 
 from gerrit_cli.graph.build import (
     _build_merged_trunk,
+    _hook_orphan_main_chains,
+    _make_edge,
     _promote_merged_to_main,
     _prune_unrelated_merged,
     _redirect_inflight_to_recent_merged,
@@ -713,3 +715,134 @@ class TestPruneUnrelatedMerged:
         assert deleted == 0
         assert structural == 0
         assert 50 in ctx.nodes
+
+
+# ─── _hook_orphan_main_chains ─────────────────────────────────────
+
+
+class TestHookOrphanMainChains:
+    """An in-flight chain root with no visible parent is attached to
+    the trunk node it branched off (by date). Abandoned parents are
+    hidden by default, so edges from them don't count as a
+    connection; the hookup they get is marked `inferred` so the JS
+    ranks it below any real parent edge."""
+
+    def _trunk(self):
+        return [
+            _node(10, "MERGED", submitted="2026-01-01 00:00:00",
+                  current_patchset=5),
+            _node(20, "MERGED", submitted="2026-03-01 00:00:00",
+                  current_patchset=6),
+            _node(30, "MERGED", submitted="2026-05-01 00:00:00",
+                  current_patchset=7),
+        ]
+
+    def _hooks(self, ctx):
+        return [e for e in ctx.edges if e.get("inferred")]
+
+    def test_root_without_parents_hooks_by_date(self):
+        ctx = _ctx(
+            nodes=self._trunk() + [
+                _node(100, "NEW", current_ps_created="2026-04-01 00:00:00",
+                      current_patchset=3),
+            ],
+            anchor_cn=20,
+        )
+        assert _hook_orphan_main_chains(ctx, [10, 20, 30]) == 1
+        (e,) = self._hooks(ctx)
+        assert (e["from"], e["to"]) == (20, 100)
+        assert e["is_stale"] is True
+        assert (e["parent_patchset"], e["child_patchset"]) == (6, 3)
+
+    def test_history_edges_from_abandoned_parents_do_not_connect(self):
+        """64616's shape: its only incoming edges come from old
+        patchsets of the node, out of two abandoned changes."""
+        ctx = _ctx(
+            nodes=self._trunk() + [
+                _node(50, "ABANDONED"),
+                _node(60, "ABANDONED"),
+                _node(100, "NEW", current_ps_created="2026-04-01 00:00:00",
+                      current_patchset=34),
+            ],
+            edges=[_make_edge(50, 1, 1, 100, 17, 34),
+                   _make_edge(60, 1, 1, 100, 18, 34)],
+            anchor_cn=20,
+        )
+        assert _hook_orphan_main_chains(ctx, [10, 20, 30]) == 1
+        (e,) = self._hooks(ctx)
+        assert (e["from"], e["to"]) == (20, 100)
+
+    def test_current_abandoned_parent_does_not_connect(self):
+        """64921's shape: the current patchset sits on an abandoned
+        change, which is hidden by default."""
+        ctx = _ctx(
+            nodes=self._trunk() + [
+                _node(50, "ABANDONED", current_patchset=2),
+                _node(100, "NEW", current_ps_created="2026-02-01 00:00:00",
+                      current_patchset=13),
+            ],
+            edges=[_make_edge(50, 1, 2, 100, 13, 13)],
+            anchor_cn=20,
+        )
+        assert _hook_orphan_main_chains(ctx, [10, 20, 30]) == 1
+        (e,) = self._hooks(ctx)
+        assert (e["from"], e["to"]) == (10, 100)
+        # the real edge stays; the JS ranks it above the hookup
+        assert any(x["from"] == 50 and not x.get("inferred")
+                   for x in ctx.edges)
+
+    def test_in_flight_parent_connects(self):
+        ctx = _ctx(
+            nodes=self._trunk() + [
+                _node(90, "NEW", current_ps_created="2026-04-01 00:00:00"),
+                _node(100, "NEW", current_ps_created="2026-04-02 00:00:00"),
+            ],
+            edges=[_make_edge(90, 1, 1, 100, 1, 1)],
+            anchor_cn=20,
+        )
+        _hook_orphan_main_chains(ctx, [10, 20, 30])
+        assert [(e["from"], e["to"]) for e in self._hooks(ctx)] == [(20, 90)]
+
+    def test_merged_parent_connects(self):
+        ctx = _ctx(
+            nodes=self._trunk() + [
+                _node(100, "NEW", current_ps_created="2026-04-01 00:00:00"),
+            ],
+            edges=[_make_edge(10, 5, 5, 100, 1, 1)],
+            anchor_cn=20,
+        )
+        assert _hook_orphan_main_chains(ctx, [10, 20, 30]) == 0
+
+    def test_base_older_than_trunk_stays_unhooked(self):
+        ctx = _ctx(
+            nodes=self._trunk() + [
+                _node(50, "ABANDONED"),
+                _node(100, "NEW", current_ps_created="2025-06-01 00:00:00"),
+            ],
+            edges=[_make_edge(50, 1, 1, 100, 1, 1)],
+            anchor_cn=20,
+        )
+        assert _hook_orphan_main_chains(ctx, [10, 20, 30]) == 0
+        assert self._hooks(ctx) == []
+
+    def test_abandoned_roots_are_not_hooked(self):
+        ctx = _ctx(
+            nodes=self._trunk() + [
+                _node(50, "ABANDONED",
+                      current_ps_created="2026-04-01 00:00:00"),
+            ],
+            anchor_cn=20,
+        )
+        assert _hook_orphan_main_chains(ctx, [10, 20, 30]) == 0
+
+    def test_in_flight_parent_of_trunk_node_is_not_hooked(self):
+        """62887's shape: an in-flight node whose git child is on the
+        trunk is placed next to that child, not hooked."""
+        ctx = _ctx(
+            nodes=self._trunk() + [
+                _node(100, "NEW", current_ps_created="2026-04-01 00:00:00"),
+            ],
+            edges=[_make_edge(100, 1, 1, 30, 7, 7)],
+            anchor_cn=20,
+        )
+        assert _hook_orphan_main_chains(ctx, [10, 20, 30]) == 0

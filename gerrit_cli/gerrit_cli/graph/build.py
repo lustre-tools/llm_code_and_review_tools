@@ -1651,6 +1651,14 @@ def _hook_orphan_main_chains(
     them into a far-right floating column and the user can't tell
     where the chain branches off master.
 
+    Edges from ABANDONED parents don't connect: abandoned nodes are
+    hidden by default, which left 64616 (only old-patchset edges
+    from two abandoned changes) and 64921 (current patchset on an
+    abandoned change) floating. Their hookup edge is `inferred`, so
+    the JS ranks it below any real parent edge: when the abandoned
+    parent is shown it still owns the node, unless that parent's
+    edge is history from an old patchset of the node.
+
     Reuses the same "where did this branch off master" logic that
     _redirect_inflight_to_recent_merged uses: walk the root's
     current-PS ancestry via _inflight_base_date, pick the most
@@ -1679,14 +1687,16 @@ def _hook_orphan_main_chains(
     trunk_max = max(trunk_dates) if trunk_dates else ""
 
     trunk_set = set(merged_trunk)
-    # A node is "already connected" if it has ANY incoming edge
-    # from another visible node, or an outgoing edge to a trunk
+    # A node is "already connected" if it has an incoming edge from
+    # a node that isn't ABANDONED, or an outgoing edge to a trunk
     # node (in-flight parent of a trunk-column child — 62887's
     # shape, already anchored via _layoutTrunkSideBranches).
     has_incoming: set[int] = set()
     has_trunk_child: set[int] = set()
     for e in ctx.edges:
-        has_incoming.add(e["to"])
+        parent = ctx.nodes.get(e["from"])
+        if not parent or parent.get("status") != "ABANDONED":
+            has_incoming.add(e["to"])
         if e["to"] in trunk_set:
             has_trunk_child.add(e["from"])
 
@@ -1756,6 +1766,7 @@ def _hook_orphan_main_chains(
         # connector — we're inferring the relationship from a date
         # walk, not from a concrete /related edge.
         edge["is_stale"] = True
+        edge["inferred"] = True
         ctx.edges.append(edge)
         adj.setdefault(target, set()).add(root)
         added += 1

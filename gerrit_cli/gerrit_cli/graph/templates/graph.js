@@ -179,9 +179,18 @@ function childrenInGroup(id) {
         const kn = nodeMap[k];
         if (!kn) continue;
         if ((kn.series_group || 0) !== myGroup) continue;
+        if (_inferredStandIn(id, k)) continue;
         out.push(k);
     }
     return out;
+}
+
+// A date-inferred trunk hookup only stands in for a parent: when the
+// kid also has a real parent edge that ranks above it, the hookup
+// must not add to the trunk node's descendants or be drawn.
+function _inferredStandIn(parentId, kid) {
+    const e = edgeMap[parentId + '->' + kid];
+    return !!(e && e.inferred && parentOf[kid] !== parentId);
 }
 
 const activeDescCache = {};
@@ -1670,15 +1679,18 @@ function edgeChildMoved(edge) {
 
 // Ranks a node's incoming edges, best first: the edge from the
 // node's CURRENT patchset (its real base) before history edges, a
-// current-on-both-sides edge before a NEEDS-REBASE one, then the
-// highest parent patchset. Shared by placement ownership
-// (_ownedByOtherParent), the rendered-edge pick
-// (computeHistoricalSuppression) and parentOf, so the three never
-// disagree about a node's parent.
+// real edge before a date-inferred trunk hookup, a current-on-both-
+// sides edge before a NEEDS-REBASE one, then the highest parent
+// patchset. Shared by placement ownership (_ownedByOtherParent), the
+// rendered-edge pick (computeHistoricalSuppression) and parentOf, so
+// the three never disagree about a node's parent.
 function _rankIncoming(a, b) {
     const ca = edgeChildMoved(a) ? 1 : 0;
     const cb = edgeChildMoved(b) ? 1 : 0;
     if (ca !== cb) return ca - cb;
+    const ia = a.inferred ? 1 : 0;
+    const ib = b.inferred ? 1 : 0;
+    if (ia !== ib) return ia - ib;
     const sa = a.is_stale ? 1 : 0;
     const sb = b.is_stale ? 1 : 0;
     if (sa !== sb) return sa - sb;
@@ -1761,7 +1773,7 @@ function computeActiveUp(positions, anchor) {
         if (activeUp.has(id)) continue;
         activeUp.add(id);
         for (const c of (childrenOf[id] || [])) {
-            if (positions[c]) stack.push(c);
+            if (positions[c] && !_inferredStandIn(id, c)) stack.push(c);
         }
     }
     return activeUp;
@@ -1779,7 +1791,17 @@ function computeActiveUp(positions, anchor) {
 function computeHistoricalSuppression(positions) {
     const keptSources = {};
     if (document.getElementById('chk-history').checked) return keptSources;
+    const best = computeBestVisibleParent(positions);
+    for (const child in best) keptSources[child] = new Set([best[child]]);
+    return keptSources;
+}
 
+// The winning incoming edge's source per child, among edges whose
+// both ends are laid out. Drives the historical-parent suppression
+// and limits a date-inferred hookup to being drawn only when it is
+// the one actually holding the child in place.
+function computeBestVisibleParent(positions) {
+    const best = {};
     const byChild = {};
     for (const e of G.edges) {
         if (!positions[e.from] || !positions[e.to]) continue;
@@ -1789,9 +1811,9 @@ function computeHistoricalSuppression(positions) {
     for (const child in byChild) {
         const uniq = Object.values(byChild[child]);
         uniq.sort(_rankIncoming);
-        keptSources[child] = new Set([uniq[0].from]);
+        best[child] = uniq[0].from;
     }
-    return keptSources;
+    return best;
 }
 
 // ─── RENDER ───
@@ -1799,6 +1821,7 @@ function renderGraph() {
     const positions = computeLayout(currentAnchor);
     const activeUp = computeActiveUp(positions, currentAnchor);
     const keptSources = computeHistoricalSuppression(positions);
+    const bestParent = computeBestVisibleParent(positions);
     const C = getColors();
     // Final render-time filter for the "Show merged" toggle. Layout
     // and edges are already computed against the full node set; we
@@ -1844,6 +1867,7 @@ function renderGraph() {
         if (!positions[edge.from] || !positions[edge.to]) continue;
         const ks = keptSources[edge.to];
         if (ks && !ks.has(edge.from)) continue;
+        if (edge.inferred && bestParent[edge.to] !== edge.from) continue;
         if (hideMerged) {
             const fn = nodeMap[edge.from];
             const tn = nodeMap[edge.to];
