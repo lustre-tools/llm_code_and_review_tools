@@ -71,8 +71,8 @@ function stJumpTo(id) {
         document.getElementById('chk-abandoned').checked = true;
         changed = true;
     }
-    if (n && n.status === 'MERGED' && !showMergedEnabled()) {
-        document.getElementById('chk-merged').checked = true;
+    if (n && n.status === 'MERGED' && stacksLayout() && !nodesDS.get(id)) {
+        setLayout('trunk', false);
         changed = true;
     }
     showTab('graph');

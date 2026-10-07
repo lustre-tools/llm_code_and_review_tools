@@ -209,9 +209,10 @@ includes:
   was based on, with a dashed edge since the link is inferred from
   dates. A chain based on master history older than every merged
   patch in the graph stays in a column of its own on the right.
-- **Stacks view**: unchecking "Show merged" drops the trunk and puts
-  each in-flight subtree in its own column, side by side, standing on
-  the merged patch it branches off (the only merged patches shown).
+- **Stacks view**: "Stacks" on the Trunk | Stacks switch (next to
+  Graph | Stats) drops the trunk and puts each in-flight subtree in
+  its own column, side by side, standing on the merged patch it
+  branches off (the only merged patches shown).
   Columns run left to right in merge order of their base, followed by
   subtrees with no merged base. At a fork the live continuation goes
   straight up and each other branch takes the nearest column to the

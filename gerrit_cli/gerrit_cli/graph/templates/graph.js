@@ -150,11 +150,19 @@ function showAbandonedEnabled() {
     return document.getElementById('chk-abandoned').checked;
 }
 
-// "Show merged" is checked by default. Unchecked switches to the
-// stacks layout (computeStacksLayout): one column per in-flight
-// subtree, standing on the merged patch it branches off.
-function showMergedEnabled() {
-    return document.getElementById('chk-merged').checked;
+// The layout the Trunk | Stacks switch selects: 'trunk' (merged
+// patches in one column, the default) or 'stacks'
+// (computeStacksLayout: one column per in-flight subtree, standing on
+// the merged patch it branches off).
+let layoutMode = 'trunk';
+function stacksLayout() {
+    return layoutMode === 'stacks';
+}
+function setLayout(mode, refresh = true) {
+    layoutMode = mode;
+    document.getElementById('layout-trunk').classList.toggle('active', mode === 'trunk');
+    document.getElementById('layout-stacks').classList.toggle('active', mode === 'stacks');
+    if (refresh) actions.refresh();
 }
 
 function nodeVisible(id) {
@@ -1293,7 +1301,7 @@ function _layoutTrunkSideBranches(ctx) {
     }
 }
 
-// ─── STACKS LAYOUT ("Show merged" off) ───
+// ─── STACKS LAYOUT ───
 //
 // One column per in-flight subtree instead of the tall merged trunk.
 // Each subtree stands on the merged patch it branches off, which is
@@ -1435,7 +1443,7 @@ function computeStacksLayout(anchorId) {
 // layout phase, and return the positions dict that renderGraph feeds
 // into vis.js.
 function computeLayout(anchorId) {
-    if (!showMergedEnabled()) return computeStacksLayout(anchorId);
+    if (stacksLayout()) return computeStacksLayout(anchorId);
     mainChain = computeMainChain(anchorId);
     baseChainSet = new Set();
     const ctx = {
@@ -1969,7 +1977,7 @@ function renderGraph() {
     const activeUp = computeActiveUp(positions, currentAnchor);
     const keptSources = computeHistoricalSuppression(positions);
     const bestParent = computeBestVisibleParent(positions);
-    const stacks = !showMergedEnabled();
+    const stacks = stacksLayout();
     const C = getColors();
 
     // Build vis.js nodes
@@ -2445,7 +2453,7 @@ function clickNode(id) {
 // the network around.
 network.on('beforeDrawing', function (canvasCtx) {
     const trunk = G.merged_trunk || [];
-    if (trunk.length < 2 || !showMergedEnabled()) return;
+    if (trunk.length < 2 || stacksLayout()) return;
     const trunkPositions = network.getPositions(trunk);
     let minY = Infinity, maxY = -Infinity, lineX = 0;
     let count = 0;
@@ -2578,7 +2586,8 @@ const actions = {
 };
 
 document.getElementById('chk-abandoned').addEventListener('change', () => actions.refresh());
-document.getElementById('chk-merged').addEventListener('change', () => actions.refresh());
+document.getElementById('layout-trunk').addEventListener('click', () => setLayout('trunk'));
+document.getElementById('layout-stacks').addEventListener('click', () => setLayout('stacks'));
 document.getElementById('chk-history').addEventListener('change', () => actions.refresh());
 document.getElementById('btn-fit').addEventListener('click', () => actions.fit());
 document.getElementById('btn-focus').addEventListener('click', () => actions.focusSelection());

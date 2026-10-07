@@ -3,7 +3,8 @@
 Each test builds a small payload, renders the real page template and
 runs tests/graph_layout_harness.mjs on it, which stubs the DOM and
 vis.js and reports every node position and drawn edge per checkbox
-combination ("a<abandoned>m<merged>h<history>", 1 = shown).
+combination ("a<abandoned>m<layout>h<history>": a1 = abandoned
+shown, m1 = Trunk / m0 = Stacks, h1 = historical parents shown).
 """
 
 import json
@@ -200,8 +201,8 @@ class TestChainIntoTrunkNode:
 
 
 class TestStacksLayout:
-    """'Show merged' off: one column per in-flight subtree, standing on
-    the merged patch it branches off."""
+    """The Stacks layout: one column per in-flight subtree, standing
+    on the merged patch it branches off."""
 
     def _series(self):
         nodes = [

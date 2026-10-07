@@ -23,7 +23,10 @@
         <button id="tab-stats" role="tab">Stats</button>
     </span>
     <label class="graph-only"><input type="checkbox" id="chk-abandoned"> Show abandoned</label>
-    <label class="graph-only" title="Unchecked: one column per in-flight branch, standing on the merged patch it branches off"><input type="checkbox" id="chk-merged" checked> Show merged</label>
+    <span class="tabs graph-only" role="group" title="Trunk: merged patches in one column in landing order, in-flight work branching off it. Stacks: one column per in-flight branch, standing on the merged patch it branches off.">
+        <button id="layout-trunk" class="active">Trunk</button>
+        <button id="layout-stacks">Stacks</button>
+    </span>
     <label class="graph-only"><input type="checkbox" id="chk-history"> Show historical parents</label>
     <button id="btn-fit" class="graph-only">Fit</button>
     <button id="btn-focus" class="graph-only">Focus</button>
@@ -49,7 +52,7 @@
         </table>
         <div style="margin-top:12px;font-size:12px;color:var(--text-muted)">
             Click a node to see details. Double-click (or middle-click) to open in Gerrit.
-            Uncheck "Show merged" for one column per in-flight branch.
+            "Stacks" shows one column per in-flight branch.
         </div>
         <div style="text-align:right;margin-top:10px">
             <button onclick="document.getElementById('help-overlay').classList.add('hidden')"

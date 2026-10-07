@@ -2,8 +2,10 @@
 //
 //   node graph_layout_harness.mjs PAGE.html [COMBO ...] [--eval EXPR]
 //
-// COMBO is a string of checkbox states "a<0|1>m<0|1>h<0|1>" (Show
-// abandoned / Show merged / Show historical parents); default: all 8.
+// COMBO is "a<0|1>m<0|1>h<0|1>": Show abandoned, the layout (m1 =
+// Trunk, m0 = Stacks; on pages from before the Trunk | Stacks switch,
+// the "Show merged" checkbox) and Show historical parents; default:
+// all 8.
 // Prints JSON {combos: {COMBO: {nodes: [...], edges: [...]}}, errors,
 // eval}: every node's position, label and style and every drawn edge,
 // plus the layout phase that placed each node. --eval runs EXPR in
@@ -179,7 +181,11 @@ for (const c of combos) {
     const mm = /^a([01])m([01])h([01])$/.exec(c);
     if (!mm) { errors.push('bad combo ' + c); continue; }
     getEl('chk-abandoned').checked = mm[1] === '1';
-    getEl('chk-merged').checked = mm[2] === '1';
+    if (typeof sandbox.setLayout === 'function') {
+        vm.runInContext(`setLayout('${mm[2] === '1' ? 'trunk' : 'stacks'}', false)`, sandbox);
+    } else {
+        getEl('chk-merged').checked = mm[2] === '1';
+    }
     getEl('chk-history').checked = mm[3] === '1';
     try {
         vm.runInContext('globalThis.__phaseOf = {}; renderGraph()', sandbox);
