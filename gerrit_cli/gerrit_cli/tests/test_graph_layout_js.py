@@ -352,3 +352,19 @@ class TestTrunkEdges:
         # the anchor sits elsewhere; its history edge to 11 is not drawn
         assert (100, 11) not in _drawn(view)
 
+    def test_unhooked_chains_keep_their_own_columns(self, tmp_path):
+        """61977's shape: 300 and the chain 310 -> 311 -> 312 are based
+        on master history older than any merged patch. Each keeps its
+        own column on the right; the chain must not stand on 300."""
+        nodes = [
+            _node(10, "MERGED", submitted="2026-01-01"),
+            _node(100), _node(300), _node(310), _node(311), _node(312),
+        ]
+        edges = [_edge(10, 100), _edge(310, 311), _edge(311, 312)]
+        pos = _pos(_render(_payload(100, nodes, edges), tmp_path,
+                           "a0m1")["a0m1"])
+        assert pos[300][1] == pos[310][1] == 0
+        assert pos[300][0] != pos[310][0]
+        assert pos[311] == (pos[310][0], -LEVEL_H)
+        assert pos[312] == (pos[310][0], -2 * LEVEL_H)
+

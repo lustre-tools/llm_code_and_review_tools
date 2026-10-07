@@ -916,15 +916,11 @@ function _layoutSeparateFixup(ctx) {
     }
 }
 
-// Place main-series nodes that the upward walk + base chain never
-// reached. These are typically ancestors that live on a
-// non-direct parent branch or side nodes that only connect back to
-// main via a stale edge from some non-anchor node. Treat them like
-// a synthetic disconnected group: BFS from the set's own roots so
-// oldest nodes sit at level 0 and children grow upward from there,
-// matching how both the main tree and disconnected separate groups
-// are laid out. The column starts at the far right of everything
-// already placed.
+// Place main-series nodes no earlier phase reached: mostly chains
+// based on master history older than every merged patch in the graph
+// (left unhooked by the Python side), plus anything that connects to
+// the main tree only through a node placed later. They go in columns
+// at the far right of everything already placed, roots on level 0.
 function _layoutUnplacedMainSeries(ctx) {
     const positions = ctx.positions;
     const unplaced = new Set();
@@ -936,65 +932,30 @@ function _layoutUnplacedMainSeries(ctx) {
     }
     if (unplaced.size === 0) return;
 
-    // Build a child map restricted to the unplaced set so BFS stays
-    // within it. Non-unplaced edges are ignored for the layout, but
-    // the edges themselves still render normally (they'll fly over
-    // from the main tree into the column).
-    const parentIn = new Set();
-    const childrenInSet = {};
-    for (const id of unplaced) childrenInSet[id] = [];
-    for (const e of G.edges) {
-        if (!unplaced.has(e.from) || !unplaced.has(e.to)) continue;
-        parentIn.add(e.to);
-        childrenInSet[e.from].push(e.to);
-    }
-
-    // Roots = unplaced nodes with no parent *within the set*.
-    const roots = [...unplaced].filter(id => !parentIn.has(id));
-    const levels = {};
-    const queue = [];
-    for (const r of roots) {
-        levels[r] = 0;
-        queue.push(r);
-    }
-    while (queue.length > 0) {
-        const n = queue.shift();
-        for (const c of (childrenInSet[n] || [])) {
-            if (!(c in levels)) {
-                levels[c] = levels[n] + 1;
-                queue.push(c);
-            }
-        }
-    }
-    // Any leftover (cycle remnant or fully-disconnected member)
-    // gets level 0 so it still lands on the baseline.
+    // Each node hangs under its best-ranked parent within the set, as
+    // everywhere else; edges to nodes outside the set are drawn but
+    // don't place anything here. Laying the forest out by subtree
+    // keeps every chain in its own column (a level-by-level layout
+    // stood a 28-node chain in 61977 on an unrelated single patch).
+    const kidsOf = {};
+    const owned = new Set();
     for (const id of unplaced) {
-        if (!(id in levels)) levels[id] = 0;
+        let best = null;
+        for (const e of (edgesTo[id] || [])) {
+            if (!unplaced.has(e.from)) continue;
+            if (best === null || _rankIncoming(e, best) < 0) best = e;
+        }
+        if (best === null) continue;
+        (kidsOf[best.from] = kidsOf[best.from] || []).push(id);
+        owned.add(id);
     }
+    const roots = [...unplaced].filter(id => !owned.has(id)).sort((a, b) => a - b);
 
-    // Arrange the column at the far right of everything placed so
-    // far. Members at the same BFS level are spaced horizontally
-    // instead of stacking so they don't overlap.
     let mainMaxX = 0;
     for (const pos of Object.values(positions)) {
         mainMaxX = Math.max(mainMaxX, pos.x);
     }
-    const columnX = mainMaxX + NODE_W * 2;
-
-    const levelBuckets = {};
-    for (const id of unplaced) {
-        (levelBuckets[levels[id]] = levelBuckets[levels[id]] || []).push(id);
-    }
-    for (const lv in levelBuckets) {
-        const ids = levelBuckets[lv].sort((a, b) => a - b);
-        for (let i = 0; i < ids.length; i++) {
-            _placeNode(
-                ctx, ids[i],
-                columnX + i * NODE_W,
-                -parseInt(lv) * LEVEL_H,
-            );
-        }
-    }
+    _placeForest(ctx, roots, kidsOf, mainMaxX + NODE_W * 2);
 }
 
 // Step 4: any nodes that ended up at exactly the same (x, y) — e.g.
@@ -1385,8 +1346,14 @@ function _stackKidOrder(parentId, kids, descOf) {
     });
 }
 
-function _layoutStacks(ctx) {
-    const { roots, kidsOf } = _stacksForest();
+// Cell layout of a forest given each node's kids. Returns shapeOf(id):
+// the cells [column, level, id] of id's subtree relative to id at
+// [0, 0], and its width in columns. The live continuation goes
+// straight up; every other branch takes the nearest column to the
+// right whose cells, and the rows just above and below them, are
+// free. A merged base's subtrees go narrowest first, so the short
+// ones stand next to it and only the widest one sits far out.
+function _shapeForest(kidsOf) {
     const descMemo = {}, shapeMemo = {};
     const descOf = (id) => {
         if (descMemo[id] !== undefined) return descMemo[id];
@@ -1395,8 +1362,6 @@ function _layoutStacks(ctx) {
         for (const k of (kidsOf[id] || [])) d += 1 + descOf(k);
         return (descMemo[id] = d);
     };
-    // Cells [column, level, id] of the subtree under `id`, relative
-    // to `id` at [0, 0]; width is its number of columns.
     const shapeOf = (id) => {
         if (shapeMemo[id]) return shapeMemo[id];
         shapeMemo[id] = { cells: [[0, 0, id]], width: 1 };  // cycle guard
@@ -1406,8 +1371,6 @@ function _layoutStacks(ctx) {
         const fits = (shape, dc) => shape.cells.every(([c, l]) =>
             free(c + dc, l) && free(c + dc, l + 1) && free(c + dc, l + 2));
         let kids = _stackKidOrder(id, kidsOf[id] || [], descOf);
-        // A merged base's subtrees go narrowest first, so the short
-        // ones stand next to it and only the widest one sits far out.
         if (nodeMap[id].status === 'MERGED') {
             kids = kids.map((k, i) => [shapeOf(k).width, i, k])
                 .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]))
@@ -1428,7 +1391,13 @@ function _layoutStacks(ctx) {
         const width = 1 + Math.max(...cells.map(c => c[0]));
         return (shapeMemo[id] = { cells, width });
     };
-    let x = 0;
+    return shapeOf;
+}
+
+// Place each root's subtree from _shapeForest side by side, starting
+// at column x with the roots on level 0.
+function _placeForest(ctx, roots, kidsOf, x) {
+    const shapeOf = _shapeForest(kidsOf);
     for (const r of roots) {
         const shape = shapeOf(r);
         for (const [c, l, n] of shape.cells) {
@@ -1438,6 +1407,11 @@ function _layoutStacks(ctx) {
         }
         x += shape.width * NODE_W + STACK_GAP;
     }
+}
+
+function _layoutStacks(ctx) {
+    const { roots, kidsOf } = _stacksForest();
+    _placeForest(ctx, roots, kidsOf, 0);
 }
 
 function computeStacksLayout(anchorId) {
