@@ -1928,15 +1928,30 @@ function styleForEdge(edge, edgeId, flags, C) {
             strokeWidth: 4,
             strokeColor: C.edgeStroke,
         },
-        smooth: {
-            type: 'cubicBezier',
-            forceDirection: 'vertical',
-            roundness: 0.4,
-        },
+        // A straight edge through another node in its column would
+        // read as linking that node too (LU-18222: 65281 -> 65282
+        // down the trunk through two later merged patches); it arcs
+        // beside the column instead.
+        smooth: flags.bypass
+            ? { type: 'curvedCW', roundness: 1.0 }
+            : { type: 'cubicBezier', forceDirection: 'vertical', roundness: 0.4 },
     };
 }
 
 // ─── RENDER HELPERS ───
+
+// True when the straight line from `from` to `to` runs through another
+// laid-out node: both ends in one column with a node between them.
+function _passesThroughNode(positions, from, to) {
+    const a = positions[from], b = positions[to];
+    if (!a || !b || a.x !== b.x) return false;
+    const lo = Math.min(a.y, b.y), hi = Math.max(a.y, b.y);
+    for (const k in positions) {
+        const p = positions[k];
+        if (p.x === a.x && p.y > lo && p.y < hi) return true;
+    }
+    return false;
+}
 
 // Nodes reachable from `anchor` by walking children that are also
 // in `positions`. "Active subtree" — used by render to decide whether
@@ -2037,8 +2052,9 @@ function renderGraph() {
         // matches the node-side isBase check so edge and endpoint
         // colors agree.
         const isBase = baseChainSet.has(edge.to);
+        const bypass = _passesThroughNode(positions, edge.from, edge.to);
 
-        visEdges.push(styleForEdge(edge, edgeIdx, { isMainEdge, isBase }, C));
+        visEdges.push(styleForEdge(edge, edgeIdx, { isMainEdge, isBase, bypass }, C));
         edgeIdx++;
     }
 

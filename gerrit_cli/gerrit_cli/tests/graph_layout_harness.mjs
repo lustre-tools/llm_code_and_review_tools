@@ -199,6 +199,7 @@ for (const c of combos) {
         const edges = vm.runInContext('edgesDS.get()', sandbox).map(e => ({
             from: e.from, to: e.to, label: e.label,
             color: e.color && e.color.color, width: e.width, dashes: e.dashes,
+            smooth: e.smooth && e.smooth.type,
         })).sort((a, b) => (a.from - b.from) || (a.to - b.to));
         out[c] = { nodes, edges };
     } catch (e) {

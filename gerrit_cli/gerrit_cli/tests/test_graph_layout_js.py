@@ -434,3 +434,21 @@ class TestNoFalseChains:
         assert pos[301][1] == pos[11][1] + LEVEL_H
         assert self._false_chains(view) == []
 
+    def test_edge_through_a_node_arcs_around_it(self, tmp_path):
+        """LU-18222's shape: the anchor's parent 101 is based on merged
+        10, below the later merged 11 and 12 in the trunk column. Its
+        edge from 10 would run straight through them."""
+        nodes = [
+            _node(10, "MERGED", submitted="2026-01-01"),
+            _node(11, "MERGED", submitted="2026-02-01"),
+            _node(12, "MERGED", submitted="2026-03-01"),
+            _node(100), _node(101),
+        ]
+        edges = [_edge(10, 101, inferred=True), _edge(101, 100)]
+        view = _render(_payload(100, nodes, edges), tmp_path, "a0m1")["a0m1"]
+        pos = _pos(view)
+        assert pos[10][0] == pos[11][0] == pos[101][0] == 0
+        smooth = {(e["from"], e["to"]): e["smooth"] for e in view["edges"]}
+        assert smooth[(10, 101)] == "curvedCW"
+        assert smooth[(101, 100)] == "cubicBezier"
+
