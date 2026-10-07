@@ -229,9 +229,9 @@ includes:
   the child sits on an older patchset of the parent (`ps53→57` —
   the child needs a rebase, and its panel says NEEDS REBASE), or the
   edge comes from an older patchset of the child that has since been
-  rebased elsewhere (`ps35 (old ps16)` — pure history). A node is
-  placed next to, and drawn attached to, the parent of its current
-  patchset; history edges only show with "Show historical parents".
+  rebased elsewhere (`ps35 (old ps16)` — pure history). Each node is
+  drawn with one incoming edge, from the parent it is placed next to:
+  the parent of its current patchset when that is in the graph.
 - **Separate-series trees** for patches sharing the anchor's topic or
   hashtags. Each group gets its own distinctive border when it's not
   wired back into the main chain by a cross-group edge.
@@ -239,9 +239,6 @@ includes:
   ones in the main chain, it stays visible by default so the chain
   isn't cut. Pure trailing-abandoned tails are hidden unless
   "Show abandoned" is checked.
-- **Historical parents**: a patch rebased across multiple parents gets
-  only its single most-relevant incoming edge by default. Toggle
-  "Show historical parents" to see the rest.
 - **Side panel**: click a node to see full details — status badge,
   verified voters with clickable Jenkins/Maloo links, code-review votes
   with reviewer names (author votes dimmed), unresolved comments (with

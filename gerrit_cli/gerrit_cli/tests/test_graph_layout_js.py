@@ -3,8 +3,8 @@
 Each test builds a small payload, renders the real page template and
 runs tests/graph_layout_harness.mjs on it, which stubs the DOM and
 vis.js and reports every node position and drawn edge per checkbox
-combination ("a<abandoned>m<layout>h<history>": a1 = abandoned
-shown, m1 = Trunk / m0 = Stacks, h1 = historical parents shown).
+combination ("a<abandoned>m<layout>": a1 = abandoned shown, m1 =
+Trunk, m0 = Stacks).
 """
 
 import json
@@ -90,7 +90,7 @@ def _render(payload: dict[str, Any], tmp_path: Path,
 
 
 def _eval(payload: dict[str, Any], tmp_path: Path, expr: str) -> Any:
-    return _run(payload, tmp_path, "a0m1h0", "--eval", expr)["eval"]
+    return _run(payload, tmp_path, "a0m1", "--eval", expr)["eval"]
 
 
 def _pos(view: dict[str, Any]) -> dict[int, tuple[int, int]]:
@@ -119,7 +119,7 @@ class TestInferredTrunkHookup:
 
     def test_holds_node_while_abandoned_parent_is_hidden(self, tmp_path):
         view = _render(self._with_abandoned_parent(3), tmp_path,
-                       "a0m1h0")["a0m1h0"]
+                       "a0m1")["a0m1"]
         pos = _pos(view)
         assert 50 not in pos
         assert pos[100][1] == pos[10][1] - LEVEL_H
@@ -127,8 +127,7 @@ class TestInferredTrunkHookup:
         assert (10, 100) in _drawn(view)
 
     def test_real_parent_owns_node_once_shown(self, tmp_path):
-        views = _render(self._with_abandoned_parent(3), tmp_path,
-                        "a1m1h0", "a1m1h1")
+        views = _render(self._with_abandoned_parent(3), tmp_path, "a1m1")
         for view in views.values():
             pos = _pos(view)
             assert pos[100][1] == pos[50][1] - LEVEL_H
@@ -149,7 +148,7 @@ class TestInferredTrunkHookup:
         """64616's shape: the abandoned parent only held an old
         patchset of the node."""
         view = _render(self._with_abandoned_parent(1), tmp_path,
-                       "a1m1h0")["a1m1h0"]
+                       "a1m1")["a1m1"]
         pos = _pos(view)
         assert pos[100][1] == pos[10][1] - LEVEL_H
         assert _drawn(view) >= {(10, 100)}
@@ -168,13 +167,13 @@ class TestAnchorBaseChain:
     def test_abandoned_history_parent_stays_hidden(self, tmp_path):
         """61965 ps23 once sat on abandoned 62508."""
         views = _render(self._anchor_on_abandoned(2), tmp_path,
-                        "a0m1h0", "a1m1h0")
-        assert 50 not in _pos(views["a0m1h0"])
-        assert 50 in _pos(views["a1m1h0"])
+                        "a0m1", "a1m1")
+        assert 50 not in _pos(views["a0m1"])
+        assert 50 in _pos(views["a1m1"])
 
     def test_abandoned_current_parent_is_shown(self, tmp_path):
-        views = _render(self._anchor_on_abandoned(5), tmp_path, "a0m1h0")
-        assert 50 in _pos(views["a0m1h0"])
+        views = _render(self._anchor_on_abandoned(5), tmp_path, "a0m1")
+        assert 50 in _pos(views["a0m1"])
 
 
 class TestChainIntoTrunkNode:
@@ -195,7 +194,7 @@ class TestChainIntoTrunkNode:
             _edge(30, 31), _edge(30, 32),
         ]
         pos = _pos(_render(_payload(10, nodes, edges), tmp_path,
-                           "a0m1h0")["a0m1h0"])
+                           "a0m1")["a0m1"])
         assert pos[21] == (pos[20][0], pos[20][1] - LEVEL_H)
         assert pos[22] == (pos[20][0], pos[20][1] - 2 * LEVEL_H)
 
@@ -225,7 +224,7 @@ class TestStacksLayout:
         return _payload(30, nodes, edges)
 
     def test_columns_stand_on_their_merged_base(self, tmp_path):
-        view = _render(self._series(), tmp_path, "a0m0h0")["a0m0h0"]
+        view = _render(self._series(), tmp_path, "a0m0")["a0m0"]
         pos = _pos(view)
         # 30 has nothing in flight on it, so it is left out
         assert 30 not in pos
@@ -237,7 +236,7 @@ class TestStacksLayout:
         assert pos[122] == (pos[121][0], -LEVEL_H)
 
     def test_narrow_subtree_next_to_base_and_forks_widen_right(self, tmp_path):
-        pos = _pos(_render(self._series(), tmp_path, "a0m0h0")["a0m0h0"])
+        pos = _pos(_render(self._series(), tmp_path, "a0m0")["a0m0"])
         x10 = pos[10][0]
         # base 10 carries 113 (one column) and 111's fork (two)
         assert pos[113] == (x10, -LEVEL_H)
@@ -260,7 +259,7 @@ class TestStacksLayout:
 
     def test_branches_at_different_heights_share_a_column(self, tmp_path):
         pos = _pos(_render(self._chain_with_branches(1), tmp_path,
-                           "a0m0h0")["a0m0h0"])
+                           "a0m0")["a0m0"])
         x = pos[201][0]
         assert pos[301] == (x + NODE_W, pos[202][1] - LEVEL_H)
         assert pos[400] == (x + NODE_W, pos[205][1] - LEVEL_H)
@@ -270,14 +269,14 @@ class TestStacksLayout:
         first; 301..303 would end right under it in the same column,
         so they move one column further out."""
         pos = _pos(_render(self._chain_with_branches(3), tmp_path,
-                           "a0m0h0")["a0m0h0"])
+                           "a0m0")["a0m0"])
         x = pos[201][0]
         assert pos[400] == (x + NODE_W, pos[205][1] - LEVEL_H)
         assert pos[301] == (x + 2 * NODE_W, pos[202][1] - LEVEL_H)
         assert pos[303] == (x + 2 * NODE_W, pos[205][1])
 
     def test_no_edges_into_merged_nodes(self, tmp_path):
-        view = _render(self._series(), tmp_path, "a0m0h1")["a0m0h1"]
+        view = _render(self._series(), tmp_path, "a0m0")["a0m0"]
         assert (10, 20) not in _drawn(view)
         assert {(20, 101), (10, 111), (10, 113)} <= _drawn(view)
 
@@ -287,13 +286,13 @@ class TestStacksLayout:
             _node(50, "ABANDONED"), _node(100),
         ]
         payload = _payload(10, nodes, [_edge(50, 100)])
-        views = _render(payload, tmp_path, "a0m0h0", "a1m0h0")
-        assert _pos(views["a0m0h0"])[100][1] == 0
-        pos = _pos(views["a1m0h0"])
+        views = _render(payload, tmp_path, "a0m0", "a1m0")
+        assert _pos(views["a0m0"])[100][1] == 0
+        pos = _pos(views["a1m0"])
         assert pos[100] == (pos[50][0], pos[50][1] - LEVEL_H)
 
     def test_merged_shown_keeps_the_trunk(self, tmp_path):
-        pos = _pos(_render(self._series(), tmp_path, "a0m1h0")["a0m1h0"])
+        pos = _pos(_render(self._series(), tmp_path, "a0m1")["a0m1"])
         assert pos[10][0] == pos[20][0] == pos[30][0] == 0
 
     def test_undrawn_node_shows_details_without_error(self, tmp_path):
@@ -301,7 +300,7 @@ class TestStacksLayout:
         leaves out; clicking one or focusing an undrawn anchor used to
         throw in vis.js."""
         payload = self._series()
-        result = _run(payload, tmp_path, "a0m0h0", "--eval",
+        result = _run(payload, tmp_path, "a0m0", "--eval",
                       "clickNode(30); actions.focusSelection();"
                       " document.getElementById('info').innerHTML")
         assert "#30" in result["eval"]

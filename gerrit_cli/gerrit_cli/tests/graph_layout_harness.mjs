@@ -2,10 +2,10 @@
 //
 //   node graph_layout_harness.mjs PAGE.html [COMBO ...] [--eval EXPR]
 //
-// COMBO is "a<0|1>m<0|1>h<0|1>": Show abandoned, the layout (m1 =
-// Trunk, m0 = Stacks; on pages from before the Trunk | Stacks switch,
-// the "Show merged" checkbox) and Show historical parents; default:
-// all 8.
+// COMBO is "a<0|1>m<0|1>": Show abandoned, and the layout (m1 = Trunk,
+// m0 = Stacks; on pages from before the Trunk | Stacks switch, the
+// "Show merged" checkbox); default: all 4. A page that still has the
+// "Show historical parents" checkbox is rendered with it unchecked.
 // Prints JSON {combos: {COMBO: {nodes: [...], edges: [...]}}, errors,
 // eval}: every node's position, label and style and every drawn edge,
 // plus the layout phase that placed each node. --eval runs EXPR in
@@ -174,11 +174,10 @@ try {
 }
 
 const combos = comboArgs.length ? comboArgs
-    : ['a0m1h0', 'a1m1h0', 'a0m1h1', 'a1m1h1',
-       'a0m0h0', 'a1m0h0', 'a0m0h1', 'a1m0h1'];
+    : ['a0m1', 'a1m1', 'a0m0', 'a1m0'];
 const out = {};
 for (const c of combos) {
-    const mm = /^a([01])m([01])h([01])$/.exec(c);
+    const mm = /^a([01])m([01])$/.exec(c);
     if (!mm) { errors.push('bad combo ' + c); continue; }
     getEl('chk-abandoned').checked = mm[1] === '1';
     if (typeof sandbox.setLayout === 'function') {
@@ -186,7 +185,7 @@ for (const c of combos) {
     } else {
         getEl('chk-merged').checked = mm[2] === '1';
     }
-    getEl('chk-history').checked = mm[3] === '1';
+    if (elements['chk-history']) getEl('chk-history').checked = false;
     try {
         vm.runInContext('globalThis.__phaseOf = {}; renderGraph()', sandbox);
         const phaseOf = vm.runInContext('globalThis.__phaseOf', sandbox);

@@ -1837,8 +1837,8 @@ function edgeChildMoved(edge) {
 // real edge before a date-inferred trunk hookup, a current-on-both-
 // sides edge before a NEEDS-REBASE one, then the highest parent
 // patchset. Shared by placement ownership (_ownedByOtherParent), the
-// rendered-edge pick (computeHistoricalSuppression) and parentOf, so
-// the three never disagree about a node's parent.
+// drawn-edge pick (computeBestVisibleParent) and parentOf, so the
+// three never disagree about a node's parent.
 function _rankIncoming(a, b) {
     const ca = edgeChildMoved(a) ? 1 : 0;
     const cb = edgeChildMoved(b) ? 1 : 0;
@@ -1934,27 +1934,11 @@ function computeActiveUp(positions, anchor) {
     return activeUp;
 }
 
-// Historical-parent suppression: a patch can have multiple incoming
-// edges because its first-parent changed across rebases. By default
-// we keep one best incoming edge per child — non-stale first,
-// otherwise highest parent_patchset. Edges whose endpoints aren't
-// visible in the current layout are excluded from the ranking so the
-// child doesn't become orphaned if the truly-current parent isn't
-// rendered in this graph. Returns a {child id -> Set<from id>} map.
-// Empty when "Show historical parents" is on — everything passes
-// through unchanged.
-function computeHistoricalSuppression(positions) {
-    const keptSources = {};
-    if (document.getElementById('chk-history').checked) return keptSources;
-    const best = computeBestVisibleParent(positions);
-    for (const child in best) keptSources[child] = new Set([best[child]]);
-    return keptSources;
-}
-
 // The winning incoming edge's source per child, among edges whose
-// both ends are laid out. Drives the historical-parent suppression
-// and limits a date-inferred hookup to being drawn only when it is
-// the one actually holding the child in place.
+// both ends are laid out: the one edge drawn into each node. A patch
+// rebased across parents has an edge from each; only the one holding
+// it in place is drawn, so a child isn't orphaned when its truly-
+// current parent isn't in the graph.
 function computeBestVisibleParent(positions) {
     const best = {};
     const byChild = {};
@@ -1975,7 +1959,6 @@ function computeBestVisibleParent(positions) {
 function renderGraph() {
     const positions = computeLayout(currentAnchor);
     const activeUp = computeActiveUp(positions, currentAnchor);
-    const keptSources = computeHistoricalSuppression(positions);
     const bestParent = computeBestVisibleParent(positions);
     const stacks = stacksLayout();
     const C = getColors();
@@ -2013,9 +1996,7 @@ function renderGraph() {
     let edgeIdx = 0;
     for (const edge of G.edges) {
         if (!positions[edge.from] || !positions[edge.to]) continue;
-        const ks = keptSources[edge.to];
-        if (ks && !ks.has(edge.from)) continue;
-        if (edge.inferred && bestParent[edge.to] !== edge.from) continue;
+        if (bestParent[edge.to] !== edge.from) continue;
         // In the stacks layout a merged node is only the base its
         // column stands on; an edge into it (from the merged patch
         // below it, or from the in-flight change an old patchset of
@@ -2588,7 +2569,6 @@ const actions = {
 document.getElementById('chk-abandoned').addEventListener('change', () => actions.refresh());
 document.getElementById('layout-trunk').addEventListener('click', () => setLayout('trunk'));
 document.getElementById('layout-stacks').addEventListener('click', () => setLayout('stacks'));
-document.getElementById('chk-history').addEventListener('change', () => actions.refresh());
 document.getElementById('btn-fit').addEventListener('click', () => actions.fit());
 document.getElementById('btn-focus').addEventListener('click', () => actions.focusSelection());
 document.getElementById('btn-search').addEventListener('click', openSearch);
