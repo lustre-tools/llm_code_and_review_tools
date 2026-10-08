@@ -525,6 +525,29 @@ class TestBuildStep:
         _add_conflicts(ctx, Repo(local), payload, logger)
         assert "conflicts" not in payload
 
+    def test_no_temporary_directory_leaves_the_graph(self, gerrit, local, monkeypatch):
+        """A sandbox whose /tmp is read-only: no conflicts, but a graph."""
+        from gerrit_cli.graph import conflicts as conflicts_mod
+        from gerrit_cli.graph.build import PhaseLogger, _add_conflicts
+
+        def no_tmp(*a, **k):
+            raise FileNotFoundError("No usable temporary directory found")
+
+        monkeypatch.setattr(conflicts_mod.tempfile, "mkdtemp", no_tmp)
+        _git(local, "remote", "add", "origin", str(gerrit.path))
+        x = gerrit.change(10, gerrit.master, {"a.c": _text({2: "x"})})
+        ctx = SimpleNamespace(
+            nodes={10: {"id": 10, "status": "NEW", "current_commit": x.commit,
+                        "current_patchset": 1, "project": "fs/lustre-release",
+                        "branch": "master"}},
+            commit_to_change_ps={x.commit: (10, 1)}, project="fs/lustre-release",
+            branch="master", base_url="https://gerrit.invalid", log=lambda *a, **k: None,
+            external_merged_submitted={},
+        )
+        payload = {"stats": {}}
+        _add_conflicts(ctx, Repo(local), payload, PhaseLogger(total=1, enabled=False))
+        assert "conflicts" not in payload
+
     def test_a_bad_repository_fails_before_any_gerrit_query(self, tmp_path):
         client = MagicMock()
         with pytest.raises(ConflictCheckError):

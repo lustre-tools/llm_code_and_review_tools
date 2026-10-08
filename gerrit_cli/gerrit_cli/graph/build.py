@@ -2388,13 +2388,15 @@ def _add_conflicts(ctx: BuildContext, repo: Repo, payload: dict[str, Any],
                    logger: "PhaseLogger") -> None:
     """The trial merges as payload["conflicts"]. When they cannot run --
     the remote refuses the branch (an internal project fetched without
-    credentials), or cannot be reached -- the graph is still what was
-    asked for: it is built without conflicts, and the log says why.
-    A path that is not a repository fails earlier, before any query."""
+    credentials), cannot be reached, or there is nowhere to put the
+    merges (a sandbox with no writable temporary directory) -- the graph
+    is still what was asked for: it is built without conflicts, and the
+    log says why. A path that is not a repository fails earlier, before
+    any query."""
     logger.start(f"Trial merges on {ctx.branch} ({repo.path})")
     try:
         conflicts = _check_conflicts(ctx, repo)
-    except ConflictCheckError as exc:
+    except (ConflictCheckError, OSError) as exc:
         logger.done(f"skipped: {exc}")
         return
     payload["conflicts"] = conflicts
