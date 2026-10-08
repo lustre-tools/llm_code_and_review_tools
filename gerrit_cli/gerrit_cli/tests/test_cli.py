@@ -2304,6 +2304,23 @@ class TestCmdGraphErrors:
         assert "Could not parse" in out["message"]
 
 
+class TestCmdGraphConflicts:
+    def test_conflicts_repo_reaches_the_build(self, tmp_path):
+        from gerrit_cli.cli import build_parser, cmd_graph
+
+        args = build_parser().parse_args(
+            ["graph", "12345", "--no-open", "--conflicts", "/src/lustre"])
+        with patch('gerrit_cli.cli.GerritCommentsClient') as MockClient, \
+             patch('gerrit_cli.graph.build_graph',
+                   return_value={"stats": {}}) as build, \
+             patch('gerrit_cli.graph.generate_html', return_value=""), \
+             patch('gerrit_cli.graph.save_and_open',
+                   return_value=str(tmp_path / "g.html")):
+            MockClient.parse_gerrit_url.return_value = ("https://gerrit.invalid", 12345)
+            cmd_graph(args)
+        assert build.call_args.kwargs["conflicts_repo"] == "/src/lustre"
+
+
 class TestVersion:
     """describe and __version__ report the installed package's version."""
 

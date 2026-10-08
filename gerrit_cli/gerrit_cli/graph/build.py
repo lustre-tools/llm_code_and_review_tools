@@ -23,6 +23,7 @@ from typing import Any
 from urllib.parse import quote
 
 from ..client import GerritCommentsClient
+from .conflicts import Patch, Repo, check_conflicts
 from .edges import _break_cycles, _collect_revisions
 from .nodes import _make_node, _update_node_meta, subject_ticket
 from .summary import add_timeline, series_summary
@@ -2234,6 +2235,32 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
     }
 
 
+def _check_conflicts(ctx: BuildContext, repo: Repo) -> dict[str, Any]:
+    """Trial merges of the in-flight changes (see conflicts.py)."""
+    inflight = {
+        cn: n for cn, n in ctx.nodes.items()
+        if n["status"] == "NEW" and n.get("current_commit")
+        and n.get("project", ctx.project) == ctx.project
+        and n.get("branch", ctx.branch) == ctx.branch
+    }
+    owner_of = {
+        h: cn for h, (cn, _ps) in ctx.commit_to_change_ps.items() if cn in inflight
+    }
+    remote = repo.resolve_remote(ctx.project) or f"{ctx.base_url}/{ctx.project}"
+    result = check_conflicts(
+        repo, remote, ctx.branch,
+        [Patch(cn, n["current_patchset"], n["current_commit"])
+         for cn, n in sorted(inflight.items())],
+        owner_of, log=ctx.log,
+    )
+    for cn, n in sorted(ctx.nodes.items()):
+        if n["status"] == "NEW" and cn not in inflight:
+            reason = ("no current commit" if not n.get("current_commit")
+                      else f"not on {ctx.project} {ctx.branch}")
+            result["results"][str(cn)] = {"status": "skipped", "reason": reason}
+    return result
+
+
 # ─── Public entry point ─────────────────────────────────────────────────
 
 
@@ -2335,6 +2362,7 @@ def build_graph(
     extra_tickets: list[str] | None = None,
     cross_project_branch: bool = False,
     name: str | None = None,
+    conflicts_repo: str | None = None,
 ) -> dict[str, Any]:
     """Build the full series graph with stale branch information.
 
@@ -2357,10 +2385,16 @@ def build_graph(
             expansion (topic/hashtag/commit-parent discovery) is
             scoped to the anchor's project AND branch. Set True to
             include results from any project/branch on the same host.
+        conflicts_repo: A local clone of the project. When given, the
+            branch and the in-flight changes are fetched into it and
+            trial-merged against the branch tip and against each other
+            (payload key "conflicts").
 
     Returns a dict ready to be embedded as JSON in the HTML template.
     """
-    logger = PhaseLogger(total=_TOTAL_PHASES, enabled=progress)
+    # Checked before the Gerrit queries, which take minutes on big graphs.
+    repo = Repo(conflicts_repo) if conflicts_repo else None
+    logger = PhaseLogger(total=_TOTAL_PHASES + (repo is not None), enabled=progress)
     ctx = BuildContext(
         client=client,
         change_number=change_number,
@@ -2449,6 +2483,14 @@ def build_graph(
     payload = _assemble_payload(ctx)
     if name:
         payload["name"] = name
+    if repo is not None:
+        logger.start(f"Trial merges on {ctx.branch} ({repo.path})")
+        conflicts = _check_conflicts(ctx, repo)
+        payload["conflicts"] = conflicts
+        logger.done(
+            f"{sum(r['status'] == 'conflict' for r in conflicts['results'].values())}"
+            f" conflict with {ctx.branch}, {len(conflicts['pairs'])} conflicting pairs"
+        )
     stats = payload["stats"]
     logger.summary(
         f"{stats['node_count']} nodes · "

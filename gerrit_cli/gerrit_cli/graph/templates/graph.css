@@ -185,6 +185,7 @@ body.light div.vis-network div.vis-navigation div.vis-button:hover {
     font-size: 10px; padding: 2px 5px; border-radius: 4px; white-space: nowrap;
 }
 .panel .ci .ssub { color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.panel .cfiles { color: var(--text-muted); font-size: 11px; margin: 0 0 6px 11px; word-break: break-all; }
 
 .sbadge-NEW { background: #1f6feb; color: #fff; }
 .sbadge-MERGED { background: #238636; color: #fff; }

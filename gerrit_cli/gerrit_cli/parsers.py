@@ -1164,6 +1164,18 @@ def add_graph_parser(subparsers):
              "from another repo.",
     )
     parser.add_argument(
+        "--conflicts",
+        default=None,
+        metavar="REPO",
+        help="Trial-merge the in-flight changes in REPO, a local clone "
+             "of the project: fetches the branch and the changes, "
+             "then tries every change on the branch tip (after the "
+             "changes it stands on) and every two changes that edit "
+             "a common file together. Adds the 'Show conflicts' "
+             "checkbox and a Conflicts section to the node panel. "
+             "Only fetched objects are added to REPO.",
+    )
+    parser.add_argument(
         "--name",
         default=None,
         metavar="LABEL",

@@ -262,6 +262,7 @@ def cmd_graph(args):
             extra_tickets=extra_tickets,
             cross_project_branch=cross_project_branch,
             name=name,
+            conflicts_repo=getattr(args, "conflicts", None),
         )
 
         html_content = generate_html(graph_data)

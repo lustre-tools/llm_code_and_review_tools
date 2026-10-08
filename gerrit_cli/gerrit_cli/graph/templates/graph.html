@@ -23,6 +23,7 @@
         <button id="tab-stats" role="tab">Stats</button>
     </span>
     <label class="graph-only"><input type="checkbox" id="chk-abandoned"> Show abandoned</label>
+    <label class="graph-only" id="lbl-conflicts" title="Red edges join two in-flight changes that conflict when both land; a red border marks a change that does not apply on the branch. Click a change for the files."><input type="checkbox" id="chk-conflicts"> Show conflicts</label>
     <span class="tabs graph-only" role="group" title="Trunk: merged patches in one column in landing order, in-flight work branching off it. Stacks: one column per in-flight branch, standing on the merged patch it branches off.">
         <button id="layout-trunk" class="active">Trunk</button>
         <button id="layout-stacks">Stacks</button>

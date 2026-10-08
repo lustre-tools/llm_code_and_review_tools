@@ -105,6 +105,9 @@ if (G.name) {
     document.getElementById('title').textContent = `Series Graph — #${G.anchor}`;
 }
 
+// Only a build with --conflicts has trial-merge results.
+if (!G.conflicts) document.getElementById('lbl-conflicts').style.display = 'none';
+
 // Build the legend from the palette. Re-rendered on theme toggle.
 renderLegend();
 
@@ -177,6 +180,10 @@ function setLayout(mode, refresh = true) {
     document.getElementById('layout-trunk').classList.toggle('active', mode === 'trunk');
     document.getElementById('layout-stacks').classList.toggle('active', mode === 'stacks');
     if (refresh) actions.refresh();
+}
+
+function showConflictsEnabled() {
+    return !!G.conflicts && document.getElementById('chk-conflicts').checked;
 }
 
 function nodeVisible(id) {
@@ -1634,6 +1641,7 @@ function getColors() {
         edgeFontNormal: light ? '#57606a' : '#6e7681',
         edgeFontStale: '#d29922',
         edgeStroke: light ? '#ffffff' : '#0d1117',
+        conflict: light ? '#cf222e' : '#ff4d4f',
     };
 }
 
@@ -1659,6 +1667,7 @@ function legendItems() {
         { kind: 'border', label: 'master-next (queued)', color: C.STATUS.MERGED.border },
         { kind: 'group', label: 'Edges', marginLeft: '8px' },
         { kind: 'fill', label: 'Stale',       color: C.edgeStale },
+        ...(G.conflicts ? [{ kind: 'fill', label: 'Conflict', color: C.conflict }] : []),
     ];
 }
 
@@ -2014,6 +2023,27 @@ function styleForEdge(edge, edgeId, flags, C) {
     };
 }
 
+// Two in-flight changes that conflict when both land. Undirected, and
+// curved so it never hides under a parent edge between the same two.
+function styleForConflict(pair, C) {
+    return {
+        id: 'x' + pair.a + '-' + pair.b,
+        from: pair.a,
+        to: pair.b,
+        color: { color: C.conflict, highlight: C.conflict, hover: C.conflict },
+        width: 4,
+        arrows: { to: { enabled: false } },
+        dashes: false,
+        title: 'Conflict in ' + pair.files.join(', '),
+        smooth: { type: 'curvedCW', roundness: 0.25 },
+    };
+}
+
+// The --conflicts trial-merge result of a change, if it was checked.
+function conflictResult(id) {
+    return G.conflicts ? G.conflicts.results[String(id)] : undefined;
+}
+
 // ─── RENDER HELPERS ───
 
 // True when the straight line from `from` to `to` runs through another
@@ -2073,6 +2103,7 @@ function renderGraph() {
     const activeUp = computeActiveUp(positions, currentAnchor);
     const bestParent = computeBestVisibleParent(positions);
     const stacks = stacksLayout();
+    const conflicts = showConflictsEnabled();
     const C = getColors();
 
     // Build vis.js nodes
@@ -2098,9 +2129,17 @@ function renderGraph() {
         // render with its real status color, not dimmed.
         const isBase = baseChainSet.has(id);
 
-        visNodes.push(styleForNode(node, {
+        const style = styleForNode(node, {
             isAnchor, isMain, isAbove, isSeparate, isBase,
-        }, pos, C));
+        }, pos, C);
+        // The label says it too: a Maloo -1 node is red already.
+        if (conflicts && (conflictResult(id) || {}).status === 'conflict') {
+            style.color.border = C.conflict;
+            style.borderWidth = 4;
+            style.label = style.label.replace(/^[^\n]*/,
+                m => m + '  \u2717 conflicts with ' + G.conflicts.branch);
+        }
+        visNodes.push(style);
     }
 
     // Build vis.js edges. G.edges is already deduped in the Python
@@ -2139,6 +2178,12 @@ function renderGraph() {
             if (stackOwner[edge.to] !== edge.from) continue;
             visEdges.push(styleForEdge(edge, edgeIdx, { context: true }, C));
             edgeIdx++;
+        }
+    }
+    if (conflicts) {
+        for (const pair of G.conflicts.pairs) {
+            if (!positions[pair.a] || !positions[pair.b]) continue;
+            visEdges.push(styleForConflict(pair, C));
         }
     }
 
@@ -2492,6 +2537,8 @@ function showNodeInfo(id) {
             </div>
         </div>` : ''}
 
+        ${conflictSection(node)}
+
         ${above.length > 0 ? `
         <h2>Dependents (${above.length})</h2>
         <div class="chain">
@@ -2504,6 +2551,68 @@ function showNodeInfo(id) {
             ${below.map(b => chainItem(b.node, b.edge, node.id, true)).join('')}
         </div>` : ''}
     `;
+}
+
+// Panel section of a --conflicts build: whether the change lands on
+// the branch after the changes below it, and which other in-flight
+// changes it collides with, itself or through a change below it.
+function conflictSection(node) {
+    const res = conflictResult(node.id);
+    if (!res) return '';
+    const C = getColors();
+    const branch = esc(G.conflicts.branch);
+    const link = id => `<a href="#" onclick="clickNode(${id});return false">#${id}</a>`;
+    const files = list => list.map(f => `<code>${esc(f)}</code>`).join(', ');
+    const below = [];
+    for (let u = res.under; u !== undefined && below.length < 200; u = (conflictResult(u) || {}).under) {
+        below.push(u);
+    }
+    let onBranch;
+    if (res.status === 'clean') {
+        onBranch = `<span style="color:#3fb950;font-weight:600">Applies</span>`
+            + (below.length ? ` after the ${below.length} change${below.length > 1 ? 's' : ''} below it` : '')
+            + (res.empty ? `; nothing left to apply, it is already on ${branch}` : '');
+    } else if (res.status === 'conflict') {
+        onBranch = `<span style="color:${C.conflict};font-weight:600">Does not apply</span>`
+            + (below.length ? ` after the ${below.length} change${below.length > 1 ? 's' : ''} below it` : '')
+            + `: ${files(res.files)}`;
+    } else if (res.status === 'blocked') {
+        onBranch = `Blocked: ${link(res.by)} below it does not apply`;
+    } else {
+        onBranch = `Not checked: ${esc(res.reason || res.status)}`;
+    }
+    const outside = (G.context_edges || [])
+        .filter(e => e.to === node.id && nodeMap[e.from] && nodeMap[e.from].status === 'NEW')
+        .map(e => e.from);
+    const stack = new Set([node.id, ...below]);
+    const rows = [];
+    for (const via of [node.id, ...below]) {
+        for (const p of G.conflicts.pairs) {
+            const other = p.a === via ? p.b : (p.b === via ? p.a : null);
+            if (other === null || stack.has(other) || !nodeMap[other]) continue;
+            rows.push(chainItem(nodeMap[other], null, node.id)
+                + `<div class="cfiles">${via !== node.id ? `through ${link(via)} below it: ` : ''}${files(p.files)}</div>`);
+        }
+    }
+    let others;
+    if (rows.length) {
+        others = `<div class="chain">${rows.join('')}</div>`;
+    } else if (res.status === 'clean') {
+        others = `<div class="fv">None</div>`;
+    } else {
+        others = `<div class="fv" style="color:var(--text-muted);font-size:12px">Not tried: it does not land on ${branch}.</div>`;
+    }
+    return `
+        <h2>Conflicts</h2>
+        <div class="field">
+            <div class="fl">On ${branch} at ${esc(G.conflicts.tip.substring(0, 10))}</div>
+            <div class="fv">${onBranch}</div>
+            ${outside.length ? `<div class="fv" style="color:var(--text-muted);font-size:12px">Tried without ${outside.map(link).join(', ')} below it, which is not in this graph.</div>` : ''}
+        </div>
+        <div class="field">
+            <div class="fl">With other in-flight changes${rows.length ? ` (${rows.length})` : ''}</div>
+            ${others}
+        </div>`;
 }
 
 // Panel for a stacks-view ancestor that isn't part of the graph.
@@ -2718,6 +2827,7 @@ const actions = {
 };
 
 document.getElementById('chk-abandoned').addEventListener('change', () => actions.refresh());
+document.getElementById('chk-conflicts').addEventListener('change', () => actions.refresh());
 document.getElementById('layout-trunk').addEventListener('click', () => setLayout('trunk'));
 document.getElementById('layout-stacks').addEventListener('click', () => setLayout('stacks'));
 document.getElementById('btn-fit').addEventListener('click', () => actions.fit());

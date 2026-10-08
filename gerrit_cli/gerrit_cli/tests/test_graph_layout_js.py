@@ -525,3 +525,88 @@ class TestTrunkSpacing:
                            "a0m1")["a0m1"])
         assert pos[11][1] - pos[12][1] == 3 * LEVEL_H
 
+
+
+class TestConflicts:
+    """'Show conflicts' and the panel section of a --conflicts build."""
+
+    def _payload(self, with_conflicts: bool = True):
+        nodes = [_node(10, "MERGED", submitted="2026-01-01"),
+                 _node(101), _node(102), _node(103), _node(104)]
+        edges = [_edge(10, 101), _edge(101, 102), _edge(10, 103), _edge(10, 104)]
+        payload = _payload(101, nodes, edges)
+        if with_conflicts:
+            payload["conflicts"] = {
+                "branch": "master", "tip": "4a7bddaf15ceb6d4fbe9e54cef4e2cf23a98263f",
+                "results": {
+                    "101": {"status": "clean"},
+                    "102": {"status": "conflict", "files": ["x.c"], "under": 101},
+                    "103": {"status": "clean"},
+                    "104": {"status": "clean"},
+                },
+                "pairs": [{"a": 101, "b": 103, "files": ["a.c"]}],
+                "pairs_tried": 2, "pair_errors": 0,
+            }
+        return payload
+
+    _VIEWS = """JSON.stringify(['trunk', 'stacks'].flatMap(mode => [false, true].map(on => {
+        setLayout(mode, false);
+        document.getElementById('chk-conflicts').checked = on;
+        renderGraph();
+        const n = nodesDS.get(102);
+        return {mode, on,
+                edges: edgesDS.get().filter(e => String(e.id).startsWith('x'))
+                    .map(e => [e.from, e.to, e.width, e.color.color, e.arrows.to.enabled, e.title]),
+                label: n.label, border: n.borderWidth};
+    })))"""
+
+    def _views(self, payload, tmp_path):
+        return json.loads(_eval(payload, tmp_path, self._VIEWS))
+
+    def _panel(self, payload, tmp_path, cn):
+        return _eval(payload, tmp_path,
+                     f"showNodeInfo({cn}), document.getElementById('info').innerHTML")
+
+    def test_checkbox_only_with_trial_merges(self, tmp_path):
+        expr = "document.getElementById('lbl-conflicts').style.display || ''"
+        assert _eval(self._payload(False), tmp_path, expr) == "none"
+        assert _eval(self._payload(), tmp_path, expr) == ""
+
+    def test_conflict_edges_only_when_checked(self, tmp_path):
+        for view in self._views(self._payload(), tmp_path):
+            if view["on"]:
+                assert view["edges"] == [
+                    [101, 103, 4, "#ff4d4f", False, "Conflict in a.c"]], view["mode"]
+            else:
+                assert view["edges"] == [], view["mode"]
+
+    def test_a_change_that_does_not_apply_is_marked(self, tmp_path):
+        for view in self._views(self._payload(), tmp_path):
+            marked = "✗ conflicts with master" in view["label"].split("\n")[0]
+            assert marked == view["on"], view["mode"]
+            assert (view["border"] == 4) == view["on"], view["mode"]
+
+    def test_without_trial_merges_nothing_is_drawn(self, tmp_path):
+        for view in self._views(self._payload(False), tmp_path):
+            assert view["edges"] == [] and view["border"] != 4
+        assert "Conflicts" not in self._panel(self._payload(False), tmp_path, 101)
+
+    def test_panel_section_sits_above_dependents(self, tmp_path):
+        info = self._panel(self._payload(), tmp_path, 101)
+        assert info.index("<h2>Conflicts</h2>") < info.index("<h2>Dependents")
+        assert "Applies" in info and "4a7bddaf15" in info
+        section = info[info.index("<h2>Conflicts"):info.index("<h2>Dependents")]
+        assert "clickNode(103)" in section and "<code>a.c</code>" in section
+
+    def test_panel_lists_conflicts_through_the_changes_below(self, tmp_path):
+        info = self._panel(self._payload(), tmp_path, 102)
+        assert "Does not apply" in info and "after the 1 change below it" in info
+        assert "<code>x.c</code>" in info
+        assert "clickNode(103)" in info
+        assert "through <a href=\"#\" onclick=\"clickNode(101)" in info
+
+    def test_panel_without_conflicts_and_for_merged_changes(self, tmp_path):
+        info = self._panel(self._payload(), tmp_path, 104)
+        section = info[info.index("<h2>Conflicts"):]
+        assert '<div class="fv">None</div>' in section
+        assert "Conflicts" not in self._panel(self._payload(), tmp_path, 10)

@@ -56,7 +56,7 @@ _gerrit_completions() {
         explain) opts="--help -h" ;;
         find-user) opts="--help --limit --pretty -h -n -p" ;;
         finish-patch) opts="--help --stay -h" ;;
-        graph) opts="--branch --comments --cross-project --help --include-hashtag --include-topic --name --no-open --output --pretty --skip-ci-details --skip-hashtag --skip-topic --ticket -h -o -p" ;;
+        graph) opts="--branch --comments --conflicts --cross-project --help --include-hashtag --include-topic --name --no-open --output --pretty --skip-ci-details --skip-hashtag --skip-topic --ticket -h -o -p" ;;
         hashtag) opts="--add --help --pretty --remove -a -h -p -r" ;;
         i|interactive) opts="--help -h" ;;
         info) opts="--help --pretty --show-bots -h -p" ;;

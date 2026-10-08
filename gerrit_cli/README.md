@@ -195,6 +195,10 @@ gc graph LU-18222 --branch b_es7_0    # non-master ticket anchor
 # Keep your own anchor and add a ticket as an extra expansion signal
 # (works like --include-hashtag, subject-match semantics)
 gc graph 61962 --ticket LU-18222,LU-17916
+
+# Trial-merge the in-flight changes against master and each other,
+# in a local clone of the project (see "Conflicts" below)
+gc graph 61962 --conflicts ~/lustre-release
 ```
 
 The generated HTML is a single file (all app CSS/JS inlined) but loads
@@ -293,6 +297,26 @@ includes:
   Each node also carries `opened_at`, `closed_at`, `closed_approx`
   (no close event was found; the last update time stands in),
   `last_activity` and `first_review_at`.
+- **Conflicts** (`--conflicts REPO`): the build fetches the branch tip
+  and the in-flight changes into REPO, a local clone of the project
+  (objects only; the remote is the one whose URL ends in the project,
+  else the Gerrit URL), and trial-merges them the way Gerrit's
+  cherry-pick submit lands them: each change's own diff picked onto
+  the tip after the in-flight changes it stands on (`git merge-tree`,
+  in memory; the merge results go to a temporary object directory, so
+  REPO only gains what was fetched). That says per change whether it
+  applies, does not apply (with the conflicting files) or is blocked by
+  a change below it that does not apply. Then every two changes that
+  both apply, neither standing on the other and whose own diffs touch a
+  common file, are landed together; a conflict is reported between the
+  two changes whose own diffs collide, not again for the changes above
+  them. "Show conflicts" draws those pairs as thick red edges and marks
+  a change that does not apply with a red border and "✗ conflicts with
+  master"; the node panel gets a Conflicts section above Dependents,
+  including the conflicts it inherits through the changes below it.
+  The results are in the payload as `conflicts` (`tip`, `results` per
+  change, `pairs`); nothing is counted in the stats. Needs git 2.40 or
+  newer. A few seconds on the portal graphs, mostly the fetch.
 - **Dark/Light mode**: toggle with the "Light Mode" / "Dark Mode" button
   in the toolbar.
 - **Keyboard shortcuts**: `F` = fit to view, `Z` = focus selected node,
