@@ -275,6 +275,41 @@ class TestStacksLayout:
         assert pos[301] == (x + 2 * NODE_W, pos[202][1] - LEVEL_H)
         assert pos[303] == (x + 2 * NODE_W, pos[205][1])
 
+    def _lone_stack_with_context(self):
+        """100 stands on nothing in the graph; the build walked its
+        ancestry: 50 (in flight, outside the graph) on merged 40."""
+        nodes = [_node(10, "MERGED", submitted="2026-01-01"), _node(100)]
+        payload = _payload(100, nodes, [])
+        payload["context_nodes"] = [
+            dict(_node(50), context=True, context_of=[100]),
+            dict(_node(40, "MERGED"), context=True, context_of=[100]),
+        ]
+        payload["context_edges"] = [_edge(50, 100), _edge(40, 50)]
+        return payload
+
+    def test_lone_stack_stands_on_its_faded_ancestry(self, tmp_path):
+        views = _render(self._lone_stack_with_context(), tmp_path,
+                        "a0m0", "a0m1")
+        pos = _pos(views["a0m0"])
+        assert pos[40][1] == 0
+        assert pos[50] == (pos[40][0], -LEVEL_H)
+        assert pos[100] == (pos[40][0], -2 * LEVEL_H)
+        assert {(40, 50), (50, 100)} <= _drawn(views["a0m0"])
+        faded = {n["id"]: n for n in views["a0m0"]["nodes"]}
+        assert faded[50]["opacity"] == faded[40]["opacity"] == 0.6
+        assert "CR:" not in faded[50]["label"]
+        # the trunk view never shows them
+        assert not {40, 50} & set(_pos(views["a0m1"]))
+
+    def test_context_counts_nowhere(self, tmp_path):
+        result = _run(self._lone_stack_with_context(), tmp_path, "a0m0",
+                      "--eval", "document.getElementById('stats').innerHTML"
+                      " + '|' + (showNodeInfo(50),"
+                      " document.getElementById('info').innerHTML)")
+        stats, info = result["eval"].split("|", 1)
+        assert "In-flight: 1<" in stats
+        assert "Not part of this graph" in info and "#100" in info
+
     def test_no_edges_into_merged_nodes(self, tmp_path):
         view = _render(self._series(), tmp_path, "a0m0")["a0m0"]
         assert (10, 20) not in _drawn(view)

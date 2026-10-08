@@ -1773,6 +1773,165 @@ def _hook_orphan_main_chains(
     return added
 
 
+_CONTEXT_MAX_HOPS = 20
+
+
+def _commit_parent(ctx: BuildContext, cn: int, commit: str) -> tuple[str, str]:
+    """(sha, subject) of the first parent of `commit`, a patchset of
+    change `cn`: from the revisions already fetched (subject unknown),
+    else one /commit lookup."""
+    parent = ctx.revision_parents.get(commit, "")
+    if parent:
+        return parent, ""
+    return _commit_parent_lookup(ctx, cn, commit)
+
+
+def _commit_parent_lookup(ctx: BuildContext, cn: int, commit: str) -> tuple[str, str]:
+    info = ctx.client.rest.get(f"/changes/{cn}/revisions/{commit}/commit")
+    parents = (info or {}).get("parents") or []
+    if not parents:
+        return "", ""
+    return parents[0].get("commit", ""), parents[0].get("subject", "")
+
+
+def _commit_owner(
+    ctx: BuildContext, sha: str,
+) -> tuple[int, int, dict[str, Any] | None] | None:
+    """(change, patchset, change payload or None) owning commit `sha`
+    in the anchor's project, or None when no change does. The payload
+    is None for a change already in the graph."""
+    known = ctx.commit_to_change_ps.get(sha)
+    if known and known[0] in ctx.nodes:
+        return known[0], known[1], None
+    found = ctx.client.rest.get(
+        f"/changes/?q=commit:{sha}&o=ALL_REVISIONS&o=DETAILED_ACCOUNTS"
+    ) or []
+    for change in found:
+        if ctx.project and change.get("project") != ctx.project:
+            continue
+        rev = (change.get("revisions") or {}).get(sha) or {}
+        return change.get("_number", 0), rev.get("_number", 0), change
+    return None
+
+
+def _context_node(ctx: BuildContext, change: dict[str, Any]) -> dict[str, Any]:
+    cn = change["_number"]
+    revs = change.get("revisions") or {}
+    latest = max((r.get("_number", 0) for r in revs.values()), default=0)
+    node = _make_node(
+        cn, change.get("subject", ""), change.get("status", ""), latest,
+        change.get("owner", {}).get("name", ""), ctx.base_url,
+        project=change.get("project") or ctx.project or _DEFAULT_PROJECT,
+        branch=change.get("branch", ""),
+    )
+    _update_node_meta(node, change)
+    node["context"] = True
+    node["context_of"] = []
+    return node
+
+
+def _master_commit_node(
+    ctx: BuildContext, node_id: int, sha: str, subject: str,
+) -> dict[str, Any]:
+    """A master commit no change owns (a release commit pushed
+    directly). It gets a negative id, so it can't clash with a change."""
+    project = ctx.project or _DEFAULT_PROJECT
+    return {
+        "id": node_id, "subject": subject or sha[:10], "status": "MERGED",
+        "current_patchset": 0, "current_commit": sha, "ticket": "",
+        "topic": "", "hashtags": [], "author": "", "owner": "",
+        "url": f"{ctx.base_url}/plugins/gitiles/{project}/+/{sha}",
+        "project": project, "branch": "", "review": {},
+        "context": True, "context_of": [], "master_commit": True,
+    }
+
+
+def _stack_context(
+    ctx: BuildContext,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Ancestry of the stacks that stand on nothing, down to a merged
+    change, for the stacks view only.
+
+    An in-flight node with no incoming edge from an in-flight or merged
+    node (a date-based trunk hookup counts) has no base in the stacks
+    view: its parent change is outside the graph, was never fetched
+    (changes found by _discover_missing_nodes come without parents), or
+    is a master commit no change owns. Walk its current patchset's
+    parents one commit at a time until a merged change, a master
+    commit, a change already in the graph, or _CONTEXT_MAX_HOPS (the
+    last node is then marked `context_cut`). Changes outside the graph
+    met on the way become context nodes.
+
+    They are returned apart from ctx.nodes and ctx.edges, so they count
+    nowhere (status counts, summary, Stats tab) and the trunk layout
+    never sees them.
+    """
+    connected = {
+        e["to"] for e in ctx.edges
+        if ctx.nodes.get(e["from"], {}).get("status") in ("NEW", "MERGED")
+    }
+    roots = [
+        cn for cn, n in sorted(ctx.nodes.items())
+        if n.get("status") == "NEW" and cn not in connected
+    ]
+    context: dict[int, dict[str, Any]] = {}
+    master_ids: dict[str, int] = {}
+    edges: list[dict[str, Any]] = []
+    seen = {(e["from"], e["to"]) for e in ctx.edges}
+
+    def node_of(cn: int) -> dict[str, Any]:
+        return ctx.nodes.get(cn) or context[cn]
+
+    for root in roots:
+        node = ctx.nodes[root]
+        child, child_ps = root, node.get("current_patchset", 0)
+        commit = node.get("current_commit", "")
+        try:
+            for hop in range(_CONTEXT_MAX_HOPS + 1):
+                if not commit:
+                    break
+                if hop == _CONTEXT_MAX_HOPS:
+                    if child in context:
+                        context[child]["context_cut"] = True
+                    break
+                parent_sha, parent_subject = _commit_parent(ctx, child, commit)
+                if not parent_sha:
+                    break
+                owner = _commit_owner(ctx, parent_sha)
+                if owner is None:
+                    if parent_sha not in master_ids:
+                        if not parent_subject and child > 0:
+                            _, parent_subject = _commit_parent_lookup(
+                                ctx, child, commit)
+                        master_ids[parent_sha] = -(len(master_ids) + 1)
+                        mid = master_ids[parent_sha]
+                        context[mid] = _master_commit_node(
+                            ctx, mid, parent_sha, parent_subject)
+                    owner = (master_ids[parent_sha], 0, None)
+                pcn, pps, change = owner
+                if pcn == child:
+                    break
+                in_graph = pcn in ctx.nodes
+                if not in_graph and pcn not in context:
+                    context[pcn] = _context_node(ctx, change)
+                parent = node_of(pcn)
+                if (pcn, child) not in seen:
+                    seen.add((pcn, child))
+                    edges.append(_make_edge(
+                        pcn, pps, parent.get("current_patchset", pps),
+                        child, child_ps,
+                        node_of(child).get("current_patchset", child_ps),
+                    ))
+                if not in_graph and root not in context[pcn]["context_of"]:
+                    context[pcn]["context_of"].append(root)
+                if in_graph or parent.get("status") == "MERGED":
+                    break
+                child, child_ps, commit = pcn, pps, parent_sha
+        except Exception as e:  # context is optional; keep the graph
+            ctx.log(f" (stack context for {root}: {e})", end="")
+    return list(context.values()), edges
+
+
 def _prune_unrelated_merged(ctx: BuildContext) -> tuple[int, int]:
     """Drop merged patches that have nothing to do with the series.
 
@@ -2014,6 +2173,7 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
     late_cycles = _break_late_cycles(ctx.edges)
     if late_cycles and ctx.logger is not None:
         ctx.logger.note(f"{late_cycles} late cycle edge(s) removed")
+    context_nodes, context_edges = _stack_context(ctx)
     generated_ts = int(time.time())
     for n in ctx.nodes.values():
         add_timeline(n)
@@ -2037,6 +2197,11 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
         # merged below, newer merged (and in-flight descendants)
         # above.
         "merged_trunk": merged_trunk,
+        # Stacks view only: ancestors of stacks that stand on nothing,
+        # down to a merged change. Kept apart from nodes/edges so they
+        # count nowhere and the trunk layout never sees them.
+        "context_nodes": context_nodes,
+        "context_edges": context_edges,
         "generated_at": generated_at,
         # Epoch seconds of the build; the Stats tab measures ages
         # (open for, idle for, "last 30 days") against this, not the

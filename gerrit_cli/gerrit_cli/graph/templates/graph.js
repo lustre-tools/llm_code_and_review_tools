@@ -20,6 +20,15 @@ G.edges.forEach(e => {
     edgesTo[e.to] = edgesTo[e.to] || [];
     edgesTo[e.to].push(e);
 });
+// Stacks view only: ancestors of stacks that stand on nothing, down to
+// a merged change (build.py _stack_context). In nodeMap so the panel
+// and styling find them; never in G.nodes or G.edges, so they count
+// nowhere and the trunk layout never sees them.
+const contextEdgesTo = {};
+for (const n of (G.context_nodes || [])) nodeMap[n.id] = n;
+for (const e of (G.context_edges || [])) {
+    (contextEdgesTo[e.to] = contextEdgesTo[e.to] || []).push(e);
+}
 // parentOf follows the same ranking as the rendered incoming edge;
 // the anchor column, the main-chain walk and the info panel all
 // read it, and a history edge listed last in the payload must not
@@ -1331,11 +1340,15 @@ function _layoutTrunkSideBranches(ctx) {
 // merged patch keeps its own column and the edge crosses over.
 
 const STACK_GAP = NODE_W / 2;
+// child id -> the parent it stands on in the last stacks layout; the
+// renderer draws context edges only where they hold a node.
+let stackOwner = {};
 
 function _stacksForest() {
     const kidsOf = {};
     const owner = {};
     const bases = new Set();
+    const context = new Set();
     for (const n of G.nodes) {
         const id = n.id;
         if (n.status === 'MERGED' || !nodeVisible(id)) continue;
@@ -1348,25 +1361,58 @@ function _stacksForest() {
         owner[id] = best.from;
         if (nodeMap[best.from].status === 'MERGED') bases.add(best.from);
     }
-    const kept = (id) => bases.has(id)
-        || (nodeMap[id].status !== 'MERGED' && nodeVisible(id));
+    // A stack that still stands on nothing gets the ancestry the build
+    // walked for it, faded, down to the merged change it is based on.
+    for (const n of G.nodes) {
+        if (n.status === 'MERGED' || !nodeVisible(n.id)) continue;
+        let cur = n.id;
+        for (let i = 0; i < 64 && owner[cur] === undefined; i++) {
+            const e = (contextEdgesTo[cur] || []).find(ce => nodeMap[ce.from]
+                && (nodeMap[ce.from].context || nodeVisible(ce.from)));
+            if (!e) break;
+            owner[cur] = e.from;
+            const p = nodeMap[e.from];
+            if (p.context) context.add(e.from);
+            if (p.status === 'MERGED') {
+                bases.add(e.from);
+                break;
+            }
+            if (!p.context) break;  // a node of the graph: placed on its own
+            cur = e.from;
+        }
+    }
+    const kept = (id) => bases.has(id) || context.has(id)
+        || (nodeMap[id].status !== 'MERGED' && !nodeMap[id].context
+            && nodeVisible(id));
     for (const id in owner) {
         const p = owner[id];
         (kidsOf[p] = kidsOf[p] || []).push(parseInt(id));
     }
     const roots = [];
-    for (const n of G.nodes) {
-        if (!kept(n.id)) continue;
-        if (n.status === 'MERGED' || owner[n.id] === undefined) roots.push(n.id);
+    const candidates = G.nodes.map(n => n.id).concat([...context]);
+    for (const id of candidates) {
+        if (!kept(id)) continue;
+        if (nodeMap[id].status === 'MERGED' || owner[id] === undefined) roots.push(id);
     }
+    // Merged bases in landing order, then the context bases (by when
+    // they landed; a bare master commit last), then roots with no base.
     const trunkIdx = {};
     (G.merged_trunk || []).forEach((id, i) => { trunkIdx[id] = i; });
+    const rootKey = (id) => {
+        const n = nodeMap[id];
+        if (trunkIdx[id] !== undefined) return [0, trunkIdx[id], ''];
+        if (n.status === 'MERGED') return [1, n.master_commit ? 1 : 0, n.submitted || ''];
+        return [2, 0, ''];
+    };
     roots.sort((a, b) => {
-        const ia = trunkIdx[a] !== undefined ? trunkIdx[a] : Infinity;
-        const ib = trunkIdx[b] !== undefined ? trunkIdx[b] : Infinity;
-        if (ia !== ib) return ia - ib;
+        const ka = rootKey(a), kb = rootKey(b);
+        for (let i = 0; i < 3; i++) {
+            if (ka[i] < kb[i]) return -1;
+            if (ka[i] > kb[i]) return 1;
+        }
         return a - b;
     });
+    stackOwner = owner;
     return { roots, kidsOf };
 }
 
@@ -1705,8 +1751,11 @@ function nodeLabel(node) {
         ? node.subject.substring(0, 47) + '...'
         : node.subject;
 
+    if (node.master_commit) {
+        return `master ${node.current_commit.substring(0, 10)}\n${node.subject}`;
+    }
     let reviewLine = '';
-    if (node.status !== 'ABANDONED' && node.status !== 'MERGED') {
+    if (node.status !== 'ABANDONED' && node.status !== 'MERGED' && !node.context) {
         const rv = node.review || {};
 
         // Verified summary: one token per voter.
@@ -1788,6 +1837,14 @@ function styleForNode(node, flags, position, C) {
         });
     }
 
+    // Context ancestors in the stacks view: faded, status only on the
+    // border, so they read as background to the series.
+    if (node.context) {
+        colors = Object.assign({}, C.DIM, {
+            border: (C.STATUS[node.status] || C.STATUS.NEW).border,
+        });
+    }
+
     // master-next override: a patch tagged "master-next" is queued
     // for the next master merge and is treated as effectively
     // merged. Apply only the MERGED border color (not the fill) so
@@ -1812,7 +1869,7 @@ function styleForNode(node, flags, position, C) {
 
     // Non-main nodes above the anchor dim slightly. Separate-series
     // nodes are never dimmed — they render at full intensity.
-    const opacity = (
+    const opacity = node.context ? 0.6 : (
         flags.isAbove && !flags.isMain && !flags.isAnchor && !flags.isSeparate
     ) ? 0.7 : 1.0;
 
@@ -1917,7 +1974,12 @@ function styleForEdge(edge, edgeId, flags, C) {
         dashes = false;
     }
 
-    const label = edgePsLabel(edge);
+    const label = flags.context ? '' : edgePsLabel(edge);
+    if (flags.context) {
+        color = C.edgeSide;
+        width = 1;
+        dashes = false;
+    }
 
     return {
         id: 'e' + edgeId,
@@ -2061,6 +2123,14 @@ function renderGraph() {
 
         visEdges.push(styleForEdge(edge, edgeIdx, { isMainEdge, isBase, bypass }, C));
         edgeIdx++;
+    }
+    if (stacks) {
+        for (const edge of (G.context_edges || [])) {
+            if (!positions[edge.from] || !positions[edge.to]) continue;
+            if (stackOwner[edge.to] !== edge.from) continue;
+            visEdges.push(styleForEdge(edge, edgeIdx, { context: true }, C));
+            edgeIdx++;
+        }
     }
 
     // Update datasets
@@ -2300,6 +2370,10 @@ function showNodeInfo(id) {
     const node = nodeMap[id];
     if (!node) return;
     const panel = document.getElementById('info');
+    if (node.context) {
+        panel.innerHTML = contextNodeInfo(node);
+        return;
+    }
 
     // Find chain above (walk up from this node). Visibility is
     // routed through the shared nodeVisible helper so this view
@@ -2421,6 +2495,24 @@ function showNodeInfo(id) {
             ${below.map(b => chainItem(b.node, b.edge, node.id, true)).join('')}
         </div>` : ''}
     `;
+}
+
+// Panel for a stacks-view ancestor that isn't part of the graph.
+function contextNodeInfo(node) {
+    const of = (node.context_of || []).map(c => `<a href="#" onclick="clickNode(${c});return false">#${c}</a>`).join(', ');
+    const what = node.master_commit
+        ? `<a href="${node.url}" target="_blank">master ${esc(node.current_commit.substring(0, 10))}</a>
+           <span style="color:var(--text-muted);font-size:11px;margin-left:6px">a master commit no change owns</span>`
+        : `<a href="${node.url}" target="_blank">#${node.id}</a>
+           <span class="sbadge sbadge-${node.status}">${node.status}</span> &nbsp; ps${node.current_patchset}`;
+    return `
+        <div class="field" style="background:var(--bg-inset);border-left:3px solid var(--text-muted);padding:6px 10px;border-radius:4px;margin-bottom:8px">
+            <span style="color:var(--text-muted);font-size:12px">Not part of this graph: shown in Stacks as an ancestor of ${of}, down to the merged change it is based on. Not counted anywhere.</span>
+        </div>
+        <div class="field"><div class="fl">Change</div><div class="fv">${what}</div></div>
+        <div class="field"><div class="fl">Subject</div><div class="fv">${esc(node.subject)}</div></div>
+        ${node.owner ? `<div class="field"><div class="fl">Owner</div><div class="fv">${esc(node.owner)}</div></div>` : ''}
+        ${node.context_cut ? `<div class="field"><div class="fl">Ancestry</div><div class="fv" style="color:var(--text-muted)">continues further; not walked</div></div>` : ''}`;
 }
 
 function chainItem(node, edge, selectedId, isBelow) {

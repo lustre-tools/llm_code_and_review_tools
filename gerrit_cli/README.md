@@ -216,7 +216,11 @@ includes:
   Columns run left to right in merge order of their base, followed by
   subtrees with no merged base. At a fork the live continuation goes
   straight up and each other branch takes the nearest column to the
-  right with room, a free row away from any other branch there.
+  right with room, a free row away from any other branch there. A
+  stack whose parent is not in the graph stands on its real ancestry,
+  drawn faded, down to the merged change (or bare master commit, such
+  as a release tag) it is based on. Those ancestors are looked up
+  when the graph is built, appear only here, and count nowhere.
 - **Review health coloring** for active changes: green (verified OK + 2
   non-author CR +1s), dark red (CR veto), bright red (Maloo -1), orange
   (Jenkins -1), pink (other -1), blue (pending). Merged = purple,
