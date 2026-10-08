@@ -634,26 +634,107 @@ class TestLinkBug:
         assert result.exit_code != 0
         mock_client.get_bug_links.assert_not_called()
 
-    def test_an_existing_pending_link_left_pending_is_an_error(
-        self, runner, mock_client
-    ):
-        """Maloo answered OK to --state accepted and left the auto-link
-        pending; this reported success with state "accepted"."""
+    def test_an_existing_pending_link_is_accepted(self, runner, mock_client):
+        """Maloo answers OK to --state accepted and leaves its auto-link
+        pending; only the web UI's Accept changes it."""
+        mock_client.create_bug_link.return_value = "OK"
+        mock_client.get_bug_links.side_effect = [
+            [_maloo_link(SUBTEST_1, "LU-16932", None)],
+            [_maloo_link(SUBTEST_1, "LU-16932", True)],
+        ]
+        mock_client.review_bug_link.return_value = "ref-1"
+        env = _parse_output(runner.invoke(main, [
+            "--envelope", "link-bug", SUBTEST_1, "LU-16932", "--type", "SubTest",
+        ]))
+        assert env["data"]["state"] == "accepted"
+        assert env["data"]["previous_state"] == "pending"
+        assert env["data"]["bug_reference_id"] == "ref-1"
+        mock_client.review_bug_link.assert_called_once_with(
+            "SubTest", SUBTEST_1, "LU-16932", "Accepted",
+        )
+
+    def test_a_link_already_accepted_is_left_alone(self, runner, mock_client):
+        mock_client.create_bug_link.return_value = "OK"
+        mock_client.get_bug_links.return_value = [
+            _maloo_link(TSID_1, "LU-12345", True),
+        ]
+        env = _parse_output(
+            runner.invoke(main, ["--envelope", "link-bug", TSID_1, "LU-12345"])
+        )
+        assert "previous_state" not in env["data"]
+        mock_client.review_bug_link.assert_not_called()
+
+    def test_a_failed_accept_is_an_error(self, runner, mock_client):
         mock_client.create_bug_link.return_value = "OK"
         mock_client.get_bug_links.return_value = [
             _maloo_link(SUBTEST_1, "LU-16932", None),
         ]
+        mock_client.review_bug_link.side_effect = LookupError("no Accept here")
         result = runner.invoke(main, [
-            "--envelope", "link-bug", SUBTEST_1, "LU-16932",
-            "--type", "SubTest", "--state", "accepted",
+            "--envelope", "link-bug", SUBTEST_1, "LU-16932", "--type", "SubTest",
         ])
         assert result.exit_code != 0
         env = json.loads(result.output)
-        assert env["ok"] is False
-        assert env["error"]["code"] == "LINK_STATE_MISMATCH"
-        assert "is pending, not accepted" in env["error"]["message"]
-        assert "web UI" in env["error"]["message"]
+        assert env["error"]["code"] == "LINK_ACCEPT_FAILED"
+        assert "no Accept here" in env["error"]["message"]
         assert env["error"]["details"]["stored_states"] == ["pending"]
+
+    def test_an_accept_that_does_not_stick_is_an_error(self, runner, mock_client):
+        mock_client.create_bug_link.return_value = "OK"
+        mock_client.get_bug_links.return_value = [
+            _maloo_link(SUBTEST_1, "LU-16932", None),
+        ]
+        mock_client.review_bug_link.return_value = "ref-1"
+        result = runner.invoke(main, [
+            "--envelope", "link-bug", SUBTEST_1, "LU-16932", "--type", "SubTest",
+        ])
+        assert result.exit_code != 0
+        env = json.loads(result.output)
+        assert env["error"]["code"] == "LINK_ACCEPT_FAILED"
+        assert "reads back as pending" in env["error"]["message"]
+
+    def test_a_read_back_failing_after_the_accept_is_unconfirmed(
+        self, runner, mock_client
+    ):
+        mock_client.create_bug_link.return_value = "OK"
+        mock_client.get_bug_links.side_effect = [
+            [_maloo_link(SUBTEST_1, "LU-16932", None)],
+            Exception("read timed out"),
+        ]
+        mock_client.review_bug_link.return_value = "ref-1"
+        env = _parse_output(runner.invoke(main, [
+            "--envelope", "link-bug", SUBTEST_1, "LU-16932", "--type", "SubTest",
+        ]))
+        assert env["data"]["state"] is None
+        assert env["data"]["previous_state"] == "pending"
+        assert "unconfirmed" in env["data"]["warning"]
+
+    def test_a_rejected_link_is_not_overridden(self, runner, mock_client):
+        mock_client.create_bug_link.return_value = "OK"
+        mock_client.get_bug_links.return_value = [
+            _maloo_link(SUBTEST_1, "LU-16932", False),
+        ]
+        result = runner.invoke(main, [
+            "--envelope", "link-bug", SUBTEST_1, "LU-16932", "--type", "SubTest",
+        ])
+        assert result.exit_code != 0
+        env = json.loads(result.output)
+        assert env["error"]["code"] == "LINK_STATE_MISMATCH"
+        assert "is rejected, not accepted" in env["error"]["message"]
+        assert "web UI" in env["error"]["message"]
+        mock_client.review_bug_link.assert_not_called()
+
+    def test_an_accepted_link_is_not_made_pending(self, runner, mock_client):
+        mock_client.create_bug_link.return_value = "OK"
+        mock_client.get_bug_links.return_value = [
+            _maloo_link(TSID_1, "LU-12345", True),
+        ]
+        result = runner.invoke(main, [
+            "--envelope", "link-bug", TSID_1, "LU-12345", "--state", "pending",
+        ])
+        env = json.loads(result.output)
+        assert env["error"]["code"] == "LINK_STATE_MISMATCH"
+        mock_client.review_bug_link.assert_not_called()
 
     def test_only_the_named_ticket_on_the_named_target_counts(
         self, runner, mock_client
@@ -662,12 +743,12 @@ class TestLinkBug:
         mock_client.get_bug_links.return_value = [
             _maloo_link(TSID_1, "LU-1", True),
             _maloo_link(SUBTEST_1, "LU-12345", True),
-            _maloo_link(TSID_1, "LU-12345", None),
+            _maloo_link(TSID_1, "LU-12345", False),
         ]
         result = runner.invoke(main, ["--envelope", "link-bug", TSID_1, "LU-12345"])
         env = json.loads(result.output)
         assert env["error"]["code"] == "LINK_STATE_MISMATCH"
-        assert env["error"]["details"]["stored_states"] == ["pending"]
+        assert env["error"]["details"]["stored_states"] == ["rejected"]
 
     def test_the_requested_state_among_several_is_success(
         self, runner, mock_client

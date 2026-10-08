@@ -770,11 +770,15 @@ def link_bug(
 
     The link is read back after it is made, and "state" is the state Maloo
     stored.  Maloo answers OK to a link for a ticket the target already
-    carries and leaves that link as it was -- an auto-linked pending one
-    stays pending -- so a stored state other than --state is an error
-    (LINK_STATE_MISMATCH).  Such a link has to be accepted in the Maloo web
-    UI.  If the read-back itself fails, the link was requested but its
-    state is unknown: "state" is null and "warning" says so.
+    carries and leaves that link as it was, so a pending link Maloo made
+    by signature stays pending.  Asked for an accepted link, link-bug then
+    accepts that pending one as the web UI's Accept does, and reports
+    "previous_state": "pending" (LINK_ACCEPT_FAILED if that fails).  Only
+    run it once the failure is checked to be the ticket's.  Any other
+    stored state -- a rejected link, or an accepted one asked to be
+    pending -- is an error (LINK_STATE_MISMATCH).  If the read-back itself
+    fails, the link was requested but its state is unknown: "state" is
+    null and "warning" says so.
 
     \b
     Examples:
@@ -802,23 +806,58 @@ def link_bug(
     }
     check = f"maloo bugs {buggable_id} --direct-only"
 
-    try:
-        links = client.get_bug_links(buggable_id)
-    except Exception as exc:
-        result["warning"] = (
-            f"Maloo answered {resp!r} but reading the link back failed "
-            f"({exc}), so its state is unconfirmed. Check it with `{check}`."
-        )
-        env = success_response(result, TOOL_NAME, "link-bug", [check])
-        _output(env, pretty)
+    def stored_states() -> list[str] | None:
+        try:
+            links = client.get_bug_links(buggable_id)
+        except Exception as exc:
+            result["warning"] = (
+                f"Maloo answered {resp!r} but reading the link back failed "
+                f"({exc}), so its state is unconfirmed. Check it with "
+                f"`{check}`."
+            )
+            env = success_response(result, TOOL_NAME, "link-bug", [check])
+            _output(env, pretty)
+            return None
+        return sorted({
+            _link_state(link) for link in links
+            if (link.get("jira") or link.get("bug_upstream_id") or "").upper()
+            == jira_ticket.upper()
+            and str(link.get("id") or buggable_id) == buggable_id
+        })
+
+    stored = stored_states()
+    if stored is None:
         return
 
-    stored = sorted({
-        _link_state(link) for link in links
-        if (link.get("jira") or link.get("bug_upstream_id") or "").upper()
-        == jira_ticket.upper()
-        and str(link.get("id") or buggable_id) == buggable_id
-    })
+    if state == "accepted" and state not in stored and "pending" in stored:
+        try:
+            ref = client.review_bug_link(
+                buggable_class, buggable_id, jira_ticket, "Accepted"
+            )
+        except Exception as exc:
+            _error(
+                ErrorCode.LINK_ACCEPT_FAILED,
+                f"{buggable_id} already carries a pending {jira_ticket} "
+                f"link, and accepting it failed: {exc}",
+                "link-bug", pretty,
+                {"buggable_id": buggable_id, "bug": jira_ticket,
+                 "stored_states": stored, "response": resp},
+            )
+        result["previous_state"] = "pending"
+        result["bug_reference_id"] = ref
+        stored = stored_states()
+        if stored is None:
+            return
+        if state not in stored:
+            _error(
+                ErrorCode.LINK_ACCEPT_FAILED,
+                f"Maloo took the Accept of the pending {jira_ticket} link on "
+                f"{buggable_id}, but it reads back as {'/'.join(stored)}. "
+                f"Check it with `{check}`.",
+                "link-bug", pretty,
+                {"buggable_id": buggable_id, "bug": jira_ticket,
+                 "stored_states": stored, "bug_reference_id": ref},
+            )
 
     if state in stored:
         result["state"] = state
@@ -845,8 +884,8 @@ def link_bug(
         ErrorCode.LINK_STATE_MISMATCH,
         f"Maloo answered {resp!r} but the {jira_ticket} link on "
         f"{buggable_id} is {'/'.join(stored)}, not {state}: it already "
-        "existed, and Maloo does not change the state of an existing link. "
-        "It has to be changed in the Maloo web UI.",
+        "existed, and link-bug only accepts a pending link. Any other "
+        "change has to be made in the Maloo web UI.",
         "link-bug", pretty, details,
     )
 

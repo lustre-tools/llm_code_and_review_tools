@@ -175,12 +175,17 @@ maloo link-bug <subtest_id> LU-12345 --type SubTest
 ```
 
 `link-bug` reads the link back and reports the state Maloo stored. When
-the target already carries a link to that ticket -- usually a pending
-one Maloo auto-linked -- Maloo answers OK and leaves it as it was, so
-`link-bug` fails with `LINK_STATE_MISMATCH`: the link is still pending
-and does not count until someone accepts it in the Maloo web UI. Say so
-rather than reporting the failure covered. A `warning` with a null
-`state` means the read-back failed; check with `maloo bugs`.
+the target already carries a pending link to that ticket -- one Maloo
+auto-linked by signature -- Maloo's API leaves it pending, so `link-bug`
+accepts it the way the web UI's Accept does and reports
+`"previous_state": "pending"`. That accept is your judgment that the
+failure is the ticket's, so check the logs fit before running it, and
+give it the id the pending link is on: `maloo bugs` names that subtest,
+and it takes `--type SubTest`. `LINK_ACCEPT_FAILED` means the link is
+still pending. A rejected link is someone's decision and is left alone
+(`LINK_STATE_MISMATCH`); say so rather than reporting the failure
+covered. A `warning` with a null `state` means the read-back failed;
+check with `maloo bugs`.
 
 `maloo bugs` on a test set includes the links on its subtests, where most
 of them are, and says which subtest each is on; `maloo subtests

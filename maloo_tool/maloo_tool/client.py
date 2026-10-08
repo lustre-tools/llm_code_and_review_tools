@@ -1,5 +1,6 @@
 """Maloo REST API client."""
 
+import html
 import json
 import os
 import re
@@ -7,6 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import requests
 
@@ -15,6 +17,17 @@ from .config import MalooConfig
 CSRF_RE = re.compile(
     r'<meta\s+name="csrf-token"\s+content="([^"]+)"'
 )
+
+#: A bug list row on a test set or subtest page, and the Accept/Reject
+#: links the web UI shows in it for a link nobody has reviewed yet.
+BUG_ROW_RE = re.compile(r"<tr\b.*?</tr>", re.DOTALL)
+REVIEW_HREF_RE = re.compile(r'href="(/buggable_links/validate\?[^"]*)"')
+
+#: Where Maloo sends a request it has no session for.
+SIGNIN_PATH = "/signin"
+
+#: The page that shows a buggable's bug links.
+BUGGABLE_PAGES = {"TestSet": "test_sets", "SubTest": "sub_tests"}
 
 GERRIT_URL = os.environ.get("GERRIT_URL", "https://review.whamcloud.com").rstrip("/")
 
@@ -432,6 +445,72 @@ class MalooClient:
         resp = self.session.post(url, params=params, timeout=30)
         resp.raise_for_status()
         return resp.text.strip()
+
+    def review_bug_link(
+        self,
+        buggable_class: str,
+        buggable_id: str,
+        bug_upstream_id: str,
+        valid: str = "Accepted",
+    ) -> str:
+        """Accept or reject an unreviewed bug link, as the web UI does.
+
+        The REST API cannot change an existing link's state.  The UI's
+        Accept and Reject links are an XHR GET of
+        /buggable_links/validate?bug_reference_id=&buggable_id=&valid=,
+        and the bug reference id is only on the page, so it is read from
+        the row for the ticket on the buggable's page.
+
+        Returns the bug reference id.  Raises PermissionError if the web
+        login did not take, LookupError if the page offers no such link
+        to follow (the link is not pending, or not on this buggable).
+        """
+        web = self._web_login()
+        page_url = (
+            f"{self.config.base_url}/{BUGGABLE_PAGES[buggable_class]}"
+            f"/{buggable_id}"
+        )
+        resp = web.get(page_url, timeout=60)
+        resp.raise_for_status()
+        if urlsplit(resp.url).path == SIGNIN_PATH:
+            raise PermissionError(
+                "the Maloo web sign-in did not take; check MALOO_USER "
+                "and MALOO_PASS"
+            )
+
+        ticket = bug_upstream_id.upper()
+        href = None
+        for row in BUG_ROW_RE.findall(resp.text):
+            texts = re.findall(r">\s*([A-Za-z]+-\d+)\s*</a>", row)
+            if ticket not in (t.upper() for t in texts):
+                continue
+            for raw in REVIEW_HREF_RE.findall(row):
+                link = html.unescape(raw)
+                query = parse_qs(urlsplit(link).query)
+                if (query.get("buggable_id") == [buggable_id]
+                        and query.get("valid") == [valid]
+                        and query.get("bug_reference_id")):
+                    href = link
+                    break
+            if href:
+                break
+        if href is None:
+            raise LookupError(
+                f"{page_url} offers no {valid} for a {bug_upstream_id} "
+                f"link on {buggable_id}: the link is not pending there"
+            )
+
+        resp = web.get(
+            f"{self.config.base_url}{href}",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        if urlsplit(resp.url).path == SIGNIN_PATH:
+            raise PermissionError(
+                "Maloo sent the link review to the sign-in page"
+            )
+        return parse_qs(urlsplit(href).query)["bug_reference_id"][0]
 
     # -- Test queues --
 

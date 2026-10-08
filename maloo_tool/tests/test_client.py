@@ -1189,3 +1189,69 @@ class TestGetTopFailures:
         )
         assert len(failures) == 1
         assert failures[0]["test_name"] == "test_1c"
+
+
+# ---------------------------------------------------------------------------
+# Accepting a pending bug link (web UI)
+# ---------------------------------------------------------------------------
+
+BUG_PAGE = (
+    __import__("pathlib").Path(__file__).parent
+    / "fixtures" / "subtest_bug_list.html"
+).read_text()
+SUBTEST = "ac9e298f-e265-48b9-9921-4246e6c1eddb"
+BUG_REF = "7df84e35-d5cd-4763-8b1a-663fc1e043dc"
+
+
+class TestReviewBugLink:
+    @pytest.fixture
+    def web(self, client):
+        """The signed-in web session, answering the page then the review."""
+        web = MagicMock(spec=requests.Session)
+        client._web_session = web
+
+        def get(url, **kwargs):
+            resp = _mock_response(text=BUG_PAGE if "/sub_tests/" in url else "")
+            resp.url = url
+            return resp
+
+        web.get.side_effect = get
+        return web
+
+    def test_follows_the_accept_link_for_the_ticket(self, client, web):
+        ref = client.review_bug_link("SubTest", SUBTEST, "lu-20523")
+        assert ref == BUG_REF
+        page, review = web.get.call_args_list
+        assert page.args[0] == f"https://testing.example.com/sub_tests/{SUBTEST}"
+        assert review.args[0] == (
+            "https://testing.example.com/buggable_links/validate"
+            f"?bug_reference_id={BUG_REF}&buggable_id={SUBTEST}"
+            "&valid=Accepted"
+        )
+        assert review.kwargs["headers"] == {"X-Requested-With": "XMLHttpRequest"}
+
+    def test_a_test_set_is_read_from_its_own_page(self, client, web):
+        with pytest.raises(LookupError):
+            client.review_bug_link("TestSet", SUBTEST, "LU-20523")
+        assert web.get.call_args.args[0].endswith(f"/test_sets/{SUBTEST}")
+
+    def test_a_reviewed_link_has_nothing_to_follow(self, client, web):
+        with pytest.raises(LookupError, match="not pending"):
+            client.review_bug_link("SubTest", SUBTEST, "LU-11111")
+        assert web.get.call_count == 1
+
+    def test_a_link_on_another_buggable_is_not_followed(self, client, web):
+        other = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+        with pytest.raises(LookupError):
+            client.review_bug_link("SubTest", other, "LU-20523")
+        assert web.get.call_count == 1
+
+    def test_a_signin_redirect_is_an_auth_failure(self, client, web):
+        def get(url, **kwargs):
+            resp = _mock_response(text="<title>Maloo - Sign in</title>")
+            resp.url = "https://testing.example.com/signin"
+            return resp
+
+        web.get.side_effect = get
+        with pytest.raises(PermissionError):
+            client.review_bug_link("SubTest", SUBTEST, "LU-20523")
