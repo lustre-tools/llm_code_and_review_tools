@@ -453,17 +453,20 @@ class MalooClient:
         bug_upstream_id: str,
         valid: str = "Accepted",
     ) -> str:
-        """Accept or reject an unreviewed bug link, as the web UI does.
+        """Set a bug link's state, as the web UI does: ``valid`` is
+        Accepted, Rejected or Pending.
 
         The REST API cannot change an existing link's state.  The UI's
-        Accept and Reject links are an XHR GET of
+        Accept, Reject and Reset links are an XHR GET of
         /buggable_links/validate?bug_reference_id=&buggable_id=&valid=,
         and the bug reference id is only on the page, so it is read from
-        the row for the ticket on the buggable's page.
+        the row for the ticket on the buggable's page.  A pending link
+        offers Accept and Reject; an accepted one Reject and Reset.
 
         Returns the bug reference id.  Raises PermissionError if the web
         login did not take, LookupError if the page offers no such link
-        to follow (the link is not pending, or not on this buggable).
+        to follow (the link is already in that state, or not on this
+        buggable).
         """
         web = self._web_login()
         page_url = (
@@ -497,7 +500,7 @@ class MalooClient:
         if href is None:
             raise LookupError(
                 f"{page_url} offers no {valid} for a {bug_upstream_id} "
-                f"link on {buggable_id}: the link is not pending there"
+                f"link on {buggable_id}: it is not there, or already {valid}"
             )
 
         resp = web.get(

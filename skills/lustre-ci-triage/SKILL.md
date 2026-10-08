@@ -187,6 +187,13 @@ still pending. A rejected link is someone's decision and is left alone
 covered. A `warning` with a null `state` means the read-back failed;
 check with `maloo bugs`.
 
+A link you made by mistake is taken back with `maloo reject-bug <id>
+LU-12345 [--type SubTest]` (`--reset` makes it pending instead). Maloo
+cannot delete a link; a rejected one no longer covers the failure. Use it
+only on a link you made wrongly in this run. Another's link, or Maloo's
+own auto-link, is not yours to reject: say what you think is wrong with
+it instead.
+
 `maloo bugs` on a test set includes the links on its subtests, where most
 of them are, and says which subtest each is on; `maloo subtests
 <test_set_id>` gives the subtest ids. It takes a test set or subtest id,

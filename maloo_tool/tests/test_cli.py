@@ -721,7 +721,7 @@ class TestLinkBug:
         env = json.loads(result.output)
         assert env["error"]["code"] == "LINK_STATE_MISMATCH"
         assert "is rejected, not accepted" in env["error"]["message"]
-        assert "web UI" in env["error"]["message"]
+        assert "maloo reject-bug" in env["error"]["message"]
         mock_client.review_bug_link.assert_not_called()
 
     def test_an_accepted_link_is_not_made_pending(self, runner, mock_client):
@@ -784,6 +784,74 @@ class TestLinkBug:
         assert env["data"]["requested_state"] == "accepted"
         assert "read timed out" in env["data"]["warning"]
         assert "unconfirmed" in env["data"]["warning"]
+
+
+# -- reject-bug command --
+
+
+class TestRejectBug:
+    def test_an_accepted_link_is_rejected(self, runner, mock_client):
+        """A wrong link made by mistake is taken back the way the web UI
+        does it: Maloo has no delete."""
+        mock_client.get_bug_links.side_effect = [
+            [_maloo_link(SUBTEST_1, "LU-9", True)],
+            [_maloo_link(SUBTEST_1, "LU-9", False)],
+        ]
+        mock_client.review_bug_link.return_value = "ref-9"
+        env = _parse_output(runner.invoke(main, [
+            "--envelope", "reject-bug", SUBTEST_1, "LU-9", "--type", "SubTest",
+        ]))
+        assert env["data"]["state"] == "rejected"
+        assert env["data"]["previous_state"] == "accepted"
+        assert env["data"]["bug_reference_id"] == "ref-9"
+        mock_client.review_bug_link.assert_called_once_with(
+            "SubTest", SUBTEST_1, "LU-9", "Rejected",
+        )
+
+    def test_reset_makes_a_link_pending(self, runner, mock_client):
+        mock_client.get_bug_links.side_effect = [
+            [_maloo_link(TSID_1, "LU-12345", True)],
+            [_maloo_link(TSID_1, "LU-12345", None)],
+        ]
+        mock_client.review_bug_link.return_value = "ref-1"
+        env = _parse_output(runner.invoke(main, [
+            "--envelope", "reject-bug", TSID_1, "LU-12345", "--reset",
+        ]))
+        assert env["data"]["state"] == "pending"
+        mock_client.review_bug_link.assert_called_once_with(
+            "TestSet", TSID_1, "LU-12345", "Pending",
+        )
+
+    def test_a_link_already_rejected_is_left_alone(self, runner, mock_client):
+        mock_client.get_bug_links.return_value = [_maloo_link(TSID_1, "LU-9", False)]
+        env = _parse_output(runner.invoke(main, ["--envelope", "reject-bug", TSID_1, "LU-9"]))
+        assert env["data"]["state"] == "rejected"
+        mock_client.review_bug_link.assert_not_called()
+
+    def test_no_such_link_is_an_error(self, runner, mock_client):
+        mock_client.get_bug_links.return_value = [_maloo_link(TSID_1, "LU-1", True)]
+        result = runner.invoke(main, ["--envelope", "reject-bug", TSID_1, "LU-9"])
+        assert result.exit_code != 0
+        assert json.loads(result.output)["error"]["code"] == "LINK_NOT_STORED"
+        mock_client.review_bug_link.assert_not_called()
+
+    def test_a_change_that_does_not_stick_is_an_error(self, runner, mock_client):
+        mock_client.get_bug_links.return_value = [_maloo_link(TSID_1, "LU-9", True)]
+        mock_client.review_bug_link.return_value = "ref-9"
+        result = runner.invoke(main, ["--envelope", "reject-bug", TSID_1, "LU-9"])
+        assert result.exit_code != 0
+        env = json.loads(result.output)
+        assert env["error"]["code"] == "LINK_REVIEW_FAILED"
+        assert "reads back as accepted" in env["error"]["message"]
+
+    def test_a_failed_change_is_an_error(self, runner, mock_client):
+        mock_client.get_bug_links.return_value = [_maloo_link(TSID_1, "LU-9", True)]
+        mock_client.review_bug_link.side_effect = LookupError("no Reject here")
+        result = runner.invoke(main, ["--envelope", "reject-bug", TSID_1, "LU-9"])
+        assert result.exit_code != 0
+        env = json.loads(result.output)
+        assert env["error"]["code"] == "LINK_REVIEW_FAILED"
+        assert "no Reject here" in env["error"]["message"]
 
 
 # -- sessions command --

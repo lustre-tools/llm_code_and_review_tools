@@ -884,10 +884,106 @@ def link_bug(
         ErrorCode.LINK_STATE_MISMATCH,
         f"Maloo answered {resp!r} but the {jira_ticket} link on "
         f"{buggable_id} is {'/'.join(stored)}, not {state}: it already "
-        "existed, and link-bug only accepts a pending link. Any other "
-        "change has to be made in the Maloo web UI.",
+        "existed, and link-bug only accepts a pending link. "
+        "`maloo reject-bug` rejects a link or resets it to pending.",
         "link-bug", pretty, details,
     )
+
+
+@main.command(name="reject-bug")
+@click.argument("buggable_id")
+@click.argument("jira_ticket")
+@click.option(
+    "--type", "buggable_class", type=click.Choice(["TestSet", "SubTest"]),
+    default="TestSet", help="Type of entity the link is on (default: TestSet)")
+@click.option(
+    "--reset", is_flag=True,
+    help="Set the link back to pending instead of rejecting it")
+@click.option("--pretty", is_flag=True, help="Pretty-print JSON")
+def reject_bug(
+    buggable_id: str,
+    jira_ticket: str,
+    buggable_class: str,
+    reset: bool,
+    pretty: bool,
+) -> None:
+    """Reject a bug link on a test set or subtest, or reset it to pending.
+
+    Maloo has no way to delete a link; rejecting it is how the web UI takes
+    a wrong one back, and a rejected link no longer covers the failure.
+    --reset makes an accepted link pending again, as the UI's Reset does.
+    Either works on a link however it was made, Maloo's own auto-links
+    included, so check the link is wrong before rejecting it.  The link
+    is read back afterwards and "state" is what Maloo stored.
+
+    \b
+    Examples:
+      maloo reject-bug <subtest_id> LU-9 --type SubTest
+      maloo reject-bug <test_set_id> LU-12345 --reset
+    """
+    client = _make_client()
+    target = "pending" if reset else "rejected"
+    check = f"maloo bugs {buggable_id} --direct-only"
+    details: dict[str, Any] = {"buggable_id": buggable_id, "bug": jira_ticket}
+
+    def stored_states() -> list[str]:
+        return sorted({
+            _link_state(link) for link in client.get_bug_links(buggable_id)
+            if (link.get("jira") or link.get("bug_upstream_id") or "").upper()
+            == jira_ticket.upper()
+            and str(link.get("id") or buggable_id) == buggable_id
+        })
+
+    stored = stored_states()
+    if not stored:
+        _error(
+            ErrorCode.LINK_NOT_STORED,
+            f"{buggable_id} carries no {jira_ticket} link. Check the id and "
+            f"--type, and `{check}`.",
+            "reject-bug", pretty, details,
+        )
+    result: dict[str, Any] = {
+        "success": True,
+        "buggable_class": buggable_class,
+        "buggable_id": buggable_id,
+        "bug": jira_ticket,
+        "previous_state": "/".join(stored),
+        "state": target,
+    }
+    if stored == [target]:
+        _output(success_response(result, TOOL_NAME, "reject-bug"), pretty)
+        return
+    try:
+        result["bug_reference_id"] = client.review_bug_link(
+            buggable_class, buggable_id, jira_ticket,
+            "Pending" if reset else "Rejected",
+        )
+    except Exception as exc:
+        _error(
+            ErrorCode.LINK_REVIEW_FAILED,
+            f"Setting the {jira_ticket} link on {buggable_id} to {target} "
+            f"failed: {exc}",
+            "reject-bug", pretty, {**details, "stored_states": stored},
+        )
+    try:
+        after = stored_states()
+    except Exception as exc:
+        result["state"] = None
+        result["warning"] = (
+            f"Maloo took the change, but reading the link back failed ({exc}), "
+            f"so its state is unconfirmed. Check it with `{check}`."
+        )
+        _output(success_response(result, TOOL_NAME, "reject-bug", [check]), pretty)
+        return
+    if target not in after:
+        _error(
+            ErrorCode.LINK_REVIEW_FAILED,
+            f"Maloo took the change of the {jira_ticket} link on {buggable_id}, "
+            f"but it reads back as {'/'.join(after) or 'gone'}. Check it with "
+            f"`{check}`.",
+            "reject-bug", pretty, {**details, "stored_states": after},
+        )
+    _output(success_response(result, TOOL_NAME, "reject-bug"), pretty)
 
 
 @main.command(name="raise-bug")

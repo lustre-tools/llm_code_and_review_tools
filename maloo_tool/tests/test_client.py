@@ -1236,7 +1236,7 @@ class TestReviewBugLink:
         assert web.get.call_args.args[0].endswith(f"/test_sets/{SUBTEST}")
 
     def test_a_reviewed_link_has_nothing_to_follow(self, client, web):
-        with pytest.raises(LookupError, match="not pending"):
+        with pytest.raises(LookupError, match="already"):
             client.review_bug_link("SubTest", SUBTEST, "LU-11111")
         assert web.get.call_count == 1
 
