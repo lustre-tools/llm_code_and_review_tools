@@ -470,10 +470,21 @@ def cmd_run(args) -> int:
                     print(f"error: cannot read the series of '{spec}': "
                           f"{exc}")
                     return 1
-                print(f"  series of {anchor.number}: itself + "
-                      f"{len(children)} open child change(s)")
-                expanded += [spec] + [str(n) for n in children]
+                in_flight = anchor.status in (None, "NEW")
+                what = (f"{len(children.open)} in-flight child "
+                        "change(s)")
+                print(f"  series of {anchor.number}: "
+                      + (f"itself + {what}" if in_flight else
+                         f"{what}; {anchor.number} itself is "
+                         f"{anchor.status.lower()}, not reviewed"))
+                for number, why in children.skipped:
+                    print(f"    skipped {number}: {why}")
+                expanded += ([spec] if in_flight else []) + [
+                    str(n) for n in children.open]
             specs = expanded
+            if not specs:
+                print("nothing in flight to review")
+                return 0
         for spec in specs:
             try:
                 change = resolve_change(spec)

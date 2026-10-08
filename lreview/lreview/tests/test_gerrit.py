@@ -108,8 +108,9 @@ class TestSeriesChildren:
         from unittest.mock import MagicMock
         client = MagicMock()
         client.rest.get.return_value = {"changes": [
-            {"_change_number": n, "status": status}
-            for n, status in related]}
+            {"_change_number": n, "status": status,
+             "_revision_number": listed, "_current_revision_number": cur}
+            for n, status, listed, cur in related]}
         return client
 
     def _change(self, number=100):
@@ -121,21 +122,43 @@ class TestSeriesChildren:
 
     def test_children_base_to_tip_ancestors_excluded(self):
         from lreview.gerrit import series_children
-        client = self._client([(103, "NEW"), (102, "NEW"), (101, "NEW"),
-                               (100, "NEW"), (99, "NEW"), (98, "NEW")])
-        assert series_children(self._change(), client) == [101, 102, 103]
+        client = self._client([(103, "NEW", 1, 1), (102, "NEW", 2, 2),
+                               (101, "NEW", 1, 1), (100, "NEW", 3, 3),
+                               (99, "NEW", 1, 1), (98, "MERGED", 4, 4)])
+        result = series_children(self._change(), client)
+        assert result.open == [101, 102, 103]
+        assert result.skipped == []
         # asked for the reviewed revision's relation chain
         client.rest.get.assert_called_once_with(
             f"/changes/100/revisions/{'a' * 40}/related")
 
-    def test_only_open_children(self):
+    def test_merged_and_abandoned_children_skipped(self):
+        """Real chains carry both: 68876's eight children are all
+        abandoned."""
         from lreview.gerrit import series_children
-        client = self._client([(103, "NEW"), (102, "ABANDONED"),
-                               (101, "MERGED"), (100, "NEW")])
-        assert series_children(self._change(), client) == [103]
+        client = self._client([(104, "NEW", 1, 1), (103, "ABANDONED", 1, 1),
+                               (102, "MERGED", 2, 2), (101, "NEW", 1, 1),
+                               (100, "NEW", 3, 3)])
+        result = series_children(self._change(), client)
+        assert result.open == [101, 104]  # 104 sits on the abandoned 103
+        assert result.skipped == [(102, "merged"), (103, "abandoned")]
+
+    def test_child_moved_off_the_series_skipped(self):
+        """Gerrit lists a child at the patchset that last sat on the
+        change (64616 shows 64927 at ps2; its ps8 is elsewhere):
+        reviewing the current patchset would review another patch."""
+        from lreview.gerrit import series_children
+        client = self._client([(102, "NEW", 2, 8), (101, "NEW", 1, 1),
+                               (100, "NEW", 3, 3)])
+        result = series_children(self._change(), client)
+        assert result.open == [101]
+        assert result.skipped == [
+            (102, "moved off the series (ps2 sat on it, now at ps8)")]
 
     def test_tip_and_standalone_have_none(self):
         from lreview.gerrit import series_children
-        assert series_children(
-            self._change(), self._client([(100, "NEW"), (99, "NEW")])) == []
-        assert series_children(self._change(), self._client([])) == []
+        tip = series_children(self._change(), self._client(
+            [(100, "NEW", 3, 3), (99, "NEW", 1, 1)]))
+        assert tip.open == [] and tip.skipped == []
+        alone = series_children(self._change(), self._client([]))
+        assert alone.open == [] and alone.skipped == []

@@ -612,11 +612,14 @@ class TestRunPost:
 
 class TestRunSeries:
 
-    def _run(self, tmp_path, monkeypatch, argv, children):
+    def _run(self, tmp_path, monkeypatch, argv, children, status=None,
+             skipped=None):
         import subprocess
         from lreview.cli import cmd_run
-        from lreview.gerrit import ResolvedChange, change_ref
+        from lreview.gerrit import ResolvedChange, SeriesChildren, change_ref
         from lreview.prompts import PromptsStatus
+        status = status or {}
+        skipped = skipped or {}
 
         repo = tmp_path / "repo"
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -627,12 +630,16 @@ class TestRunSeries:
             return ResolvedChange(
                 number=n, project="ex/lustre-release", subject=f"s{n}",
                 sha=f"{n:040d}", patchset=1, ref=change_ref(n, 1),
-                base_url="https://gerrit.invalid")
+                base_url="https://gerrit.invalid",
+                status=status.get(n, "NEW"))
 
         monkeypatch.setenv("LREVIEW_PROMPTS_UPDATE", "off")
         monkeypatch.setattr("lreview.cli.resolve_change", resolve)
-        monkeypatch.setattr("lreview.gerrit.series_children",
-                            lambda change: children.get(change.number, []))
+        monkeypatch.setattr(
+            "lreview.gerrit.series_children",
+            lambda change: SeriesChildren(
+                open=children.get(change.number, []),
+                skipped=skipped.get(change.number, [])))
         monkeypatch.setattr(
             "lreview.cli.ensure_prompts",
             lambda args: PromptsStatus(
@@ -657,8 +664,35 @@ class TestRunSeries:
             {65382: [66955, 66956, 66957]})
         assert rc == 0
         assert reviewed["numbers"] == [65382, 66955, 66956, 66957]
-        assert ("series of 65382: itself + 3 open child change(s)"
+        assert ("series of 65382: itself + 3 in-flight child change(s)"
                 in capsys.readouterr().out)
+
+    def test_skipped_children_are_named(self, tmp_path, monkeypatch,
+                                        capsys):
+        rc, reviewed = self._run(
+            tmp_path, monkeypatch, ["--series", "100"], {100: [101]},
+            skipped={100: [(102, "abandoned"), (103, "merged")]})
+        out = capsys.readouterr().out
+        assert reviewed["numbers"] == [100, 101]
+        assert "skipped 102: abandoned" in out
+        assert "skipped 103: merged" in out
+
+    def test_merged_base_reviews_only_its_children(self, tmp_path,
+                                                   monkeypatch, capsys):
+        rc, reviewed = self._run(
+            tmp_path, monkeypatch, ["--series", "100"], {100: [101, 102]},
+            status={100: "MERGED"})
+        assert reviewed["numbers"] == [101, 102]
+        assert ("100 itself is merged, not reviewed"
+                in capsys.readouterr().out)
+
+    def test_nothing_in_flight(self, tmp_path, monkeypatch, capsys):
+        rc, reviewed = self._run(
+            tmp_path, monkeypatch, ["--series", "100"], {100: []},
+            status={100: "ABANDONED"})
+        assert rc == 0
+        assert "numbers" not in reviewed
+        assert "nothing in flight to review" in capsys.readouterr().out
 
     def test_overlapping_series_reviewed_once(self, tmp_path, monkeypatch,
                                               capsys):

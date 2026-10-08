@@ -571,7 +571,7 @@ opencode's `--model` wants the `provider/model` form.
 |---|---|---|
 | `--repo PATH` | `.` | Source git repository |
 | `--dry-run` | off | Resolve the changes (and `--series` children), show what would be reviewed and posted, then stop — nothing fetched, reviewed, posted, cleared or updated |
-| `--series` | off | Also review every open child of each given change — what its Gerrit relation chain shows stacked on it; e.g. `--series 65382` reviews the base and all its children |
+| `--series` | off | Also review every in-flight child of each given change — what its Gerrit relation chain shows stacked on it; e.g. `--series 65382` reviews the base and all its children. Merged, abandoned and moved-off children (and a merged/abandoned base) are skipped with a note |
 | `--local` | off | Changes are git refs of `--repo`; no changes at all = checked-out HEAD, in place (no flag needed); not postable |
 | `--mode NAME` | `full` | Review depth: `full` = review-core.md deep dive, `light` = the bundled single-pass light review (see "Review modes") |
 | `--last, -n N` | — | Review the newest N commits of `--repo`, one worktree each; takes no change arguments; not postable |

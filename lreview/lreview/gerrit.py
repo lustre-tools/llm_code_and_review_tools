@@ -25,6 +25,7 @@ class ResolvedChange:
     base_url: str
     change_id: Optional[str] = None
     provider: str = "gerrit"
+    status: Optional[str] = None  # NEW, MERGED or ABANDONED
 
     @property
     def slug(self) -> str:
@@ -108,17 +109,26 @@ def resolve_change(url_or_number: str, client: Optional[Any] = None) -> Resolved
         ref=ref,
         base_url=base_url,
         change_id=detail.get("change_id"),
+        status=detail.get("status"),
     )
 
 
-def series_children(change: ResolvedChange,
-                    client: Optional[Any] = None) -> list[int]:
-    """Open changes stacked on `change`, base to tip.
+@dataclass
+class SeriesChildren:
+    """The in-flight children of a change, and the ones left out."""
+    open: list[int]  # base to tip
+    skipped: list[tuple[int, str]]  # (change, why)
 
-    Exactly the children Gerrit's relation chain shows from this change:
+
+def series_children(change: ResolvedChange,
+                    client: Optional[Any] = None) -> SeriesChildren:
+    """The children Gerrit's relation chain shows above `change`.
+
     /related lists descendants first, then the change itself, then its
-    ancestors — so this includes children Gerrit links through an
-    outdated patchset of their parent.
+    ancestors, so this includes children Gerrit links through an
+    outdated patchset of their parent. A child listed at a patchset
+    that is no longer its current one has moved off the series since:
+    reviewing its current patchset would review something else.
     """
     from gerrit_cli.client import GerritCommentsClient
 
@@ -128,7 +138,20 @@ def series_children(change: ResolvedChange,
     ).get("changes", [])
     numbers = [entry.get("_change_number") for entry in related]
     if change.number not in numbers:
-        return []
-    above = related[:numbers.index(change.number)]
-    return [entry["_change_number"] for entry in reversed(above)
-            if entry.get("status") == "NEW"]
+        return SeriesChildren(open=[], skipped=[])
+
+    result = SeriesChildren(open=[], skipped=[])
+    for entry in reversed(related[:numbers.index(change.number)]):
+        number = entry["_change_number"]
+        status = entry.get("status")
+        listed = entry.get("_revision_number")
+        current = entry.get("_current_revision_number")
+        if status != "NEW":
+            result.skipped.append((number, (status or "unknown").lower()))
+        elif current and listed != current:
+            result.skipped.append((
+                number, f"moved off the series (ps{listed} sat on it, "
+                        f"now at ps{current})"))
+        else:
+            result.open.append(number)
+    return result
