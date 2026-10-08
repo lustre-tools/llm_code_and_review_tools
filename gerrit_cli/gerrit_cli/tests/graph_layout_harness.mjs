@@ -51,8 +51,11 @@ function makeElement(id) {
     let text = '';
     const el = {
         id, checked: false, value: '', innerHTML: '', style: {},
-        dataset: {}, children: [], classList: classList(),
-        addEventListener() {}, removeEventListener() {},
+        dataset: {}, children: [], classList: classList(), listeners: {},
+        addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
+        removeEventListener() {},
+        // what a user's click would run: fire('change')
+        fire(type) { for (const fn of this.listeners[type] || []) fn({ target: this }); },
         focus() {}, select() {}, blur() {}, click() {},
         appendChild(c) { this.children.push(c); return c; },
         removeChild() {}, setAttribute() {}, getAttribute() { return null; },
@@ -99,12 +102,15 @@ class DataSet {
 class Network {
     constructor(container, data) { this.data = data || {}; }
     _has(id) { return !!(this.data.nodes && this.data.nodes.get(id)); }
-    on() {} fit() {} redraw() {} unselectAll() {}
+    on() {} redraw() {} unselectAll() { this._selected = []; }
+    fit() { this.fits = (this.fits || 0) + 1; }
     selectNodes(ids) {
         for (const id of ids) {
             if (!this._has(id)) throw new RangeError(`Node with id "${id}" not found`);
         }
+        this._selected = ids;
     }
+    getSelectedNodes() { return this._selected || []; }
     focus(id) {
         if (!this._has(id)) sandbox.console.error(`Node: ${id} cannot be found.`);
     }

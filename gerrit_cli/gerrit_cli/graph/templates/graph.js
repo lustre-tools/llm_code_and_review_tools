@@ -2098,7 +2098,9 @@ function computeBestVisibleParent(positions) {
 }
 
 // ─── RENDER ───
-function renderGraph() {
+// keepView: nothing moves (the conflicts overlay), so the camera and
+// the selection stay as they are instead of fitting the new layout.
+function renderGraph(keepView = false) {
     const positions = computeLayout(currentAnchor);
     const activeUp = computeActiveUp(positions, currentAnchor);
     const bestParent = computeBestVisibleParent(positions);
@@ -2201,6 +2203,12 @@ function renderGraph() {
         ? G.name
         : `Series Graph — #${currentAnchor}`;
 
+    if (keepView) {
+        if (selectedNodeId !== null && nodesDS.get(selectedNodeId)) {
+            network.selectNodes([selectedNodeId]);
+        }
+        return;
+    }
     // Fit after render
     setTimeout(() => {
         network.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
@@ -2763,8 +2771,8 @@ container.addEventListener('mousedown', function(e) {
 // implementation. Adding a new entry point (command palette,
 // programmatic control, etc.) becomes a one-line call.
 const actions = {
-    refresh() {
-        renderGraph();
+    refresh(keepView = false) {
+        renderGraph(keepView);
         if (selectedNodeId !== null) showNodeInfo(selectedNodeId);
     },
     fit() {
@@ -2827,7 +2835,7 @@ const actions = {
 };
 
 document.getElementById('chk-abandoned').addEventListener('change', () => actions.refresh());
-document.getElementById('chk-conflicts').addEventListener('change', () => actions.refresh());
+document.getElementById('chk-conflicts').addEventListener('change', () => actions.refresh(true));
 document.getElementById('layout-trunk').addEventListener('click', () => setLayout('trunk'));
 document.getElementById('layout-stacks').addEventListener('click', () => setLayout('stacks'));
 document.getElementById('btn-fit').addEventListener('click', () => actions.fit());

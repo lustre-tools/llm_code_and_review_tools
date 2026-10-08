@@ -580,6 +580,28 @@ class TestConflicts:
             else:
                 assert view["edges"] == [], view["mode"]
 
+    def test_ticking_it_keeps_the_camera_and_the_selection(self, tmp_path):
+        """Only the overlay changes, so the view is not fitted again;
+        "Show abandoned" moves nodes and still fits."""
+        expr = """(() => {
+            globalThis.setTimeout = f => f();
+            clickNode(103);
+            network.fits = 0;
+            const chk = document.getElementById('chk-conflicts');
+            const seen = [];
+            for (const on of [true, false]) {
+                chk.checked = on;
+                chk.fire('change');
+                seen.push([network.fits, network.getSelectedNodes(),
+                           edgesDS.get().filter(e => String(e.id).startsWith('x')).length]);
+            }
+            document.getElementById('chk-abandoned').fire('change');
+            seen.push([network.fits]);
+            return JSON.stringify(seen);
+        })()"""
+        assert json.loads(_eval(self._payload(), tmp_path, expr)) == [
+            [0, [103], 1], [0, [103], 0], [1]]
+
     def test_a_change_that_does_not_apply_is_marked(self, tmp_path):
         for view in self._views(self._payload(), tmp_path):
             marked = "✗ conflicts with master" in view["label"].split("\n")[0]
