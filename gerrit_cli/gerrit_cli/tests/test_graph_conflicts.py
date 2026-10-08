@@ -432,6 +432,22 @@ class TestRepository:
         assert _git(local, "for-each-ref") == ""
         assert not (local / ".git" / "FETCH_HEAD").exists()
 
+    def test_a_fetch_starts_no_maintenance(self, gerrit, local):
+        """Builds can share a clone: a gc started by one build's fetch must
+        not prune the unreferenced commits another build is merging."""
+        # Any automatic gc would run at once, in the foreground, and prune
+        # every unreferenced object: each fetch makes a pack, and two packs
+        # are already too many.
+        for key, value in (("fetch.unpackLimit", "1"), ("gc.autoPackLimit", "1"),
+                           ("gc.autoDetach", "false"), ("gc.pruneExpire", "now")):
+            _git(local, "config", key, value)
+        old = gerrit.change(20, gerrit.master, {"b.c": _text({2: "y"})})
+        _git(local, "fetch", "--quiet", "--no-write-fetch-head", "--no-auto-maintenance",
+             str(gerrit.path), change_ref(20, 1))
+        x = gerrit.change(10, gerrit.master, {"a.c": _text({2: "x"})})
+        _check(gerrit, local, [x])
+        assert _git(local, "cat-file", "-t", old.commit) == "commit"
+
     def test_an_unknown_branch_is_an_error(self, gerrit, local):
         with pytest.raises(ConflictCheckError, match="has no branch b2_15"):
             check_conflicts(Repo(local), str(gerrit.path), "b2_15", [], {})
@@ -493,6 +509,21 @@ class TestBuildStep:
         assert res["60"] == {"status": "skipped", "reason": "no current commit"}
         assert "40" not in res
         assert _pairs(result) == [(10, 20, ["a.c"])]
+
+    def test_trial_merges_that_cannot_run_leave_the_graph(self, gerrit, local):
+        """An internal project fetched without credentials, or a remote
+        that is down: the graph is built without conflicts."""
+        from gerrit_cli.graph.build import PhaseLogger, _add_conflicts
+
+        ctx = SimpleNamespace(
+            nodes={}, commit_to_change_ps={}, project="internal/example-project", branch="master",
+            base_url=str(gerrit.path.parent / "nowhere"), log=lambda *a, **k: None,
+            external_merged_submitted={},
+        )
+        payload = {"stats": {}}
+        logger = PhaseLogger(total=1, enabled=False)
+        _add_conflicts(ctx, Repo(local), payload, logger)
+        assert "conflicts" not in payload
 
     def test_a_bad_repository_fails_before_any_gerrit_query(self, tmp_path):
         client = MagicMock()

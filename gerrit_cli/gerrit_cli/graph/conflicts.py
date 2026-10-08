@@ -190,8 +190,13 @@ class Repo:
         not lose the rest; after a timeout nothing more is fetched and
         what is missing is reported missing."""
         # an empty --refmap: a named remote's fetch refspec would
-        # otherwise move its remote-tracking branches
-        args = ("fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--refmap=", remote)
+        # otherwise move its remote-tracking branches. No auto-maintenance:
+        # the fetched commits are referenced by nothing, so a `gc --auto`
+        # started here may prune the older ones while another build on the
+        # same clone is about to merge them. Packing the clone is left to
+        # its owner (README: "Sharing a clone").
+        args = ("fetch", "--quiet", "--no-tags", "--no-write-fetch-head",
+                "--no-auto-maintenance", "--refmap=", remote)
         for i in range(0, len(refs), _FETCH_BATCH):
             batch = refs[i:i + _FETCH_BATCH]
             rc = self._run(*args, *batch).returncode

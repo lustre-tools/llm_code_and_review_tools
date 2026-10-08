@@ -23,7 +23,7 @@ from typing import Any
 from urllib.parse import quote
 
 from ..client import GerritCommentsClient
-from .conflicts import Patch, Repo, check_conflicts
+from .conflicts import ConflictCheckError, Patch, Repo, check_conflicts
 from .edges import _break_cycles, _collect_revisions
 from .nodes import _make_node, _update_node_meta, subject_ticket
 from .summary import add_timeline, series_summary
@@ -2384,6 +2384,28 @@ def _check_conflicts(ctx: BuildContext, repo: Repo) -> dict[str, Any]:
     return result
 
 
+def _add_conflicts(ctx: BuildContext, repo: Repo, payload: dict[str, Any],
+                   logger: "PhaseLogger") -> None:
+    """The trial merges as payload["conflicts"]. When they cannot run --
+    the remote refuses the branch (an internal project fetched without
+    credentials), or cannot be reached -- the graph is still what was
+    asked for: it is built without conflicts, and the log says why.
+    A path that is not a repository fails earlier, before any query."""
+    logger.start(f"Trial merges on {ctx.branch} ({repo.path})")
+    try:
+        conflicts = _check_conflicts(ctx, repo)
+    except ConflictCheckError as exc:
+        logger.done(f"skipped: {exc}")
+        return
+    payload["conflicts"] = conflicts
+    failing = [r for r in conflicts["results"].values() if r["status"] == "conflict"]
+    on_branch = sum(1 for r in failing if "base" not in r and "parent" not in r)
+    logger.done(
+        f"{len(failing)} do not apply ({on_branch} conflict with {ctx.branch}),"
+        f" {len(conflicts['pairs'])} conflicting pairs"
+    )
+
+
 # ─── Public entry point ─────────────────────────────────────────────────
 
 
@@ -2610,15 +2632,7 @@ def build_graph(
     if name:
         payload["name"] = name
     if repo is not None:
-        logger.start(f"Trial merges on {ctx.branch} ({repo.path})")
-        conflicts = _check_conflicts(ctx, repo)
-        payload["conflicts"] = conflicts
-        failing = [r for r in conflicts["results"].values() if r["status"] == "conflict"]
-        on_branch = sum(1 for r in failing if "base" not in r and "parent" not in r)
-        logger.done(
-            f"{len(failing)} do not apply ({on_branch} conflict with {ctx.branch}),"
-            f" {len(conflicts['pairs'])} conflicting pairs"
-        )
+        _add_conflicts(ctx, repo, payload, logger)
     stats = payload["stats"]
     logger.summary(
         f"{stats['node_count']} nodes · "

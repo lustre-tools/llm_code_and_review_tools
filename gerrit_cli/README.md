@@ -340,6 +340,19 @@ includes:
   `next` for master-next, `with` naming the queued patch); a collision
   with a queued patch in the graph is a dashed red edge. Nothing is
   counted in the stats. Needs git 2.40 or newer. A few seconds on the portal graphs, mostly the fetch.
+  When the trial merges cannot run -- the remote will not give the
+  branch (an internal project fetched without credentials) or cannot be
+  reached -- the graph is built without them and the log says why; a
+  REPO that is not a git repository fails before any Gerrit query.
+
+  *Sharing a clone*: builds can run at the same time on one REPO. Each
+  writes its merges to a private temporary object directory, and its
+  fetch adds objects only (no refs, no FETCH_HEAD) and starts no
+  automatic `git gc`: the fetched commits are referenced by nothing,
+  and a gc started by one build could prune the older ones while
+  another is merging them. So the clone only grows. Pack it at any
+  time with `git repack -a -d --keep-unreachable` (deletes no object);
+  `git gc --prune=now` only when no build is running.
 - **Dark/Light mode**: toggle with the "Light Mode" / "Dark Mode" button
   in the toolbar.
 - **Keyboard shortcuts**: `F` = fit to view, `Z` = focus selected node,
