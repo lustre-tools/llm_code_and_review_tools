@@ -514,6 +514,75 @@ def _filter_merged_ancestors(ctx: BuildContext) -> int:
     return len(merged_discovered)
 
 
+def _discover_inflight_ancestors(ctx: BuildContext) -> int:
+    """In-flight changes the series sits on that no search found.
+
+    _discover_missing_nodes fetches what it finds without parent
+    commits. When an in-flight change's current patchset sits on such a
+    change, the series needs it, but its own parent was never looked
+    up: 61965's 66481 sits on 69506, which sits on 69505, so 69506
+    stood on nothing, was hooked to the trunk by date and trial-merged
+    without 69505. Look such a change's parent up; an in-flight owner
+    joins the graph as an unrelated parent (dimmed, counted nowhere)
+    and is walked in turn. A change only an old patchset sat on is left
+    alone, the stacks view shows its ancestry. Returns the number of
+    changes added."""
+    current_parents = {
+        ctx.revision_parents.get(n["current_commit"])
+        for n in ctx.nodes.values() if n["status"] == "NEW"
+    }
+    needed = {
+        cn for h, (cn, _ps) in ctx.commit_to_change_ps.items()
+        if h in current_parents
+    }
+    todo = [
+        cn for cn, n in sorted(ctx.nodes.items())
+        if cn in needed and n["status"] == "NEW" and n.get("current_commit")
+        and n["current_commit"] not in ctx.revision_parents
+    ]
+    added = 0
+    for _hop in range(_CONTEXT_MAX_HOPS):
+        found = []
+        for cn in todo:
+            commit = ctx.nodes[cn]["current_commit"]
+            try:
+                parent, _subject = _commit_parent(ctx, cn, commit)
+                owner = _commit_owner(ctx, parent) if parent else None
+            except Exception as e:
+                ctx.log(f" (parent of {cn}: {e})", end="")
+                continue
+            if owner is None or owner[0] == cn:
+                continue
+            pcn, _pps, change = owner
+            if change is None:
+                if ctx.nodes[pcn]["status"] == "NEW":
+                    ctx.revision_parents[commit] = parent
+                continue
+            if change.get("status") != "NEW" or not _matches_anchor_scope(ctx, change):
+                continue
+            ctx.nodes[pcn] = _make_node(
+                pcn, change.get("subject", ""), "NEW",
+                change.get("_current_revision_number")
+                or max((r.get("_number", 0) for r in (change.get("revisions") or {}).values()),
+                       default=1),
+                change.get("owner", {}).get("name", "Unknown"), ctx.base_url,
+                topic=change.get("topic", ""), hashtags=change.get("hashtags", []),
+                updated=change.get("updated", ""),
+                is_wip=bool(change.get("work_in_progress", False)),
+                project=change.get("project", ctx.project),
+                branch=change.get("branch", ctx.branch),
+            )
+            ctx.nodes[pcn]["unrelated_parent"] = True
+            ctx.revision_parents[commit] = parent
+            found.append(pcn)
+        if not found:
+            break
+        added += len(found)
+        _fetch_revisions_batch(ctx, found, collect_parents=True)
+        todo = found
+    return added
+
+
 def _attach_review_info(ctx: BuildContext) -> None:
     """Copy the parsed labels + comment count onto each node's
     ``review`` field."""
@@ -2142,14 +2211,17 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
         s = n["status"]
         # Structural merged nodes are branch-point parents of the
         # series, not series members — visible in the trunk but
-        # excluded from the Merged counter.
-        if s == "MERGED" and n.get("trunk_structural"):
+        # excluded from the Merged counter. Unrelated parents count
+        # nowhere at all.
+        if (s == "MERGED" and n.get("trunk_structural")) or n.get("unrelated_parent"):
             continue
         status_counts[s] = status_counts.get(s, 0) + 1
+    unrelated_parents = sorted(cn for cn, n in ctx.nodes.items() if n.get("unrelated_parent"))
 
     stale_edges = sum(1 for e in ctx.edges if e["is_stale"])
     tickets = sorted(
-        set(n["ticket"] for n in ctx.nodes.values() if n["ticket"])
+        set(n["ticket"] for n in ctx.nodes.values()
+            if n["ticket"] and not n.get("unrelated_parent"))
     )
     generated_at = datetime.now().astimezone().strftime(
         "%Y-%m-%d %I:%M:%S %p %Z"
@@ -2212,7 +2284,7 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
         # no review activity or abandon time, and the Stats tab says so.
         "review_activity": bool(ctx.fetch_details),
         "stats": {
-            "node_count": len(ctx.nodes),
+            "node_count": len(ctx.nodes) - len(unrelated_parents),
             "edge_count": len(ctx.edges),
             "status_counts": status_counts,
             "stale_edge_count": stale_edges,
@@ -2231,6 +2303,9 @@ def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
             # Headline numbers (see summary.py); read by the Stats tab
             # and by the portal's graph list.
             "summary": summary,
+            # In-flight changes the series sits on that no search
+            # found (_discover_inflight_ancestors); shown dimmed.
+            **({"unrelated_parent_cns": unrelated_parents} if unrelated_parents else {}),
         },
     }
 
@@ -2243,15 +2318,31 @@ def _check_conflicts(ctx: BuildContext, repo: Repo) -> dict[str, Any]:
         and n.get("project", ctx.project) == ctx.project
         and n.get("branch", ctx.branch) == ctx.branch
     }
-    owner_of = {
-        h: cn for h, (cn, _ps) in ctx.commit_to_change_ps.items() if cn in inflight
-    }
+    owners = {}
+    for h, (cn, _ps) in ctx.commit_to_change_ps.items():
+        if cn in ctx.nodes:
+            owners[h] = (cn, ctx.nodes[cn]["status"])
+        elif cn in ctx.external_merged_submitted:
+            owners[h] = (cn, "MERGED")
+
+    def lookup(shas: list[str]) -> dict[str, tuple[int, str]]:
+        found = {}
+        for i in range(0, len(shas), _DISCOVERY_BATCH_SIZE):
+            query = " OR ".join(f"commit:{h}" for h in shas[i:i + _DISCOVERY_BATCH_SIZE])
+            for change in ctx.client.rest.get(
+                f"/changes/?q={quote(query, safe=':+ ')}&o=ALL_REVISIONS&n=500"
+            ) or []:
+                for h in change.get("revisions") or {}:
+                    if h in shas:
+                        found[h] = (change.get("_number", 0), change.get("status", ""))
+        return found
+
     remote = repo.resolve_remote(ctx.project) or f"{ctx.base_url}/{ctx.project}"
     result = check_conflicts(
         repo, remote, ctx.branch,
         [Patch(cn, n["current_patchset"], n["current_commit"])
          for cn, n in sorted(inflight.items())],
-        owner_of, log=ctx.log,
+        owners, lookup=lookup, log=ctx.log,
     )
     for cn, n in sorted(ctx.nodes.items()):
         if n["status"] == "NEW" and cn not in inflight:
@@ -2437,9 +2528,12 @@ def build_graph(
     logger.start("Discovering missing parent commits")
     discovered = _discover_missing_nodes(ctx)
     filtered = _filter_merged_ancestors(ctx)
+    ancestors = _discover_inflight_ancestors(ctx)
     parts = []
     if discovered:
         parts.append(f"+{discovered} discovered")
+    if ancestors:
+        parts.append(f"+{ancestors} unrelated parents")
     if filtered:
         parts.append(f"{filtered} ancestors filtered")
     logger.done(", ".join(parts) if parts else "nothing new")
@@ -2487,9 +2581,11 @@ def build_graph(
         logger.start(f"Trial merges on {ctx.branch} ({repo.path})")
         conflicts = _check_conflicts(ctx, repo)
         payload["conflicts"] = conflicts
+        failing = [r for r in conflicts["results"].values() if r["status"] == "conflict"]
+        on_branch = sum(1 for r in failing if "base" not in r and "parent" not in r)
         logger.done(
-            f"{sum(r['status'] == 'conflict' for r in conflicts['results'].values())}"
-            f" conflict with {ctx.branch}, {len(conflicts['pairs'])} conflicting pairs"
+            f"{len(failing)} do not apply ({on_branch} conflict with {ctx.branch}),"
+            f" {len(conflicts['pairs'])} conflicting pairs"
         )
     stats = payload["stats"]
     logger.summary(

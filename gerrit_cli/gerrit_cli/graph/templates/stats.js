@@ -90,8 +90,9 @@ function stMs(t) {
 function stBuildRecords() {
     const out = [];
     for (const n of G.nodes) {
-        // Unrelated merged patches kept only as a branch base.
-        if (n.trunk_structural || !n.opened_at) continue;
+        // Unrelated merged patches kept only as a branch base, and
+        // in-flight changes the series sits on that no search found.
+        if (n.trunk_structural || n.unrelated_parent || !n.opened_at) continue;
         const ps = (n.ps_times || []).map(t => t * 1000);
         out.push({
             id: n.id,
@@ -930,6 +931,7 @@ function stDrawNotes() {
     const approx = stRecs.filter(r => r.closedApprox).length;
     const structural = (G.stats.structural_merged_cns || []).length;
     const pruned = (G.stats.pruned_merged_cns || []).length;
+    const parents = (G.stats.unrelated_parent_cns || []).length;
     const notes = [
         'Covers the ' + stRecs.length + ' patches in this graph, including separate groups and abandoned patches.',
         'Created = first patchset upload. Merged = submit time. Abandoned = the last abandon not followed by a restore.',
@@ -940,10 +942,11 @@ function stDrawNotes() {
         notes.push(stPlural(approx, 'closed patch has', 'closed patches have')
             + ' no close event; the last update time stands in for it.');
     }
-    if (structural || pruned) {
+    if (structural || pruned || parents) {
         const parts = [];
         if (structural) parts.push(stPlural(structural, 'unrelated merged base patch', 'unrelated merged base patches') + ' shown dimmed in the graph');
         if (pruned) parts.push(stPlural(pruned, 'unrelated merged patch', 'unrelated merged patches') + ' dropped from the trunk');
+        if (parents) parts.push(stPlural(parents, 'unrelated in-flight parent', 'unrelated in-flight parents') + ' shown dimmed in the graph');
         notes.push('Not counted: ' + parts.join('; ') + '.');
     }
     if (G.review_activity === false) notes.push('Review activity is missing: this graph was built with --skip-ci-details.');

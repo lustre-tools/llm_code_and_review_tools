@@ -213,6 +213,13 @@ includes:
   was based on, with a dashed edge since the link is inferred from
   dates. A chain based on master history older than every merged
   patch in the graph stays in a column of its own on the right.
+- **Unrelated in-flight parents**: when the series sits on an
+  in-flight change that no search found (61965: 66481 sits on 69506,
+  which sits on 69505), that change is pulled in, down to the merged
+  change or master commit it is based on, and drawn dimmed with a blue
+  border. It counts nowhere (stats bar, Stats tab, summary). Changes
+  that only an old patchset of the series sat on are not walked; the
+  Stacks view shows their ancestry instead.
 - **Stacks view**: "Stacks" on the Trunk | Stacks switch (next to
   Graph | Stats) drops the trunk and puts each in-flight subtree in
   its own column, side by side, standing on the merged patch it
@@ -306,7 +313,14 @@ includes:
   in memory; the merge results go to a temporary object directory, so
   REPO only gains what was fetched). That says per change whether it
   applies, does not apply (with the conflicting files) or is blocked by
-  a change below it that does not apply. Then every two changes that
+  a change below it that does not apply. A change that does not apply
+  is not blamed on the branch when the cause is elsewhere: when it sits
+  on an older patchset of the change below it and conflicts with that
+  change's current patchset too, it says "conflicts with #N" (it needs
+  a rebase onto it); when the bottom of its stack sits on something
+  that is not on the branch (an abandoned change, a change outside the
+  graph or another branch, a commit no change owns), only its own diff
+  could be tried, and it says "base not on master". Then every two changes that
   both apply, neither standing on the other and whose own diffs touch a
   common file, are landed together; a conflict is reported between the
   two changes whose own diffs collide, not again for the changes above
@@ -315,7 +329,8 @@ includes:
   master"; the node panel gets a Conflicts section above Dependents,
   including the conflicts it inherits through the changes below it.
   The results are in the payload as `conflicts` (`tip`, `results` per
-  change, `pairs`); nothing is counted in the stats. Needs git 2.40 or
+  change with `parent` / `base` for those two causes, `pairs`); nothing
+  is counted in the stats. Needs git 2.40 or
   newer. A few seconds on the portal graphs, mostly the fetch.
 - **Dark/Light mode**: toggle with the "Light Mode" / "Dark Mode" button
   in the toolbar.

@@ -8,7 +8,13 @@ changes it stands on. Every pick is `git merge-tree --merge-base=<parent>
 1. Against the branch tip: each change is picked onto the result of the
    changes below it, so one pass says for every change whether its stack
    applies, where it stops applying (conflict) and what sits above that
-   (blocked).
+   (blocked). A change at the bottom whose parent is not on the branch
+   (an abandoned change, a change outside the graph, a stray commit) is
+   tried with its own diff alone, so its result says that ("base"). A
+   change on an older patchset of the change below it that does not
+   apply is also tried on that change's current patchset alone; when it
+   conflicts there too, the cause is the parent's new patchset
+   ("parent"), not the branch.
 2. Against each other: for two changes neither of which stands on the
    other, one stack is applied and the other's own part picked on top.
    Only pairs whose own diffs share a file are tried: a conflict on a
@@ -129,6 +135,9 @@ class Repo:
         raise ConflictCheckError(
             f"git ls-remote {remote} {ref} failed: {r.stderr.strip() or 'no such branch'}")
 
+    def is_ancestor(self, commit: str, of: str) -> bool:
+        return self._run("merge-base", "--is-ancestor", commit, of).returncode == 0
+
     def missing(self, commits: list[str]) -> set[str]:
         r = self._run("cat-file", "--batch-check=%(objectname) %(objecttype)",
                       input="".join(c + "\n" for c in commits))
@@ -219,6 +228,7 @@ class Repo:
 class _State:
     patches: dict[int, Patch]
     base: dict[int, str] = field(default_factory=dict)       # parent commit
+    off_branch: dict[int, dict[str, Any]] = field(default_factory=dict)
     under: dict[int, int] = field(default_factory=dict)      # in-flight change below
     results: dict[int, dict[str, Any]] = field(default_factory=dict)
     applied: dict[int, str] = field(default_factory=dict)    # stack on the tip
@@ -230,16 +240,18 @@ def check_conflicts(
     remote: str,
     branch: str,
     patches: list[Patch],
-    owner_of: dict[str, int],
+    owners: dict[str, tuple[int, str]],
     *,
+    lookup: Callable[[list[str]], dict[str, tuple[int, str]]] | None = None,
     log: Callable[[str], None] | None = None,
     workers: int | None = None,
 ) -> dict[str, Any]:
     """Trial-merge `patches` against the fetched tip of `branch` and
     against each other.
 
-    `owner_of` maps every known patch set commit of the in-flight changes
-    to its change number; it decides which change a patch stands on.
+    `owners` maps known patch set commits to (change, status): a parent
+    owned by one of `patches` is the change a patch stands on. `lookup`
+    finds the owners of other parent commits that are not on the branch.
     """
     say = log or (lambda _msg: None)
     workers = workers or min(8, os.cpu_count() or 2)
@@ -256,7 +268,8 @@ def check_conflicts(
             missing = repo.missing(sorted(missing))
         if tip in missing:
             raise ConflictCheckError(f"could not fetch {branch} from {remote}")
-        _link(repo, st, missing, owner_of)
+        _link(repo, st, missing, owners)
+        _off_branch(repo, st, tip, owners, lookup)
         _check_tip(repo, st, tip, workers)
         own = repo.changed_files({st.patches[cn].commit: st.base[cn] for cn in st.applied})
         own_by_cn = {cn: own.get(st.patches[cn].commit, set()) for cn in st.applied}
@@ -265,6 +278,8 @@ def check_conflicts(
     for cn, res in st.results.items():
         if cn in st.under:
             res["under"] = st.under[cn]
+        if cn in st.off_branch:
+            res["base"] = st.off_branch[cn]
     summary = defaultdict(int)
     for res in st.results.values():
         summary[res["status"]] += 1
@@ -281,7 +296,8 @@ def check_conflicts(
     }
 
 
-def _link(repo: Repo, st: _State, missing: set[str], owner_of: dict[str, int]) -> None:
+def _link(repo: Repo, st: _State, missing: set[str],
+          owners: dict[str, tuple[int, str]]) -> None:
     """Parent commit and in-flight change below each patch."""
     present = [p.commit for p in st.patches.values() if p.commit not in missing]
     parents = repo.parents(present)
@@ -295,7 +311,7 @@ def _link(repo: Repo, st: _State, missing: set[str], owner_of: dict[str, int]) -
                               "reason": "merge commit" if ps else "root commit"}
             continue
         st.base[cn] = ps[0]
-        below = owner_of.get(ps[0])
+        below = owners.get(ps[0], (None, ""))[0]
         if below is not None and below != cn and below in st.patches:
             st.under[cn] = below
     # Two changes each on an old patch set of the other: no order lands both.
@@ -316,22 +332,59 @@ def _link(repo: Repo, st: _State, missing: set[str], owner_of: dict[str, int]) -
         st.stack[cn] = chain[::-1]
 
 
+def _off_branch(repo: Repo, st: _State, tip: str, owners: dict[str, tuple[int, str]],
+                lookup: Callable[[list[str]], dict[str, tuple[int, str]]] | None) -> None:
+    """The bottom changes whose parent is not on the branch: what they
+    sit on instead. A merged change's old patchset counts as on the
+    branch; cherry-pick submit landed it under another commit."""
+    unknown: dict[str, list[int]] = defaultdict(list)
+    for cn, parent in st.base.items():
+        if cn in st.under or cn in st.results:
+            continue
+        owner = owners.get(parent)
+        if owner is None or owner[0] == cn:
+            unknown[parent].append(cn)
+        elif owner[1] != "MERGED":
+            st.off_branch[cn] = {"cn": owner[0], "status": owner[1]}
+    for parent in [p for p in unknown if repo.is_ancestor(p, tip)]:
+        del unknown[parent]
+    found: dict[str, tuple[int, str]] = {}
+    if unknown and lookup is not None:
+        try:
+            found = lookup(sorted(unknown))
+        except Exception:  # the base stays "unknown"
+            found = {}
+    for parent, cns in unknown.items():
+        owner = found.get(parent)
+        if owner is not None and owner[1] == "MERGED":
+            continue
+        for cn in cns:
+            st.off_branch[cn] = ({"cn": owner[0], "status": owner[1]} if owner
+                                 else {"status": "unknown"})
+
+
 def _check_tip(repo: Repo, st: _State, tip: str, workers: int) -> None:
     levels: dict[int, list[int]] = defaultdict(list)
     for cn in st.patches:
         if cn not in st.results:
             levels[len(st.stack[cn])].append(cn)
 
-    def one(cn: int) -> tuple[int, _Pick | None]:
+    def one(cn: int) -> tuple[int, _Pick | None, _Pick | None]:
         below = st.under.get(cn)
         if below is not None and below not in st.applied:
-            return cn, None
+            return cn, None, None
         onto = st.applied[below] if below is not None else tip
-        return cn, repo.pick(onto, st.patches[cn].commit, st.base[cn])
+        commit, base = st.patches[cn].commit, st.base[cn]
+        pick = repo.pick(onto, commit, base)
+        on_parent = None
+        if (pick.status == "conflict" and below is not None
+                and base != st.patches[below].commit):
+            on_parent = repo.pick(st.patches[below].commit, commit, base)
+        return cn, pick, on_parent
 
     with ThreadPoolExecutor(workers) as pool:
         for depth in sorted(levels):
-            for cn, pick in pool.map(one, sorted(levels[depth])):
+            for cn, pick, on_parent in pool.map(one, sorted(levels[depth])):
                 if pick is None:
                     res = st.results[st.under[cn]]
                     by = res.get("by", st.under[cn]) if res["status"] == "blocked" else st.under[cn]
@@ -343,6 +396,9 @@ def _check_tip(repo: Repo, st: _State, tip: str, workers: int) -> None:
                         st.results[cn]["empty"] = True
                 elif pick.status == "conflict":
                     st.results[cn] = {"status": "conflict", "files": list(pick.files)}
+                    if on_parent is not None and on_parent.status == "conflict":
+                        st.results[cn]["parent"] = {"cn": st.under[cn],
+                                                    "files": list(on_parent.files)}
                 else:
                     st.results[cn] = {"status": "error", "reason": pick.detail[:300]}
 

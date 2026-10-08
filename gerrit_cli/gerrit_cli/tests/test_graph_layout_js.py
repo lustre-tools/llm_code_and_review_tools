@@ -627,8 +627,89 @@ class TestConflicts:
         assert "clickNode(103)" in info
         assert "through <a href=\"#\" onclick=\"clickNode(101)" in info
 
+    def test_a_change_whose_base_is_not_on_the_branch(self, tmp_path):
+        """105 sits on an abandoned change: only its own diff was tried,
+        so the label and panel blame the base, not master."""
+        payload = self._payload()
+        payload["nodes"].append(_node(105))
+        payload["edges"].append(_edge(10, 105))
+        payload["conflicts"]["results"]["105"] = {
+            "status": "conflict", "files": ["y.c"],
+            "base": {"cn": 30, "status": "ABANDONED"}}
+        expr = """(() => {
+            document.getElementById('chk-conflicts').checked = true;
+            renderGraph();
+            const n = nodesDS.get(105);
+            showNodeInfo(105);
+            return JSON.stringify([n.label.split('\\n')[0], n.color.border,
+                                   document.getElementById('info').innerHTML]);
+        })()"""
+        first, border, info = json.loads(_eval(payload, tmp_path, expr))
+        assert first.endswith("\u2717 base not on master")
+        assert border == "#d29922"
+        assert "Does not apply without its base" in info
+        assert "abandoned <a href=\"#\" onclick=\"clickNode(30)" in info
+
+    def test_a_change_that_conflicts_with_its_parents_new_patch_set(self, tmp_path):
+        payload = self._payload()
+        payload["edges"] = [e for e in payload["edges"] if (e["from"], e["to"]) != (101, 102)]
+        payload["edges"].append(_edge(101, 102, 1, 2))
+        payload["conflicts"]["results"]["102"]["parent"] = {"cn": 101, "files": ["x.c"]}
+        expr = """(() => {
+            document.getElementById('chk-conflicts').checked = true;
+            renderGraph();
+            const n = nodesDS.get(102);
+            showNodeInfo(102);
+            return JSON.stringify([n.label.split('\\n')[0], n.color.border,
+                                   document.getElementById('info').innerHTML]);
+        })()"""
+        first, border, info = json.loads(_eval(payload, tmp_path, expr))
+        assert first.endswith("\u2717 conflicts with #101") and border == "#d29922"
+        assert "it sits on ps1 of" in info and "the current patch set (ps2)" in info
+        assert "needs a rebase onto" in info
+
     def test_panel_without_conflicts_and_for_merged_changes(self, tmp_path):
         info = self._panel(self._payload(), tmp_path, 104)
         section = info[info.index("<h2>Conflicts"):]
         assert '<div class="fv">None</div>' in section
         assert "Conflicts" not in self._panel(self._payload(), tmp_path, 10)
+
+
+class TestUnrelatedParents:
+    """69505: in flight, not in the series, but 69506 sits on it."""
+
+    def _payload(self):
+        nodes = [_node(10, "MERGED", submitted="2026-01-01"),
+                 _node(69505, unrelated_parent=True, opened_at=1767225600),
+                 _node(69506, opened_at=1767225600), _node(66481, opened_at=1767225600)]
+        edges = [_edge(10, 69505, inferred=True), _edge(69505, 69506, 1, 2),
+                 _edge(69506, 66481)]
+        payload = _payload(66481, nodes, edges)
+        payload["stats"]["status_counts"] = {"MERGED": 1, "NEW": 2}
+        payload["stats"]["unrelated_parent_cns"] = [69505]
+        return payload
+
+    def test_it_holds_the_change_on_it_in_both_views(self, tmp_path):
+        for combo, view in _render(self._payload(), tmp_path, "a0m1", "a0m0").items():
+            pos = _pos(view)
+            assert pos[69506] == (pos[69505][0], pos[69505][1] - LEVEL_H), combo
+            assert (69505, 69506) in _drawn(view), combo
+
+    def test_it_is_dimmed(self, tmp_path):
+        view = _render(self._payload(), tmp_path, "a0m1")["a0m1"]
+        nodes = {n["id"]: n for n in view["nodes"]}
+        assert nodes[69505]["bg"] == "#161b22" and nodes[69505]["border"] == "#388bfd"
+        assert nodes[69506]["bg"] != "#161b22"
+
+    def test_it_counts_nowhere_and_says_why_it_is_there(self, tmp_path):
+        expr = """JSON.stringify([
+            health.ready + health.pending + health.veto + health.maloo
+                + health.jenkins + health.other,
+            stBuildRecords().map(r => r.id).sort(),
+            document.getElementById('legend').innerHTML.includes('Unrelated in-flight parent'),
+            (showNodeInfo(69505), document.getElementById('info').innerHTML)])"""
+        chips, records, legend, info = json.loads(_eval(self._payload(), tmp_path, expr))
+        assert chips == 2
+        assert records == [66481, 69506]
+        assert legend
+        assert "Not part of this series" in info and "clickNode(69506)" in info

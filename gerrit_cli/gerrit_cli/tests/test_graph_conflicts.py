@@ -47,7 +47,7 @@ class Gerrit:
         self.path.mkdir(parents=True)
         _git(self.path, "init", "-q", "--bare")
         self.index = root / "index"
-        self.owner: dict[str, int] = {}
+        self.owner: dict[str, tuple[int, str]] = {}
         self.master = self.commit(None, {"a.c": _text({}), "b.c": _text({})}, "base")
         _git(self.path, "update-ref", "refs/heads/master", self.master)
 
@@ -67,10 +67,11 @@ class Gerrit:
         _git(self.path, "update-ref", "refs/heads/master", self.master)
         return self.master
 
-    def change(self, cn: int, parent: str, files: dict[str, str], ps: int = 1) -> Patch:
+    def change(self, cn: int, parent: str, files: dict[str, str], ps: int = 1,
+               status: str = "NEW") -> Patch:
         sha = self.commit(parent, files, f"change {cn} ps{ps}")
         _git(self.path, "update-ref", change_ref(cn, ps), sha)
-        self.owner[sha] = cn
+        self.owner[sha] = (cn, status)
         return Patch(cn, ps, sha)
 
 
@@ -87,9 +88,11 @@ def local(tmp_path):
     return path
 
 
-def _check(gerrit: Gerrit, local: Path, patches: list[Patch]) -> dict:
+def _check(gerrit: Gerrit, local: Path, patches: list[Patch], owners=None,
+           lookup=None) -> dict:
     return check_conflicts(Repo(local), str(gerrit.path), "master", patches,
-                           gerrit.owner, workers=2)
+                           gerrit.owner if owners is None else owners,
+                           lookup=lookup, workers=2)
 
 
 def _status(result: dict) -> dict[int, str]:
@@ -160,6 +163,88 @@ class TestAgainstTheBranch:
         result = _check(gerrit, local, [x2, y1])
         assert result["results"]["10"]["reason"] == "circular dependency"
         assert _status(result) == {10: "error", 20: "error"}
+
+
+class TestBaseNotOnTheBranch:
+    """A change at the bottom whose parent is not on the branch is tried
+    with its own diff alone; the result says what it sits on."""
+
+    def _on(self, gerrit, status):
+        a = gerrit.change(30, gerrit.master, {"a.c": _text({2: "a"})}, status=status)
+        x = gerrit.change(10, a.commit, {"a.c": _text({2: "x"})})
+        return a, x
+
+    @pytest.mark.parametrize("status", ["ABANDONED", "NEW"])
+    def test_a_change_on_a_change_that_does_not_land(self, gerrit, local, status):
+        """x rewrites the line its base added: alone it does not apply,
+        and that is the base's doing, not master's."""
+        _a, x = self._on(gerrit, status)
+        res = _check(gerrit, local, [x])["results"]["10"]
+        assert res == {"status": "conflict", "files": ["a.c"],
+                       "base": {"cn": 30, "status": status}}
+
+    def test_a_change_on_an_old_patch_set_of_a_merged_change(self, gerrit, local):
+        m1 = gerrit.change(30, gerrit.master, {"a.c": _text({2: "m"})}, status="MERGED")
+        gerrit.advance({"a.c": _text({2: "m"})})
+        x = gerrit.change(10, m1.commit, {"a.c": _text({2: "m", 9: "x"})})
+        assert _check(gerrit, local, [x])["results"]["10"] == {"status": "clean"}
+
+    def test_a_change_on_an_older_branch_commit(self, gerrit, local):
+        old = gerrit.master
+        gerrit.advance({"b.c": _text({1: "moved"})})
+        x = gerrit.change(10, old, {"a.c": _text({9: "x"})})
+        calls = []
+        result = _check(gerrit, local, [x], lookup=lambda shas: calls.append(shas) or {})
+        assert result["results"]["10"] == {"status": "clean"} and calls == []
+
+    def test_a_commit_no_known_change_owns_is_looked_up(self, gerrit, local):
+        stray = gerrit.commit(gerrit.master, {"a.c": _text({2: "s"})}, "stray")
+        x = gerrit.change(10, stray, {"a.c": _text({2: "x"})})
+        owners = {x.commit: (10, "NEW")}
+        res = _check(gerrit, local, [x], owners, lookup=lambda shas: {})["results"]["10"]
+        assert res["base"] == {"status": "unknown"}
+        res = _check(gerrit, local, [x], owners,
+                     lookup=lambda shas: {stray: (40, "ABANDONED")})["results"]["10"]
+        assert res["base"] == {"cn": 40, "status": "ABANDONED"}
+        res = _check(gerrit, local, [x], owners,
+                     lookup=lambda shas: {stray: (40, "MERGED")})["results"]["10"]
+        assert "base" not in res
+
+    def test_only_the_bottom_of_a_stack_says_it(self, gerrit, local):
+        _a, x = self._on(gerrit, "ABANDONED")
+        y = gerrit.change(11, x.commit, {"a.c": _text({2: "x", 9: "y"})})
+        result = _check(gerrit, local, [x, y])["results"]
+        assert result["10"]["base"] == {"cn": 30, "status": "ABANDONED"}
+        assert result["11"] == {"status": "blocked", "by": 10, "under": 10}
+
+
+class TestParentMovedOn:
+    """x sits on ps1 of y, y is at ps2 now."""
+
+    def _stack(self, gerrit, x_edits):
+        y1 = gerrit.change(20, gerrit.master, {"a.c": _text({2: "y1"})})
+        y2 = gerrit.change(20, gerrit.master, {"a.c": _text({2: "y2"})}, ps=2)
+        x = gerrit.change(30, y1.commit, {"a.c": _text({2: "y1", **x_edits})})
+        return y2, x
+
+    def test_a_conflict_with_the_new_patch_set_is_the_parents(self, gerrit, local):
+        y2, x = self._stack(gerrit, {3: "x"})
+        res = _check(gerrit, local, [y2, x])["results"]["30"]
+        assert res == {"status": "conflict", "files": ["a.c"], "under": 20,
+                       "parent": {"cn": 20, "files": ["a.c"]}}
+
+    def test_a_conflict_the_parent_does_not_cause_is_the_branchs(self, gerrit, local):
+        y2, x = self._stack(gerrit, {9: "x"})
+        gerrit.advance({"a.c": _text({9: "master"})})
+        res = _check(gerrit, local, [y2, x])["results"]["30"]
+        assert res == {"status": "conflict", "files": ["a.c"], "under": 20}
+
+    def test_on_the_current_patch_set_no_extra_pick(self, gerrit, local):
+        y = gerrit.change(20, gerrit.master, {"a.c": _text({2: "y"})})
+        x = gerrit.change(30, y.commit, {"a.c": _text({2: "y", 9: "x"})})
+        gerrit.advance({"a.c": _text({9: "master"})})
+        res = _check(gerrit, local, [y, x])["results"]["30"]
+        assert "parent" not in res and res["status"] == "conflict"
 
 
 class TestBetweenChanges:
@@ -281,6 +366,7 @@ class TestBuildStep:
             project="fs/lustre-release", branch="master",
             base_url="https://gerrit.invalid", log=lambda *a, **k: None,
         )
+        ctx.external_merged_submitted = {}
         result = _check_conflicts(ctx, Repo(local))
         res = result["results"]
         assert res["30"] == {"status": "clean", "under": 10}

@@ -47,9 +47,10 @@ for (const child in edgesTo) {
 // …" without having to scan the graph node-by-node.
 const sc = G.stats.status_counts;
 const inflight = sc.NEW || 0;
+const unrelatedParents = (G.stats.unrelated_parent_cns || []).length;
 const health = { ready: 0, pending: 0, veto: 0, maloo: 0, jenkins: 0, other: 0 };
 for (const n of G.nodes) {
-    if (n.status !== 'NEW') continue;
+    if (n.status !== 'NEW' || n.unrelated_parent) continue;
     const h = reviewHealth(n);
     if      (h === 'good')        health.ready++;
     else if (h === 'bad_veto')    health.veto++;
@@ -83,7 +84,7 @@ const breakdown = healthChips.length
     : '';
 
 document.getElementById('stats').innerHTML =
-    `<span class="badge badge-new">In-flight: ${inflight}</span>`
+    `<span class="badge badge-new"${unrelatedParents ? ` title="${inflight} in the series; ${unrelatedParents} unrelated in-flight parent(s) shown dimmed, not counted"` : ''}>In-flight: ${inflight}</span>`
   + breakdown
   + `<span class="badge badge-merged" title="${sc.MERGED || 0} series member(s) merged${(G.stats.structural_merged_count || 0) ? `; ${G.stats.structural_merged_count} unrelated merged patch(es) shown dimmed only as branch base` : ''}">MERGED: ${sc.MERGED || 0}${(G.stats.structural_merged_count || 0) ? ` +${G.stats.structural_merged_count} base` : ''}</span>`
   + `<span class="badge badge-abandoned">ABANDONED: ${sc.ABANDONED || 0}</span>`
@@ -1661,6 +1662,8 @@ function legendItems() {
         { kind: 'fill', label: 'Other -1',    color: C.REVIEW_BAD_OTHER.bg },
         { kind: 'fill', label: 'Merged',      color: C.STATUS.MERGED.bg },
         { kind: 'border', label: 'Base (unrelated parent)', color: C.STATUS.MERGED.border },
+        ...((G.stats.unrelated_parent_cns || []).length
+            ? [{ kind: 'border', label: 'Unrelated in-flight parent', color: C.STATUS.NEW.border }] : []),
         { kind: 'fill', label: 'Abandoned',   color: C.STATUS.ABANDONED.bg },
         { kind: 'border', label: '🚧 WIP',   color: '#c9d1d9', dashed: true },
         { kind: 'border', label: 'Anchor',   color: C.HIGHLIGHT.border, thick: true },
@@ -1855,9 +1858,10 @@ function styleForNode(node, flags, position, C) {
         });
     }
 
-    // Context ancestors in the stacks view: faded, status only on the
+    // Context ancestors in the stacks view, and in-flight changes the
+    // series sits on that no search found: faded, status only on the
     // border, so they read as background to the series.
-    if (node.context) {
+    if (node.context || node.unrelated_parent) {
         colors = Object.assign({}, C.DIM, {
             border: (C.STATUS[node.status] || C.STATUS.NEW).border,
         });
@@ -2134,12 +2138,18 @@ function renderGraph(keepView = false) {
         const style = styleForNode(node, {
             isAnchor, isMain, isAbove, isSeparate, isBase,
         }, pos, C);
-        // The label says it too: a Maloo -1 node is red already.
-        if (conflicts && (conflictResult(id) || {}).status === 'conflict') {
-            style.color.border = C.conflict;
+        // The label says it too: a Maloo -1 node is red already. It
+        // names the branch only when the branch is to blame: not when
+        // the change's base is not on it (only its own diff was tried)
+        // or when it conflicts with its parent's newer patchset.
+        const cr = conflictResult(id) || {};
+        if (conflicts && cr.status === 'conflict') {
+            style.color.border = (cr.base || cr.parent) ? C.edgeStale : C.conflict;
             style.borderWidth = 4;
-            style.label = style.label.replace(/^[^\n]*/,
-                m => m + '  \u2717 conflicts with ' + G.conflicts.branch);
+            const why = cr.parent ? 'conflicts with #' + cr.parent.cn
+                : cr.base ? 'base not on ' + G.conflicts.branch
+                : 'conflicts with ' + G.conflicts.branch;
+            style.label = style.label.replace(/^[^\n]*/, m => m + '  \u2717 ' + why);
         }
         visNodes.push(style);
     }
@@ -2485,8 +2495,16 @@ function showNodeInfo(id) {
         </div>`
         : '';
 
+    const sitsOn = (childrenOf[node.id] || []).filter(k => nodeMap[k] && nodeMap[k].status === 'NEW');
+    const unrelatedBanner = node.unrelated_parent
+        ? `<div class="field" style="background:var(--bg-inset);border-left:3px solid var(--text-muted);padding:6px 10px;border-radius:4px;margin-bottom:8px">
+            <span style="color:var(--text-muted);font-size:12px">Not part of this series: in the graph because ${sitsOn.map(k => `<a href="#" onclick="clickNode(${k});return false">#${k}</a>`).join(', ')} ${sitsOn.length > 1 ? 'sit' : 'sits'} on it. Counted nowhere.</span>
+        </div>`
+        : '';
+
     panel.innerHTML = `
         ${anchorBanner}
+        ${unrelatedBanner}
         <div class="field">
             <div class="fl">Change</div>
             <div class="fv">
@@ -2575,13 +2593,29 @@ function conflictSection(node) {
     for (let u = res.under; u !== undefined && below.length < 200; u = (conflictResult(u) || {}).under) {
         below.push(u);
     }
+    // the bottom change of this stack, if its base is not on the branch
+    const bottom = below.length ? below[below.length - 1] : node.id;
+    const base = (conflictResult(bottom) || {}).base;
+    const baseText = !base ? ''
+        : base.status === 'ABANDONED' ? `abandoned ${link(base.cn)}`
+        : base.status === 'NEW' ? `${link(base.cn)}, which is ${nodeMap[base.cn] ? 'not on ' + branch : 'not in this graph'}`
+        : base.cn ? `${link(base.cn)} (${esc(base.status)})`
+        : `a commit that is not on ${branch} and that no change owns`;
+    const baseNote = !base ? ''
+        : `<div class="fv" style="color:var(--text-muted);font-size:12px">${bottom === node.id ? 'It' : link(bottom) + ' at the bottom'} sits on ${baseText}: only the changes from there up were tried, so a conflict may be with what that base adds.</div>`;
     let onBranch;
     if (res.status === 'clean') {
         onBranch = `<span style="color:#3fb950;font-weight:600">Applies</span>`
             + (below.length ? ` after the ${below.length} change${below.length > 1 ? 's' : ''} below it` : '')
             + (res.empty ? `; nothing left to apply, it is already on ${branch}` : '');
+    } else if (res.status === 'conflict' && res.parent) {
+        const edge = edgeMap[res.parent.cn + '->' + node.id];
+        const ps = edge ? `ps${edge.parent_patchset} of ` : 'an older patch set of ';
+        onBranch = `<span style="color:${C.edgeStale};font-weight:600">Conflicts with ${link(res.parent.cn)}</span>:`
+            + ` it sits on ${ps}${link(res.parent.cn)}, and the current patch set${edge ? ' (ps' + edge.parent_latest + ')' : ''}`
+            + ` conflicts with it in ${files(res.parent.files)}. It needs a rebase onto ${link(res.parent.cn)} before it can land.`;
     } else if (res.status === 'conflict') {
-        onBranch = `<span style="color:${C.conflict};font-weight:600">Does not apply</span>`
+        onBranch = `<span style="color:${base ? C.edgeStale : C.conflict};font-weight:600">Does not apply${base ? ' without its base' : ''}</span>`
             + (below.length ? ` after the ${below.length} change${below.length > 1 ? 's' : ''} below it` : '')
             + `: ${files(res.files)}`;
     } else if (res.status === 'blocked') {
@@ -2589,9 +2623,6 @@ function conflictSection(node) {
     } else {
         onBranch = `Not checked: ${esc(res.reason || res.status)}`;
     }
-    const outside = (G.context_edges || [])
-        .filter(e => e.to === node.id && nodeMap[e.from] && nodeMap[e.from].status === 'NEW')
-        .map(e => e.from);
     const stack = new Set([node.id, ...below]);
     const rows = [];
     for (const via of [node.id, ...below]) {
@@ -2615,7 +2646,7 @@ function conflictSection(node) {
         <div class="field">
             <div class="fl">On ${branch} at ${esc(G.conflicts.tip.substring(0, 10))}</div>
             <div class="fv">${onBranch}</div>
-            ${outside.length ? `<div class="fv" style="color:var(--text-muted);font-size:12px">Tried without ${outside.map(link).join(', ')} below it, which is not in this graph.</div>` : ''}
+            ${baseNote}
         </div>
         <div class="field">
             <div class="fl">With other in-flight changes${rows.length ? ` (${rows.length})` : ''}</div>

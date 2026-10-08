@@ -98,11 +98,12 @@ def series_summary(
     nodes: list[dict[str, Any]], as_of: int, review_activity: bool,
 ) -> dict[str, Any]:
     """Headline numbers over the series' own patches: nodes kept only
-    as a branch base (trunk_structural) are not counted. Nodes must
-    already carry add_timeline()'s fields."""
+    as a branch base (trunk_structural) or as an unrelated parent are
+    not counted. Nodes must already carry add_timeline()'s fields."""
     recs = [
         n for n in nodes
-        if not n.get("trunk_structural") and n.get("opened_at")
+        if not n.get("trunk_structural") and not n.get("unrelated_parent")
+        and n.get("opened_at")
     ]
     open_ = [n for n in recs if n["status"] == "NEW"]
     merged = [n for n in recs if n["status"] == "MERGED"]
