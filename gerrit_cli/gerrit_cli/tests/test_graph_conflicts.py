@@ -339,12 +339,15 @@ class TestMasterNext:
         assert result["results"]["10"]["status"] == "conflict"
         assert "10" not in result["next"]["results"]
 
-    def test_a_queue_behind_the_branch_is_not_used(self, gerrit, local):
+    def test_a_stale_queue_is_not_used(self, gerrit, local):
+        """500 landed as a new commit on master; master-next was not
+        rebuilt and still has it on the old tip."""
         x = gerrit.change(10, gerrit.master, {"a.c": _text({2: "x"})})
         _queue(gerrit, [(500, {"b.c": _text({1: "q"})})])
-        gerrit.advance({"b.c": _text({16: "master moved"})})
+        gerrit.advance({"b.c": _text({1: "q"})})
         nxt = self._check(gerrit, local, [x])["next"]
-        assert nxt["skipped"] == "master-next is not on top of the branch tip"
+        assert nxt == {"branch": "master-next", "tip": nxt["tip"],
+                       "skipped": "master-next is stale, master has moved on since it was built"}
 
     def test_without_a_queue_there_is_no_next(self, gerrit, local):
         x = gerrit.change(10, gerrit.master, {"a.c": _text({2: "x"})})

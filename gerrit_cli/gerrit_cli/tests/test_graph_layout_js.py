@@ -701,6 +701,14 @@ class TestConflicts:
         assert label103.endswith("\u2717 conflicts with master-next #104")
         assert label101.endswith("\u2717 conflicts with master-next #103")
 
+    def test_a_stale_queue_is_not_used(self, tmp_path):
+        payload = self._payload()
+        payload["conflicts"]["next"] = {
+            "branch": "master-next", "tip": "0" * 40,
+            "skipped": "master-next is stale, master has moved on since it was built"}
+        info = self._panel(payload, tmp_path, 101)
+        assert "Not used: master-next is stale, master has moved on since it was built." in info
+
     def test_panel_says_where_in_the_queue(self, tmp_path):
         payload = self._with_queue()
         info = self._panel(payload, tmp_path, 103)

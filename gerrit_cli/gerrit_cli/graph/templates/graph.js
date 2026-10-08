@@ -2706,7 +2706,7 @@ function nextField(node, res, link, files) {
     const nr = nextResult(node.id);
     let text;
     if (q.skipped) {
-        text = `Not checked: ${esc(q.skipped)}`;
+        text = `Not used: ${esc(q.skipped)}.`;
     } else if (!nr) {
         text = `<span style="color:var(--text-muted)">Not tried: it does not land on ${esc(G.conflicts.branch)}.</span>`;
     } else if (nr.status === 'queued') {

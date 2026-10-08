@@ -328,7 +328,7 @@ def check_conflicts(
         own = repo.changed_files({st.patches[cn].commit: st.base[cn] for cn in st.applied})
         own_by_cn = {cn: own.get(st.patches[cn].commit, set()) for cn in st.applied}
         pairs, tried, errors = _check_pairs(repo, st, own_by_cn, workers)
-        queue = (_check_next(repo, st, tip, next_branch, next_tip, change_lookup, workers)
+        queue = (_check_next(repo, st, branch, tip, next_branch, next_tip, change_lookup, workers)
                  if next_branch and next_tip else None)
 
     for cn, res in st.results.items():
@@ -472,12 +472,14 @@ def _check_tip(repo: Repo, st: _State, tip: str, workers: int) -> None:
                     st.results[cn] = {"status": "error", "reason": pick.detail[:300]}
 
 
-def _check_next(repo: Repo, st: _State, tip: str, name: str, next_tip: str,
+def _check_next(repo: Repo, st: _State, branch: str, tip: str, name: str, next_tip: str,
                 change_lookup: Callable[[list[str]], dict[str, int]] | None,
                 workers: int) -> dict[str, Any]:
+    # Landing puts new commits on the branch (not -next's), so until
+    # -next is rebuilt on the new tip it holds what already landed.
     if not repo.is_ancestor(tip, next_tip):
         return {"branch": name, "tip": next_tip,
-                "skipped": f"{name} is not on top of the branch tip"}
+                "skipped": f"{name} is stale, {branch} has moved on since it was built"}
     queue = repo.first_parent_range(tip, next_tip)
     pos = {c: i for i, c in enumerate(queue)}
     info = repo.messages(queue + [st.patches[cn].commit for cn in st.base])
