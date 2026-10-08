@@ -15,7 +15,14 @@ changes it stands on. Every pick is `git merge-tree --merge-base=<parent>
    apply is also tried on that change's current patchset alone; when it
    conflicts there too, the cause is the parent's new patchset
    ("parent"), not the branch.
-2. Against each other: for two changes neither of which stands on the
+2. Against <branch>-next (master-next: the patches queued to land, on
+   top of the branch tip), when it exists: each change that applies on
+   the branch and is not queued itself lands the same way on the
+   -next tip, its queued ancestors being there already. When it does
+   not apply, the -next commits touching the conflicting files are
+   tried in queue order, each as the tip; the first one it fails on is
+   the queued patch it collides with ("with").
+3. Against each other: for two changes neither of which stands on the
    other, one stack is applied and the other's own part picked on top.
    Only pairs whose own diffs share a file are tried: a conflict on a
    file needs both sides to change it, and the change lower in a stack
@@ -41,6 +48,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 _OID_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+_CHANGE_ID_RE = re.compile(r"^Change-Id:\s*(I[0-9a-f]{40})\s*$", re.M)
 # merge-tree --write-tree with --merge-base
 _MIN_GIT = (2, 40)
 _FETCH_BATCH = 50
@@ -125,15 +133,34 @@ class Repo:
             return "origin"
         return names[0] if names else None
 
-    def branch_tip(self, remote: str, branch: str) -> str:
-        ref = f"refs/heads/{branch}"
-        r = self._run("ls-remote", remote, ref)
+    def branch_tips(self, remote: str, branches: list[str]) -> dict[str, str]:
+        """Tip of each branch on the remote; a missing branch is left out."""
+        r = self._run("ls-remote", remote, *(f"refs/heads/{b}" for b in branches))
+        if r.returncode != 0:
+            raise ConflictCheckError(f"git ls-remote {remote} failed: {r.stderr.strip()}")
+        tips = {}
         for line in r.stdout.splitlines():
             parts = line.split()
-            if len(parts) == 2 and parts[1] == ref:
-                return parts[0]
-        raise ConflictCheckError(
-            f"git ls-remote {remote} {ref} failed: {r.stderr.strip() or 'no such branch'}")
+            if len(parts) == 2 and parts[1].startswith("refs/heads/"):
+                tips[parts[1][len("refs/heads/"):]] = parts[0]
+        return tips
+
+    def first_parent_range(self, base: str, head: str) -> list[str]:
+        r = self._run("rev-list", "--reverse", "--first-parent", f"{base}..{head}")
+        return r.stdout.split()
+
+    def messages(self, commits: list[str]) -> dict[str, tuple[str, str]]:
+        """(subject, last Change-Id or "") of each commit."""
+        if not commits:
+            return {}
+        r = self._run("log", "--no-walk=unsorted", "--format=%H%x00%s%x00%B%x01", *commits)
+        out = {}
+        for rec in r.stdout.split("\x01"):
+            parts = rec.strip("\n").split("\x00", 2)
+            if len(parts) == 3:
+                ids = _CHANGE_ID_RE.findall(parts[2])
+                out[parts[0]] = (parts[1], ids[-1] if ids else "")
+        return out
 
     def is_ancestor(self, commit: str, of: str) -> bool:
         return self._run("merge-base", "--is-ancestor", commit, of).returncode == 0
@@ -243,6 +270,8 @@ def check_conflicts(
     owners: dict[str, tuple[int, str]],
     *,
     lookup: Callable[[list[str]], dict[str, tuple[int, str]]] | None = None,
+    next_branch: str | None = None,
+    change_lookup: Callable[[list[str]], dict[str, int]] | None = None,
     log: Callable[[str], None] | None = None,
     workers: int | None = None,
 ) -> dict[str, Any]:
@@ -252,15 +281,21 @@ def check_conflicts(
     `owners` maps known patch set commits to (change, status): a parent
     owned by one of `patches` is the change a patch stands on. `lookup`
     finds the owners of other parent commits that are not on the branch.
+    `next_branch` names the queue to check against when the remote has
+    it; `change_lookup` turns the Change-Ids of the queued patches the
+    changes collide with into change numbers.
     """
     say = log or (lambda _msg: None)
     workers = workers or min(8, os.cpu_count() or 2)
     st = _State({p.cn: p for p in patches})
 
     with repo:
-        tip = repo.branch_tip(remote, branch)
-        missing = repo.missing([tip] + [p.commit for p in patches])
-        refs = [f"refs/heads/{branch}"] if tip in missing else []
+        heads = repo.branch_tips(remote, [branch] + ([next_branch] if next_branch else []))
+        if branch not in heads:
+            raise ConflictCheckError(f"{remote} has no branch {branch}")
+        tip = heads[branch]
+        missing = repo.missing(list(heads.values()) + [p.commit for p in patches])
+        refs = [f"refs/heads/{b}" for b, sha in heads.items() if sha in missing]
         refs += [change_ref(p.cn, p.ps) for p in patches if p.commit in missing]
         if refs:
             say(f"fetching {len(refs)} ref(s)")
@@ -268,12 +303,18 @@ def check_conflicts(
             missing = repo.missing(sorted(missing))
         if tip in missing:
             raise ConflictCheckError(f"could not fetch {branch} from {remote}")
+        next_tip = heads.get(next_branch or "")
+        if next_tip in missing:
+            say(f"could not fetch {next_branch}")
+            next_tip = None
         _link(repo, st, missing, owners)
         _off_branch(repo, st, tip, owners, lookup)
         _check_tip(repo, st, tip, workers)
         own = repo.changed_files({st.patches[cn].commit: st.base[cn] for cn in st.applied})
         own_by_cn = {cn: own.get(st.patches[cn].commit, set()) for cn in st.applied}
         pairs, tried, errors = _check_pairs(repo, st, own_by_cn, workers)
+        queue = (_check_next(repo, st, tip, next_branch, next_tip, change_lookup, workers)
+                 if next_branch and next_tip else None)
 
     for cn, res in st.results.items():
         if cn in st.under:
@@ -286,7 +327,7 @@ def check_conflicts(
     say(", ".join(f"{n} {s}" for s, n in sorted(summary.items()))
         + f"; {tried} pair(s) tried, {len(pairs)} conflicting"
         + (f", {errors} failed" if errors else ""))
-    return {
+    out = {
         "branch": branch,
         "tip": tip,
         "results": {str(cn): st.results[cn] for cn in sorted(st.results)},
@@ -294,6 +335,14 @@ def check_conflicts(
         "pairs_tried": tried,
         "pair_errors": errors,
     }
+    if queue is not None:
+        counts = defaultdict(int)
+        for res in queue.get("results", {}).values():
+            counts[res["status"]] += 1
+        say(f"{next_branch}: " + (", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
+                                   or queue.get("skipped", "nothing to try")))
+        out["next"] = queue
+    return out
 
 
 def _link(repo: Repo, st: _State, missing: set[str],
@@ -401,6 +450,96 @@ def _check_tip(repo: Repo, st: _State, tip: str, workers: int) -> None:
                                                     "files": list(on_parent.files)}
                 else:
                     st.results[cn] = {"status": "error", "reason": pick.detail[:300]}
+
+
+def _check_next(repo: Repo, st: _State, tip: str, name: str, next_tip: str,
+                change_lookup: Callable[[list[str]], dict[str, int]] | None,
+                workers: int) -> dict[str, Any]:
+    if not repo.is_ancestor(tip, next_tip):
+        return {"branch": name, "tip": next_tip,
+                "skipped": f"{name} is not on top of the branch tip"}
+    queue = repo.first_parent_range(tip, next_tip)
+    pos = {c: i for i, c in enumerate(queue)}
+    info = repo.messages(queue + [st.patches[cn].commit for cn in st.base])
+    queued_ids = {info[c][1]: c for c in queue if info.get(c, ("", ""))[1]}
+    # change -> its commit in the queue
+    queued = {cn: queued_ids[cid] for cn in st.base
+              if (cid := info.get(st.patches[cn].commit, ("", ""))[1]) in queued_ids}
+    results: dict[int, dict[str, Any]] = {cn: {"status": "queued"} for cn in queued}
+    todo = [cn for cn in st.applied if cn not in queued]
+    own = {cn: [z for z in st.stack[cn] if z not in queued] for cn in todo}
+    touched = repo.changed_files({c: (queue[i - 1] if i else tip) for i, c in enumerate(queue)})
+    applied: dict[int, str] = {}
+
+    def one(cn: int) -> tuple[int, _Pick | None]:
+        below = own[cn][-2] if len(own[cn]) > 1 else None
+        if below is not None and below not in applied:
+            return cn, None
+        onto = applied[below] if below is not None else next_tip
+        return cn, repo.pick(onto, st.patches[cn].commit, st.base[cn])
+
+    levels: dict[int, list[int]] = defaultdict(list)
+    for cn in todo:
+        levels[len(own[cn])].append(cn)
+    with ThreadPoolExecutor(workers) as pool:
+        for depth in sorted(levels):
+            for cn, pick in pool.map(one, sorted(levels[depth])):
+                if pick is None:
+                    below = own[cn][-2]
+                    res = results[below]
+                    by = res.get("by", below) if res["status"] == "blocked" else below
+                    results[cn] = {"status": "blocked", "by": by}
+                elif pick.ok:
+                    applied[cn] = pick.commit
+                    results[cn] = {"status": "clean"}
+                elif pick.status == "conflict":
+                    results[cn] = {"status": "conflict", "files": list(pick.files)}
+                else:
+                    results[cn] = {"status": "error", "reason": pick.detail[:300]}
+
+    def lands_on(i: int, cn: int) -> bool:
+        """Does cn's stack apply with the queue cut after commit i? The
+        queued changes it stands on that come later are added."""
+        cur = queue[i]
+        for z in st.stack[cn]:
+            if z in queued:
+                c = queued[z]
+                if pos[c] <= i:
+                    continue
+                pick = repo.pick(cur, c, queue[pos[c] - 1] if pos[c] else tip)
+            else:
+                pick = repo.pick(cur, st.patches[z].commit, st.base[z])
+            if not pick.ok:
+                return False
+            cur = pick.commit
+        return True
+
+    def culprit(cn: int) -> tuple[int, int | None]:
+        files = set(results[cn]["files"])
+        for i, c in enumerate(queue):
+            if touched.get(c, set()) & files and not lands_on(i, cn):
+                return cn, i
+        return cn, None
+
+    failing = [cn for cn, r in results.items() if r["status"] == "conflict"]
+    found: dict[int, int] = {}
+    with ThreadPoolExecutor(workers) as pool:
+        for cn, i in pool.map(culprit, failing):
+            if i is not None:
+                found[cn] = i
+    numbers: dict[str, int] = {}
+    ids = sorted({info[queue[i]][1] for i in found.values() if info[queue[i]][1]})
+    if ids and change_lookup is not None:
+        try:
+            numbers = change_lookup(ids)
+        except Exception:  # the patch is still named by subject
+            numbers = {}
+    for cn, i in found.items():
+        subject, cid = info.get(queue[i], ("", ""))
+        results[cn]["with"] = {"cn": numbers.get(cid), "subject": subject,
+                               "commit": queue[i], "position": i + 1}
+    return {"branch": name, "tip": next_tip, "ahead": len(queue),
+            "results": {str(cn): results[cn] for cn in sorted(results)}}
 
 
 def _check_pairs(repo: Repo, st: _State, own: dict[int, set[str]],

@@ -324,14 +324,22 @@ includes:
   both apply, neither standing on the other and whose own diffs touch a
   common file, are landed together; a conflict is reported between the
   two changes whose own diffs collide, not again for the changes above
-  them. "Show conflicts" draws those pairs as thick red edges and marks
+  them. When the remote has `<branch>-next` (master-next: master plus
+  the patches queued to land), every change that applies on the branch
+  and is not queued itself is also landed on it, its queued ancestors
+  being there already; when it does not apply, the queued commits that
+  touch the conflicting files are tried in queue order as the tip, and
+  the first one it fails on is named ("conflicts with master-next #N",
+  with its place in the queue), so it can be rebased before that patch
+  lands. "Show conflicts" draws those pairs as thick red edges and marks
   a change that does not apply with a red border and "✗ conflicts with
   master"; the node panel gets a Conflicts section above Dependents,
   including the conflicts it inherits through the changes below it.
   The results are in the payload as `conflicts` (`tip`, `results` per
-  change with `parent` / `base` for those two causes, `pairs`); nothing
-  is counted in the stats. Needs git 2.40 or
-  newer. A few seconds on the portal graphs, mostly the fetch.
+  change with `parent` / `base` for those two causes, `pairs`, and
+  `next` for master-next, `with` naming the queued patch); a collision
+  with a queued patch in the graph is a dashed red edge. Nothing is
+  counted in the stats. Needs git 2.40 or newer. A few seconds on the portal graphs, mostly the fetch.
 - **Dark/Light mode**: toggle with the "Light Mode" / "Dark Mode" button
   in the toolbar.
 - **Keyboard shortcuts**: `F` = fit to view, `Z` = focus selected node,

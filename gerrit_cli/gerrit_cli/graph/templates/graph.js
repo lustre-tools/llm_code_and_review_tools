@@ -2048,6 +2048,28 @@ function conflictResult(id) {
     return G.conflicts ? G.conflicts.results[String(id)] : undefined;
 }
 
+// Its result against the queue (master-next), if that was checked.
+function nextResult(id) {
+    const q = G.conflicts && G.conflicts.next;
+    return q && q.results ? q.results[String(id)] : undefined;
+}
+
+// A change that lands on the branch but collides with a queued patch
+// in the graph: dashed, since the collision comes once that lands.
+function styleForNextConflict(from, res, C) {
+    return {
+        id: 'q' + from + '-' + res.with.cn,
+        from: from,
+        to: res.with.cn,
+        color: { color: C.conflict, highlight: C.conflict, hover: C.conflict },
+        width: 4,
+        dashes: [10, 6],
+        arrows: { to: { enabled: false } },
+        title: 'Conflict once it lands from ' + G.conflicts.next.branch + ', in ' + res.files.join(', '),
+        smooth: { type: 'curvedCW', roundness: 0.25 },
+    };
+}
+
 // ─── RENDER HELPERS ───
 
 // True when the straight line from `from` to `to` runs through another
@@ -2143,6 +2165,14 @@ function renderGraph(keepView = false) {
         // the change's base is not on it (only its own diff was tried)
         // or when it conflicts with its parent's newer patchset.
         const cr = conflictResult(id) || {};
+        const nr = nextResult(id) || {};
+        if (conflicts && cr.status === 'clean' && nr.status === 'conflict') {
+            style.color.border = C.conflict;
+            style.borderWidth = 4;
+            const who = nr.with && nr.with.cn ? ' #' + nr.with.cn : '';
+            style.label = style.label.replace(/^[^\n]*/,
+                m => m + '  \u2717 conflicts with ' + G.conflicts.next.branch + who);
+        }
         if (conflicts && cr.status === 'conflict') {
             style.color.border = (cr.base || cr.parent) ? C.edgeStale : C.conflict;
             style.borderWidth = 4;
@@ -2196,6 +2226,13 @@ function renderGraph(keepView = false) {
         for (const pair of G.conflicts.pairs) {
             if (!positions[pair.a] || !positions[pair.b]) continue;
             visEdges.push(styleForConflict(pair, C));
+        }
+        const paired = new Set(G.conflicts.pairs.flatMap(p => [p.a + '-' + p.b, p.b + '-' + p.a]));
+        for (const [id, res] of Object.entries((G.conflicts.next || {}).results || {})) {
+            if (res.status !== 'conflict' || !res.with || !res.with.cn) continue;
+            if (!positions[id] || !positions[res.with.cn]) continue;
+            if (paired.has(id + '-' + res.with.cn)) continue;
+            visEdges.push(styleForNextConflict(parseInt(id), res, C));
         }
     }
 
@@ -2587,7 +2624,10 @@ function conflictSection(node) {
     if (!res) return '';
     const C = getColors();
     const branch = esc(G.conflicts.branch);
-    const link = id => `<a href="#" onclick="clickNode(${id});return false">#${id}</a>`;
+    // a change outside the graph opens in Gerrit
+    const link = id => nodeMap[id]
+        ? `<a href="#" onclick="clickNode(${id});return false">#${id}</a>`
+        : `<a href="${esc(G.base_url)}/c/${esc(node.project || 'fs/lustre-release')}/+/${id}" target="_blank">#${id}</a>`;
     const files = list => list.map(f => `<code>${esc(f)}</code>`).join(', ');
     const below = [];
     for (let u = res.under; u !== undefined && below.length < 200; u = (conflictResult(u) || {}).under) {
@@ -2648,9 +2688,43 @@ function conflictSection(node) {
             <div class="fv">${onBranch}</div>
             ${baseNote}
         </div>
+        ${nextField(node, res, link, files)}
         <div class="field">
             <div class="fl">With other in-flight changes${rows.length ? ` (${rows.length})` : ''}</div>
             ${others}
+        </div>`;
+}
+
+// The Conflicts section's line for the queue (master-next).
+function nextField(node, res, link, files) {
+    const q = G.conflicts.next;
+    if (!q) return '';
+    const name = esc(q.branch);
+    const head = q.skipped ? name
+        : `${name} at ${esc(q.tip.substring(0, 10))}, ${q.ahead} patch${q.ahead === 1 ? '' : 'es'} queued`;
+    const nr = nextResult(node.id);
+    let text;
+    if (q.skipped) {
+        text = `Not checked: ${esc(q.skipped)}`;
+    } else if (!nr) {
+        text = `<span style="color:var(--text-muted)">Not tried: it does not land on ${esc(G.conflicts.branch)}.</span>`;
+    } else if (nr.status === 'queued') {
+        text = `Queued: this change is on ${name}.`;
+    } else if (nr.status === 'clean') {
+        text = `<span style="color:#3fb950;font-weight:600">Applies</span>`;
+    } else if (nr.status === 'conflict') {
+        const w = nr.with;
+        const who = !w ? `a ${name} patch (none alone found)`
+            : (w.cn ? link(w.cn) + ' ' : '') + `<span style="color:var(--text-muted)">${esc(w.subject)}</span>, number ${w.position} in the queue`;
+        text = `<span style="color:${getColors().conflict};font-weight:600">Conflicts with</span> ${who}: ${files(nr.files)}`;
+    } else if (nr.status === 'blocked') {
+        text = `Blocked: ${link(nr.by)} below it does not apply on ${name}`;
+    } else {
+        text = `Not checked: ${esc(nr.reason || nr.status)}`;
+    }
+    return `<div class="field">
+            <div class="fl">On ${head}</div>
+            <div class="fv">${text}</div>
         </div>`;
 }
 

@@ -2337,12 +2337,24 @@ def _check_conflicts(ctx: BuildContext, repo: Repo) -> dict[str, Any]:
                         found[h] = (change.get("_number", 0), change.get("status", ""))
         return found
 
+    def change_lookup(change_ids: list[str]) -> dict[str, int]:
+        found = {}
+        for i in range(0, len(change_ids), _DISCOVERY_BATCH_SIZE):
+            ids = " OR ".join(f"change:{c}" for c in change_ids[i:i + _DISCOVERY_BATCH_SIZE])
+            query = f"({ids}) project:{ctx.project} branch:{ctx.branch}"
+            for change in ctx.client.rest.get(
+                f"/changes/?q={quote(query, safe=':+ ()')}&n=500"
+            ) or []:
+                found[change.get("change_id", "")] = change.get("_number", 0)
+        return found
+
     remote = repo.resolve_remote(ctx.project) or f"{ctx.base_url}/{ctx.project}"
     result = check_conflicts(
         repo, remote, ctx.branch,
         [Patch(cn, n["current_patchset"], n["current_commit"])
          for cn, n in sorted(inflight.items())],
-        owners, lookup=lookup, log=ctx.log,
+        owners, lookup=lookup, next_branch=f"{ctx.branch}-next",
+        change_lookup=change_lookup, log=ctx.log,
     )
     for cn, n in sorted(ctx.nodes.items()):
         if n["status"] == "NEW" and cn not in inflight:

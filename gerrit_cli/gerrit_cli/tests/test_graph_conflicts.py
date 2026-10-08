@@ -69,10 +69,25 @@ class Gerrit:
 
     def change(self, cn: int, parent: str, files: dict[str, str], ps: int = 1,
                status: str = "NEW") -> Patch:
-        sha = self.commit(parent, files, f"change {cn} ps{ps}")
+        sha = self.commit(parent, files, f"change {cn} ps{ps}\n\nChange-Id: {change_id(cn)}")
         _git(self.path, "update-ref", change_ref(cn, ps), sha)
         self.owner[sha] = (cn, status)
         return Patch(cn, ps, sha)
+
+
+def change_id(cn: int) -> str:
+    return f"I{cn:040x}"
+
+
+def _queue(gerrit: "Gerrit", picks: list[tuple[int | None, dict[str, str]]]) -> list[str]:
+    """master-next: master plus one commit per (change or None, files)."""
+    head, out = gerrit.master, []
+    for cn, files in picks:
+        msg = f"queued {cn}" + (f"\n\nChange-Id: {change_id(cn)}" if cn else "")
+        head = gerrit.commit(head, files, msg)
+        out.append(head)
+    _git(gerrit.path, "update-ref", "refs/heads/master-next", head)
+    return out
 
 
 @pytest.fixture
@@ -247,6 +262,70 @@ class TestParentMovedOn:
         assert "parent" not in res and res["status"] == "conflict"
 
 
+class TestMasterNext:
+    """master-next = master + the queued patches. Changes that are not
+    queued are tried on it, and a conflict names the queued patch."""
+
+    def _check(self, gerrit, local, patches, lookup=None):
+        return check_conflicts(Repo(local), str(gerrit.path), "master", patches,
+                               gerrit.owner, next_branch="master-next",
+                               change_lookup=lookup, workers=2)
+
+    def test_a_change_colliding_with_a_queued_patch(self, gerrit, local):
+        y = gerrit.change(10, gerrit.master, {"a.c": _text({2: "y"})})
+        y2 = gerrit.change(11, y.commit, {"a.c": _text({2: "y", 12: "y2"})})
+        z = gerrit.change(20, gerrit.master, {"b.c": _text({5: "z"})})
+        queue = _queue(gerrit, [(None, {"b.c": _text({1: "synthetic"})}),
+                                (500, {"b.c": _text({1: "synthetic"}), "a.c": _text({2: "q"})}),
+                                (501, {"b.c": _text({1: "synthetic"}), "a.c": _text({2: "q", 18: "q2"})})])
+        result = self._check(gerrit, local, [y, y2, z],
+                             lambda ids: {change_id(500): 500, change_id(501): 501})
+        assert result["results"]["10"]["status"] == "clean"
+        nxt = result["next"]
+        assert (nxt["branch"], nxt["tip"], nxt["ahead"]) == ("master-next", queue[-1], 3)
+        assert nxt["results"]["10"] == {
+            "status": "conflict", "files": ["a.c"],
+            "with": {"cn": 500, "subject": "queued 500", "commit": queue[1], "position": 2}}
+        assert nxt["results"]["11"] == {"status": "blocked", "by": 10}
+        assert nxt["results"]["20"] == {"status": "clean"}
+
+    def test_queued_changes_and_changes_on_them(self, gerrit, local):
+        """x is queued; x2 on it is tried on top of the queue. Cut after
+        q0, x is not in the queue yet and x2 (next to x's line) would
+        fail there too: x is added, so the blame lands on q2."""
+        x = gerrit.change(10, gerrit.master, {"a.c": _text({2: "x"})})
+        x2 = gerrit.change(11, x.commit, {"a.c": _text({2: "x", 3: "x2", 9: "x2"})})
+        queue = _queue(gerrit, [(600, {"a.c": _text({15: "q0"})}),
+                                (10, {"a.c": _text({2: "x", 15: "q0"})}),
+                                (602, {"a.c": _text({2: "x", 9: "q2", 15: "q0"})})])
+        result = self._check(gerrit, local, [x, x2],
+                             lambda ids: {change_id(600): 600, change_id(602): 602})
+        nxt = result["next"]["results"]
+        assert nxt["10"] == {"status": "queued"}
+        assert nxt["11"]["status"] == "conflict"
+        assert nxt["11"]["with"]["cn"] == 602 and nxt["11"]["with"]["commit"] == queue[2]
+
+    def test_a_change_that_does_not_land_on_the_branch_is_not_tried(self, gerrit, local):
+        base = gerrit.master
+        gerrit.advance({"a.c": _text({5: "master"})})
+        m = gerrit.change(10, base, {"a.c": _text({5: "m"})})
+        _queue(gerrit, [(500, {"b.c": _text({1: "q"})})])
+        result = self._check(gerrit, local, [m])
+        assert result["results"]["10"]["status"] == "conflict"
+        assert "10" not in result["next"]["results"]
+
+    def test_a_queue_behind_the_branch_is_not_used(self, gerrit, local):
+        x = gerrit.change(10, gerrit.master, {"a.c": _text({2: "x"})})
+        _queue(gerrit, [(500, {"b.c": _text({1: "q"})})])
+        gerrit.advance({"b.c": _text({16: "master moved"})})
+        nxt = self._check(gerrit, local, [x])["next"]
+        assert nxt["skipped"] == "master-next is not on top of the branch tip"
+
+    def test_without_a_queue_there_is_no_next(self, gerrit, local):
+        x = gerrit.change(10, gerrit.master, {"a.c": _text({2: "x"})})
+        assert "next" not in self._check(gerrit, local, [x])
+
+
 class TestBetweenChanges:
     def test_two_changes_on_the_same_line_conflict(self, gerrit, local):
         x = gerrit.change(10, gerrit.master, {"a.c": _text({2: "x"})})
@@ -326,7 +405,7 @@ class TestRepository:
         assert not (local / ".git" / "FETCH_HEAD").exists()
 
     def test_an_unknown_branch_is_an_error(self, gerrit, local):
-        with pytest.raises(ConflictCheckError, match="no such branch"):
+        with pytest.raises(ConflictCheckError, match="has no branch b2_15"):
             check_conflicts(Repo(local), str(gerrit.path), "b2_15", [], {})
 
     def test_not_a_directory(self, tmp_path):

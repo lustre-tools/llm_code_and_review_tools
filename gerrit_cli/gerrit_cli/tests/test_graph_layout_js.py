@@ -648,7 +648,7 @@ class TestConflicts:
         assert first.endswith("\u2717 base not on master")
         assert border == "#d29922"
         assert "Does not apply without its base" in info
-        assert "abandoned <a href=\"#\" onclick=\"clickNode(30)" in info
+        assert "abandoned <a href=\"https://gerrit.invalid/c/" in info and "/+/30\"" in info
 
     def test_a_change_that_conflicts_with_its_parents_new_patch_set(self, tmp_path):
         payload = self._payload()
@@ -667,6 +667,52 @@ class TestConflicts:
         assert first.endswith("\u2717 conflicts with #101") and border == "#d29922"
         assert "it sits on ps1 of" in info and "the current patch set (ps2)" in info
         assert "needs a rebase onto" in info
+
+    def _with_queue(self):
+        payload = self._payload()
+        payload["conflicts"]["next"] = {
+            "branch": "master-next", "tip": "0c93230bde933914cf0a8d325ed36a25205d2f05",
+            "ahead": 77,
+            "results": {
+                "101": {"status": "conflict", "files": ["a.c"],
+                        "with": {"cn": 103, "subject": "LU-1 change 103",
+                                 "commit": "c" * 40, "position": 9}},
+                "103": {"status": "conflict", "files": ["b.c"],
+                        "with": {"cn": 104, "subject": "LU-1 change 104",
+                                 "commit": "d" * 40, "position": 3}},
+                "104": {"status": "queued"},
+            },
+        }
+        return payload
+
+    def test_a_collision_with_a_queued_patch(self, tmp_path):
+        expr = """(() => {
+            document.getElementById('chk-conflicts').checked = true;
+            renderGraph();
+            const q = edgesDS.get().filter(e => String(e.id).startsWith('q'))
+                .map(e => [e.from, e.to, e.dashes !== false]);
+            return JSON.stringify([q, nodesDS.get(103).label.split('\\n')[0],
+                                   nodesDS.get(101).label.split('\\n')[0]]);
+        })()"""
+        edges, label103, label101 = json.loads(_eval(self._with_queue(), tmp_path, expr))
+        # 101-103 is drawn as an in-graph pair already
+        assert edges == [[103, 104, True]]
+        assert label103.endswith("\u2717 conflicts with master-next #104")
+        assert label101.endswith("\u2717 conflicts with master-next #103")
+
+    def test_panel_says_where_in_the_queue(self, tmp_path):
+        payload = self._with_queue()
+        info = self._panel(payload, tmp_path, 103)
+        assert "On master-next at 0c93230bde, 77 patches queued" in info
+        assert "Conflicts with</span> <a href=\"#\" onclick=\"clickNode(104)" in info
+        assert "number 3 in the queue" in info and "<code>b.c</code>" in info
+        assert info.index("On master-next") < info.index("<h2>Tip (no dependents)")
+        assert "Queued: this change is on master-next" in self._panel(payload, tmp_path, 104)
+        # a queued patch outside the graph opens in Gerrit
+        payload["conflicts"]["next"]["results"]["103"]["with"]["cn"] = 58097
+        info = self._panel(payload, tmp_path, 103)
+        assert '<a href="https://gerrit.invalid/c/' in info and '/+/58097" target="_blank">' in info
+        assert "Not tried: it does not land on master" in self._panel(payload, tmp_path, 102)
 
     def test_panel_without_conflicts_and_for_merged_changes(self, tmp_path):
         info = self._panel(self._payload(), tmp_path, 104)
