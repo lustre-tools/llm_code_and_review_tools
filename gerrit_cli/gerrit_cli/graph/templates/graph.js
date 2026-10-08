@@ -1141,9 +1141,14 @@ function _layoutMergedTrunk(ctx, belowAnchorLevel) {
     function trunkSpacing(id) {
         const excluded = _anchorReachAvoiding(id);
         const seen = new Set();
+        // A merged node in the subtree is a trunk row of its own and
+        // lays out its own kids: counting through it reserved 25 rows
+        // above 54459's 54463 for a side branch two rows tall, whose
+        // last node an old patchset of the newer trunk node 54475 sat
+        // on (trunk nodes above are placed after this is measured).
         const heightExcl = (k) => {
             if (excluded.has(k) || seen.has(k)) return 0;
-            if (ctx.positions[k] !== undefined) return 0;
+            if (ctx.positions[k] !== undefined || trunkSet.has(k)) return 0;
             seen.add(k);
             let h = 0;
             for (const c of _layoutKids(ctx, k)) {

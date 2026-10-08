@@ -452,3 +452,24 @@ class TestNoFalseChains:
         assert smooth[(10, 101)] == "curvedCW"
         assert smooth[(101, 100)] == "cubicBezier"
 
+
+class TestTrunkSpacing:
+    def test_trunk_gap_stops_at_the_next_trunk_node(self, tmp_path):
+        """54459's shape: trunk node 11's side branch 100 -> 101 is two
+        rows tall, but an old patchset of the newer trunk node 12 sat
+        on 101, and 12 has a long chain of its own. The rows reserved
+        above 11 must not count 12's chain."""
+        chain = list(range(200, 210))
+        nodes = [
+            _node(10, "MERGED", submitted="2026-01-01"),
+            _node(11, "MERGED", submitted="2026-02-01"),
+            _node(12, "MERGED", submitted="2026-03-01", current_patchset=2),
+            _node(100), _node(101),
+        ] + [_node(c) for c in chain]
+        edges = [_edge(11, 100), _edge(100, 101), _edge(101, 12, cps=1, cl=2),
+                 _edge(12, chain[0], pps=2, pl=2)]
+        edges += [_edge(a, b) for a, b in zip(chain, chain[1:])]
+        pos = _pos(_render(_payload(10, nodes, edges), tmp_path,
+                           "a0m1")["a0m1"])
+        assert pos[11][1] - pos[12][1] == 3 * LEVEL_H
+
