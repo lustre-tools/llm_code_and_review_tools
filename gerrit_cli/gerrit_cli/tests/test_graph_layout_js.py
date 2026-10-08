@@ -8,6 +8,7 @@ Trunk, m0 = Stacks).
 """
 
 import json
+import re
 import shutil
 import subprocess
 from collections import Counter
@@ -719,6 +720,18 @@ class TestConflicts:
         section = info[info.index("<h2>Conflicts"):]
         assert '<div class="fv">None</div>' in section
         assert "Conflicts" not in self._panel(self._payload(), tmp_path, 10)
+
+
+class TestRender:
+    def test_a_subject_with_a_script_end_tag(self, tmp_path):
+        nodes = [_node(10, "MERGED", submitted="2026-01-01"),
+                 _node(101, subject="LU-1 fix </script><b>x</b> in docs")]
+        payload = _payload(101, nodes, [_edge(10, 101)])
+        html = generate_html(payload)
+        assert "</script><b>" not in html
+        G = json.loads(re.search(r"const G = (\{.*?\});\n", html, re.S).group(1))
+        assert G["nodes"][1]["subject"] == "LU-1 fix </script><b>x</b> in docs"
+        assert _eval(payload, tmp_path, "nodeMap[101].subject") == G["nodes"][1]["subject"]
 
 
 class TestUnrelatedParents:

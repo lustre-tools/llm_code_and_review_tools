@@ -51,6 +51,7 @@ _OID_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _CHANGE_ID_RE = re.compile(r"^Change-Id:\s*(I[0-9a-f]{40})\s*$", re.M)
 # merge-tree --write-tree with --merge-base
 _MIN_GIT = (2, 40)
+_TIMED_OUT = -1
 _FETCH_BATCH = 50
 # The throwaway commits get fixed ids and need no user.name/email.
 _COMMIT_ENV = {
@@ -63,6 +64,10 @@ _COMMIT_ENV = {
 
 class ConflictCheckError(Exception):
     """The repository can't be used or the branch can't be fetched."""
+
+
+class ConflictRepoError(ConflictCheckError):
+    """The --conflicts argument is not a usable repository."""
 
 
 @dataclass(frozen=True)
@@ -94,7 +99,7 @@ class Repo:
     def __init__(self, path: str | os.PathLike[str]) -> None:
         self.path = Path(path).expanduser().resolve()
         if not self.path.is_dir():
-            raise ConflictCheckError(f"{self.path}: no such directory")
+            raise ConflictRepoError(f"{self.path}: no such directory")
         version = self._run("version").stdout.split()
         nums = tuple(int(x) for x in re.findall(r"\d+", version[2] if len(version) > 2 else "")[:2])
         if nums < _MIN_GIT:
@@ -104,7 +109,7 @@ class Repo:
             )
         r = self._run("rev-parse", "--path-format=absolute", "--git-path", "objects")
         if r.returncode != 0:
-            raise ConflictCheckError(f"{self.path}: not a git repository")
+            raise ConflictRepoError(f"{self.path}: not a git repository")
         self.objects = r.stdout.strip()
         self._scratch: str | None = None
         self._trees: dict[str, str] = {}
@@ -115,10 +120,13 @@ class Repo:
         if scratch:
             env = dict(os.environ, GIT_OBJECT_DIRECTORY=self._scratch or "",
                        GIT_ALTERNATE_OBJECT_DIRECTORIES=self.objects, **_COMMIT_ENV)
-        return subprocess.run(
-            ["git", "-C", str(self.path), *args], capture_output=True,
-            text=True, input=input, timeout=timeout, env=env,
-        )
+        try:
+            return subprocess.run(
+                ["git", "-C", str(self.path), *args], capture_output=True,
+                text=True, input=input, timeout=timeout, env=env,
+            )
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(args, _TIMED_OUT, "", f"timed out after {timeout} s")
 
     def resolve_remote(self, project: str) -> str | None:
         """The remote that fetches Gerrit `project`, "origin" first."""
@@ -179,14 +187,21 @@ class Repo:
         """Fetch refs into the object store (no refs, no FETCH_HEAD).
 
         A batch that fails is retried ref by ref so one deleted ref does
-        not lose the rest."""
+        not lose the rest; after a timeout nothing more is fetched and
+        what is missing is reported missing."""
+        # an empty --refmap: a named remote's fetch refspec would
+        # otherwise move its remote-tracking branches
+        args = ("fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--refmap=", remote)
         for i in range(0, len(refs), _FETCH_BATCH):
             batch = refs[i:i + _FETCH_BATCH]
-            args = ("fetch", "--quiet", "--no-tags", "--no-write-fetch-head", remote)
-            if self._run(*args, *batch).returncode == 0:
+            rc = self._run(*args, *batch).returncode
+            if rc == _TIMED_OUT:
+                return
+            if rc == 0:
                 continue
             for ref in batch:
-                self._run(*args, ref)
+                if self._run(*args, ref).returncode == _TIMED_OUT:
+                    return
 
     def parents(self, commits: list[str]) -> dict[str, list[str]]:
         if not commits:
@@ -319,8 +334,9 @@ def check_conflicts(
     for cn, res in st.results.items():
         if cn in st.under:
             res["under"] = st.under[cn]
-        if cn in st.off_branch:
-            res["base"] = st.off_branch[cn]
+        bottom = st.stack[cn][0] if st.stack.get(cn) else cn
+        if bottom in st.off_branch:
+            res["base"] = st.off_branch[bottom]
     summary = defaultdict(int)
     for res in st.results.values():
         summary[res["status"]] += 1
@@ -408,8 +424,12 @@ def _off_branch(repo: Repo, st: _State, tip: str, owners: dict[str, tuple[int, s
         if owner is not None and owner[1] == "MERGED":
             continue
         for cn in cns:
-            st.off_branch[cn] = ({"cn": owner[0], "status": owner[1]} if owner
-                                 else {"status": "unknown"})
+            if owner is None:
+                st.off_branch[cn] = {"status": "unknown"}
+            elif owner[0] == cn:
+                st.off_branch[cn] = {"status": "own"}
+            else:
+                st.off_branch[cn] = {"cn": owner[0], "status": owner[1]}
 
 
 def _check_tip(repo: Repo, st: _State, tip: str, workers: int) -> None:
@@ -497,9 +517,11 @@ def _check_next(repo: Repo, st: _State, tip: str, name: str, next_tip: str,
                 else:
                     results[cn] = {"status": "error", "reason": pick.detail[:300]}
 
-    def lands_on(i: int, cn: int) -> bool:
-        """Does cn's stack apply with the queue cut after commit i? The
-        queued changes it stands on that come later are added."""
+    def lands_on(i: int, cn: int) -> bool | None:
+        """Does cn apply with the queue cut after commit i? The queued
+        changes its stack stands on that come later are added first;
+        None when one of those or a change below cn fails there, which
+        says nothing about cn itself."""
         cur = queue[i]
         for z in st.stack[cn]:
             if z in queued:
@@ -510,14 +532,14 @@ def _check_next(repo: Repo, st: _State, tip: str, name: str, next_tip: str,
             else:
                 pick = repo.pick(cur, st.patches[z].commit, st.base[z])
             if not pick.ok:
-                return False
+                return False if z == cn else None
             cur = pick.commit
         return True
 
     def culprit(cn: int) -> tuple[int, int | None]:
         files = set(results[cn]["files"])
         for i, c in enumerate(queue):
-            if touched.get(c, set()) & files and not lands_on(i, cn):
+            if touched.get(c, set()) & files and lands_on(i, cn) is False:
                 return cn, i
         return cn, None
 
@@ -528,7 +550,7 @@ def _check_next(repo: Repo, st: _State, tip: str, name: str, next_tip: str,
             if i is not None:
                 found[cn] = i
     numbers: dict[str, int] = {}
-    ids = sorted({info[queue[i]][1] for i in found.values() if info[queue[i]][1]})
+    ids = sorted({cid for i in found.values() if (cid := info.get(queue[i], ("", ""))[1])})
     if ids and change_lookup is not None:
         try:
             numbers = change_lookup(ids)

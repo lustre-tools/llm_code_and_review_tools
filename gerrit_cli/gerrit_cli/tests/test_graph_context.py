@@ -12,6 +12,7 @@ from gerrit_cli.graph.build import (
     BuildContext,
     _assemble_payload,
     _discover_inflight_ancestors,
+    _expand_separate_series,
     _make_edge,
     _stack_context,
 )
@@ -256,6 +257,56 @@ class TestInflightAncestors:
         assert _discover_inflight_ancestors(ctx) == 0
         assert ctx.client.rest.calls == []
 
+    def test_walks_on_through_changes_found_by_commit_discovery(self):
+        """66481 sits on D1, D1 on D2, both found by commit discovery
+        (no parents recorded); D2 sits on X, which no search found."""
+        gerrit = _Gerrit({
+            300: ("NEW", {"cD1": (1, "cD2")}),
+            400: ("NEW", {"cD2": (1, "cX")}),
+            500: ("NEW", {"cX": (1, "m")}),
+            100: ("MERGED", {"m": (5, "m0")}),
+        })
+        nodes = [_node(66481, commit="c66481"), _node(300, commit="cD1"),
+                 _node(400, commit="cD2")]
+        ctx = _walk_ctx(nodes, gerrit, {"c66481": "cD1"},
+                        {"c66481": (66481, 1), "cD1": (300, 1), "cD2": (400, 1)})
+        assert _discover_inflight_ancestors(ctx) == 1
+        assert ctx.nodes[500]["unrelated_parent"]
+        assert ctx.revision_parents["cD1"] == "cD2" and ctx.revision_parents["cD2"] == "cX"
+
+    def test_a_shared_parent_is_added_once(self):
+        gerrit = _Gerrit({
+            300: ("NEW", {"cD1": (1, "cX")}), 301: ("NEW", {"cD2": (1, "cX")}),
+            500: ("NEW", {"cX": (1, "cY")}), 600: ("NEW", {"cY": (1, "m")}),
+            100: ("MERGED", {"m": (5, "m0")}),
+        })
+        nodes = [_node(1, commit="c1"), _node(2, commit="c2"),
+                 _node(300, commit="cD1"), _node(301, commit="cD2")]
+        ctx = _walk_ctx(nodes, gerrit, {"c1": "cD1", "c2": "cD2"},
+                        {"c1": (1, 1), "c2": (2, 1), "cD1": (300, 1), "cD2": (301, 1)})
+        assert _discover_inflight_ancestors(ctx) == 2
+        assert sorted(cn for cn, n in ctx.nodes.items() if n.get("unrelated_parent")) == [500, 600]
+        assert sum("commit:cX" in c for c in gerrit.calls) == 1
+
+    def test_a_search_hit_is_not_unrelated(self):
+        """--ticket LU-2 finds 69505 after the walk added it."""
+        ctx = self._series()
+        assert _discover_inflight_ancestors(ctx) == 1
+        for attr, val in dict(include_topic=False, include_hashtag=False, extra_topics=[],
+                              extra_hashtags=[], extra_tickets=["LU-2"], change_number=66481,
+                              logger=None, separate_groups=[], edges=[], seen_edges=set()).items():
+            setattr(ctx, attr, val)
+        rest = ctx.client.rest
+        plain_get = rest.get
+
+        def get(endpoint):
+            if "message:" in endpoint:
+                return [rest._payload(69505)]
+            return plain_get(endpoint)
+        rest.get = get
+        _expand_separate_series(ctx)
+        assert "unrelated_parent" not in ctx.nodes[69505]
+
     def test_unrelated_parents_count_nowhere(self):
         ctx = BuildContext(
             client=SimpleNamespace(rest=_Gerrit({})), change_number=2,
@@ -276,3 +327,36 @@ class TestInflightAncestors:
         assert stats["tickets"] == ["LU-1"]
         assert stats["summary"]["open"] == 1
         assert stats["unrelated_parent_cns"] == [1]
+
+    def test_unrelated_parents_keep_no_merged_patch(self):
+        """Their tickets are no series signal, and a merged patch only
+        they sit on is not kept as a base."""
+        def stats(with_parent):
+            ctx = BuildContext(
+                client=SimpleNamespace(rest=_Gerrit({})), change_number=2,
+                base_url="https://gerrit.invalid", progress=False,
+                fetch_details=False, fetch_comments=False, include_topic=False,
+                include_hashtag=False, extra_topics=[], extra_hashtags=[],
+                extra_tickets=[],
+            )
+            specs = [(2, "LU-1 series", "NEW"), (3, "LU-7 merged in the chain", "MERGED"),
+                     (4, "LU-1 merged base", "MERGED"), (5, "LU-9 merged", "MERGED")]
+            if with_parent:
+                specs.append((1, "LU-7 unrelated parent", "NEW"))
+            for cn, subject, status in specs:
+                ctx.nodes[cn] = _make_node(cn, subject, status, 1, "A", ctx.base_url)
+                ctx.nodes[cn]["current_commit"] = f"c{cn}"
+                ctx.nodes[cn]["created"] = "2026-01-01 00:00:00.000000000"
+                if status == "MERGED":
+                    ctx.nodes[cn]["submitted"] = f"2026-01-0{cn} 00:00:00.000000000"
+                ctx.raw_entries.append({"cn": cn, "commit": f"c{cn}", "parent_commit": "",
+                                        "ps": 1, "latest": 1})
+            ctx.edges.append(_make_edge(4, 1, 1, 2, 1, 1))
+            if with_parent:
+                ctx.nodes[1]["unrelated_parent"] = True
+                ctx.edges += [_make_edge(1, 1, 1, 2, 1, 1), _make_edge(5, 1, 1, 1, 1, 1)]
+            s = _assemble_payload(ctx)["stats"]
+            return {k: s[k] for k in ("status_counts", "node_count", "tickets",
+                                      "pruned_merged_cns", "structural_merged_cns")}
+        assert stats(True) == stats(False)
+        assert stats(True)["pruned_merged_cns"] == [3, 5]

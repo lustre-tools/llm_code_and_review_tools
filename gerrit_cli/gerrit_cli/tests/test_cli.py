@@ -2320,6 +2320,19 @@ class TestCmdGraphConflicts:
             cmd_graph(args)
         assert build.call_args.kwargs["conflicts_repo"] == "/src/lustre"
 
+    def test_a_repo_that_is_not_one_is_invalid_input(self, tmp_path, capsys):
+        from gerrit_cli.cli import build_parser, cmd_graph
+
+        args = build_parser().parse_args(
+            ["graph", "12345", "--no-open", "--conflicts", str(tmp_path / "nope")])
+        with patch('gerrit_cli.cli.GerritCommentsClient') as MockClient, \
+             pytest.raises(SystemExit) as exc_info:
+            MockClient.parse_gerrit_url.return_value = ("https://gerrit.invalid", 12345)
+            cmd_graph(args)
+        assert exc_info.value.code == 4
+        out = json.loads(capsys.readouterr().out)
+        assert out["code"] == "INVALID_INPUT" and "no such directory" in out["message"]
+
 
 class TestVersion:
     """describe and __version__ report the installed package's version."""

@@ -31,7 +31,9 @@ def _load_template() -> str:
 
 def generate_html(graph_data: dict[str, Any]) -> str:
     """Generate a self-contained interactive HTML visualization."""
-    data_json = json.dumps(graph_data)
+    # "</script>" in a subject or commit message would end the script
+    # tag early; "<\/" is the same string to JSON and JS
+    data_json = json.dumps(graph_data).replace("</", "<\\/")
     return _load_template().replace("__GRAPH_DATA__", data_json)
 
 

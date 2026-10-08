@@ -249,6 +249,10 @@ def error_code_for(exc: BaseException, default: str = ErrorCode.API_ERROR) -> st
 
 
 def _own_error_code(exc: BaseException) -> str | None:
+    from ..graph.conflicts import ConflictRepoError
+
+    if isinstance(exc, ConflictRepoError):
+        return ErrorCode.INVALID_INPUT
     if isinstance(exc, GerritAuthRequired):
         return ErrorCode.AUTH_MISSING
     if isinstance(exc, GerritConfigError):

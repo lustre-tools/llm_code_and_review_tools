@@ -2639,6 +2639,7 @@ function conflictSection(node) {
     const baseText = !base ? ''
         : base.status === 'ABANDONED' ? `abandoned ${link(base.cn)}`
         : base.status === 'NEW' ? `${link(base.cn)}, which is ${nodeMap[base.cn] ? 'not on ' + branch : 'not in this graph'}`
+        : base.status === 'own' ? 'an older patch set of itself'
         : base.cn ? `${link(base.cn)} (${esc(base.status)})`
         : `a commit that is not on ${branch} and that no change owns`;
     const baseNote = !base ? ''

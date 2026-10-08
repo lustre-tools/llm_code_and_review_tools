@@ -541,24 +541,35 @@ def _discover_inflight_ancestors(ctx: BuildContext) -> int:
         and n["current_commit"] not in ctx.revision_parents
     ]
     added = 0
+    seen = set(todo)
+    owners: dict[str, Any] = {}
     for _hop in range(_CONTEXT_MAX_HOPS):
-        found = []
+        found, unwalked = [], []
         for cn in todo:
             commit = ctx.nodes[cn]["current_commit"]
             try:
                 parent, _subject = _commit_parent(ctx, cn, commit)
-                owner = _commit_owner(ctx, parent) if parent else None
+                if parent and parent not in owners:
+                    owners[parent] = _commit_owner(ctx, parent)
             except Exception as e:
                 ctx.log(f" (parent of {cn}: {e})", end="")
                 continue
+            owner = owners.get(parent) if parent else None
             if owner is None or owner[0] == cn:
                 continue
             pcn, _pps, change = owner
-            if change is None:
-                if ctx.nodes[pcn]["status"] == "NEW":
+            if pcn in ctx.nodes:
+                parent_node = ctx.nodes[pcn]
+                if parent_node["status"] == "NEW":
                     ctx.revision_parents[commit] = parent
+                    # found by commit discovery too: its parent is unknown
+                    if (pcn not in seen and parent_node.get("current_commit")
+                            and parent_node["current_commit"] not in ctx.revision_parents):
+                        seen.add(pcn)
+                        unwalked.append(pcn)
                 continue
-            if change.get("status") != "NEW" or not _matches_anchor_scope(ctx, change):
+            if (change is None or change.get("status") != "NEW"
+                    or not _matches_anchor_scope(ctx, change)):
                 continue
             ctx.nodes[pcn] = _make_node(
                 pcn, change.get("subject", ""), "NEW",
@@ -574,12 +585,14 @@ def _discover_inflight_ancestors(ctx: BuildContext) -> int:
             )
             ctx.nodes[pcn]["unrelated_parent"] = True
             ctx.revision_parents[commit] = parent
+            seen.add(pcn)
             found.append(pcn)
-        if not found:
+        if found:
+            added += len(found)
+            _fetch_revisions_batch(ctx, found, collect_parents=True)
+        todo = found + unwalked
+        if not todo:
             break
-        added += len(found)
-        _fetch_revisions_batch(ctx, found, collect_parents=True)
-        todo = found
     return added
 
 
@@ -888,6 +901,10 @@ def _build_separate_group(
     get their own /related fetch, edges, and (optionally) cross-
     group stale links back to main."""
     main_cns = set(ctx.nodes.keys())
+    for cn in seed_cns:
+        # a search hit is a series member, not just a parent of one
+        if cn in main_cns:
+            ctx.nodes[cn].pop("unrelated_parent", None)
     seeds_new = [cn for cn in seed_cns if cn not in main_cns]
     if not seeds_new:
         return
@@ -2051,6 +2068,7 @@ def _prune_unrelated_merged(ctx: BuildContext) -> tuple[int, int]:
     tickets = {
         n["ticket"] for n in ctx.nodes.values()
         if n.get("status") != "MERGED" and n.get("ticket")
+        and not n.get("unrelated_parent")
     }
     if anchor.get("ticket"):
         tickets.add(anchor["ticket"])
@@ -2086,7 +2104,9 @@ def _prune_unrelated_merged(ctx: BuildContext) -> tuple[int, int]:
     for e in ctx.edges:
         src = ctx.nodes.get(e["from"])
         dst = ctx.nodes.get(e["to"])
-        if not src or not dst:
+        # an unrelated parent changes no count: if its base goes, it
+        # is hooked to the trunk by date like any other root
+        if not src or not dst or src.get("unrelated_parent") or dst.get("unrelated_parent"):
             continue
         if (src.get("status") == "MERGED"
                 and dst.get("status") != "MERGED"):

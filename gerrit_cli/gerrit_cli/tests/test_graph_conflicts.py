@@ -225,12 +225,24 @@ class TestBaseNotOnTheBranch:
                      lookup=lambda shas: {stray: (40, "MERGED")})["results"]["10"]
         assert "base" not in res
 
-    def test_only_the_bottom_of_a_stack_says_it(self, gerrit, local):
-        _a, x = self._on(gerrit, "ABANDONED")
-        y = gerrit.change(11, x.commit, {"a.c": _text({2: "x", 9: "y"})})
+    def test_the_changes_above_the_bottom_say_it_too(self, gerrit, local):
+        """x applies alone; y on it does not: the base may be why."""
+        a = gerrit.change(30, gerrit.master, {"a.c": _text({2: "a"})}, status="ABANDONED")
+        x = gerrit.change(10, a.commit, {"a.c": _text({2: "a", 9: "x"})})
+        y = gerrit.change(11, x.commit, {"a.c": _text({2: "a", 9: "x", 14: "y"})})
+        gerrit.advance({"a.c": _text({14: "master"})})
         result = _check(gerrit, local, [x, y])["results"]
-        assert result["10"]["base"] == {"cn": 30, "status": "ABANDONED"}
-        assert result["11"] == {"status": "blocked", "by": 10, "under": 10}
+        assert result["10"] == {"status": "clean", "base": {"cn": 30, "status": "ABANDONED"}}
+        assert result["11"] == {"status": "conflict", "files": ["a.c"], "under": 10,
+                                "base": {"cn": 30, "status": "ABANDONED"}}
+
+    def test_a_change_on_its_own_older_patch_set(self, gerrit, local):
+        x1 = gerrit.change(10, gerrit.master, {"a.c": _text({2: "x1"})})
+        x2 = gerrit.change(10, x1.commit, {"a.c": _text({2: "x2"})}, ps=2)
+        owners = {x2.commit: (10, "NEW")}
+        res = _check(gerrit, local, [x2], owners,
+                     lookup=lambda shas: {x1.commit: (10, "NEW")})["results"]["10"]
+        assert res["base"] == {"status": "own"}
 
 
 class TestParentMovedOn:
@@ -304,6 +316,19 @@ class TestMasterNext:
         assert nxt["10"] == {"status": "queued"}
         assert nxt["11"]["status"] == "conflict"
         assert nxt["11"]["with"]["cn"] == 602 and nxt["11"]["with"]["commit"] == queue[2]
+
+    def test_a_queued_ancestor_that_fails_early_blames_nothing(self, gerrit, local):
+        """x is queued after q1, which it needs. Cut after q0, x itself
+        does not apply, which says nothing about x2: the blame is q3."""
+        x = gerrit.change(10, gerrit.master, {"a.c": _text({5: "x"})})
+        x2 = gerrit.change(11, x.commit, {"a.c": _text({5: "x", 9: "x2"})})
+        queue = _queue(gerrit, [(600, {"a.c": _text({15: "q0"})}),
+                                (601, {"a.c": _text({15: "q0", 5: "q1"})}),
+                                (10, {"a.c": _text({15: "q0", 5: "x"})}),
+                                (603, {"a.c": _text({15: "q0", 5: "x", 9: "q3"})})])
+        result = self._check(gerrit, local, [x, x2],
+                             lambda ids: {change_id(c): c for c in (600, 601, 603)})
+        assert result["next"]["results"]["11"]["with"]["commit"] == queue[3]
 
     def test_a_change_that_does_not_land_on_the_branch_is_not_tried(self, gerrit, local):
         base = gerrit.master
@@ -407,6 +432,18 @@ class TestRepository:
     def test_an_unknown_branch_is_an_error(self, gerrit, local):
         with pytest.raises(ConflictCheckError, match="has no branch b2_15"):
             check_conflicts(Repo(local), str(gerrit.path), "b2_15", [], {})
+
+    def test_a_named_remote_keeps_its_refs(self, gerrit, local):
+        """Fetching a branch from a remote with a fetch refspec would
+        move its remote-tracking branch."""
+        _git(local, "remote", "add", "origin", str(gerrit.path))
+        x = gerrit.change(10, gerrit.master, {"a.c": _text({2: "x"})})
+        _queue(gerrit, [(500, {"b.c": _text({1: "q"})})])
+        result = check_conflicts(Repo(local), "origin", "master", [x], gerrit.owner,
+                                 next_branch="master-next", workers=2)
+        assert result["next"]["results"]["10"] == {"status": "clean"}
+        assert _git(local, "for-each-ref") == ""
+        assert not (local / ".git" / "FETCH_HEAD").exists()
 
     def test_not_a_directory(self, tmp_path):
         with pytest.raises(ConflictCheckError, match="no such directory"):
