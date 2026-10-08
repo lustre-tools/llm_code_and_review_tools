@@ -1262,15 +1262,24 @@ function _layoutTrunkSideBranches(ctx) {
             for (let i = 0; i < parentSides.length; i++) {
                 const p = parentSides[i];
                 const pY = -(level - 1) * LEVEL_H;
-                // Take the other side when the preferred slot would
-                // stack onto an unrelated node (49342: two trunk
-                // parents of neighbouring trunk rows in one column).
-                let right = (i % 2 === 0);
+                // Skip slots that would stack onto an unrelated node
+                // (49342: two trunk parents of neighbouring trunk rows
+                // in one column): take the nearest free slot on either
+                // side, the preferred side on a tie.
+                const preferRight = (i % 2 === 0);
                 const blocked = (x) => _touchesUnrelated(positions, p, x, pY)
                     || Object.values(positions).some(q => q.x === x && q.y === pY);
-                if (blocked(right ? rightX : leftX)
-                        && !blocked(right ? leftX : rightX)) right = !right;
-                const pX = right ? rightX : leftX;
+                const slots = [];
+                for (let k = 0; k < 4; k++) {
+                    slots.push({ x: rightX + k * NODE_W, right: true });
+                    slots.push({ x: leftX - k * NODE_W, right: false });
+                }
+                slots.sort((a, b) => (Math.abs(a.x - pos.x) - Math.abs(b.x - pos.x))
+                    || ((a.right === preferRight) ? -1 : 1));
+                const slot = slots.find(c => !blocked(c.x))
+                    || slots.find(c => c.right === preferRight);
+                const right = slot.right;
+                const pX = slot.x;
                 _placeNode(ctx, p, pX, pY);
                 heldBy[p] = id;
                 for (const gk of _layoutKids(ctx, p)) {
@@ -1278,8 +1287,8 @@ function _layoutTrunkSideBranches(ctx) {
                     _layoutTree(ctx, gk, pX, level, 1);
                 }
                 const ext = _subtreeExtents(ctx, p);
-                if (right) rightX = pX + (ext.right + 1) * NODE_W;
-                else leftX = pX - (ext.left + 1) * NODE_W;
+                if (right) rightX = Math.max(rightX, pX + (ext.right + 1) * NODE_W);
+                else leftX = Math.min(leftX, pX - (ext.left + 1) * NODE_W);
             }
         }
         const unplaced = _layoutKids(ctx, id)

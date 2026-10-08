@@ -452,6 +452,23 @@ class TestNoFalseChains:
         view = _render(_payload(5, nodes, edges), tmp_path, "a0m1")["a0m1"]
         assert self._false_chains(view) == []
 
+    def test_trunk_parent_takes_the_nearest_free_slot(self, tmp_path):
+        """49342's 50621: 301 can't take the right slot (it would stack
+        under 300) and goes left with a fork; 302 then takes the free
+        right slot two columns out, not the left one three out."""
+        nodes = [
+            _node(10, "MERGED", submitted="2026-01-01", current_patchset=2),
+            _node(11, "MERGED", submitted="2026-02-01", current_patchset=2),
+        ] + [_node(c) for c in (300, 301, 302, 310, 311, 400)]
+        edges = [_edge(300, 10, cps=1, cl=2), _edge(301, 11, cps=1, cl=2),
+                 _edge(302, 11, cps=1, cl=2), _edge(301, 310), _edge(301, 311),
+                 _edge(11, 400, pps=2, pl=2)]
+        view = _render(_payload(400, nodes, edges), tmp_path, "a0m1")["a0m1"]
+        pos = _pos(view)
+        assert pos[301][0] == -NODE_W
+        assert pos[302] == (2 * NODE_W, pos[11][1] + LEVEL_H)
+        assert self._false_chains(view) == []
+
     def test_trunk_parents_of_neighbouring_rows(self, tmp_path):
         """49342's shape: 300 and 301 each once carried one of two
         neighbouring trunk nodes and have nothing else; they must not
