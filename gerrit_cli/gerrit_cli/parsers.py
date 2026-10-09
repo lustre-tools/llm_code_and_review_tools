@@ -1424,7 +1424,10 @@ def add_related_parser(subparsers):
         "related",
         help="Get the relation chain (series) for a Gerrit change",
         description="Show all changes in the git relation chain for a change. "
-                    "Returns the series from root ancestor to tip, in order.",
+                    "Returns the series from root ancestor to tip, in order. "
+                    "Each entry carries its subject, status, Change-Id, the "
+                    "related patchset's commit and, once merged, the commit "
+                    "that landed (merged_commit).",
     )
     parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(

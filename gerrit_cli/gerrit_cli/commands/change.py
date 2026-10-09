@@ -239,19 +239,30 @@ def cmd_related(args):
 
         changes = client.get_related_changes(change_number)
 
+        merged = [c["_change_number"] for c in changes
+                  if c.get("_change_number") is not None
+                  and c.get("status") == "MERGED"]
+        landed = client.get_current_revisions(merged) if merged else {}
+
         # Build clean output: list of change numbers in series order
         series = []
         for c in changes:
             num = c.get("_change_number")
             if num is None:
                 continue
+            commit = c.get("commit") or {}
+            status = c.get("status", "NEW")
             series.append({
                 "change_number": num,
                 "patchset": c.get("_revision_number"),
                 "current_patchset": c.get("_current_revision_number"),
-                "status": c.get("status", "NEW"),
-                "subject": c.get("subject", ""),
+                "status": status,
+                "subject": commit.get("subject") or c.get("subject", ""),
                 "is_current": num == change_number,
+                "change_id": c.get("change_id"),
+                "commit": commit.get("commit"),
+                "merged_commit": (landed.get(num)
+                                  if status == "MERGED" else None),
             })
 
         data = {

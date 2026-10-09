@@ -764,12 +764,34 @@ class GerritCommentsClient:
 
         Returns:
             List of dicts with keys: _change_number, _revision_number,
-            _current_revision_number, status, subject, change_id
+            _current_revision_number, status, change_id, and commit
+            (the related patchset's commit: sha in commit.commit,
+            subject in commit.subject)
         """
         result = self.rest.get(
             f"/changes/{change_number}/revisions/current/related"
         )
         return result.get("changes", [])
+
+    def get_current_revisions(
+        self,
+        change_numbers: list[int],
+    ) -> dict[int, str]:
+        """Map each change to its current revision sha, in one query.
+
+        For a merged change that is the commit that landed.
+        """
+        if not change_numbers:
+            return {}
+        query = " OR ".join(f"change:{n}" for n in change_numbers)
+        changes = self.search_changes(
+            query, limit=len(change_numbers), options=["CURRENT_REVISION"]
+        )
+        return {
+            c["_number"]: c["current_revision"]
+            for c in changes
+            if c.get("_number") and c.get("current_revision")
+        }
 
     def add_hashtags(
         self,
