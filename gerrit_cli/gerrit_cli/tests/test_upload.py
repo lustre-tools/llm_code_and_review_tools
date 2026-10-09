@@ -486,6 +486,114 @@ def test_foreign_signoff_refused_before_anything_is_rewritten(gerrit):
         assert pushed_refs(bare) == {}
 
 
+# A commit made where an amend was meant (`git commit -F msg` without
+# --amend) is refused for whatever else is wrong with it; the refusal says
+# HEAD holds an extra commit.
+
+FOREIGN = ("Someone Else", "else@example.com")
+
+
+def test_a_commit_repeating_its_parents_change_id_hints_at_amend(gerrit):
+    fake, bare, work = gerrit
+    patchset = commit(work, "LU-1 llite: the change", cid=CID_A,
+                      committer=BOT)
+    fake.add_change(51164, CID_A, revisions={patchset: 2})
+    head = commit(work, "LU-1 llite: the change v2", cid=CID_A,
+                  committer=BOT, signoff=FOREIGN)
+
+    with pytest.raises(UploadError) as err:
+        upload(fake, repo=str(work), change="51164", dry_run=True)
+
+    e = err.value
+    assert e.code == ErrorCode.NO_SIGNOFF
+    assert "HEAD has 2 commit(s) over master" in e.message
+    assert (f"{head[:12]} 'LU-1 llite: the change v2' repeats the "
+            f"Change-Id of {patchset[:12]}") in e.message
+    assert "`git commit --amend`" in e.message
+    assert e.details["hint"] in e.message
+    assert "--amend" in str(e)
+
+
+def test_a_series_commit_opening_a_new_change_hints_at_amend(gerrit):
+    fake, bare, work = gerrit
+    patchset = commit(work, "LU-1 llite: the change", cid=CID_A,
+                      committer=BOT)
+    fake.add_change(51164, CID_A, revisions={patchset: 2})
+    head = commit(work, "LU-1 llite: the change v2", cid=CID_NEW,
+                  committer=BOT, signoff=FOREIGN)
+
+    with pytest.raises(UploadError) as err:
+        upload(fake, repo=str(work), change="51164", series=True,
+               dry_run=True)
+
+    e = err.value
+    assert e.code == ErrorCode.NO_SIGNOFF
+    assert (f"{head[:12]} 'LU-1 llite: the change v2' would open a new "
+            "change") in e.message
+    assert "`git commit --amend`" in e.message
+
+
+def test_a_head_with_a_new_change_id_above_the_change_hints_at_amend(gerrit):
+    fake, bare, work = gerrit
+    patchset = commit(work, "LU-1 llite: the change", cid=CID_A,
+                      committer=BOT)
+    fake.add_change(51164, CID_A, revisions={patchset: 2})
+    commit(work, "LU-1 llite: the change v2", cid=CID_NEW, committer=BOT)
+
+    with pytest.raises(UploadError) as err:
+        upload(fake, repo=str(work), change="51164")
+
+    e = err.value
+    assert e.code == ErrorCode.CHANGE_ID_MISMATCH
+    assert "HEAD~1" in e.message
+    assert "HEAD has 1 commit(s) over it" in e.message
+    assert "`git commit --amend`" in e.message
+
+
+def test_a_head_without_a_change_id_names_the_commit_below(gerrit):
+    fake, bare, work = gerrit
+    patchset = commit(work, "LU-1 llite: the change", cid=CID_A,
+                      committer=BOT)
+    commit(work, "LU-1 llite: the change v2", committer=BOT)
+
+    with pytest.raises(UploadError) as err:
+        upload(fake, repo=str(work))
+
+    e = err.value
+    assert e.code == ErrorCode.NO_CHANGE_ID
+    assert f"HEAD sits on {patchset[:12]}" in e.message
+    assert "change 51164" in e.message
+    assert "`git commit --amend`" in e.message
+
+
+def test_a_new_change_on_a_merged_one_gets_no_amend_hint(gerrit):
+    fake, bare, work = gerrit
+    fake.add_change(60000, CID_B, status="MERGED")
+    commit(work, "LU-2 osc: landed", cid=CID_B, committer=BOT)
+    commit(work, "LU-3 mdt: new work", cid=CID_NEW, committer=BOT)
+
+    with pytest.raises(UploadError) as err:
+        upload(fake, repo=str(work))
+
+    assert err.value.code == ErrorCode.CHANGE_NOT_FOUND
+    assert "--amend" not in err.value.message
+
+
+def test_a_change_on_top_of_another_gets_no_amend_hint(gerrit):
+    fake, bare, work = gerrit
+    parent = commit(work, "LU-2 osc: parent", cid=CID_B, committer=BOT)
+    fake.add_change(60000, CID_B, revisions={parent: 4})
+    commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT,
+           signoff=FOREIGN)
+
+    with pytest.raises(UploadError) as err:
+        upload(fake, repo=str(work), change="51164", dry_run=True)
+
+    assert err.value.code == ErrorCode.NO_SIGNOFF
+    assert "--amend" not in err.value.message
+    assert "hint" not in err.value.details
+
+
 def test_a_parent_gerrit_already_has_is_not_checked(gerrit):
     """A series parent already uploaded is not validated again."""
     fake, bare, work = gerrit

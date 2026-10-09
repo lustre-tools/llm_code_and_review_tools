@@ -68,6 +68,9 @@ class UploadError(Exception):
         self.details = details or {}
         self.exit_code = exit_code
 
+    def __str__(self) -> str:
+        return self.message
+
 
 @dataclass
 class Commit:
@@ -663,6 +666,7 @@ def _head_mismatch(
     named: Target,
 ) -> UploadError:
     """The refusal for a HEAD that is not the named change."""
+    owner = None
     if head_change_id is None:
         problem = "HEAD has no Change-Id trailer"
         consequence = "Gerrit would not add it to that change"
@@ -688,6 +692,12 @@ def _head_mismatch(
                 "commits above it, pass --series; each goes to its own "
                 "change."
             )
+            if head_change_id is None or not owner:
+                fix += (
+                    f" Hint: HEAD has {depth} commit(s) over it, and HEAD "
+                    f"carries {'no' if head_change_id is None else 'a new'}"
+                    " Change-Id; did you mean `git commit --amend`?"
+                )
             break
     return UploadError(
         ErrorCode.CHANGE_ID_MISMATCH,
@@ -840,7 +850,8 @@ def _resolve_destination(
             f"HEAD {head.sha[:12]} ('{head.subject}') has no Change-Id "
             "trailer, so there is no change to upload it to. Amend the "
             "commit with the Change-Id of the change it belongs to (the "
-            "commit-msg hook generates one for a new change).",
+            "commit-msg hook generates one for a new change)."
+            + _parent_hint(client, repo, head),
         )
     picked, everywhere = _find_change(client, head_change_id, project, branch)
     if picked is None:
@@ -854,11 +865,77 @@ def _resolve_destination(
             ErrorCode.CHANGE_NOT_FOUND,
             f"No change on {client.url} has HEAD's Change-Id "
             f"{head_change_id}{where}. To upload HEAD as a new change, "
-            "pass both --project and --branch.",
+            "pass both --project and --branch." + _parent_hint(client, repo, head),
             exit_code=ExitCode.NOT_FOUND,
         )
     _closed(picked)
     return picked["project"], picked["branch"], None
+
+
+def _parent_hint(client: Any, repo: str, head: Commit) -> str:
+    """For a HEAD whose Change-Id names no change: the open change below
+    it may be the one it was meant to amend."""
+    if len(head.parents) != 1:
+        return ""
+    parent = _read_commits(repo, ["-1", head.parents[0]])[0]
+    if not parent.change_ids or parent.change_ids == head.change_ids:
+        return ""
+    try:
+        found, _ = _find_change(client, parent.change_ids[-1], None, None)
+    except UploadError:
+        return ""
+    if not found or found.get("status") != "NEW":
+        return ""
+    return (
+        f" Hint: HEAD sits on {parent.label()}, change "
+        f"{found.get('_number')}; did you mean `git commit --amend`?"
+    )
+
+
+def _amend_hint(
+    commits: list[Commit],
+    new: list[Commit],
+    series: bool,
+    plan: list[dict[str, Any]] | None,
+    branch: str,
+    tip: str,
+) -> str:
+    """A hint for a range holding a commit made where an amend was meant.
+
+    Such a commit sits on top of the one it should have replaced, and
+    carries no Change-Id, a new one, or that commit's own.
+    """
+    in_range = {c.sha for c in commits}
+    owners: dict[str, Commit] = {}
+    for c in commits:
+        if c.change_ids:
+            owners.setdefault(c.change_ids[-1], c)
+    creates = {e["sha"] for e in plan or [] if e.get("action") == "create"}
+    suspects = []
+    for c in new:
+        if not set(c.parents) & in_range:
+            continue
+        what = f"{c.sha[:12]} '{c.subject}'"
+        cid = c.change_ids[-1] if c.change_ids else None
+        if cid is None:
+            suspects.append(f"{what} has no Change-Id")
+        elif owners[cid].sha != c.sha:
+            suspects.append(
+                f"{what} repeats the Change-Id of {owners[cid].sha[:12]}"
+            )
+        elif c is commits[-1] and c.sha in creates:
+            suspects.append(f"{what} would open a new change")
+    if not series and len(new) > 1:
+        suspects.append(
+            f"{len(new)} are new to Gerrit, where one was expected"
+        )
+    if not suspects:
+        return ""
+    return (
+        f" Hint: HEAD has {len(commits)} commit(s) over {branch} "
+        f"({tip[:12]}); " + "; ".join(suspects)
+        + ". Did you mean `git commit --amend`?"
+    )
 
 
 def _check_range(
@@ -1228,13 +1305,22 @@ def upload(
                 "is already on Gerrit; there is nothing new to upload.",
             )
 
-        _check_range(commits, new, head, series, named, project, branch)
+        plan = None
+        try:
+            _check_range(commits, new, head, series, named, project, branch)
+            plan = _plan(client, commits, known, project, branch)
+            _check_signoffs(new, account)
+            rewrite = _committer_rewrites(commits, known, account, amend)
+            head_entry = plan[-1]
+            if expect_patchset is not None:
+                _check_expected_patchset(client, head_entry, expect_patchset)
+        except UploadError as e:
+            hint = _amend_hint(commits, new, series, plan, branch, tip)
+            if hint:
+                e.message += hint
+                e.details["hint"] = hint.strip()
+            raise
 
-        plan = _plan(client, commits, known, project, branch)
-
-        _check_signoffs(new, account)
-
-        rewrite = _committer_rewrites(commits, known, account, amend)
         to = f"{account.name} <{account.preferred_email}>"
         amended = [
             {"old_sha": c.sha, "new_sha": None, "subject": c.subject,
@@ -1250,9 +1336,6 @@ def upload(
             return [*_GIT_AUTH_ARGS, "push", "--porcelain", url,
                     f"{sha}:{ref}"]
 
-        head_entry = plan[-1]
-        if expect_patchset is not None:
-            _check_expected_patchset(client, head_entry, expect_patchset)
         data: dict[str, Any] = {
             "dry_run": dry_run,
             "pushed": False,

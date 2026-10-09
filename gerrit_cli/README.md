@@ -125,6 +125,10 @@ gc --user patrickbot upload 12345 --repo /path/to/checkout
   own Change-Id names (updated, or created if new); every commit needs a
   Change-Id, and CHANGE, if given, may be any commit in the range rather
   than HEAD. Commits Gerrit already has are not uploaded again.
+  When a refusal's range holds a commit that looks made where an amend
+  was meant -- one sitting on the commit it should have replaced, with
+  no Change-Id, a new one or that commit's own -- the error ends with a
+  hint asking whether `git commit --amend` was meant.
 - **Committer.** Gerrit refuses a committer email that is not registered
   to the pushing account unless it has "forge committer". The account's
   emails are read from `/accounts/self/emails`; a commit whose committer
