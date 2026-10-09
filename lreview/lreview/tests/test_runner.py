@@ -1212,3 +1212,64 @@ class TestClaudeSessionResume:
         run_batch(_config(repo, tmp_path), [_change(903, sha)])
         (run,) = _invocations(args_log)
         assert "--resume" not in run and "--settings" not in run
+
+
+class TestPreload:
+
+    def _prompts(self, tmp_path):
+        from lreview.runner import PRELOAD_FILES
+        prompts = tmp_path / "prompts"
+        for name in PRELOAD_FILES:
+            (prompts / name).parent.mkdir(parents=True, exist_ok=True)
+            (prompts / name).write_text(f"contents of {name}\n")
+        return prompts
+
+    def test_prompt_carries_the_commit(self, repo, tmp_path):
+        from lreview.runner import review_prompt
+        sha = _commit_with_marker(repo, "NEW_FILE", "hello\n")
+        _git(repo, "checkout", "-q", sha)
+        config = _config(repo, tmp_path, prompts_dir=self._prompts(tmp_path),
+                         preload=True)
+        prompt = review_prompt(config, _change(1, sha), worktree=repo)
+        assert "Lustre Patch Analysis Protocol in your system prompt" in prompt
+        assert "review-core.md" not in prompt
+        assert f"commit {sha}" in prompt and "+hello" in prompt
+
+    def test_cmd_names_one_shared_system_file(self, tmp_path):
+        config = _config(tmp_path, tmp_path,
+                         prompts_dir=self._prompts(tmp_path), preload=True)
+        config.results_dir.mkdir(parents=True)
+        first = build_agent_cmd(config, _change(1, "a" * 40))
+        second = build_agent_cmd(config, _change(2, "b" * 40))
+        path = first[first.index("--append-system-prompt-file") + 1]
+        assert path == second[second.index("--append-system-prompt-file") + 1]
+        text = Path(path).read_text()
+        assert text.index("contents of review-core.md") < text.index(
+            "contents of subsystem/subsystem.md")
+        assert str(config.prompts_dir) in text
+
+    def test_light_mode_is_not_preloaded(self, tmp_path):
+        config = _config(tmp_path, tmp_path,
+                         prompts_dir=self._prompts(tmp_path), preload=True,
+                         mode="light")
+        cmd = build_agent_cmd(config, _change(1, "a" * 40))
+        assert "--append-system-prompt-file" not in cmd
+
+    def test_large_commit_left_out(self, repo, tmp_path, monkeypatch):
+        from lreview import runner
+        monkeypatch.setattr(runner, "PRELOAD_COMMIT_LIMIT", 10)
+        assert "too large" in runner.commit_text(repo)
+
+
+def test_run_batch_records_telemetry(repo, tmp_path, stub_claude):
+    sha = _commit_with_marker(repo, "HAS_FINDINGS", json.dumps(REVIEW_SPEC))
+    config = _config(repo, tmp_path, lean=True)
+    result, = run_batch(config, [_change(130, sha)])
+    saved = list(config.results_dir.glob("kreview-130_ps1-*.telemetry.json"))
+    assert len(saved) == 1
+    data = json.loads(saved[0].read_text())
+    assert data["run"]["lean"] is True
+    assert data["run"]["status"] == STATUS_FINDINGS
+    summary = json.loads((config.results_dir / "summary.json").read_text())
+    assert summary["130"]["telemetry"] == result.telemetry
+    assert "split_usd" in result.telemetry

@@ -193,7 +193,12 @@ is substituted too). Posting is pinned to the reviewed
 patchset revision and guarded against double-posting. Prompts are
 found via `--prompts-dir` / `$REVIEW_PROMPTS_DIR`, a legacy
 kreview.md skill install, or `~/review-prompts`; if missing, the
-tool offers to clone review-prompts. See `lreview/README.md`.
+tool offers to clone review-prompts. Claude reviews run `--lean` and
+`--preload` by default (minimal tools, no MCP/skills/CLAUDE.md, a
+5-minute prompt cache; the protocol in the system prompt and the commit
+in the first message); every review writes a `.telemetry.json` beside
+its log, and `lreview stats` shows where reviews spent their time and
+money. See `lreview/README.md`.
 
 ### Other tools
 

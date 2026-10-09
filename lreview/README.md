@@ -228,6 +228,48 @@ lreview run --mode light --repo lustre-release -m 64086   # cheap pass
 lreview run --repo lustre-release -m 64086                # full gate
 ```
 
+## Cost, speed and telemetry
+
+A full review is one headless claude session. Almost all of its wall
+time (about 95%) is the model generating, and its cost is three things
+in roughly equal parts: what the calls write into the prompt cache,
+what they read back from it on every later call, and what the model
+writes (most of it thinking). Two defaults keep both down:
+
+- **`--lean`** (default on): the reviewer starts with only the tools a
+  review uses (Bash, Read, Write, Edit, Grep, Glob), no MCP servers,
+  no skills listing and no CLAUDE.md files, and with a 5-minute prompt
+  cache instead of Claude Code's 1-hour one. The interactive setup
+  otherwise puts some 40K tokens in front of every call, and a 1-hour
+  cache write costs 2x input against 1.25x; calls in a review are
+  seconds apart.
+- **`--preload`** (default on, claude full mode): the protocol
+  (`review-core.md`) and the files it always loads go into the system
+  prompt, the same for every review so concurrent reviews share its
+  cache, and the commit goes into the first message. The agent no
+  longer spends its first calls reading them one at a time, and no
+  longer skips any.
+
+Measured on four merged Gerrit changes, twice each (2026-10-09, Opus
+5.5): $1.82 and 3.7 minutes a review with both off, $0.74 and 2.4
+minutes with both on, with the same known bugs found.
+`--no-lean` / `--no-preload` (or `LREVIEW_LEAN=0`, `LREVIEW_PRELOAD=0`)
+restore the old behaviour.
+
+Every review writes `<log>.telemetry.json` beside its log: each model
+call (when, how long, its context, cache write and read, output, cost)
+and each tool call (what it ran, how long, how many tokens its output
+added, and what that cost to write and re-read on every later call).
+`summary.json` keeps a compact copy per change. `lreview stats` reads
+them, or any review log:
+
+```bash
+lreview stats                          # the newest 20 reviews in the results dir
+lreview stats -n 200 DIR ...           # more, from other directories too
+lreview stats --calls kreview-X.log    # every call of one review
+lreview stats --json                   # the summaries, for scripts
+```
+
 ## How it works
 
 1. Every change (number or URL) is resolved to its **current patchset**
@@ -468,6 +510,7 @@ lreview-results/
 ├── gerrit-review-64086_ps40.json     # the review (only when findings)
 ├── review-metadata-64086_ps40.json   # severity score + issue count
 ├── kreview-64086_ps40-20260828-153012.1234.log   # per-run claude event log
+├── kreview-64086_ps40-20260828-153012.1234.telemetry.json  # its time/cost breakdown
 ├── markdown/
 │   └── 64086_LU-..._ps40.md          # human-readable report (see below)
 ├── review-last3.txt                  # --last text dump (see above)
@@ -511,6 +554,7 @@ lreview render [file.json...]    # (re)generate Markdown reports from
 lreview chat <change|url>        # interactive session over an existing
                                  # review (findings, how the patch works)
 lreview models                   # models and efforts each agent accepts
+lreview stats [LOG|DIR...]       # where reviews spent their time and money
 lreview post [<change|url>...] [options]
 ```
 
@@ -589,6 +633,8 @@ opencode's `--model` wants the `provider/model` form.
 | `--clear-memory, -c` | off | With `-m`: delete the change's memory document first |
 | `--no-resume` | off | With `-m` (claude): start a fresh session from the memory document instead of resuming the recorded review conversation |
 | `--db DIR` | `$LREVIEW_DB`, else `<repo>/lreview-db` | Memory database directory |
+| `--lean` / `--no-lean` | on (`$LREVIEW_LEAN=0` for off) | claude: minimal tools, no MCP/skills/CLAUDE.md, 5-minute prompt cache (see "Cost, speed and telemetry") |
+| `--preload` / `--no-preload` | on (`$LREVIEW_PRELOAD=0` for off) | claude, full mode: protocol and its always-loaded files in the system prompt, the commit in the first message |
 | `--agent-arg=ARG` | — | Extra agent-CLI arg (repeatable; `--claude-arg` is a legacy alias) |
 | `--post` | off | Post findings when batch finishes |
 | `--prefix TEXT` | `[AI review - <model>]` | Message prefix; `<model>` placeholder substituted (`$LREVIEW_PREFIX` overrides the default; `''` for none) |
@@ -618,6 +664,8 @@ in psN." message, but only when named (`lreview post 69459`, or
 | `LREVIEW_MODEL` | Default for `--model` (else `opus` for claude, `gpt-6.1-sol` for codex); a name from another agent's models, such as `opus` under `--agent codex`, gives way to that agent's default |
 | `LREVIEW_EFFORT` | Default for `--effort` (else the agent's own) |
 | `LREVIEW_DB` | Default for `--db` (memory database directory) |
+| `LREVIEW_LEAN` | `0` turns `--lean` off by default |
+| `LREVIEW_PRELOAD` | `0` turns `--preload` off by default |
 | `LREVIEW_RESULTS_DIR` | Default for `--results-dir` |
 | `LREVIEW_PROMPTS_UPDATE` | Prompts auto-update: `auto` (default), `warn` (ask first), `off` |
 | `LREVIEW_PREFIX` | Default for `--prefix`; `<model>` substituted |
@@ -632,9 +680,9 @@ in psN." message, but only when named (`lreview post 69459`, or
   --dangerously-bypass-approvals-and-sandbox`, gemini: `--yolo`) —
   they must read the tree, run git/grep, and write one JSON file; each
   runs confined to its own disposable worktree.
-- Reviews are expensive (a deep analysis of a non-trivial patch can run
-  30–90 minutes and significant tokens). Start with one change to
-  calibrate before batching.
+- A full review of a typical Lustre patch on Opus 5.5 takes 2-4
+  minutes and costs $0.50-1.50 with the defaults; a large one more.
+  `lreview stats` shows what yours cost.
 - This is an operator-facing tool and prints human-readable output,
   unlike the JSON-emitting agent tools in this repository.
 # GitHub pull requests

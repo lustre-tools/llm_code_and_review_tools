@@ -267,6 +267,7 @@ class ReviewResult:
     session_id: Optional[str] = None
     log_path: Optional[Path] = None
     error: Optional[str] = None
+    telemetry: Optional[dict] = None
 
 
 @dataclass
@@ -288,6 +289,11 @@ class BatchConfig:
     # With memory_db and the claude agent: fork and continue the
     # session recorded in the memory document instead of starting cold
     resume: bool = True
+    # Start the agent with only what a review uses (agents.LEAN_*)
+    lean: bool = False
+    # claude, full mode: put the protocol and the files it always loads
+    # in the system prompt and the commit in the first message
+    preload: bool = False
     agent_args: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -343,7 +349,13 @@ def review_prompt(config: BatchConfig,
                 f"Write {REVIEW_RESULT_NAME} version 1 with message and findings; inline "
                 "findings must name added PR lines, while commit-message and general findings "
                 "use location_kind commit_message or summary with null path and line.")
-    if config.mode == "light":
+    preloaded = _preloading(config, change)
+    if preloaded:
+        prompt = ("Run a deep dive regression analysis of the top commit "
+                  "of the git repository in the current directory, "
+                  "following the Lustre Patch Analysis Protocol in your "
+                  "system prompt")
+    elif config.mode == "light":
         prompt = (f"Using the prompt {LIGHT_PROMPT_PATH} run a light "
                   "regression review of the top commit; the "
                   "review-prompts knowledge directory is "
@@ -370,7 +382,67 @@ def review_prompt(config: BatchConfig,
     if focus is not None:
         from .since import focus_prompt
         prompt += ".\n\n" + focus_prompt(focus, change.sha)
+    if preloaded and worktree is not None:
+        prompt += commit_text(worktree)
     return prompt
+
+
+# What the protocol loads for every review, in its order.  Preloading
+# them saves the agent the round trips, and it skips none of them.
+PRELOAD_FILES = ("review-core.md", "technical-patterns.md",
+                 "subsystem/build.md", "lustre-commit-message.md",
+                 "lustre-style.md", "subsystem/subsystem.md")
+# A command-line argument past 128KB fails to exec; leave the commit
+# out of the prompt well before that.
+PRELOAD_COMMIT_LIMIT = 96 * 1024
+
+
+def _preloading(config: BatchConfig, change) -> bool:
+    return (config.preload and config.mode == "full"
+            and config.agent == "claude"
+            and getattr(change, "provider", None) != "github")
+
+
+def preload_file(config: BatchConfig) -> Path:
+    """The protocol and its always-loaded files as one system-prompt
+    file.  It is the same for every review with the same prompts, so
+    concurrent reviews share its prompt cache."""
+    parts = [
+        "# Lustre review protocol (preloaded by lreview)\n\n"
+        f"The prompt directory is {config.prompts_dir}. The protocol "
+        "(review-core.md) and the files it always loads are included "
+        "below exactly as they are there; they are already loaded, so "
+        "do not read them again. Load every other file the protocol "
+        "calls for from the prompt directory, as it directs.\n"]
+    for name in PRELOAD_FILES:
+        text = (config.prompts_dir / name).read_text()
+        parts.append(f"\n\n======== {name} ========\n\n{text}")
+    content = "".join(parts)
+    import hashlib
+    digest = hashlib.sha256(content.encode()).hexdigest()[:12]
+    dest = config.results_dir / f".preload-{digest}.md"
+    if not dest.exists():
+        dest.write_text(content)
+    return dest
+
+
+def commit_text(worktree: Path) -> str:
+    """The commit under review, for the first message."""
+    try:
+        shown = subprocess.run(
+            ["git", "-C", str(worktree), "show", "--stat", "--patch",
+             "--format=fuller", "HEAD"],
+            capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if not shown:
+        return ""
+    if len(shown.encode()) > PRELOAD_COMMIT_LIMIT:
+        return (".\n\nThe commit is too large to include here; read it "
+                "with git show HEAD.")
+    return (".\n\nThe commit follows, as git show --stat --patch "
+            "--format=fuller HEAD prints it; there is no need to show it "
+            "again.\n\n" + shown)
 
 
 def compaction_settings(doc: Path) -> str:
@@ -408,7 +480,9 @@ def build_agent_cmd(config: BatchConfig,
         config.model, config.effort, config.agent_args,
         review_prompt(config, change, session, worktree),
         resume=session.session_id if session is not None else None,
-        settings=settings)
+        settings=settings, lean=config.lean,
+        system_file=(str(preload_file(config))
+                     if _preloading(config, change) else None))
 
 
 def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:
@@ -571,7 +645,7 @@ class ProgressTracker:
 
 
 def _run_agent(cmd: list[str], cwd: Path, log_path: Path,
-               timeout: int) -> int:
+               timeout: int, extra_env: Optional[dict] = None) -> int:
     """Run the agent in its own process group; kill the whole group on
     timeout so MCP servers / hook children don't outlive the review.
 
@@ -585,6 +659,7 @@ def _run_agent(cmd: list[str], cwd: Path, log_path: Path,
         env.pop("GH_TOKEN", None); env.pop("GITHUB_TOKEN", None)
         if os.environ.get("CI"):
             env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+        env.update(extra_env or {})
         proc = subprocess.Popen(
             cmd,
             cwd=str(cwd),
@@ -681,20 +756,21 @@ def run_review(
     if log_path is None:
         log_path = run_log_path(config, change)
     cmd = build_agent_cmd(config, change, session, worktree_dir)
+    extra_env = get_agent(config.agent).env(config.lean)
     start = time.monotonic()
 
     _log(f"[{change.slug}] {console.color('cyan', 'review started')}: "
          f"{change.subject[:60]}")
     try:
         returncode = _run_agent(cmd, worktree_dir, log_path,
-                                config.timeout)
+                                config.timeout, extra_env)
         if (session is not None and returncode != 0
                 and _NO_SESSION_TEXT in _read_tail(log_path, 4096)):
             _log(f"[{change.slug}] note: Claude could not resume session "
                  f"{session.session_id}; starting a fresh one")
             cmd = build_agent_cmd(config, change, None, worktree_dir)
             returncode = _run_agent(cmd, worktree_dir, log_path,
-                                    config.timeout)
+                                    config.timeout, extra_env)
     except subprocess.TimeoutExpired:
         duration = time.monotonic() - start
         _log(f"[{change.slug}] {console.color('red', 'TIMEOUT')} "
@@ -912,6 +988,8 @@ def _review_and_cleanup(
     result.effort = config.effort
     if config.agent == "claude" and result.log_path:
         result.session_id = parse_session_id(result.log_path)
+    if result.log_path and result.log_path.is_file():
+        result.telemetry = record_telemetry(config, result)
     if memory_path is not None:
         result.memory_path = memory_path
         try:
@@ -944,6 +1022,43 @@ def _review_and_cleanup(
                     _log(f"[{change.slug}] warning: could not record the "
                          f"Claude session: {exc}")
     return result
+
+
+def record_telemetry(config: BatchConfig, result: ReviewResult):
+    """Save where the review's time and money went beside its log, and
+    return the summary the manifest keeps."""
+    from .telemetry import write_telemetry
+    from .prompts import _git_out
+    run = {
+        "mode": config.mode, "agent": config.agent, "model": config.model,
+        "effort": config.effort, "lean": config.lean,
+        "preload": config.preload,
+        "memory": config.memory_db is not None,
+        "since": getattr(result.change, "since", None) is not None,
+        "prompts_rev": _git_out(config.prompts_dir, "rev-parse",
+                                "--short=12", "HEAD"),
+        "status": result.status, "findings": result.findings,
+    }
+    try:
+        summary = write_telemetry(
+            result.log_path, telemetry_path(result.log_path), run)
+    except Exception as exc:  # noqa: BLE001 - never fail a review on it
+        _log(f"[{result.change.slug}] warning: telemetry failed: {exc}")
+        return None
+    if not summary:
+        return None
+    keep = ("wall_s", "model_s", "tool_s", "calls", "main_calls",
+            "tool_calls", "starting_context", "peak_context", "split_usd",
+            "tokens")
+    compact = {k: summary.get(k) for k in keep}
+    compact["categories_usd"] = {
+        k: round(v.get("cost", 0), 4)
+        for k, v in (summary.get("categories") or {}).items()}
+    return compact
+
+
+def telemetry_path(log_path: Path) -> Path:
+    return log_path.with_suffix(".telemetry.json")
 
 
 def _stash_stale_artifacts(config: BatchConfig, repo_dir: Path) -> None:
@@ -1106,6 +1221,7 @@ def update_summary(results_dir: Path, results: list[ReviewResult],
                            if result.memory_path else None),
                 "memory_reviews": result.memory_reviews,
                 "log": result.log_path.name if result.log_path else None,
+                "telemetry": result.telemetry,
                 "error": result.error,
                 "posted": False,
                 "reviewed_at": datetime.now(timezone.utc).isoformat(

@@ -19,6 +19,26 @@ from pathlib import Path
 from typing import Optional
 
 
+# A review needs a shell and the file tools.  The interactive defaults
+# add some 40K tokens to every call: three dozen tools, the claude.ai
+# connectors, the skills listing, and every CLAUDE.md from ~ down to
+# the worktree, none of which the review prompts use.
+LEAN_CLAUDE_ARGS = [
+    "--tools", "Bash,Read,Write,Edit,Grep,Glob",
+    "--strict-mcp-config",
+    "--disable-slash-commands",
+    # Keeps cwd and git status out of the cached system prompt, so
+    # concurrent reviews share its cache.
+    "--exclude-dynamic-system-prompt-sections",
+]
+# Calls in a review are seconds apart, so the 1h cache Claude Code
+# defaults to only makes every cache write cost 2x input, not 1.25x.
+LEAN_CLAUDE_ENV = {
+    "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
+    "CLAUDE_CODE_PROMPT_CACHE_TTL": "5m",
+}
+
+
 @dataclass(frozen=True)
 class AgentSpec:
     """One supported agent backend."""
@@ -37,10 +57,12 @@ class AgentSpec:
         prompt_text: str,
         resume: Optional[str] = None,
         settings: Optional[str] = None,
+        lean: bool = False,
+        system_file: Optional[str] = None,
     ) -> list[str]:
         # resume and settings are claude's: a session to fork and
         # continue, and per-run settings (hooks). Other agents ignore
-        # both.
+        # both.  lean: see LEAN_CLAUDE_ARGS.
         # effort: claude gets --effort; codex gets a config override
         # for model_reasoning_effort (Codex has no --effort flag).
         # gemini/opencode ignore it (the CLI warns when dropped).
@@ -57,6 +79,10 @@ class AgentSpec:
                 cmd += ["--resume", resume, "--fork-session"]
             if settings:
                 cmd += ["--settings", settings]
+            if lean:
+                cmd += LEAN_CLAUDE_ARGS
+            if system_file:
+                cmd += ["--append-system-prompt-file", system_file]
             return cmd + extra_args
         if self.name == "codex":
             # --json makes exec stream JSONL events (thread/turn/item)
@@ -80,6 +106,12 @@ class AgentSpec:
                 cmd += ["--model", model]
             return cmd + extra_args + [prompt_text]
         raise ValueError(f"unknown agent {self.name}")
+
+    def env(self, lean: bool = False) -> dict:
+        """Environment additions for a headless review."""
+        if lean and self.name == "claude":
+            return dict(LEAN_CLAUDE_ENV)
+        return {}
 
     def build_interactive_cmd(
         self,

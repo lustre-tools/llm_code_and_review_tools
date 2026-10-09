@@ -129,3 +129,27 @@ class TestBuildInteractiveCmd:
             assert "yolo" not in joined
             assert "dangerously" not in joined
             assert "bypass" not in joined
+
+
+class TestLean:
+
+    def test_claude_lean_args_and_env(self):
+        from lreview.agents import LEAN_CLAUDE_ARGS
+        spec = get_agent("claude")
+        cmd = spec.build_cmd("opus", None, ["--extra"], PROMPT, lean=True)
+        assert cmd[-len(LEAN_CLAUDE_ARGS) - 1:-1] == LEAN_CLAUDE_ARGS
+        assert cmd[-1] == "--extra"
+        assert spec.env(lean=True) == {
+            "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
+            "CLAUDE_CODE_PROMPT_CACHE_TTL": "5m"}
+        assert spec.env(lean=False) == {}
+
+    def test_lean_is_claude_only(self):
+        cmd = get_agent("codex").build_cmd(None, None, [], PROMPT, lean=True)
+        assert cmd[-1] == PROMPT and "--tools" not in cmd
+        assert get_agent("codex").env(lean=True) == {}
+
+    def test_system_file(self):
+        cmd = get_agent("claude").build_cmd(
+            None, None, [], PROMPT, system_file="/r/.preload-x.md")
+        assert cmd[-2:] == ["--append-system-prompt-file", "/r/.preload-x.md"]

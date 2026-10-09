@@ -10,6 +10,7 @@ Subcommands:
     chat   - interactive session over an existing review
     models - list the models and efforts each agent accepts
     render - regenerate Markdown reports from review JSONs
+    stats  - where reviews spent their time and money
     post   - post previously collected results to Gerrit
 """
 
@@ -28,6 +29,7 @@ from .runner import (
     run_batch,
 )
 from .prompts import check_prompts, offer_setup, setup_instructions
+from .stats import cmd_stats
 
 
 def _positive_int(value: str) -> int:
@@ -35,6 +37,13 @@ def _positive_int(value: str) -> int:
     if number < 1:
         raise argparse.ArgumentTypeError("must be >= 1")
     return number
+
+
+def _env_flag(name: str, default: bool = True) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    if not value:
+        return default
+    return value not in ("0", "no", "off", "false")
 
 
 def default_results_dir() -> str:
@@ -585,6 +594,8 @@ def cmd_run(args) -> int:
         effort=args.effort,
         memory_db=memory_db,
         resume=not args.no_resume,
+        lean=args.lean,
+        preload=args.preload,
         agent_args=args.agent_arg or [],
     )
     try:
@@ -1018,6 +1029,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Memory database directory (default: $LREVIEW_DB, else "
              "lreview-db/ in this repository — gitignored)")
     run_p.add_argument(
+        "--lean", action=argparse.BooleanOptionalAction,
+        default=_env_flag("LREVIEW_LEAN"),
+        help="claude: start the reviewer with only the tools a review "
+             "uses -- no MCP servers, skills or CLAUDE.md files -- and a "
+             "5-minute prompt cache (default: on; $LREVIEW_LEAN=0 turns "
+             "it off)")
+    run_p.add_argument(
+        "--preload", action=argparse.BooleanOptionalAction,
+        default=_env_flag("LREVIEW_PRELOAD"),
+        help="claude, full mode: give the reviewer the protocol and the "
+             "files it always loads in its system prompt, and the commit "
+             "in its first message, instead of having it read them one "
+             "call at a time (default: on; $LREVIEW_PRELOAD=0 turns it "
+             "off)")
+    run_p.add_argument(
         "--agent-arg", "--claude-arg", action="append", dest="agent_arg",
         metavar="ARG",
         help="Extra argument passed through to the agent CLI (repeatable; "
@@ -1034,6 +1060,32 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--prompts-dir", default=default_prompts, help=prompts_help)
     run_p.set_defaults(func=cmd_run)
+
+    stats_p = sub.add_parser(
+        "stats", help="Where reviews spent their time and money")
+    stats_p.add_argument(
+        "paths", nargs="*",
+        help="Review logs, saved .telemetry.json files, or directories "
+             "of logs (default: the results directory)")
+    stats_p.add_argument(
+        "--last", "-n", type=_positive_int, default=20, metavar="N",
+        help="From each directory, the newest N logs (default: 20)")
+    stats_p.add_argument(
+        "--results-dir", default=default_results_dir(),
+        help="Results directory to read when no paths are given")
+    stats_p.add_argument(
+        "--calls", action="store_true",
+        help="Also list every model call of each review")
+    stats_p.add_argument(
+        "--top", type=_positive_int, default=10,
+        help="How many of the costliest tool outputs to list")
+    stats_p.add_argument(
+        "--all", dest="complete", action="store_false",
+        help="Include reviews that did not finish")
+    stats_p.add_argument(
+        "--json", action="store_true",
+        help="Print the summaries (with --calls, the full detail) as JSON")
+    stats_p.set_defaults(func=cmd_stats)
 
     chat_p = sub.add_parser(
         "chat", help="Interactive session over an existing review "
