@@ -419,9 +419,7 @@ def summarize(scored: dict, judge: bool = False) -> dict:
         "calls_mean": mean("calls"), "peak_mean": mean("peak"),
         "output_mean": mean("output"),
         "tokens_mean": mean("tokens"),
-        "plan_pct_mean": (round(statistics.mean(r["plan_pct"] for r in done), 4)
-                          if done and all(r.get("plan_pct") is not None
-                                          for r in done) else None),
+        "plan_pct_mean": mean("plan_pct"),
         "findings_mean": (round(statistics.mean(r["findings"] for r in rows
                                                 if r["complete"]), 2)
                           if any(r["complete"] for r in rows) else None),

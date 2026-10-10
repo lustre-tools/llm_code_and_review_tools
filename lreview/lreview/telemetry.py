@@ -332,7 +332,7 @@ class Telemetry:
             "tool_calls": len(self.tools),
             "cost_usd": (round(self.reported_cost, 4)
                          if self.reported_cost is not None
-                         else None if self.codex_usage
+                         else None if self.agent == "codex"
                          else round(computed, 4)),
             "computed_cost_usd": round(computed, 4),
             "split_usd": {k: round(v, 4) for k, v in split.items()},
