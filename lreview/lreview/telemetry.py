@@ -540,8 +540,11 @@ def _attribute(tel: Telemetry) -> None:
                 prices = _prices(nxt.model)
                 if not prices:
                     continue
-                p_w1, p_read = prices[2] / 1e6, prices[3] / 1e6
-                tool.write_cost = tool.tokens * p_w1
+                # Written at whichever cache rate the call that read it used
+                p_write = (prices[2] if nxt.cache_write_1h
+                           or not nxt.cache_write else prices[1]) / 1e6
+                p_read = prices[3] / 1e6
+                tool.write_cost = tool.tokens * p_write
                 tool.reread_cost = tool.tokens * p_read * (len(later) - 1)
 
 
