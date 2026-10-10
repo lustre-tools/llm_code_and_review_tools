@@ -1143,6 +1143,509 @@
    "sets": [
     "eval"
    ]
+  },
+  {
+   "id": "move-include-to-top-level",
+   "change": 60989,
+   "patchset": 9,
+   "sha": "dbf4d41d9879f6dd1c141eeda27cd9e9b971b7d9",
+   "subject": "LU-18687 libcfs: move include to top-level",
+   "change_id": "I178e0563894071ddc898fad88f3e63759e89c5c5",
+   "merged": "2025-09-25",
+   "lines": 602,
+   "subsystem": "libcfs",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "fix-shrinker-debug-init-fini-i",
+     "fix_sha": "4dae04cfc5fd4787b3b5b8d14f16e830597769fa",
+     "fix_subject": "LU-18687 compat: fix shrinker_debug_init/fini #ifdef",
+     "summary": "In include/lustre_compat/linux/shrinker.h, the ORIGINAL commit moved the shrinker_debugfs_init/fini declarations from linux-misc.h (guarded by #ifndef CONFIG_SHRINKER_DEBUG) into the branch guarded by `!defined(CONFIG_SHRINKER_DEBUG) || defined(HAVE_REGISTER_SHRINKER_FORMAT_NAMED)`. The inline no-op stubs sit in the #else branch and are only defined when CONFIG_SHRINKER_DEBUG is set and HAVE_REGISTER_SHRINKER_FORMAT_NAMED is not. The guard no longer matches the one around the implementation in linux-prim.c, so on some kernel configs the functions are declared when they should be stubs, or the stubs and real definitions conflict or are missing. This causes compilation errors. Also, linux-prim.c (cfs_arch_init) relies on these declarations but the commit did not make it include shrinker.h, and libcfs.h no longer pulls it in via the removed include chain.",
+     "locations": [
+      "include/lustre_compat/linux/shrinker.h:shrinker_debugfs_init",
+      "include/lustre_compat/linux/shrinker.h:shrinker_debugfs_fini",
+      "libcfs/libcfs/linux/linux-prim.c:cfs_arch_init"
+     ],
+     "match": [
+      [
+       "shrinker_debugfs_(init|fini)",
+       "(ifdef|ifndef|#if|guard|condition|CONFIG_SHRINKER_DEBUG)"
+      ],
+      [
+       "shrinker_debugfs",
+       "HAVE_REGISTER_SHRINKER_FORMAT_NAMED"
+      ],
+      [
+       "shrinker_debugfs",
+       "linux-prim\\.c",
+       "(include|shrinker\\.h)"
+      ]
+     ],
+     "source": "same-ticket"
+    }
+   ],
+   "sets": [
+    "eval"
+   ],
+   "notes": "Found without a Fixes: tag (same-ticket), vetted by an LLM reading both commits."
+  },
+  {
+   "id": "refresh-context-vs-lbug-upon",
+   "change": 62467,
+   "patchset": 5,
+   "sha": "e1e5b116de8e55eba8d77ebb54485e5de6365be5",
+   "subject": "LU-19580 gss: refresh context vs LBUG upon gss error for LDLM",
+   "change_id": "I9f948cb753b8e02cceabb6d032ea2a62411148a8",
+   "merged": "2025-12-10",
+   "lines": 31,
+   "subsystem": "gss",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "refresh-context-vs-lbug-upon-g",
+     "fix_sha": "d22e461c4197a71ee8c632817f246fada789e634",
+     "fix_subject": "LU-19580 gss: refresh context vs LBUG upon gss error for LDLM",
+     "summary": "In the ORIGINAL change to lustre/ptlrpc/sec.c:sptlrpc_req_refresh_ctx(), the new refresh branch also fires when `rc2 == -ENODATA`, the return value of sptlrpc_req_replace_dead_ctx(), and not only when gc_gss_err is GSS_S_NO_CONTEXT. When the ctx is DEAD and cannot be replaced, the code clears PTLRPC_CTX_ERROR_BIT, drops the sec ref and does `goto again` for any request with timeout == MAX_SCHEDULE_TIMEOUT. The same dead ctx is then retried, fails replacement again, and loops, so it can spin or hang indefinitely and never set rq_err. The fix removes the `rc2` / `-ENODATA` condition and keeps only the GSS_S_NO_CONTEXT check. The ORIGINAL also dereferences ctx2gctx(ctx)->gc_gss_err without checking that the ctx is a GSS ctx.",
+     "locations": [
+      "lustre/ptlrpc/sec.c:sptlrpc_req_refresh_ctx",
+      "lustre/ptlrpc/sec.c:sptlrpc_req_replace_dead_ctx"
+     ],
+     "match": [
+      [
+       "rc2",
+       "ENODATA"
+      ],
+      [
+       "sptlrpc_req_refresh_ctx|sptlrpc_req_replace_dead_ctx",
+       "(infinite|endless|spin|loop|hang|goto again|retry)"
+      ],
+      [
+       "PTLRPC_CTX_ERROR_BIT|clear_bit",
+       "(MAX_SCHEDULE_TIMEOUT|goto again|loop|retry)"
+      ]
+     ],
+     "source": "same-ticket"
+    }
+   ],
+   "sets": [
+    "eval"
+   ],
+   "notes": "Found without a Fixes: tag (same-ticket), vetted by an LLM reading both commits."
+  },
+  {
+   "id": "relate-qmt-lvbo-free-wq-and",
+   "change": 56661,
+   "patchset": 3,
+   "sha": "846db2f7afb81e15e13fffdbcc86c5448e41768c",
+   "subject": "LU-18024 quota: relate qmt_lvbo_free_wq and QMT",
+   "change_id": "I298382fa0eed6885e55991e26e4b36d435e99e26",
+   "merged": "2024-10-18",
+   "lines": 18,
+   "subsystem": "quota",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "fix-the-order-of-freeing-qmt-l",
+     "fix_sha": "a0e766235d6d4c045184f0d8a1906a49ad262230",
+     "fix_subject": "LU-18024 quota: fix the order of freeing qmt_lvbo_free_wq",
+     "summary": "In qmt_dev.c:qmt_device_fini the ORIGINAL change moves the workqueue into struct qmt_device but keeps the destroy_workqueue(qmt->qmt_lvbo_free_wq) and NULL assignment at the very start of shutdown, before qmt_pool_fini() and the namespace/lock cleanup. Those later steps release ldlm resources and invoke qmt_lvbo_free(), which does queue_work(qmt->qmt_lvbo_free_wq, ...). Because the workqueue was already destroyed and set to NULL, queue_work() is called on a destroyed/NULL workqueue, causing a crash/use-after-free, and pending lvbo-free work for lqe entries is lost (leak). The workqueue must be destroyed only after all possible users have finished cleanup.",
+     "locations": [
+      "lustre/quota/qmt_dev.c:qmt_device_fini",
+      "lustre/quota/qmt_lock.c:qmt_lvbo_free"
+     ],
+     "match": [
+      [
+       "qmt_lvbo_free_wq",
+       "destroy_workqueue|destroyed|freed|NULL"
+      ],
+      [
+       "qmt_device_fini",
+       "queue_work|qmt_lvbo_free",
+       "before|order|after"
+      ],
+      [
+       "qmt_lvbo_free",
+       "queue_work",
+       "NULL|destroyed|use-after-free|shutdown|fini"
+      ]
+     ],
+     "source": "same-ticket"
+    }
+   ],
+   "sets": [
+    "eval"
+   ],
+   "notes": "Found without a Fixes: tag (same-ticket), vetted by an LLM reading both commits."
+  },
+  {
+   "id": "lfs-find-ost-supports-index",
+   "change": 55902,
+   "patchset": 5,
+   "sha": "70d8107c48abe2f82f714ca82e488d953642ce06",
+   "subject": "LU-16622 utils: 'lfs find --ost' supports index range",
+   "change_id": "I094aa480c97440dad8ffaac8af902682b5916d6c",
+   "merged": "2024-12-02",
+   "lines": 175,
+   "subsystem": "utils",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "fix-lfs-find-m-mdtidx-negation",
+     "fix_sha": "e87c54a7e7a16a47393debb418a6c2f1e5aaabfb",
+     "fix_subject": "LU-20433 utils: fix 'lfs find ! -m MDTIDX' negation",
+     "summary": "In lustre/utils/lfs.c:lfs_find, the ORIGINAL commit merged the 'm', 'i' and 'O' option handling into one case block and dropped the 'param.fp_exclude_mdt = !!neg_opt;' assignment that previously lived in the 'if (c == \"m\")' branch; only fp_exclude_obd is now set. check_mdt_match() still reads fp_exclude_mdt, so 'lfs find ! -m MDTIDX' (or '! --mdt') is never negated and returns the same files as 'lfs find -m MDTIDX' instead of the files not on that MDT.",
+     "locations": [
+      "lustre/utils/lfs.c:lfs_find"
+     ],
+     "match": [
+      [
+       "fp_exclude_mdt",
+       "neg_opt|negat|\\!|exclude"
+      ],
+      [
+       "(-m|--mdt|mdt).*(negat|\\!|exclude)",
+       "fp_exclude_obd|dropped|removed|not set|never set|missing"
+      ],
+      [
+       "fp_exclude_mdt",
+       "fp_exclude_obd"
+      ]
+     ],
+     "source": "szz"
+    }
+   ],
+   "sets": [
+    "eval"
+   ],
+   "notes": "Found without a Fixes: tag (szz), vetted by an LLM reading both commits."
+  },
+  {
+   "id": "support-pci-p2p-dma-mapping",
+   "change": 66985,
+   "patchset": 26,
+   "sha": "bec2cd935bf41017b472d94761dfd747db6eeec0",
+   "subject": "LU-20438 lnd: Support PCI P2P DMA mapping",
+   "change_id": "Ib8180a1550ad4fe7154823418f403473dbac7ef3",
+   "merged": "2026-09-03",
+   "lines": 150,
+   "subsystem": "lnd",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "fix-efa-p2p-configure-guard",
+     "fix_sha": "eabffde030239d9953b54401ad9135775174854b",
+     "fix_subject": "LU-20438 lnd: fix EFA P2P configure guard",
+     "summary": "In lnet/klnds/efalnd/efalnd.c:kefalnd_startup, the ORIGINAL commit guards the ni->ni_p2pdma initialisation with IN_KERNEL_HAVE_OFED_IB_DMA_PCI_P2P_DMA_SUPPORTED, a macro that is only emitted by the o2ib configure check (LN_CONFIG_O2IB). In a --disable-o2ib --enable-efa build the macro is never defined, so the #ifdef block compiles out and ni_p2pdma stays clear on an EFA NI whose device does support PCI P2P DMA, so P2P/GPU DMA is not advertised or used for efalnd. The FIX adds a configure check in LN_CONFIG_EFALND defining HAVE_EFA_IB_DMA_PCI_P2P_DMA_SUPPORTED and switches efalnd.c to it.",
+     "locations": [
+      "lnet/klnds/efalnd/efalnd.c:kefalnd_startup",
+      "config/lustre-lnet.m4:LN_CONFIG_EFALND"
+     ],
+     "match": [
+      [
+       "IN_KERNEL_HAVE_OFED_IB_DMA_PCI_P2P_DMA_SUPPORTED",
+       "efalnd|efa"
+      ],
+      [
+       "ni_p2pdma",
+       "efa",
+       "o2ib|ifdef|configure|macro|guard|not defined"
+      ],
+      [
+       "kefalnd_startup",
+       "ib_dma_pci_p2p_dma_supported",
+       "ifdef|guard|configure|disable-o2ib|not defined"
+      ]
+     ],
+     "source": "szz"
+    }
+   ],
+   "sets": [
+    "eval"
+   ],
+   "notes": "Found without a Fixes: tag (szz), vetted by an LLM reading both commits."
+  },
+  {
+   "id": "use-nidmasks-for-ipv6-nids",
+   "change": 56184,
+   "patchset": 10,
+   "sha": "8f6988be4416fe0256583e5d6ea63e92ec0811ca",
+   "subject": "LU-14288 nodemap: Use nidmasks for IPv6 NIDs",
+   "change_id": "Ib1f60eda6fbc9d0214b6c63dcc8656eab3977a8b",
+   "merged": "2024-12-16",
+   "lines": 278,
+   "subsystem": "nodemap",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "fix-nidlist-leak-in-nodemap-pa",
+     "fix_sha": "1dad0bda39a580ae8990666eb733d51f1c7a2b7d",
+     "fix_subject": "LU-20431 nodemap: fix nidlist leak in nodemap_parse_range()",
+     "summary": "In nodemap_parse_range() in lustre/ptlrpc/nodemap_handler.c, the ORIGINAL change parses range_str with cfs_parse_nidlist(), which allocates the nidlist on success. If cfs_nidmask_get_length() returns 0 (e.g. multiple nidmasks or zero prefix length), the code does GOTO(out, rc = -EINVAL) without calling cfs_free_nidlist(), leaking the parsed nidlist. The adjacent cfs_nidmask_get_base_nidstr() error path frees it, showing the inconsistency.",
+     "locations": [
+      "lustre/ptlrpc/nodemap_handler.c:nodemap_parse_range"
+     ],
+     "match": [
+      [
+       "nodemap_parse_range",
+       "leak|not freed|without free|cfs_free_nidlist"
+      ],
+      [
+       "cfs_nidmask_get_length",
+       "leak|cfs_free_nidlist|nidlist"
+      ],
+      [
+       "netmask",
+       "zero|!\\*netmask|-EINVAL",
+       "leak|cfs_free_nidlist|nidlist"
+      ]
+     ],
+     "source": "szz"
+    }
+   ],
+   "sets": [
+    "eval"
+   ],
+   "notes": "Found without a Fixes: tag (szz), vetted by an LLM reading both commits."
+  },
+  {
+   "id": "return-error-for-verify-when",
+   "change": 61751,
+   "patchset": 8,
+   "sha": "9f4089d97d2fd401f9353c711d5086b647523cef",
+   "subject": "LU-14554 lfs: Return error for verify when stale components exist",
+   "change_id": "Ie24e4b41601f3f5bb95efa6a553a88ac426987c2",
+   "merged": "2025-11-14",
+   "lines": 243,
+   "subsystem": "lfs",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "fix-resync-with-nosync-stale-c",
+     "fix_sha": "34a17ba8ef3e40a03a8a57d9be7b55bbc91161d5",
+     "fix_subject": "LU-19527 lfs: fix resync with nosync+stale components",
+     "summary": "The ORIGINAL change makes `lfs mirror verify` count every LCME_FL_STALE component as an error (print_stale_mirrors() in lustre/utils/lfs.c returns stale_count, and lfs_mirror_verify_file() sets rc2 = -ESTALE), without excluding components that are both stale and LCME_FL_NOSYNC. Nosync+stale components are intentionally skipped by resync (llapi_mirror_find_stale), so they can never be made non-stale; verify then returns ESTALE and `lfs mirror resync` (which runs verify afterward) fails on files with nosync+stale components such as EC parity mirrors. lfs_mirror_prepare_chunk() also does not skip nosync components, so they are included in chunk verification.",
+     "locations": [
+      "lustre/utils/lfs.c:print_stale_mirrors",
+      "lustre/utils/lfs.c:lfs_mirror_verify_file",
+      "lustre/utils/lfs.c:lfs_mirror_prepare_chunk"
+     ],
+     "match": [
+      [
+       "nosync",
+       "stale"
+      ],
+      [
+       "print_stale_mirrors|lfs_mirror_verify_file",
+       "nosync|LCME_FL_NOSYNC"
+      ],
+      [
+       "resync",
+       "nosync",
+       "ESTALE|verify|error"
+      ]
+     ],
+     "source": "szz"
+    }
+   ],
+   "sets": [
+    "eval"
+   ],
+   "notes": "Found without a Fixes: tag (szz), vetted by an LLM reading both commits."
+  },
+  {
+   "id": "enforce-file-quota-for-root",
+   "change": 60213,
+   "patchset": 9,
+   "sha": "4ea5a7e99e0e4cd8ab182c10287d3e98a8a04552",
+   "subject": "LU-19183 quota: enforce file quota for root_prj_quota",
+   "change_id": "If4207d048f2fc062254e42dd8e075998030d4c7f",
+   "merged": "2025-09-03",
+   "lines": 137,
+   "subsystem": "quota",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "fix-silent-data-loss-for-root",
+     "fix_sha": "e1af85a420b9ec65df58a52a5763b25d7a2aeb9b",
+     "fix_subject": "LU-19791 quota: fix silent data loss for root project",
+     "summary": "In osd_declare_inode_qid (osd-ldiskfs/osd_quota.c) and osd_declare_quota (osd-zfs/osd_quota.c), the ORIGINAL change makes root-project-quota (QUOTA_FL_ROOT_PRJQUOTA) override the force/ignore-quota flag for block quota, so force = th->th_ignore_quota applies and OSD_QID_FORCE is effectively nullified when root_prj_enable is set. It does this for all block writes, including OBD_BRW_ASYNC lnbs flushed from the client cache in osd_declare_write_commit. When root is over the project quota (e.g. from another client), these already-acknowledged buffered pages are rejected with -EDQUOT at write commit and dropped, causing silent data loss. The write path needed a way to ignore the root-prj check for ASYNC pages (later OSD_QID_IGNORE_ROOT_PRJ).",
+     "locations": [
+      "lustre/osd-ldiskfs/osd_quota.c:osd_declare_inode_qid",
+      "lustre/osd-zfs/osd_quota.c:osd_declare_quota",
+      "lustre/osd-ldiskfs/osd_io.c:osd_declare_write_commit",
+      "lustre/osd-zfs/osd_io.c:osd_declare_write_commit"
+     ],
+     "match": [
+      [
+       "QUOTA_FL_ROOT_PRJQUOTA|root_prj",
+       "force|th_ignore_quota|OSD_QID_FORCE"
+      ],
+      [
+       "root_prj|ROOT_PRJQUOTA",
+       "ASYNC|cache|buffered|write.?commit|data loss|dropped"
+      ],
+      [
+       "osd_declare_inode_qid|osd_declare_quota",
+       "EDQUOT",
+       "force|ignore"
+      ]
+     ],
+     "source": "szz"
+    }
+   ],
+   "sets": [
+    "eval"
+   ],
+   "notes": "Found without a Fixes: tag (szz), vetted by an LLM reading both commits."
+  },
+  {
+   "id": "gds-support-for-kfilnd",
+   "change": 61824,
+   "patchset": 2,
+   "sha": "0642807006d095043c8bef78fa4ea71cffea10e8",
+   "subject": "LU-19475 kfilnd: GDS support for kfilnd",
+   "change_id": "I4b852a60dc5c97bd2bb2b4b5b9ac109d0749cf1e",
+   "merged": "2025-10-28",
+   "lines": 310,
+   "subsystem": "kfilnd",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "fix-sg-table-free-after-orig-n",
+     "fix_sha": "2705d3bfef39ea4e5eacad539206464d0f6c5bab",
+     "fix_subject": "LU-19796 kfilnd: fix sg_table free after orig_nents overwrite",
+     "summary": "In lnet/klnds/kfilnd/kfilnd_tn.c:kfilnd_tn_set_sgl_buf(), the ORIGINAL change allocates the sg_table with sg_alloc_table(max_nkiov) and then overwrites tn->tn_sgt.orig_nents with sg_count (the number of populated segments) before DMA mapping. kfilnd_tn_free() later calls sg_free_table() on that table, which relies on orig_nents being the original allocation size to decide whether to free chained pages or just kfree(); with the shrunken value it mis-frees the table, producing free_nonslab_page() warnings and potentially leaking or corrupting memory. The original allocation size is never saved, so it cannot be restored before sg_free_table().",
+     "locations": [
+      "lnet/klnds/kfilnd/kfilnd_tn.c:kfilnd_tn_set_sgl_buf",
+      "lnet/klnds/kfilnd/kfilnd_tn.c:kfilnd_tn_free"
+     ],
+     "match": [
+      [
+       "orig_nents",
+       "sg_free_table|kfilnd_tn_free|sg_alloc_table"
+      ],
+      [
+       "tn_sgt",
+       "orig_nents|sg_count",
+       "free"
+      ]
+     ],
+     "source": "szz"
+    },
+    {
+     "id": "fix-error-handling-in-dma-mapp",
+     "fix_sha": "3d6df6b2884c4037bd8cd03c429cdc07099a05a0",
+     "fix_subject": "LU-19496 kfilnd: Fix error handling in DMA mapping",
+     "summary": "In kfilnd_tn.c:kfilnd_tn_set_sgl_buf() (added by the ORIGINAL commit), the return value of lnet_rdma_map_sg_attrs()/dma_map_sgtable() is not checked before setting tn->tn_sgt_mapped = true and populating tn_num_iovec from tn_sgt.nents. If DMA mapping fails, the function proceeds as if mapped, so the failed table is later passed to kfilnd_ep_post_*() and then unmapped via lnet_rdma_unmap_sg()/dma_unmap_sgtable() in kfilnd_tn_finalize() (unmapping something never mapped). On the failing path the caller also calls kfilnd_tn_free(), and the error return leaves state inconsistent (also GPU path can leave nents unset when rc==0). Fix checks rc<0, frees the sg_table and returns before setting tn_sgt_mapped.",
+     "locations": [
+      "lnet/klnds/kfilnd/kfilnd_tn.c:kfilnd_tn_set_sgl_buf",
+      "lnet/klnds/kfilnd/kfilnd_tn.c:kfilnd_tn_finalize",
+      "lnet/klnds/kfilnd/kfilnd_tn.c:kfilnd_tn_free"
+     ],
+     "match": [
+      [
+       "kfilnd_tn_set_sgl_buf|tn_sgt_mapped",
+       "dma_map_sgtable|lnet_rdma_map_sg_attrs|map(ping)? (fail|error)|rc|return value"
+      ],
+      [
+       "tn_sgt_mapped",
+       "unmap|sg_free_table|leak|double.?free|not checked|unchecked"
+      ]
+     ],
+     "source": "szz"
+    }
+   ],
+   "sets": [
+    "eval"
+   ],
+   "notes": "Found without a Fixes: tag (szz), vetted by an LLM reading both commits."
+  },
+  {
+   "id": "replace-client-lock-lru-with",
+   "change": 60162,
+   "patchset": 28,
+   "sha": "0373d0c40b2fe4fbad7377897d2203a7bb8ee953",
+   "subject": "LU-11509 ldlm: replace client lock LRU with LFRU",
+   "change_id": "Ida3df854348c8a7268834ebcdad4afaa9c645e0d",
+   "merged": "2026-01-28",
+   "lines": 813,
+   "subsystem": "ldlm",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "fix-lfru-priv-ratio-limit-over",
+     "fix_sha": "f1e4a9fcfec3f8c12720f8aca6d162e9def29c65",
+     "fix_subject": "LU-11509 ldlm: fix lfru priv_ratio_limit overflow issue",
+     "summary": "In the ORIGINAL change, `ns_lfru_priv_ratio_limit_256` is declared `__s8` in struct ldlm_namespace (lustre_dlm.h) but is assigned values up to 255 (default 30*256/100=76, but sysfs `lru_priv_ratio_limit_store` in ldlm_resource.c accepts any int and stores `tmp * 256 / 100` unchecked). Values above ~50% overflow to negative, and `ldlm_lfru_priv_too_many` (ldlm_cache_policy.c) multiplies `ns_nr_unused * ratio` and shifts, so a negative ratio or a 32-bit overflow yields a wrong/garbage threshold, causing the priv list to be demoted incorrectly or never. The store handler also lacks any range validation (negative or >100 values accepted).",
+     "locations": [
+      "lustre/include/lustre_dlm.h:struct ldlm_namespace",
+      "lustre/ldlm/ldlm_resource.c:lru_priv_ratio_limit_store",
+      "lustre/ldlm/ldlm_cache_policy.c:ldlm_lfru_priv_too_many"
+     ],
+     "match": [
+      [
+       "ns_lfru_priv_ratio_limit_256|priv_ratio_limit",
+       "__s8|signed|overflow|negative"
+      ],
+      [
+       "lru_priv_ratio_limit_store|ratio_limit",
+       "range|validat|bounds|overflow"
+      ],
+      [
+       "ldlm_lfru_priv_too_many",
+       "overflow|ns_nr_unused \\*|multipl"
+      ]
+     ],
+     "source": "szz"
+    }
+   ],
+   "sets": [
+    "eval"
+   ],
+   "notes": "Found without a Fixes: tag (szz), vetted by an LLM reading both commits."
+  },
+  {
+   "id": "specify-total-count-for-mirr",
+   "change": 55867,
+   "patchset": 11,
+   "sha": "a796b10fa2609af6ab1869a04ea6cc6c2c9051ec",
+   "subject": "LU-16446 utils: specify total count for mirror extend",
+   "change_id": "I76fc416b4dc2c37edf99926bae9a8d42167a49ab",
+   "merged": "2024-12-02",
+   "lines": 185,
+   "subsystem": "utils",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "fix-issues-with-llapi-get-lmm",
+     "fix_sha": "bed10bb93399971f27295069d82a046cb0995b9a",
+     "fix_subject": "LU-16446 utils: fix issues with llapi_get_lmm_from_path()",
+     "summary": "The ORIGINAL commit adds llapi_get_lmm_from_path() in liblustreapi.c and its use in lfs.c:lfs_setstripe_internal (-N=TOTAL mode). In llapi_get_lmm_from_path, lmmlen is declared size_t so the `lmmlen < 0` check from get_mds_md_size() is never true (negative error wraps to a huge value), leading to a huge calloc or bad size; open_parent() result is not checked; and on calloc failure or get_lmd_info_fd() failure the parent fd p and/or the allocated *lmmbuf are leaked. In lfs_setstripe_internal the caller never frees the comp_v1 buffer returned by the API, leaking it on every -N=TOTAL use.",
+     "locations": [
+      "lustre/utils/liblustreapi.c:llapi_get_lmm_from_path",
+      "lustre/utils/lfs.c:lfs_setstripe_internal"
+     ],
+     "match": [
+      [
+       "llapi_get_lmm_from_path|lmmbuf|comp_v1",
+       "leak|not freed|never freed|free"
+      ],
+      [
+       "lmmlen",
+       "size_t|unsigned|ssize_t|negative|< ?0"
+      ],
+      [
+       "open_parent|\\bp\\b|fd|file descriptor",
+       "leak|not closed|close|error path"
+      ]
+     ],
+     "source": "szz"
+    }
+   ],
+   "sets": [
+    "eval"
+   ],
+   "notes": "Found without a Fixes: tag (szz), vetted by an LLM reading both commits."
   }
  ]
 }
