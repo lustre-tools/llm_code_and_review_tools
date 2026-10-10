@@ -215,3 +215,11 @@ def test_offline_env_shadows_network_commands(tmp_path):
     result = subprocess.run(["curl", "https://example.invalid"], env=env,
                             capture_output=True, text=True)
     assert result.returncode == 7 and "disabled" in result.stderr
+
+
+def test_render_bugs(tmp_path):
+    label = tmp_path / "arm"
+    _rep(label, 1, "c1", ["a is uninitialized here"])
+    _rep(label, 2, "c1", [])
+    text = bench.render_bugs([bench.score(label, [_case("0" * 40)])])
+    assert "c1/b1" in text and "1/2" in text

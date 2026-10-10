@@ -752,6 +752,8 @@ def cmd_bench(args) -> int:
             import json as _json
             print(_json.dumps([{"summary": bench.summarize(s, args.judge),
                                 **s} for s in scoreds], indent=1))
+        elif args.by_bug:
+            print(bench.render_bugs(scoreds, judge=args.judge))
         else:
             print(bench.render(scoreds, judge=args.judge))
         return 0
@@ -1220,6 +1222,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--judge", action="store_true",
         help="Ask an LLM whether each finding is the known bug, instead "
              "of the cases' regex patterns (cached per rep)")
+    bench_report.add_argument(
+        "--by-bug", action="store_true",
+        help="Each known bug's hit rate in each arm, instead of the summary")
     bench_report.add_argument("--json", action="store_true")
     bench_report.set_defaults(func=cmd_bench)
 

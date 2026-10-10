@@ -439,6 +439,39 @@ def _cost_cell(s: dict) -> str:
     return "-"
 
 
+def bug_rates(scoreds: list, judge: bool = False) -> dict:
+    """{(case, bug): {arm: [found, reviews]}} over every non-leaked,
+    finished review."""
+    rates = {}
+    for scored in scoreds:
+        for rep in scored["reps"]:
+            for row in rep["rows"]:
+                if not row["complete"] or row.get("leaked"):
+                    continue
+                for bug, verdict in row["bugs"].items():
+                    cell = rates.setdefault((row["case"], bug), {}).setdefault(
+                        scored["label"], [0, 0])
+                    cell[0] += _found(verdict, judge)
+                    cell[1] += 1
+    return rates
+
+
+def render_bugs(scoreds: list, judge: bool = False) -> str:
+    rates = bug_rates(scoreds, judge)
+    labels = [s["label"] for s in scoreds]
+    width = max([len(f"{c}/{b}") for c, b in rates] + [10])
+    lines = [f"{'case/bug':{width}s} " + " ".join(f"{l[:12]:>12s}"
+                                                  for l in labels)]
+    for (case, bug), by_arm in sorted(rates.items()):
+        cells = []
+        for label in labels:
+            found, total = by_arm.get(label, (0, 0))
+            cells.append(f"{found}/{total}" if total else "-")
+        lines.append(f"{case + '/' + bug:{width}s} "
+                     + " ".join(f"{c:>12s}" for c in cells))
+    return "\n".join(lines)
+
+
 def render(scoreds: list, judge: bool = False) -> str:
     lines = []
     head = (f"{'arm':28s} {'reviews':>7s} {'$/review':>9s} {'Mtok':>5s} {'min':>5s} "
