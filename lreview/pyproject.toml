@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lreview"
-version = "0.2.9"
+version = "0.2.10"
 description = "Run deep AI patch reviews on Gerrit changes and GitHub pull requests"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -38,7 +38,7 @@ lreview = "lreview.cli:main"
 include = ["lreview*"]
 
 [tool.setuptools.package-data]
-lreview = ["*.md"]
+lreview = ["*.md", "benchmark/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["lreview/tests"]

@@ -9,6 +9,7 @@ Subcommands:
     run    - review a batch of Gerrit changes in parallel
     chat   - interactive session over an existing review
     models - list the models and efforts each agent accepts
+    bench  - run or report the standard benchmark set
     render - regenerate Markdown reports from review JSONs
     stats  - where reviews spent their time and money
     post   - post previously collected results to Gerrit
@@ -16,6 +17,7 @@ Subcommands:
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -717,6 +719,79 @@ def cmd_run(args) -> int:
     return 1 if failed else 0
 
 
+def cmd_bench(args) -> int:
+    from . import bench
+    data = bench.load_cases(Path(args.cases_file)
+                            if getattr(args, "cases_file", None)
+                            else bench.CASES_PATH)
+    try:
+        cases = bench.select(data["cases"], getattr(args, "cases", None))
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1
+    bench_dir = Path(args.bench_dir).expanduser().resolve()
+
+    if args.bench_cmd == "list":
+        for case in cases:
+            bugs = ", ".join(b["id"] for b in case.get("bugs") or []) or "-"
+            print(f"{case['id']:24s} {case['change']:>6}/{case['patchset']:<3} "
+                  f"{case.get('lines', 0):>4} lines  {case.get('kind', ''):8s} "
+                  f"bugs: {bugs}\n{'':24s} {case['subject']}")
+        print(f"\n{len(cases)} case(s) in {args.cases_file or bench.CASES_PATH}")
+        return 0
+
+    if args.bench_cmd == "report":
+        dirs = [Path(d).expanduser() for d in args.labels] or sorted(
+            (p for p in bench_dir.iterdir()
+             if (p / bench.RUN_FILE).exists()), key=lambda p: p.name)
+        scoreds = [bench.score(d, data["cases"], judge=args.judge)
+                   for d in dirs]
+        if args.json:
+            import json as _json
+            print(_json.dumps([{"summary": bench.summarize(s, args.judge),
+                                **s} for s in scoreds], indent=1))
+        else:
+            print(bench.render(scoreds, judge=args.judge))
+        return 0
+
+    # run
+    prompts_status = ensure_prompts(args)
+    if prompts_status is None:
+        return 2
+    model = resolve_model(args.agent, args.model)
+    if not check_selection(args, model):
+        return 1
+    label = args.label or bench.default_label(args)
+    label_dir = bench_dir / label
+    source = Path(args.repo).expanduser().resolve() if args.repo else None
+    print(f"bench: preparing the case repository in {bench_dir / 'repo'}")
+    try:
+        repo = bench.prepare_repo(bench_dir, cases, source)
+    except (subprocess.SubprocessError, RuntimeError) as exc:
+        print(f"error: {exc}")
+        return 1
+
+    def config_for(results_dir: Path) -> BatchConfig:
+        return BatchConfig(
+            repo=repo, results_dir=results_dir,
+            worktrees_dir=bench_dir / "worktrees",
+            prompts_dir=prompts_status.prompts_dir, jobs=args.jobs,
+            timeout=args.timeout, mode=args.mode, agent=args.agent,
+            model=model, effort=args.effort,
+            memory_db=(label_dir / "db") if args.memory else None,
+            resume=args.resume, lean=args.lean, preload=args.preload,
+            agent_args=args.agent_arg or [])
+    try:
+        bench.run_bench(config_for, cases, label_dir, args.reps, repo,
+                        cases_path=Path(args.cases_file or bench.CASES_PATH))
+    except KeyboardInterrupt:
+        print("\ninterrupted -- finished reps are kept")
+        return 130
+    print()
+    print(bench.render([bench.score(label_dir, data["cases"])]))
+    return 0
+
+
 def cmd_chat(args) -> int:
     results_dir = Path(args.results_dir).expanduser().resolve()
     worktrees_dir = (Path(args.worktrees_dir).expanduser().resolve()
@@ -1060,6 +1135,80 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--prompts-dir", default=default_prompts, help=prompts_help)
     run_p.set_defaults(func=cmd_run)
+
+    bench_p = sub.add_parser(
+        "bench", help="Run or report the standard benchmark set")
+    bench_sub = bench_p.add_subparsers(dest="bench_cmd", required=True)
+    default_bench = str(Path(default_results_dir()) / "bench")
+
+    def bench_common(p):
+        p.add_argument("--bench-dir", default=default_bench,
+                       help="Where bench runs, the case repository and "
+                            f"worktrees live (default: {default_bench})")
+        p.add_argument("--cases-file", default=None,
+                       help="A case file other than the bundled "
+                            "benchmark/cases.json")
+        p.add_argument("--cases", default=None,
+                       help="Comma-separated case ids (default: all)")
+
+    bench_list = bench_sub.add_parser("list", help="Show the cases")
+    bench_common(bench_list)
+    bench_list.set_defaults(func=cmd_bench)
+
+    bench_run = bench_sub.add_parser(
+        "run", help="Review every case with the given options")
+    bench_common(bench_run)
+    bench_run.add_argument(
+        "--label", default=None,
+        help="Name of this arm (default: timestamp plus the options); "
+             "running again with the same label adds reps to it")
+    bench_run.add_argument(
+        "--reps", type=_positive_int, default=1,
+        help="Times to review each case (default 1).  With --memory "
+             "they are successive rounds sharing one notes database")
+    bench_run.add_argument(
+        "--repo", default=None,
+        help="A lustre-release checkout to fetch case commits from "
+             "(fast); else they come from Gerrit")
+    bench_run.add_argument("--jobs", "-j", type=_positive_int, default=4)
+    bench_run.add_argument("--timeout", type=int, default=7200)
+    bench_run.add_argument("--agent", choices=sorted(AGENTS),
+                           default=default_agent)
+    bench_run.add_argument("--model", default=None)
+    bench_run.add_argument("--effort", choices=list(EFFORT_LEVELS),
+                           default=os.environ.get("LREVIEW_EFFORT"))
+    bench_run.add_argument("--mode", choices=["full", "light"],
+                           default="full")
+    bench_run.add_argument("--lean", action=argparse.BooleanOptionalAction,
+                           default=_env_flag("LREVIEW_LEAN"))
+    bench_run.add_argument("--preload", action=argparse.BooleanOptionalAction,
+                           default=_env_flag("LREVIEW_PRELOAD"))
+    bench_run.add_argument(
+        "--memory", "-m", action="store_true",
+        help="Review memory: each rep is a round that reads the notes "
+             "the previous round wrote")
+    bench_run.add_argument(
+        "--resume", action="store_true",
+        help="With --memory (claude): also resume the previous round's "
+             "conversation (off by default here)")
+    bench_run.add_argument("--agent-arg", action="append", dest="agent_arg",
+                           metavar="ARG")
+    bench_run.add_argument("--prompts-dir", default=default_prompts,
+                           help=prompts_help)
+    bench_run.set_defaults(func=cmd_bench)
+
+    bench_report = bench_sub.add_parser(
+        "report", help="Cost, time and known bugs found, per arm")
+    bench_common(bench_report)
+    bench_report.add_argument(
+        "labels", nargs="*",
+        help="Arm directories (default: every arm in the bench dir)")
+    bench_report.add_argument(
+        "--judge", action="store_true",
+        help="Ask an LLM whether each finding is the known bug, instead "
+             "of the cases' regex patterns (cached per rep)")
+    bench_report.add_argument("--json", action="store_true")
+    bench_report.set_defaults(func=cmd_bench)
 
     stats_p = sub.add_parser(
         "stats", help="Where reviews spent their time and money")

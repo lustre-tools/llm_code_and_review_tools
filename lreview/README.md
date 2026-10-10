@@ -270,6 +270,46 @@ lreview stats --calls kreview-X.log    # every call of one review
 lreview stats --json                   # the summaries, for scripts
 ```
 
+## Benchmark (`lreview bench`)
+
+`lreview/benchmark/cases.json` is a fixed set of merged Lustre changes
+to measure lreview against. Most carry bugs that a later commit fixed
+(its `Fixes:` trailer names the change), with a summary of each bug and
+regex patterns that a finding describing it would match; a few
+controls have no known bug and calibrate cost and noise. Use it before
+and after changing lreview, its defaults, the review prompts, or the
+model, so the comparison is cost, time *and* bugs found on the same
+inputs.
+
+```bash
+lreview bench list                                   # the cases
+lreview bench run --repo ~/lustre-release --reps 2   # one arm, every case twice
+lreview bench run --label sonnet --model sonnet --reps 2 --repo ...
+lreview bench run --label memory --memory --reps 2 --repo ...
+lreview bench report                                 # every arm, side by side
+lreview bench report --judge DIR...                  # LLM-judged matching
+```
+
+- Each case is reviewed in a repository that holds only its own
+  history (`<bench-dir>/repo`, built by fetching each case commit by
+  SHA from `--repo` or from Gerrit), so the reviewer cannot find the
+  later fix in git. The Gerrit thread of a merged change is still
+  readable; the cases were chosen with bugs nobody raised after merge.
+- An arm is a directory under `<bench-dir>` (default
+  `lreview-results/bench/`), one `rep<N>` per repetition, with
+  `bench-run.json` recording the lreview, agent and prompts versions
+  and the options. Running again with the same `--label` adds reps.
+- `--memory` makes the reps successive rounds sharing one notes
+  database, so round 2 reads round 1's notes; without it reps are
+  independent. Comparing "found in any rep" between the two shows
+  whether memory narrows what repeated rounds find. `--resume` is off
+  here unless asked for.
+- `report` gives per arm: mean cost, wall time, calls, peak context,
+  findings per review, known bugs found per review and in any rep;
+  then each rep's and each case's results. Matching is by the cases'
+  regex patterns; `--judge` asks Claude (sonnet) per bug and caches the
+  verdicts in each rep.
+
 ## How it works
 
 1. Every change (number or URL) is resolved to its **current patchset**
@@ -555,6 +595,7 @@ lreview chat <change|url>        # interactive session over an existing
                                  # review (findings, how the patch works)
 lreview models                   # models and efforts each agent accepts
 lreview stats [LOG|DIR...]       # where reviews spent their time and money
+lreview bench list|run|report    # the standard benchmark set
 lreview post [<change|url>...] [options]
 ```
 

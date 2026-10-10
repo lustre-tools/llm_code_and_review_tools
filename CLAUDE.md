@@ -198,7 +198,10 @@ tool offers to clone review-prompts. Claude reviews run `--lean` and
 5-minute prompt cache; the protocol in the system prompt and the commit
 in the first message); every review writes a `.telemetry.json` beside
 its log, and `lreview stats` shows where reviews spent their time and
-money. See `lreview/README.md`.
+money. `lreview bench` runs the standard benchmark set
+(`lreview/lreview/benchmark/cases.json`: merged changes with bugs later
+fixed) -- run it before and after changing lreview, its defaults, the
+prompts or the model. See `lreview/README.md`.
 
 ### Other tools
 

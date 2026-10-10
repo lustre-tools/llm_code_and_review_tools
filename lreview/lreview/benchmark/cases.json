@@ -1,0 +1,475 @@
+{
+ "version": 1,
+ "description": "lreview benchmark: merged Lustre changes whose bugs a later commit fixed (its Fixes: trailer names the change), plus controls with no known bug. Each bug has a summary for the LLM judge and regex match sets: a finding matches a set when it matches every pattern in it.",
+ "cases": [
+  {
+   "id": "swap-layouts-interop",
+   "change": 64757,
+   "patchset": 2,
+   "sha": "529ea457da301b80dd850d7910a20bca956322ea",
+   "subject": "LU-5896 mdt: allow clients with old mdc_swap_layouts",
+   "change_id": "I26d0d321dd870b4bdd688410a3425dd620300c1e",
+   "merged": "2026-04-10",
+   "lines": 101,
+   "subsystem": "mdt/ptlrpc wire",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "swab-min-size",
+     "fix_sha": "5562816df27aaa82803e7f1d6f4e113693e3412a",
+     "fix_subject": "LU-5896 mdt: do not overwrite the actual buffer size",
+     "summary": "swabber_dumper_helper() sets len = rmf_size for every non-array field before calling the field's rmf_swab_len swabber. The new RMF_F_MINIMUM_SIZE field RMF_SWAP_LAYOUTS therefore always reaches lustre_swab_swap_layouts() with the 8-byte minimum, never the real buffer length, so msl_dv1/msl_dv2 of a 24-byte request are never swabbed for an opposite-endian peer.",
+     "locations": [
+      "lustre/ptlrpc/layout.c:swabber_dumper_helper",
+      "lustre/ptlrpc/pack_generic.c:lustre_swab_swap_layouts"
+     ],
+     "match": [
+      [
+       "swabber_dumper_helper|rmf_swab_len"
+      ],
+      [
+       "(never|not|isn.t) (be )?swabbed",
+       "dv1|dv2|msl_dv"
+      ]
+     ]
+    },
+    {
+     "id": "pack-before-set-size",
+     "fix_sha": "dac2ec9d6912233ae379bbf907948dc330f60aa8",
+     "fix_subject": "LU-20117 mdc: fix RMF_SWAP_LAYOUTS packing",
+     "summary": "mdc_ioc_swap_layouts() calls req_capsule_set_size(RMF_SWAP_LAYOUTS, 24) after mdc_prep_elc_req() has already packed the request. set_size does not resize or move packed buffers, so copying the 24-byte struct into the 8-byte RMF_SWAP_LAYOUTS buffer overwrites the start of the following RMF_DLM_REQ (the ELC cancel data).",
+     "locations": [
+      "lustre/mdc/mdc_request.c:mdc_ioc_swap_layouts"
+     ],
+     "match": [
+      [
+       "set_size",
+       "pack"
+      ],
+      [
+       "24",
+       "8.byte|8 bytes",
+       "overwrit|clobber|overflow|past|beyond"
+      ],
+      [
+       "(already|after).{0,60}pack|packed",
+       "24 bytes|8 bytes|overwrit|clobber"
+      ]
+     ]
+    }
+   ],
+   "notes": ""
+  },
+  {
+   "id": "ping-evictor-rework",
+   "change": 58620,
+   "patchset": 3,
+   "sha": "4cb897ca4a970a35ef239de6148f487a9683ba2f",
+   "subject": "LU-18878 ptlrpc: improve ping evictor and recovery timeout",
+   "change_id": "I97b9795746ccd4242f9798c8192abd4d7a57bbac",
+   "merged": "2025-04-16",
+   "lines": 598,
+   "subsystem": "ptlrpc/ldlm/obdclass",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "export-timer-alloc",
+     "fix_sha": "3eeec9e6b24f4b456e1ac77b1f91d11e4e870e5a",
+     "fix_subject": "LU-17000 obdclass: handle export timer allocation failure",
+     "summary": "obd_export_timed_init() checks the void ** argument instead of the pointer OBD_ALLOC() wrote through it, so it returns 0 even when the allocation failed. Its callers (ptlrpc_update_export_timer(), rev_import_init()) then call obd_export_timed_add() with a NULL node while holding obd_dev_lock and hit LASSERT(ned != NULL) under memory pressure.",
+     "locations": [
+      "lustre/obdclass/genops.c:obd_export_timed_init"
+     ],
+     "match": [
+      [
+       "void \\*\\*",
+       "alloc|ENOMEM|NULL|fail"
+      ],
+      [
+       "obd_export_timed_init",
+       "always|never|ENOMEM|NULL|fail"
+      ],
+      [
+       "tests? `?data`?|`data`",
+       "\\*data"
+      ],
+      [
+       "OBD_ALLOC",
+       "returns? 0|still returns|never (reported|fails)"
+      ]
+     ]
+    }
+   ],
+   "notes": "Two later commits (0498ab0fd6, 0a5ee1a2a2) also change the timeout formula; they are design changes, not counted."
+  },
+  {
+   "id": "lmv-qos-exclude",
+   "change": 60794,
+   "patchset": 9,
+   "sha": "5fe3d1c7b87bead572c4f51ecc90c9c85553d7ee",
+   "subject": "LU-19268 lmv: Add qos_exclude_patterns",
+   "change_id": "I7f307850aa6f0b2301ae24f96c27a2b80a60e96b",
+   "merged": "2025-08-29",
+   "lines": 282,
+   "subsystem": "lmv (client)",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "exclude-list-uaf",
+     "fix_sha": "3d9e884fed980a75f582a32301a0552b892a7fe6",
+     "fix_subject": "LU-20495 lmv: fix use-after-free in qos exclude list",
+     "summary": "lmv_qos_exclude() walks lmv_qos_exclude_list without taking lmv_lock, while the qos_exclude_patterns/qos_exclude_prefixes set_param handlers free entries under lmv_lock. A mkdir racing 'lctl set_param qos_exclude_patterns' dereferences a freed entry (use-after-free, client panic).",
+     "locations": [
+      "lustre/lmv/lmv_qos.c:lmv_qos_exclude"
+     ],
+     "match": [
+      [
+       "qos_exclude|exclude.?list|exclude_list",
+       "without|no lock|unlocked|lockless|race|use.after.free|UAF|freed|lmv_lock"
+      ]
+     ]
+    }
+   ],
+   "notes": ""
+  },
+  {
+   "id": "mgc-new-registration",
+   "change": 59212,
+   "patchset": 8,
+   "sha": "e9c290e7dd2e8c8ad45d9cedf0683e29b321e929",
+   "subject": "LU-18986 mgc: client part of new registration protocol",
+   "change_id": "Ifc0fd24d7eb26dd092c3e9cce895980b26f0524d",
+   "merged": "2025-06-12",
+   "lines": 111,
+   "subsystem": "mgc/mgs protocol",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "legacy-nid-oob",
+     "fix_sha": "bc07e00b075868925af15f6c73d6441703eb7350",
+     "fix_subject": "LU-18986 mgc: fix OOB read registering targets with legacy NIDs",
+     "summary": "mgc_target_register() takes the new registration path whenever the MGS export has OBD_CONNECT_MGS_NIDLIST, even when the target has only legacy NIDs and server_lsi2mti() never allocated/filled mti_nidlist (only done for LDD_F_LARGE_NID). It then reads NIDLIST_SIZE() bytes from mti_nidlist: a slab out-of-bounds read.",
+     "locations": [
+      "lustre/mgc/mgc_request.c:mgc_target_register"
+     ],
+     "match": [
+      [
+       "nidlist",
+       "legacy|LARGE_NID|large NID|out.of.bounds|OOB|overrun|beyond|past|not allocated|uninitiali"
+      ]
+     ]
+    }
+   ],
+   "notes": "The fix is on the same LU ticket (LU-18986); a reviewer reading the JIRA ticket could see it. bench report flags that as a leak."
+  },
+  {
+   "id": "shrinker-compat",
+   "change": 60352,
+   "patchset": 7,
+   "sha": "3ccd941e2de36a2d791268111c381c72f0afa11e",
+   "subject": "LU-19080 compat: match kernel shrinker protocol",
+   "change_id": "I885c7521e89c279b8df1385d0ed3b46f98880967",
+   "merged": "2025-08-20",
+   "lines": 148,
+   "subsystem": "llite compat",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "shrinker-alloc-leak",
+     "fix_sha": "2bb6a2a9f2e3459e48f57313522f2b6ad21938fe",
+     "fix_subject": "LU-17000 compat: Fix resource leak in ll_shrinker_alloc",
+     "summary": "ll_shrinker_alloc() allocates the ll_shrinker wrapper first and leaks it when shrinker_alloc()/registration fails; it also dereferences the result of kvasprintf_const() without a NULL check and frees it with kfree() instead of kfree_const().",
+     "locations": [
+      "lustre/llite/lproc_llite.c:ll_shrinker_alloc"
+     ],
+     "match": [
+      [
+       "ll_shrinker_alloc|shrinker_alloc|ll_shrinker",
+       "leak|not freed|never freed|error path|fail"
+      ],
+      [
+       "kvasprintf_const",
+       "NULL|kfree_const"
+      ]
+     ]
+    }
+   ],
+   "notes": ""
+  },
+  {
+   "id": "lnet-recreate-peers",
+   "change": 61596,
+   "patchset": 17,
+   "sha": "e08fd8c40982453253fb156173bab0e1acfa1216",
+   "subject": "LU-19437 lnet: re-create missed Lustre peers",
+   "change_id": "Ib8c08d4925d13005ce250d7f5280426d0eef28ed",
+   "merged": "2025-12-10",
+   "lines": 27,
+   "subsystem": "lnet/ptlrpc",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "sleep-in-spinlock",
+     "fix_sha": "f50fb2ca3da49326d108e5f125f4a7810f6caa18",
+     "fix_subject": "LU-19928 ptlrpc: don't sleep inside spinlock",
+     "summary": "LNetPeerDiscovered() now calls lnet_peerni_by_nid_locked(), which can take a mutex and sleep, but it is called from import_select_connection() inside a spinlock-protected loop: sleeping in atomic context.",
+     "locations": [
+      "lnet/lnet/peer.c:LNetPeerDiscovered",
+      "lustre/ptlrpc/import.c:import_select_connection"
+     ],
+     "match": [
+      [
+       "LNetPeerDiscovered|lnet_peerni_by_nid_locked|import_select_connection",
+       "sleep|spinlock|spin lock|atomic|mutex|might_sleep"
+      ]
+     ]
+    }
+   ],
+   "notes": ""
+  },
+  {
+   "id": "o2iblnd-rtnl",
+   "change": 63038,
+   "patchset": 5,
+   "sha": "aebedbe75007ad5747d10a3fc620644aa4074e6a",
+   "subject": "LU-19707 lnet: fix RTNL assert in LNet on v6.15",
+   "change_id": "Ideab7fb1bac89ab1c729ae823dd97cc47ee61a5b",
+   "merged": "2026-02-17",
+   "lines": 78,
+   "subsystem": "lnet o2iblnd",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "rtnl-in-rcu",
+     "fix_sha": "e3a0dfd046fb57b0b540ea1360f539dc0cfb46ea",
+     "fix_subject": "LU-20102 o2iblnd: do not call rtnl_lock() in RCU read section",
+     "summary": "The change takes rtnl_lock() (a sleeping mutex) inside an RCU read-side critical section; only a reference on the net device should be taken under RCU and the locked work done outside.",
+     "locations": [
+      "lnet/klnds/o2iblnd/o2iblnd.c"
+     ],
+     "match": [
+      [
+       "rtnl",
+       "rcu"
+      ]
+     ]
+    },
+    {
+     "id": "rtnl-under-global-lock",
+     "fix_sha": "fd76c0fe6c427f0143d412817ce7dde91d96dfe2",
+     "fix_subject": "LU-20580 o2iblnd: don't sleep in atomic in kiblnd_startup()",
+     "summary": "kiblnd_startup() queries the net device link status (lnet_get_link_status(), which takes rtnl_lock(), a mutex) inside the kib_global_lock write section with interrupts off: sleeping in atomic context, reported as 'scheduling while atomic' and able to stop a node booting when rtnl_mutex is contended.",
+     "locations": [
+      "lnet/klnds/o2iblnd/o2iblnd.c:kiblnd_startup"
+     ],
+     "match": [
+      [
+       "rtnl|lnet_get_link_status|link status",
+       "kib_global_lock|write_lock|irqsave|atomic|spinlock"
+      ]
+     ]
+    }
+   ],
+   "notes": ""
+  },
+  {
+   "id": "quota-nodemap",
+   "change": 59297,
+   "patchset": 5,
+   "sha": "ed5c93a97c16db018b4b4e53910bada3669ba29b",
+   "subject": "LU-19030 quota: lfs quota all respects nodemap",
+   "change_id": "I8820e18957805c0dceacc4674713875b024a8e99",
+   "merged": "2025-06-07",
+   "lines": 338,
+   "subsystem": "ofd/quota/nodemap",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "nodemap-put-early",
+     "fix_sha": "66efbc67b5b6ab404a6a90a9fe60b690505d053e",
+     "fix_subject": "LU-20485 ofd: hold nodemap ref while using the nodemap object",
+     "summary": "ofd_quotactl() drops its nodemap reference with nodemap_putref() before lquotactl_slv() has finished using the nodemap, so the nodemap can be freed while still in use.",
+     "locations": [
+      "lustre/ofd/ofd_obd.c:ofd_quotactl"
+     ],
+     "match": [
+      [
+       "nodemap_putref|putref",
+       "lquotactl_slv|still|after|use.after|freed"
+      ],
+      [
+       "ofd_quotactl",
+       "nodemap",
+       "reference|use.after|freed|putref"
+      ]
+     ]
+    }
+   ],
+   "notes": ""
+  },
+  {
+   "id": "mgc-nid-notify",
+   "change": 59868,
+   "patchset": 11,
+   "sha": "b625dac2346c8a2828ea26fb206825502ab3babb",
+   "subject": "LU-19095 mgc: notify MGS about LNet changes",
+   "change_id": "Ia572dfe643307f654fea3146107b3bf7b6ef744e",
+   "merged": "2025-08-20",
+   "lines": 192,
+   "subsystem": "mgc",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "unchecked-reply",
+     "fix_sha": "d8dc4bdc0746831e974beee136a7d3f8f89f4ee8",
+     "fix_subject": "LU-19389 mgc: check reply in mgc_nid_notify_interpret()",
+     "summary": "mgc_nid_notify_interpret() reads the reply message without checking rc or that a valid reply exists, so a failed or timed-out RPC dereferences a missing reply.",
+     "locations": [
+      "lustre/mgc/mgc_request.c:mgc_nid_notify_interpret"
+     ],
+     "match": [
+      [
+       "mgc_nid_notify_interpret",
+       "reply|repmsg|rq_repmsg|rc|NULL"
+      ]
+     ]
+    }
+   ],
+   "notes": ""
+  },
+  {
+   "id": "memcg-balance-dirty",
+   "change": 59223,
+   "patchset": 11,
+   "sha": "c413d2ede5dfe71a89878aed305a8d61f03a30a3",
+   "subject": "LU-19014 memcg: fix client hang in balance_dirty_pages()",
+   "change_id": "Iecee60484f1b65fad6f4c9eac7bd4d2c53f38b8d",
+   "merged": "2025-07-08",
+   "lines": 374,
+   "subsystem": "osc/llite",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "unlocked-tree-dump",
+     "fix_sha": "dd5d669438d2120564ace15a6fd9e455ddf4b9e5",
+     "fix_subject": "LU-20078 osc: call osc_extent_tree_dump() without object lock held",
+     "summary": "The new osc_extent_tree_dump() call in osc_cache_writeback_range() (dirty-exceeded path) walks the extent rbtree without osc_object_lock(); next_extent() asserts the extent is still in the tree, so a concurrent removal panics.",
+     "locations": [
+      "lustre/osc/osc_cache.c:osc_cache_writeback_range"
+     ],
+     "match": [
+      [
+       "osc_extent_tree_dump",
+       "lock|unlocked|without"
+      ]
+     ]
+    }
+   ],
+   "notes": "A second later fix (39a24e8028, osc shrinker NULL deref) names this change too, but mostly reorders teardown that predates it; not counted."
+  },
+  {
+   "id": "socklnd-restrict-ip",
+   "change": 59673,
+   "patchset": 15,
+   "sha": "2e49bc7dd1701790f10f593c696a634f0d26986b",
+   "subject": "LU-18812 lnet: restrict IP addresses that socklnd listens on",
+   "change_id": "I067abbe04caddebb9a9ab3a27deb943af1c99973",
+   "merged": "2025-07-30",
+   "lines": 430,
+   "subsystem": "lnet socklnd/acceptor",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "waitqueue-before-init",
+     "fix_sha": "26e01e5a10b4e09c51660d6a6fec24de7f3f9cf0",
+     "fix_subject": "LU-20132 lnet: statically initialize acceptor wait queue",
+     "summary": "lnet_acceptor_add_socket() installs lnet_acceptor_ready() as the data_ready callback on listening sockets during LND startup, before the acceptor thread initialises the wait queue it wakes (init_waitqueue_head runs in the thread). A connection completing in that window wakes an uninitialised wait queue: NULL dereference in __wake_up_common().",
+     "locations": [
+      "lnet/lnet/acceptor.c:lnet_acceptor_add_socket"
+     ],
+     "match": [
+      [
+       "wait.?queue|init_waitqueue_head",
+       "lnet_acceptor_ready|data_ready|before|initiali"
+      ]
+     ]
+    },
+    {
+     "id": "callback-not-restored",
+     "fix_sha": "9bff0197f8d0f96f95f4b8d0f16ec8c185307f6f",
+     "fix_subject": "LU-19528 lnet: restore kernel cb before listener sk free",
+     "summary": "The listening socket is released without restoring its original kernel callbacks, so a late data_ready interrupt during teardown calls lnet_acceptor_ready() on freed state and crashes in __wake_up_common().",
+     "locations": [
+      "lnet/lnet/acceptor.c"
+     ],
+     "match": [
+      [
+       "callback|sk_data_ready|data_ready",
+       "restor|release|free|teardown|shutdown"
+      ]
+     ]
+    }
+   ],
+   "notes": ""
+  },
+  {
+   "id": "lassert-side-effects",
+   "change": 56115,
+   "patchset": 5,
+   "sha": "a32c87805ffb04dad416705e8058775835df0899",
+   "subject": "LU-18155 misc: use LASSERT/F instead of if () LBUG()",
+   "change_id": "Ie0b5b8872004f446253ac7c613c41e07af6b168a",
+   "merged": "2025-01-18",
+   "lines": 75,
+   "subsystem": "misc (target, obdclass)",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "state-change-in-assert",
+     "fix_sha": "ffe1627adca33262bc7ece28887642d6c209b639",
+     "fix_subject": "LU-20559 misc: keep updates out of assertion conditions",
+     "summary": "Converting 'if (...) LBUG()' to LASSERT/LASSERTF moved state-changing calls into the assertion condition: atomic_dec_and_test() in dt_los_put() and test_and_set_bit()/test_and_clear_bit() on lut_client_bitmap. With --disable-libcfs-assert LASSERT does not evaluate its condition, so the reference is never dropped and the bitmap never updated.",
+     "locations": [
+      "lustre/obdclass/local_storage.c:dt_los_put",
+      "lustre/target/tgt_lastrcvd.c"
+     ],
+     "match": [
+      [
+       "LASSERT",
+       "side.effect|disable-libcfs-assert|compil(ed|es) (out|away)|not (be )?evaluated|no-op|state change"
+      ]
+     ]
+    }
+   ],
+   "notes": ""
+  },
+  {
+   "id": "osc-kswapd-deadlock",
+   "change": 64397,
+   "patchset": 2,
+   "sha": "7dc7cffb110fcb2ca1a79ba83f1cb5ac1b0f83a2",
+   "subject": "LU-19951 osc: fix kswapd writeback vs writer deadlock",
+   "change_id": "Iff817b6e5153de0acc529d2106361a389fa1c35b",
+   "merged": "2026-04-10",
+   "lines": 17,
+   "subsystem": "osc",
+   "kind": "control",
+   "bugs": [],
+   "notes": "No known later fix."
+  },
+  {
+   "id": "lnet-mr-forwarding",
+   "change": 63582,
+   "patchset": 5,
+   "sha": "bb6237483d50cf67f9743f62bccd83cf377f0a81",
+   "subject": "LU-19827 lnet: Fix MR forwarding",
+   "change_id": "Idaa40618d1df4c6793266c7cf9ae0d63a5a8bff7",
+   "merged": "2026-02-10",
+   "lines": 177,
+   "subsystem": "lnet (+tests)",
+   "kind": "control",
+   "bugs": [],
+   "notes": "Only a later test fix; code and tests mixed."
+  }
+ ]
+}
