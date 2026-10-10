@@ -172,6 +172,7 @@ def test_bundled_cases_are_well_formed():
     for case in data["cases"]:
         assert len(case["sha"]) == 40
         assert case["kind"] in ("bug", "control")
+        assert "eval" in case["sets"]
         assert bool(case.get("bugs")) == (case["kind"] == "bug")
         for bug in case.get("bugs") or []:
             assert bug["summary"] and bug["match"]
@@ -193,3 +194,13 @@ def test_leak_is_reported(tmp_path):
     scored = bench.score(label, [case])
     assert bench.summarize(scored)["leaked"] == 1
     assert "LEAKED" in bench.render([scored])
+
+
+def test_select_by_set():
+    cases = [{"id": "x", "sets": ["quick", "eval"]}, {"id": "y", "sets": ["eval"]}]
+    assert [c["id"] for c in bench.select(cases, None, "quick")] == ["x"]
+    assert len(bench.select(cases, None, "eval")) == 2
+    assert len(bench.select(cases, None, "all")) == 2
+    assert [c["id"] for c in bench.select(cases, "y", "quick")] == ["y"]
+    with pytest.raises(ValueError, match="no cases in set"):
+        bench.select(cases, None, "nope")

@@ -40,10 +40,17 @@ def load_cases(path: Path = CASES_PATH) -> dict:
     return data
 
 
-def select(cases: list, wanted: Optional[str]) -> list:
-    """Cases named in a comma-separated list of ids (or all)."""
+def select(cases: list, wanted: Optional[str],
+           case_set: Optional[str] = None) -> list:
+    """Cases named in a comma-separated list of ids, else the cases in
+    `case_set` (every case when it is None or "all")."""
     if not wanted:
-        return cases
+        if case_set in (None, "all"):
+            return cases
+        chosen = [c for c in cases if case_set in c.get("sets", [])]
+        if not chosen:
+            raise ValueError(f"no cases in set {case_set!r}")
+        return chosen
     names = {w.strip() for w in wanted.split(",") if w.strip()}
     chosen = [c for c in cases if c["id"] in names]
     missing = names - {c["id"] for c in chosen}

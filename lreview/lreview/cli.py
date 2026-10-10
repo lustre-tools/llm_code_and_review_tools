@@ -725,7 +725,8 @@ def cmd_bench(args) -> int:
                             if getattr(args, "cases_file", None)
                             else bench.CASES_PATH)
     try:
-        cases = bench.select(data["cases"], getattr(args, "cases", None))
+        cases = bench.select(data["cases"], getattr(args, "cases", None),
+                             getattr(args, "set", None))
     except ValueError as exc:
         print(f"error: {exc}")
         return 1
@@ -736,7 +737,8 @@ def cmd_bench(args) -> int:
             bugs = ", ".join(b["id"] for b in case.get("bugs") or []) or "-"
             print(f"{case['id']:24s} {case['change']:>6}/{case['patchset']:<3} "
                   f"{case.get('lines', 0):>4} lines  {case.get('kind', ''):8s} "
-                  f"bugs: {bugs}\n{'':24s} {case['subject']}")
+                  f"[{','.join(case.get('sets', []))}] bugs: {bugs}"
+                  f"\n{'':24s} {case['subject']}")
         print(f"\n{len(cases)} case(s) in {args.cases_file or bench.CASES_PATH}")
         return 0
 
@@ -1150,7 +1152,12 @@ def build_parser() -> argparse.ArgumentParser:
                        help="A case file other than the bundled "
                             "benchmark/cases.json")
         p.add_argument("--cases", default=None,
-                       help="Comma-separated case ids (default: all)")
+                       help="Comma-separated case ids (overrides --set)")
+        p.add_argument("--set", default="quick",
+                       help="Case set: 'quick' (default; a few cheap cases "
+                            "with reliable hits, for cost and quick checks), "
+                            "'eval' (every validated case; expensive), or "
+                            "'all'")
 
     bench_list = bench_sub.add_parser("list", help="Show the cases")
     bench_common(bench_list)

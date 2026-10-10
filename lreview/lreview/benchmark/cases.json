@@ -1,6 +1,6 @@
 {
  "version": 1,
- "description": "lreview benchmark: merged Lustre changes whose bugs a later commit fixed (its Fixes: trailer names the change), plus controls with no known bug. Each bug has a summary for the LLM judge and regex match sets: a finding matches a set when it matches every pattern in it.",
+ "description": "lreview benchmark: merged Lustre changes whose bugs a later commit fixed (its Fixes: trailer names the change), plus controls with no known bug. Each bug has a summary for the LLM judge and regex match sets: a finding matches a set when it matches every pattern in it. Sets: 'quick' is a few cheap cases with reliable hits, for cost checks and quick verification; 'eval' is every validated case.",
  "cases": [
   {
    "id": "swap-layouts-interop",
@@ -58,7 +58,11 @@
      ]
     }
    ],
-   "notes": ""
+   "notes": "",
+   "sets": [
+    "quick",
+    "eval"
+   ]
   },
   {
    "id": "ping-evictor-rework",
@@ -100,7 +104,10 @@
      ]
     }
    ],
-   "notes": "Two later commits (0498ab0fd6, 0a5ee1a2a2) also change the timeout formula; they are design changes, not counted."
+   "notes": "Two later commits (0498ab0fd6, 0a5ee1a2a2) also change the timeout formula; they are design changes, not counted.",
+   "sets": [
+    "eval"
+   ]
   },
   {
    "id": "lmv-qos-exclude",
@@ -130,7 +137,11 @@
      ]
     }
    ],
-   "notes": ""
+   "notes": "",
+   "sets": [
+    "quick",
+    "eval"
+   ]
   },
   {
    "id": "mgc-new-registration",
@@ -160,7 +171,10 @@
      ]
     }
    ],
-   "notes": "The fix is on the same LU ticket (LU-18986); a reviewer reading the JIRA ticket could see it. bench report flags that as a leak."
+   "notes": "The fix is on the same LU ticket (LU-18986); a reviewer reading the JIRA ticket could see it. bench report flags that as a leak.",
+   "sets": [
+    "eval"
+   ]
   },
   {
    "id": "shrinker-compat",
@@ -194,7 +208,10 @@
      ]
     }
    ],
-   "notes": ""
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
   },
   {
    "id": "lnet-recreate-peers",
@@ -225,7 +242,11 @@
      ]
     }
    ],
-   "notes": ""
+   "notes": "",
+   "sets": [
+    "quick",
+    "eval"
+   ]
   },
   {
    "id": "o2iblnd-rtnl",
@@ -270,7 +291,10 @@
      ]
     }
    ],
-   "notes": ""
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
   },
   {
    "id": "quota-nodemap",
@@ -305,7 +329,10 @@
      ]
     }
    ],
-   "notes": ""
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
   },
   {
    "id": "mgc-nid-notify",
@@ -335,7 +362,10 @@
      ]
     }
    ],
-   "notes": ""
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
   },
   {
    "id": "memcg-balance-dirty",
@@ -365,7 +395,10 @@
      ]
     }
    ],
-   "notes": "A second later fix (39a24e8028, osc shrinker NULL deref) names this change too, but mostly reorders teardown that predates it; not counted."
+   "notes": "A second later fix (39a24e8028, osc shrinker NULL deref) names this change too, but mostly reorders teardown that predates it; not counted.",
+   "sets": [
+    "eval"
+   ]
   },
   {
    "id": "socklnd-restrict-ip",
@@ -410,7 +443,10 @@
      ]
     }
    ],
-   "notes": ""
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
   },
   {
    "id": "lassert-side-effects",
@@ -441,7 +477,10 @@
      ]
     }
    ],
-   "notes": ""
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
   },
   {
    "id": "osc-kswapd-deadlock",
@@ -455,7 +494,11 @@
    "subsystem": "osc",
    "kind": "control",
    "bugs": [],
-   "notes": "No known later fix."
+   "notes": "No known later fix.",
+   "sets": [
+    "quick",
+    "eval"
+   ]
   },
   {
    "id": "lnet-mr-forwarding",
@@ -469,7 +512,637 @@
    "subsystem": "lnet (+tests)",
    "kind": "control",
    "bugs": [],
-   "notes": "Only a later test fix; code and tests mixed."
+   "notes": "Only a later test fix; code and tests mixed.",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "nodemap-ban-default",
+   "change": 60074,
+   "patchset": 15,
+   "sha": "26361c3f3206473182fa15bda7675f57ca5412ba",
+   "subject": "LU-19157 nodemap: allow ban list on default nodemap",
+   "change_id": "I4c3d6f86353aa5f4ec00750891d9b47511b4e384",
+   "merged": "2025-08-26",
+   "lines": 116,
+   "subsystem": "nodemap",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "ban-search-unlocked",
+     "fix_sha": "5a3722af0849e6503777f46b163a5372fde3e6d9",
+     "fix_subject": "LU-19157 nodemap: read semaphore for ban_range_search",
+     "summary": "nodemap_add_range_helper() calls ban_range_search() on the ban range tree without taking nmc_ban_range_tree_lock, so the search can race with ban-range insertion or deletion.",
+     "locations": [
+      "lustre/ptlrpc/nodemap_handler.c:nodemap_add_range_helper"
+     ],
+     "match": [
+      [
+       "ban_range_search",
+       "lock|sem|race|unlocked|without"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "mount-large-nids",
+   "change": 57560,
+   "patchset": 10,
+   "sha": "f9d346f0c18efde1fb288549fa37e4f91364e544",
+   "subject": "LU-18587 utils: allow large NID lists in mount tools",
+   "change_id": "I8f3867e0f31c75e6261434d4aef48eaf4e8f4507",
+   "merged": "2025-01-18",
+   "lines": 127,
+   "subsystem": "utils (mount)",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "append-param-nul",
+     "fix_sha": "53ae11aa46eb4c8cff5002b199cd0ea38e129d8e",
+     "fix_subject": "LU-18896 utils: don't miss null-terminator in append_param",
+     "summary": "append_param() moves the tail of the parameter buffer when replacing a parameter, but when there is no tail (the parameter is the last one) the move skips the NUL terminator, leaving the buffer unterminated.",
+     "locations": [
+      "lustre/utils/mount_utils.c:append_param"
+     ],
+     "match": [
+      [
+       "append_param|memmove|tail",
+       "NUL|null.terminat|terminat|\\\\0"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "fsinfo-long-nids",
+   "change": 59421,
+   "patchset": 5,
+   "sha": "fff7cd33bbb424b770768a71267604b4e87f7276",
+   "subject": "LU-19050 utils: Support long nid lists when getting fs info",
+   "change_id": "I3d9c30795fba14618368b7b9e1769fe0b07d3fc7",
+   "merged": "2025-06-12",
+   "lines": 203,
+   "subsystem": "utils (liblustreapi)",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "root-path-want",
+     "fix_sha": "50a2634695317d7085b6bb22c9555d3fa74e88b5",
+     "fix_subject": "LU-19050 utils: fix get_root_path WANT condition",
+     "summary": "get_root_path() calls the new get_root_path_fast() even when WANT_INDEX or WANT_NID is requested; the fast path cannot supply those, so the condition choosing it is wrong.",
+     "locations": [
+      "lustre/utils/liblustreapi_root.c:get_root_path"
+     ],
+     "match": [
+      [
+       "get_root_path_fast|get_root_path",
+       "WANT_INDEX|WANT_NID|want"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "lnetctl-import",
+   "change": 65055,
+   "patchset": 8,
+   "sha": "18bc6c4a54786efec127a92ffa6559dcac3e9e88",
+   "subject": "LU-20000 lnetctl: bad CPTs/tunables during import",
+   "change_id": "I234c4bf3ca5b0ed7caa47c30308dca0465daaa40",
+   "merged": "2026-05-10",
+   "lines": 381,
+   "subsystem": "lnet utils",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "import-fgets-overflow",
+     "fix_sha": "20c2a77d69d3dfe6e2aec01fbf0bf3b6b3f1c423",
+     "fix_subject": "LU-20245 lnetctl: Fix buffer overflow in import --old-api",
+     "summary": "In lnetctl import --old-api, the fgets() loop reading the YAML into a heap buffer advances buf before recomputing strlen(), so 'len -= strlen(buf)' subtracts zero; len stays at the allocation size while buf walks forward, and fgets() is told it has more room than remains: a heap buffer overflow.",
+     "locations": [
+      "lnet/utils/lnetctl.c:jt_import"
+     ],
+     "match": [
+      [
+       "fgets",
+       "len|strlen|overflow|size|room|remaining"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "lu-env-add-errors",
+   "change": 57272,
+   "patchset": 12,
+   "sha": "218cce8b70e562c8bcdd4833e10e9f0da594c4a6",
+   "subject": "LU-18506 ptlrpc: improve lu_env_add error handling",
+   "change_id": "Ie6627438340196ef50355893c52eacf3322fb2ef",
+   "merged": "2025-04-16",
+   "lines": 133,
+   "subsystem": "ptlrpc/osp",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "osp-thread-args-leak",
+     "fix_sha": "e3533028dee78ba031ff356d378f0948b6f6ab3b",
+     "fix_subject": "LU-18506 osp: ensure args are freed",
+     "summary": "After the change the caller frees the thread arguments only when the thread cannot be created, but the osp sync thread does not free them on all of its own exit paths, so they leak.",
+     "locations": [
+      "lustre/osp/osp_sync.c"
+     ],
+     "match": [
+      [
+       "args|arg",
+       "leak|free|freed"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "fallocate-no-restart",
+   "change": 59158,
+   "patchset": 4,
+   "sha": "3143e595cafa252df66e374e94fb700e6cb6e500",
+   "subject": "LU-18989 osd: no tx restart in fallocate",
+   "change_id": "I8baa3ba1505c7a55e96841524368a66d447d18c5",
+   "merged": "2025-05-21",
+   "lines": 255,
+   "subsystem": "osd-ldiskfs",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "restart-offset-units",
+     "fix_sha": "b0ab8999c6e6f8d63e8b704390dd124a5f5017b9",
+     "fix_subject": "LU-20629 osd: fix fallocate restart offset units",
+     "summary": "osd_fallocate_preallocate() advances *start, the byte offset where the fallocate resumes after an -EAGAIN restart, by the block count ldiskfs_map_blocks() returned, mixing blocks and bytes, so the restarted pass re-maps a range already mapped (and can pass a start beyond end).",
+     "locations": [
+      "lustre/osd-ldiskfs/osd_io.c:osd_fallocate_preallocate"
+     ],
+     "match": [
+      [
+       "start|offset",
+       "block|bytes|units|shift|blkbits"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "dne-migrate-layout",
+   "change": 58585,
+   "patchset": 8,
+   "sha": "4b922dec731c2440938e15c04d40f3ab8c3841be",
+   "subject": "LU-18869 dne: mdt migrate to check layout",
+   "change_id": "Iaacffcc1ecf34c5e01cba57a44c5e3ade97d936a",
+   "merged": "2025-04-16",
+   "lines": 250,
+   "subsystem": "lod/mdt (DNE)",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "fld-range-uninit",
+     "fix_sha": "5ad307db23133a4e3bc86d9eb353126adf36f8f9",
+     "fix_subject": "LU-20428 lod: init fld range type before lod_fld_lookup",
+     "summary": "lod_dir_layout_check() calls lod_fld_lookup() with an fld range whose type was never initialised (it should be LU_SEQ_RANGE_MDT), passing stack garbage into fld_range_set_type().",
+     "locations": [
+      "lustre/lod/lod_object.c:lod_dir_layout_check"
+     ],
+     "match": [
+      [
+       "lod_fld_lookup|fld|range",
+       "uninitiali|not initiali|garbage|LU_SEQ_RANGE_MDT|type"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "nodemap-innermost-range",
+   "change": 59890,
+   "patchset": 10,
+   "sha": "5bde32348f3c1fcebc8d8b41afc230450079ba6b",
+   "subject": "LU-17431 nodemap: find innermost nid range",
+   "change_id": "Ide5d69794adb3516603b6594aad5f8f8ba123cc5",
+   "merged": "2025-08-12",
+   "lines": 51,
+   "subsystem": "nodemap",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "orphaned-subranges",
+     "fix_sha": "7fae11ad4c80a3d4163585c4c0c500a874453d88",
+     "fix_subject": "LU-20524 nodemap: do not orphan sub-ranges when deleting a range",
+     "summary": "Sub-nodemap NID ranges are stored in the parent range's embedded interval tree (rn_subtree) and point back to it through rn_tree; range_delete_generic() frees a range without handling its subtree, so deleting a parent range leaves sub-ranges linked into freed memory with rn_tree dangling.",
+     "locations": [
+      "lustre/ptlrpc/nodemap_range.c:range_delete_generic"
+     ],
+     "match": [
+      [
+       "subtree|sub.range|rn_tree",
+       "free|dangl|orphan|delete|use.after"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "fileset-llog-compat",
+   "change": 60006,
+   "patchset": 10,
+   "sha": "c6e12f54dc950916abb6db254a7f32d20abd0929",
+   "subject": "LU-18357 ptlrpc: Fix fileset llog compatibility on nodemaps",
+   "change_id": "I90a87b9921c929b3993dd89d7d00c80baa10a772",
+   "merged": "2025-07-22",
+   "lines": 406,
+   "subsystem": "nodemap",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "nodemap-del-null",
+     "fix_sha": "0cf0f8d9e920e5f60d1cc0d02c78c446ebb5d41e",
+     "fix_subject": "LU-20272 nodemap: fix NULL deref in nodemap_del()",
+     "summary": "nodemap_del() can be called with out_clean_llog_fileset == NULL but dereferences it without a NULL check.",
+     "locations": [
+      "lustre/ptlrpc/nodemap_handler.c:nodemap_del"
+     ],
+     "match": [
+      [
+       "out_clean_llog_fileset|nodemap_del",
+       "NULL"
+      ]
+     ]
+    }
+   ],
+   "notes": "The fix also names an older change (40cd140b85); the dereference is in lines this change touches.",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "resource-id-check",
+   "change": 59208,
+   "patchset": 6,
+   "sha": "719f6763fe19d208833040a36d47ad360da465f2",
+   "subject": "LU-18756 sec: add resource id check to oss and mds",
+   "change_id": "I040ddb1b934707baa84b492337139f45b856692e",
+   "merged": "2025-06-12",
+   "lines": 587,
+   "subsystem": "mdt/ofd security",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "getxattr-check-order",
+     "fix_sha": "21bd3cd84759e35c77a72bc939ddf2ded4878efa",
+     "fix_subject": "LU-18756 mdt: check resource IDs before init_ucred in getxattr",
+     "summary": "mdt_getxattr() calls mdt_check_resource_ids() after mdt_init_ucred(), so requests that will be rejected still acquire identity cache entries, which are then not cleaned up correctly; the check must come first.",
+     "locations": [
+      "lustre/mdt/mdt_xattr.c:mdt_getxattr"
+     ],
+     "match": [
+      [
+       "mdt_check_resource_ids|resource.?id",
+       "init_ucred|ucred|identity|order|before"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "osc-lu-device",
+   "change": 58818,
+   "patchset": 8,
+   "sha": "43669e3e6c565a51f5a6f08092f599423840da61",
+   "subject": "LU-18162 osc: convert Object Storage Client to LU device",
+   "change_id": "Iaf00c293d1c31eb11f8a5cdbff6aa313f5c96c28",
+   "merged": "2025-07-22",
+   "lines": 35,
+   "subsystem": "osc",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "device-free-null-obd",
+     "fix_sha": "5537bbc0b6cef29519d5aad6b00d539b40870846",
+     "fix_subject": "LU-20160 mdc,osc: Do not crash on device registration failure",
+     "summary": "osc_device_free() dereferences the obd pointer without a NULL check; when device registration fails it is NULL and the cleanup path crashes.",
+     "locations": [
+      "lustre/osc/osc_dev.c:osc_device_free"
+     ],
+     "match": [
+      [
+       "osc_device_free|device_free|obd",
+       "NULL|registration|fail"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "quick",
+    "eval"
+   ]
+  },
+  {
+   "id": "llog-subcommands",
+   "change": 56040,
+   "patchset": 8,
+   "sha": "fe4b49635d85fead1efbb4f06ac2c9e68ba76dfc",
+   "subject": "LU-18114 llog: split \"lctl llog_*\" group into subcommands",
+   "change_id": "Iea1cbfac61ff807d793a7a48dafa73915b06639d",
+   "merged": "2025-03-26",
+   "lines": 55,
+   "subsystem": "utils (lctl)",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "remove-runs-check",
+     "fix_sha": "6681a33af55a3348af23a53927f4d75a6a3d9761",
+     "fix_subject": "LU-20274 utils: fix wrong func ptr for \"lctl llog remove\"",
+     "summary": "The new llog subcommand table assigns jt_llog_check to the \"remove\" entry instead of jt_llog_remove, so 'lctl llog remove' silently runs llog_check.",
+     "locations": [
+      "lustre/utils/lctl.c:llog_cmdlist"
+     ],
+     "match": [
+      [
+       "jt_llog_check|llog_check",
+       "remove|jt_llog_remove"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "quick",
+    "eval"
+   ]
+  },
+  {
+   "id": "nodemap-fileset-inherit",
+   "change": 55614,
+   "patchset": 24,
+   "sha": "e8c244e81e906d77fe08bdbd761ff63343c364c4",
+   "subject": "LU-17431 nodemap: fileset inheritance for dynamic nodemap",
+   "change_id": "I61a5fe82d92233bc66d10b8c1b939c04777bcf94",
+   "merged": "2025-07-22",
+   "lines": 473,
+   "subsystem": "nodemap",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "fileset-parent-check",
+     "fix_sha": "b32f37a0f64d22cfbb797c49a30474d873f8ab2e",
+     "fix_subject": "LU-19426 nodemap: check parent when setting fileset",
+     "summary": "When a parent nodemap has only alternate filesets, a child dynamic nodemap can set any primary fileset with 'lctl nodemap_set_fileset', even outside the parent's namespace: check_fileset_add_vs_parent() is not applied on that path.",
+     "locations": [
+      "lustre/ptlrpc/nodemap_handler.c:nodemap_set_fileset_prim_iam"
+     ],
+     "match": [
+      [
+       "check_fileset_add_vs_parent|parent",
+       "fileset",
+       "primary|alternate|outside|bypass|escape|restrict"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "changelog-enc-names",
+   "change": 55916,
+   "patchset": 8,
+   "sha": "cc7d9d04d6ce48e1088cf9c5096b6632a964526a",
+   "subject": "LU-18087 enc: support encrypted names in changelogs",
+   "change_id": "If0de4bfa210f9067a7a934ac74863a77b19482db",
+   "merged": "2025-01-02",
+   "lines": 345,
+   "subsystem": "mdd changelog",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "ns-store-null-target",
+     "fix_sha": "c4cbeeca8cc16d0ecfa255706bedee799d3765e9",
+     "fix_subject": "LU-19501 mdd: check target in mdd_changelog_ns_store",
+     "summary": "mdd_changelog_ns_store() uses the target object's FID unconditionally, but for lfs rm_entry the target is not defined, so mdd_object_fid() dereferences an invalid object and the MDS crashes.",
+     "locations": [
+      "lustre/mdd/mdd_dir.c:mdd_changelog_ns_store"
+     ],
+     "match": [
+      [
+       "mdd_changelog_ns_store|target",
+       "NULL|rm_entry|not defined|invalid|deref"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "mgs-buffer-checks",
+   "change": 64953,
+   "patchset": 4,
+   "sha": "2867efe066c8e188c66eca54f3e295fb6241111a",
+   "subject": "LU-20054 mgs: more checks for incoming buffers",
+   "change_id": "Ifaeab2c5e0d5f33cd55047c96a64b2581cb580f8",
+   "merged": "2026-04-18",
+   "lines": 81,
+   "subsystem": "mgs/target",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "skip-ipv6-uninit",
+     "fix_sha": "2d8050bbd4f6207c8891be46157bd2fd20d9f04d",
+     "fix_subject": "LU-20584 target: init nfd_skip_ipv6 in tgt_import_update()",
+     "summary": "tgt_import_update() leaves nfd_skip_ipv6 (and nfd_has_ipv6) uninitialised on the stack; server_nid2radix() reads nfd_skip_ipv6 and may drop every large NID, so the target reports it cannot get its local NIDs.",
+     "locations": [
+      "lustre/target/tgt_mount.c:tgt_import_update"
+     ],
+     "match": [
+      [
+       "nfd_skip_ipv6|nfd_has_ipv6|tgt_import_update",
+       "uninitiali|not initiali|garbage|stack"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "pm-qos-latency",
+   "change": 57039,
+   "patchset": 12,
+   "sha": "54a64ea818d936cb52c263fd34bb359972ae9fb1",
+   "subject": "LU-18446 ptlrpc: lower CPUs latency during client I/O",
+   "change_id": "I784a699f355da413db5029c6c7584ce3ee4ba9e1",
+   "merged": "2025-03-06",
+   "lines": 413,
+   "subsystem": "ptlrpc",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "delayed-work-not-stopped",
+     "fix_sha": "80708743dcbdc0c8454f0884a639285b9062c53e",
+     "fix_subject": "LU-18788 ptlrpc: cancel PM-QoS delayed work",
+     "summary": "The per-CPU cpu_latency_work() delayed work is not cancelled and waited for when the connection is finalised, so the timer or work can run after the cpu_latency_qos array and its PM-QoS request are freed and the module unloaded (later fixes added cancel_delayed_work(), then the _sync wait).",
+     "locations": [
+      "lustre/ptlrpc/connection.c:ptlrpc_connection_fini"
+     ],
+     "match": [
+      [
+       "delayed.work|cpu_latency_work|cancel_delayed_work",
+       "cancel|flush|sync|fini|unload|free"
+      ]
+     ]
+    },
+    {
+     "id": "svc-stats-unprotected",
+     "fix_sha": "fb8423bfd90aab4b78b17ad210433151686ae25e",
+     "fix_subject": "LU-19091 ptlrpc: protect internal access to obd->obd_svc_stats",
+     "summary": "kick_cpu_latency() reads obd->obd_svc_stats to choose the low-latency period without protection against concurrent teardown of the stats.",
+     "locations": [
+      "lustre/ptlrpc/niobuf.c:kick_cpu_latency"
+     ],
+     "match": [
+      [
+       "obd_svc_stats|svc_stats",
+       "lock|protect|race|concurrent|freed|NULL"
+      ]
+     ]
+    },
+    {
+     "id": "cpu-index-math",
+     "fix_sha": "7cfd807096ee222a59e8ad38b6bd76b1a696dd10",
+     "fix_subject": "LU-6142 ptlrpc: fix cpu index computation in cpu_latency_work()",
+     "summary": "cpu_latency_work() computes the CPU number as the pointer difference divided by sizeof(struct cpu_latency_qos), but subtracting two typed pointers already gives the element index, so the CPU number is wrong.",
+     "locations": [
+      "lustre/ptlrpc/connection.c:cpu_latency_work"
+     ],
+     "match": [
+      [
+       "sizeof",
+       "pointer|index|cpu"
+      ]
+     ]
+    }
+   ],
+   "notes": "A fourth later fix (69bf4ec09b) moves a completion-time boundary by one jiffy; not counted.",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "lnd-module-loading",
+   "change": 57946,
+   "patchset": 3,
+   "sha": "6e76d3569bf602d71745b8151417cff7ddfd7df4",
+   "subject": "LU-12511 lnet: rework lnd module loading",
+   "change_id": "Ie97b00b6b5c21d6e20acf72f796707630369251e",
+   "merged": "2025-02-11",
+   "lines": 11,
+   "subsystem": "lnet",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "err-ptr-positive",
+     "fix_sha": "969a680544e630183c5cbbb5b38effe505459bc0",
+     "fix_subject": "LU-18893 lnet: Use negative errno for ERR_PTR",
+     "summary": "lnet_load_lnd() passes request_module()'s return value to ERR_PTR(), but request_module() can return a positive modprobe status, which ERR_PTR() turns into a bogus non-error pointer.",
+     "locations": [
+      "lnet/lnet/api-ni.c:lnet_load_lnd"
+     ],
+     "match": [
+      [
+       "ERR_PTR|request_module",
+       "positive|negative|errno"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "grant-rpc-failure",
+   "change": 56547,
+   "patchset": 5,
+   "sha": "df2b5d99adfc6117a327f8e9102ba30076253213",
+   "subject": "LU-17933 target: do not break grants on RPC failure",
+   "change_id": "Ic835eb0b7f1894207637ec541b1d39c59bde286d",
+   "merged": "2025-05-02",
+   "lines": 70,
+   "subsystem": "target (grants)",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "o-grant-not-reset",
+     "fix_sha": "a91c46a7da131208c17843b07f635ecf25baf097",
+     "fix_subject": "LU-19016 target: reset o_grant if no grant is returned",
+     "summary": "tgt_grant_dealloc() leaves oa->o_grant set when the server decides not to return grants, so a stale grant value goes back to the client.",
+     "locations": [
+      "lustre/target/tgt_grant.c:tgt_grant_dealloc"
+     ],
+     "match": [
+      [
+       "o_grant|tgt_grant_dealloc",
+       "reset|zero|stale|not cleared|left"
+      ]
+     ]
+    }
+   ],
+   "notes": "",
+   "sets": [
+    "eval"
+   ]
   }
  ]
 }
