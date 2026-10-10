@@ -286,15 +286,17 @@ found from `Fixes:` trailers, from `git blame` of bug-fix commits (SZZ)
 and from same-ticket follow-ups, the last two vetted by Claude reading
 both commits -- with a summary of each bug, regex patterns that a
 finding describing it would match, and the rate at which the default
-setup found it; a few controls have no known bug and calibrate cost and
-noise. The sets:
+setup found it. The two cases first chosen as clean controls (no later
+fix named them) were not: a high-effort check of every finding raised
+on them confirmed real issues, which are now their known bugs. The
+benchmark measures recall of known bugs; a finding that matches none
+is not thereby a false positive. The sets:
 
 - `quick` (the default): 8 cheap cases, about $4 a pass, mixing bugs that
   separate configurations with easy ones as regression guards. For cost
   checks and quick verification.
 - `eval`: every case whose bugs the default setup finds at least some
-  of the time, plus the controls (32 cases). For real comparisons;
-  expensive.
+  of the time (32 cases). For real comparisons; expensive.
 - `hard`: cases whose bugs the default setup never found (11). Where a
   better model or setting would show.
 - `all`: everything. Use it before

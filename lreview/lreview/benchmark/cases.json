@@ -1,6 +1,6 @@
 {
  "version": 1,
- "description": "lreview benchmark: merged Lustre changes with bugs a later commit fixed, found from Fixes: trailers, git blame of bug-fix commits (SZZ) and same-ticket follow-ups (the last two vetted by Claude reading both commits), plus controls with no known bug. Each bug has a summary for the LLM judge, regex match sets (a finding matches a set when it matches every pattern in it), and its measured hit rate. Sets: 'quick' (a few cheap cases for cost checks and quick verification), 'eval' (cases whose bugs the default setup finds at least sometimes, plus controls), 'hard' (cases whose bugs it never found), 'all'.",
+ "description": "lreview benchmark: merged Lustre changes with bugs a later commit fixed, found from Fixes: trailers, git blame of bug-fix commits (SZZ) and same-ticket follow-ups (the last two vetted by Claude reading both commits). Each bug has a summary for the LLM judge, regex match sets (a finding matches a set when it matches every pattern in it), and its measured hit rate. Sets: 'quick' (a few cheap cases for cost checks and quick verification), 'eval' (cases whose bugs the default setup finds at least sometimes), 'hard' (cases whose bugs it never found), 'all'.",
  "cases": [
   {
    "id": "swap-layouts-interop",
@@ -582,9 +582,66 @@
    "merged": "2026-04-10",
    "lines": 17,
    "subsystem": "osc",
-   "kind": "control",
-   "bugs": [],
-   "notes": "No known later fix.",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "oe-memalloc-never-set-dead-check",
+     "fix_sha": null,
+     "fix_subject": null,
+     "summary": "The patch adds `|| ext->oe_memalloc` checks to osc_extent_find(), but on master nothing sets oe_memalloc: its only setter lived in osc_flush_async_page(), removed with ll_writepage() by LU-18675 (6e83069d98), an ancestor of this commit. Both checks are therefore always false, the 'fix' is dead code on the branch it landed on, and it adds new users of a dead field (oe_memalloc/mem_tight could be removed instead). Harmless at runtime; still unchanged on origin/master.",
+     "locations": [],
+     "match": [
+      [
+       "oe_memalloc",
+       "(never|no longer|nothing|not).{0,40}(set|assign|writ)"
+      ],
+      [
+       "oe_memalloc",
+       "(dead code|always false|always 0|always zero|unreachable|never (be )?true|inert|no effect|does nothing|changes nothing)"
+      ],
+      [
+       "(LU-18675|6e83069d98|writepage)",
+       "(dead|always false|unreachable|no effect|does nothing)"
+      ]
+     ],
+     "source": "verified-finding",
+     "severity": "low",
+     "note": "No later fix; confirmed by a high-effort verifier reading the code and later history.",
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
+    },
+    {
+     "id": "comment-cites-removed-osc-flush-async-page",
+     "fix_sha": null,
+     "fix_subject": null,
+     "summary": "The comments added in osc_extent_find() describe a kswapd -> osc_flush_async_page() -> cl_page_prep() path that was deleted by LU-18675 before this patch landed, so they document behaviour master cannot have and will mislead readers. Part of the same no-op-on-master problem.",
+     "locations": [],
+     "match": [
+      [
+       "comment",
+       "osc_flush_async_page"
+      ],
+      [
+       "osc_flush_async_page",
+       "(no longer exist|doesn't exist|does not exist|removed|deleted|gone)"
+      ]
+     ],
+     "source": "verified-finding",
+     "severity": "low",
+     "note": "No later fix; confirmed by a high-effort verifier reading the code and later history.",
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
+    }
+   ],
+   "notes": "Chosen as a clean control (no later fix names it); a high-effort review of every finding the benchmark runs raised on it showed real issues: Not a clean control, though it carries no runtime regression. The headline finding, raised by 14 of 27 findings (plus 8 commit-message findings), is correct: at 7dc7cffb11 nothing sets oe_memalloc, because its only setter in osc_flush_async_page() was removed with ll_writepage() by LU-18675 (6e83069d98), an ancestor of this commit. Both new checks are always false, the patch is a no-op on master, ",
    "sets": [
     "eval",
     "quick"
@@ -600,9 +657,54 @@
    "merged": "2026-02-10",
    "lines": 177,
    "subsystem": "lnet (+tests)",
-   "kind": "control",
-   "bugs": [],
-   "notes": "Only a later test fix; code and tests mixed.",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "test237-238-no-interop-version-gate",
+     "fix_sha": null,
+     "fix_subject": null,
+     "summary": "The new sanity-lnet tests 237/238 need the router node to run this patch's code (the fix and the new fail_loc 0xe004), but they have no version check. In interop runs where the router is a b2_15/b2_16 server, test_237 fails every time ('Expected N-N >= 50'), and test_238 fails too, because old routers MR-forward for non-MR sources. This is confirmed by dozens of enforced interop failures in Maloo; master is still unfixed, and the later test fix cbdbb1fb1c only fixed test_238's True/true case comparison.",
+     "locations": [],
+     "match": [
+      [
+       "version.?gate|version_code|interop|older (build|server)|MDS1_VERSION",
+       "test_23[78]|0xe004|CFS_FAIL_RTR_HEALTH_INC|router"
+      ]
+     ],
+     "source": "verified-finding",
+     "severity": "medium",
+     "note": "No later fix; confirmed by a high-effort verifier reading the code and later history.",
+     "calibration": {
+      "found": 1,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "medium"
+    },
+    {
+     "id": "test238-setup-rc-unchecked",
+     "fix_sha": null,
+     "fix_subject": null,
+     "summary": "test_238 ignores setup_router_test's return code, unlike test_237, so an LNet setup failure on a node goes undetected and the test fails later with a confusing error. Minor test-script robustness issue, not fixed on master.",
+     "locations": [],
+     "match": [
+      [
+       "setup_router_test",
+       "return \\$\\?|not checked|half-configured|drops"
+      ]
+     ],
+     "source": "verified-finding",
+     "severity": "low",
+     "note": "No later fix; confirmed by a high-effort verifier reading the code and later history.",
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "hard"
+    }
+   ],
+   "notes": "Chosen as a clean control (no later fix names it); a high-effort review of every finding the benchmark runs raised on it showed real issues: The kernel code is clean. lnet_mr_forwarding_allowed() (lib-move.c:3008-3032) checks the source peer's MR status, fixing the src/dst mix-up, and restores the health criterion exactly as it was at the default sensitivity. The src_lpni reference is dropped correctly, the lock behaviour is the same as the old inline code (lnet_peerni_by_nid_locked may drop the net lock when creating the peer, but tha",
    "sets": [
     "eval"
    ]
