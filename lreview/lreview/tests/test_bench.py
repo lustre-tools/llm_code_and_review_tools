@@ -206,3 +206,12 @@ def test_select_by_set():
     assert [c["id"] for c in bench.select(cases, "y", "quick")] == ["y"]
     with pytest.raises(ValueError, match="no cases in set"):
         bench.select(cases, None, "nope")
+
+
+def test_offline_env_shadows_network_commands(tmp_path):
+    env = bench.offline_env(tmp_path)
+    shims = tmp_path / "offline-bin"
+    assert env["PATH"].startswith(str(shims) + os.pathsep)
+    result = subprocess.run(["curl", "https://example.invalid"], env=env,
+                            capture_output=True, text=True)
+    assert result.returncode == 7 and "disabled" in result.stderr

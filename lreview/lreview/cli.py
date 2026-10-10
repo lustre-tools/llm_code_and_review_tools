@@ -782,6 +782,7 @@ def cmd_bench(args) -> int:
             model=model, effort=args.effort,
             memory_db=(label_dir / "db") if args.memory else None,
             resume=args.resume, lean=args.lean, preload=args.preload,
+            env=bench.offline_env(bench_dir) if args.offline else {},
             agent_args=args.agent_arg or [])
     try:
         bench.run_bench(config_for, cases, label_dir, args.reps, repos,
@@ -1199,6 +1200,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--resume", action="store_true",
         help="With --memory (claude): also resume the previous round's "
              "conversation (off by default here)")
+    bench_run.add_argument(
+        "--offline", action=argparse.BooleanOptionalAction, default=True,
+        help="Keep the reviewer off Gerrit and JIRA (default: on): a merged "
+             "change's related changes and ticket can show the later fix")
     bench_run.add_argument("--agent-arg", action="append", dest="agent_arg",
                            metavar="ARG")
     bench_run.add_argument("--prompts-dir", default=default_prompts,

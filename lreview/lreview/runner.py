@@ -294,6 +294,8 @@ class BatchConfig:
     # claude, full mode: put the protocol and the files it always loads
     # in the system prompt and the commit in the first message
     preload: bool = False
+    # Added to the agent's environment (e.g. lreview bench's offline PATH)
+    env: dict = field(default_factory=dict)
     agent_args: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -772,7 +774,7 @@ def run_review(
     if log_path is None:
         log_path = run_log_path(config, change)
     cmd = build_agent_cmd(config, change, session, worktree_dir)
-    extra_env = get_agent(config.agent).env(config.lean)
+    extra_env = {**get_agent(config.agent).env(config.lean), **config.env}
     stdin_path = None
     if _prompt_on_stdin(config, change):
         stdin_path = log_path.with_suffix(".prompt.md")

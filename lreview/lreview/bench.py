@@ -117,6 +117,31 @@ def prepare_repos(bench_dir: Path, cases: list,
     return repos
 
 
+# What a review would use to read Gerrit or JIRA.  A merged change's
+# Gerrit page lists the later fixes among its related changes, and its
+# ticket can carry them too, so bench reviews run without them.
+OFFLINE_COMMANDS = ("curl", "wget", "gerrit", "gerrit-cli", "gc", "jira",
+                    "http", "https")
+OFFLINE_SHIM = """#!/bin/sh
+echo "$(basename "$0"): network access is disabled for this review" >&2
+exit 7
+"""
+
+
+def offline_env(bench_dir: Path) -> dict:
+    """PATH with commands that fail as if the network were down ahead of
+    the real ones, for the agent's tools; the agent's own connection to
+    its model is untouched."""
+    shims = bench_dir / "offline-bin"
+    shims.mkdir(parents=True, exist_ok=True)
+    for name in OFFLINE_COMMANDS:
+        path = shims / name
+        if not path.exists() or path.read_text() != OFFLINE_SHIM:
+            path.write_text(OFFLINE_SHIM)
+            path.chmod(0o755)
+    return {"PATH": f"{shims}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+
 def bench_change(case: dict) -> LocalChange:
     return LocalChange(ref_name=f"bench-{case['id']}", sha=case["sha"],
                        subject=case["subject"],
@@ -142,6 +167,7 @@ def environment(config, cases_path: Path = CASES_PATH) -> dict:
         "lean": config.lean, "preload": config.preload,
         "memory": config.memory_db is not None,
         "resume": config.memory_db is not None and config.resume,
+        "offline": "offline-bin" in config.env.get("PATH", ""),
         "agent_args": config.agent_args,
         "prompts_rev": _git_out(config.prompts_dir, "rev-parse", "HEAD"),
         "cases_file": str(cases_path),

@@ -303,8 +303,11 @@ lreview bench report --judge DIR...                  # LLM-judged matching
   SHA from `--repo` or Gerrit into a ref-less shared store the case
   repositories borrow objects from. The review protocol tells the
   reviewer to look forward in git for fixes; in a full checkout it
-  reads the very commits that fixed the bugs. The Gerrit thread of a merged change is still
-  readable; the cases were chosen with bugs nobody raised after merge.
+  reads the very commits that fixed the bugs. Reviews also run offline
+  (`--offline`, the default): `curl`, `wget`, `gerrit` and `jira` fail as
+  if the network were down, because a merged change's Gerrit related
+  changes and its JIRA ticket can show the later fix. The agent's own
+  connection to its model is untouched.
 - An arm is a directory under `<bench-dir>` (default
   `lreview-results/bench/`), one `rep<N>` per repetition, with
   `bench-run.json` recording the lreview, agent and prompts versions
