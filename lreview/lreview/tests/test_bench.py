@@ -146,6 +146,7 @@ def test_run_bench_end_to_end(tmp_path, source, monkeypatch):
     stub.write_text(STUB)
     stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.chdir(tmp_path)
     bench_dir = tmp_path / "bench"
     cases = [_case(sha)]
     repos = bench.prepare_repos(bench_dir, cases, src)

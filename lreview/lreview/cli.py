@@ -743,7 +743,9 @@ def cmd_bench(args) -> int:
         return 0
 
     if args.bench_cmd == "report":
-        dirs = [Path(d).expanduser() for d in args.labels] or sorted(
+        # A label names an arm under the bench directory, or is a path
+        dirs = [Path(d).expanduser() if Path(d).expanduser().is_dir()
+                else bench_dir / d for d in args.labels] or sorted(
             (p for p in bench_dir.iterdir()
              if (p / bench.RUN_FILE).exists()), key=lambda p: p.name)
         scoreds = [bench.score(d, data["cases"], judge=args.judge)
@@ -1217,7 +1219,8 @@ def build_parser() -> argparse.ArgumentParser:
     bench_common(bench_report)
     bench_report.add_argument(
         "labels", nargs="*",
-        help="Arm directories (default: every arm in the bench dir)")
+        help="Arm labels or directories (default: every arm in the bench "
+        "dir)")
     bench_report.add_argument(
         "--judge", action="store_true",
         help="Ask an LLM whether each finding is the known bug, instead "
