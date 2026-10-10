@@ -384,6 +384,8 @@ def review_prompt(config: BatchConfig,
     if focus is not None:
         from .since import focus_prompt
         prompt += ".\n\n" + focus_prompt(focus, change.sha)
+    if config.mode == "full" and not preloaded:
+        prompt += ".\n\n" + CLOSING_NOTE
     if preloaded and worktree is not None:
         prompt += commit_text(worktree)
     if preloaded and config.agent == "codex":
@@ -391,6 +393,18 @@ def review_prompt(config: BatchConfig,
         # so the provider's prefix cache shares it between them.
         prompt = preload_file(config).read_text() + "\n\n" + prompt
     return prompt
+
+
+# lreview reads the review from the two files and never the closing
+# message, which the protocol asks to be a summary: about a tenth of a
+# review's time and output went into writing it.
+CLOSING_NOTE = (
+    "Nothing reads your final message: lreview takes the review from "
+    "the files.  Write ./gerrit-review.json (when there are regressions) "
+    "and ./review-metadata.json in a single tool call, and check both "
+    "with `python3 -m json.tool` in that same call.  In place of the "
+    "protocol's OUTPUT FORMAT summary, end with the single line "
+    "`FINAL REGRESSIONS FOUND: <number>`.")
 
 
 # What the protocol loads for every review, in its order.  Preloading
@@ -429,6 +443,7 @@ def preload_file(config: BatchConfig) -> Path:
     for name in PRELOAD_FILES:
         text = (config.prompts_dir / name).read_text()
         parts.append(f"\n\n======== {name} ========\n\n{text}")
+    parts.append(f"\n\n======== lreview ========\n\n{CLOSING_NOTE}\n")
     content = "".join(parts)
     import hashlib
     digest = hashlib.sha256(content.encode()).hexdigest()[:12]

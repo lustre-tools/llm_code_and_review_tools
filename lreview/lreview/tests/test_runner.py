@@ -16,6 +16,7 @@ import pytest
 
 from lreview.gerrit import ResolvedChange, change_ref
 from lreview.runner import (
+    CLOSING_NOTE,
     BatchConfig,
     STATUS_CLEAN,
     STATUS_FAILED,
@@ -162,7 +163,7 @@ class TestBuildAgentCmd:
         assert cmd[:2] == ["claude", "-p"]
         assert cmd[2] == ("Using the prompt /p/kernel/review-core.md "
                           "run a deep dive regression analysis of the "
-                          "top commit")
+                          "top commit.\n\n" + CLOSING_NOTE)
         assert cmd[3:] == ["--dangerously-skip-permissions",
                            "--verbose", "--output-format", "stream-json"]
 
@@ -1246,8 +1247,9 @@ class TestPreload:
         assert path == second[second.index("--append-system-prompt-file") + 1]
         text = Path(path).read_text()
         assert text.index("contents of review-core.md") < text.index(
-            "contents of subsystem/subsystem.md")
+            "contents of subsystem/subsystem.md") < text.index(CLOSING_NOTE)
         assert str(config.prompts_dir) in text
+        assert CLOSING_NOTE not in first[2]
 
     def test_light_mode_is_not_preloaded(self, tmp_path):
         config = _config(tmp_path, tmp_path,

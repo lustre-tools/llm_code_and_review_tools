@@ -9,8 +9,8 @@ import pytest
 
 from lreview.cli import build_parser, cmd_run
 from lreview.gerrit import LocalChange
-from lreview.runner import (BatchConfig, ReviewResult, STATUS_CLEAN,
-                            review_prompt, update_summary)
+from lreview.runner import (CLOSING_NOTE, BatchConfig, ReviewResult,
+                            STATUS_CLEAN, review_prompt, update_summary)
 from lreview.since import SinceFocus, focus_prompt, resolve_since
 from lreview.worktree import add_worktree, remove_worktree, rev_parse
 
@@ -159,7 +159,9 @@ class TestFocusPrompt:
         assert "Focus:" not in plain
         change.since = SinceFocus(OLD, OLD, same_base=True)
         focused = review_prompt(config, change)
-        assert focused.startswith(plain + ".\n\nFocus: ")
+        bare = plain.removesuffix(".\n\n" + CLOSING_NOTE)
+        assert focused.startswith(bare + ".\n\nFocus: ")
+        assert focused.endswith(CLOSING_NOTE)
         assert "review-core.md" in focused
 
     def test_light_and_memory_compose(self, tmp_path):
