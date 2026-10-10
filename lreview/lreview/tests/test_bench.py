@@ -56,16 +56,22 @@ def test_regex_found():
     assert bench.regex_found(bug, ["swabber alone"]) is None
 
 
-def test_repo_holds_only_the_case_history(tmp_path, source):
+def test_repos_hold_only_the_case_history(tmp_path, source):
     src, sha = source
-    repo = bench.prepare_repo(tmp_path / "bench", [_case(sha)], src)
-    assert _git(repo, "rev-parse", f"{sha}^{{commit}}") == sha
-    # The later fix is not in the bench repository
     later = _git(src, "rev-parse", "HEAD")
-    assert subprocess.run(["git", "-C", str(repo), "cat-file", "-e", later],
-                          capture_output=True).returncode != 0
+    cases = [_case(sha), dict(_case(later), id="c2")]
+    repos = bench.prepare_repos(tmp_path / "bench", cases, src)
+    assert _git(repos["c1"], "rev-parse", f"{sha}^{{commit}}") == sha
+    # Each case repository reaches nothing from git log --all, not even
+    # the other case's newer commit, though its objects are shared.
+    for repo in repos.values():
+        assert _git(repo, "log", "--all", "--oneline") == ""
+    _git(repos["c1"], "worktree", "add", "-q", "--detach",
+         str(tmp_path / "wt"), sha)
+    assert later not in _git(repos["c1"], "log", "--all", "--format=%H")
+    assert not (tmp_path / "bench" / "store.git" / "FETCH_HEAD").exists()
     # A second prepare is a no-op
-    assert bench.prepare_repo(tmp_path / "bench", [_case(sha)], src) == repo
+    assert bench.prepare_repos(tmp_path / "bench", cases, src) == repos
 
 
 def _rep(label_dir, rep, case_id, findings, cost=0.5):
@@ -142,16 +148,16 @@ def test_run_bench_end_to_end(tmp_path, source, monkeypatch):
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     bench_dir = tmp_path / "bench"
     cases = [_case(sha)]
-    repo = bench.prepare_repo(bench_dir, cases, src)
+    repos = bench.prepare_repos(bench_dir, cases, src)
     label = bench_dir / "arm"
     prompts = tmp_path / "prompts"
     prompts.mkdir()
 
-    def config_for(results_dir):
+    def config_for(results_dir, repo):
         return BatchConfig(repo=repo, results_dir=results_dir,
                            worktrees_dir=bench_dir / "worktrees",
                            prompts_dir=prompts, memory_db=label / "db")
-    bench.run_bench(config_for, cases, label, 2, repo, log=lambda *a: None)
+    bench.run_bench(config_for, cases, label, 2, repos, log=lambda *a: None)
     meta = json.loads((label / bench.RUN_FILE).read_text())
     assert [r["rep"] for r in meta["reps"]] == [1, 2]
     assert meta["memory"] is True and meta["environment"]["memory"] is True

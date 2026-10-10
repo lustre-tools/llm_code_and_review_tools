@@ -290,10 +290,12 @@ lreview bench report                                 # every arm, side by side
 lreview bench report --judge DIR...                  # LLM-judged matching
 ```
 
-- Each case is reviewed in a repository that holds only its own
-  history (`<bench-dir>/repo`, built by fetching each case commit by
-  SHA from `--repo` or from Gerrit), so the reviewer cannot find the
-  later fix in git. The Gerrit thread of a merged change is still
+- Each case is reviewed in its own repository (`<bench-dir>/repos/<case>`)
+  that reaches only that case's history: the commits are fetched by
+  SHA from `--repo` or Gerrit into a ref-less shared store the case
+  repositories borrow objects from. The review protocol tells the
+  reviewer to look forward in git for fixes; in a full checkout it
+  reads the very commits that fixed the bugs. The Gerrit thread of a merged change is still
   readable; the cases were chosen with bugs nobody raised after merge.
 - An arm is a directory under `<bench-dir>` (default
   `lreview-results/bench/`), one `rep<N>` per repetition, with

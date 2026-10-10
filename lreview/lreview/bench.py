@@ -7,17 +7,14 @@ case with the options given, `--reps` times, and `bench report` says
 what each arm cost, how long it took, and which known bugs it found.
 
 A case is reviewed in a repository holding only its own history: the
-source checkout has the later fixes, and a reviewer that ran git log
---all could find them.  The repository is built once under the bench
-directory by fetching each case's commit by SHA, from --repo when it
-has it, else from Gerrit.
+source checkout has the later fixes, and the review protocol has the
+reviewer look forward in git for them.  See prepare_repos().
 """
 
 import hashlib
 import json
 import os
 import re
-import shutil
 import statistics
 import subprocess
 import time
@@ -65,44 +62,58 @@ def _has(repo: Path, sha: str) -> bool:
                 check=False).returncode == 0
 
 
-def prepare_repo(bench_dir: Path, cases: list,
-                 source: Optional[Path] = None) -> Path:
-    """The bench repository, holding every case's commit and its
-    history and nothing later.  Commits are fetched by SHA, from the
-    source checkout when it has them, else from the change's Gerrit
-    ref; no ref is created, so nothing past them is reachable."""
-    repo = bench_dir / "repo"
-    if not (repo / ".git").is_dir():
-        repo.mkdir(parents=True, exist_ok=True)
-        _git(repo, "init", "-q")
-        _git(repo, "config", "user.email", "lreview-bench@invalid")
-        _git(repo, "config", "user.name", "lreview bench")
+def prepare_repos(bench_dir: Path, cases: list,
+                  source: Optional[Path] = None) -> dict:
+    """One repository per case, holding that case's commit and its
+    history and nothing later; returns {case id: repository}.
+
+    The commits are fetched by SHA, from the source checkout when it
+    has them, else from the change's Gerrit ref, into a bare store
+    with no refs, which every case repository borrows objects from.
+    A case repository has no refs either: its review worktree's HEAD
+    is the only commit git log --all can reach, so no reviewer sees
+    another case's newer history (where an older case's fix can be).
+    """
+    store = bench_dir / "store.git"
+    if not (store / "objects").is_dir():
+        store.mkdir(parents=True, exist_ok=True)
+        _git(store, "init", "-q", "--bare")
         # Keep the fetched commits: they are reachable from no ref.
-        _git(repo, "config", "gc.auto", "0")
-        _git(repo, "config", "gc.pruneExpire", "never")
+        _git(store, "config", "gc.auto", "0")
+        _git(store, "config", "gc.pruneExpire", "never")
     for case in cases:
         sha = case["sha"]
-        if _has(repo, sha):
+        if _has(store, sha):
             continue
         if source is not None and _git(source, "cat-file", "-e",
                                        f"{sha}^{{commit}}",
                                        check=False).returncode == 0:
-            _git(repo, "fetch", "-q", "--no-tags", str(source), sha)
+            _git(store, "fetch", "-q", "--no-tags", str(source), sha)
         else:
-            _git(repo, "fetch", "-q", "--no-tags", GERRIT_URL,
+            _git(store, "fetch", "-q", "--no-tags", GERRIT_URL,
                  change_ref(case["change"], case["patchset"]))
-        if not _has(repo, sha):
+        if not _has(store, sha):
             raise RuntimeError(f"case {case['id']}: {sha} not fetched")
-    return repo
-
-
-def bench_changes(repo: Path, cases: list) -> list:
-    changes = []
+    (store / "FETCH_HEAD").unlink(missing_ok=True)
+    repos = {}
     for case in cases:
-        changes.append(LocalChange(
-            ref_name=f"bench-{case['id']}", sha=case["sha"],
-            subject=case["subject"], change_id=case.get("change_id")))
-    return changes
+        repo = bench_dir / "repos" / case["id"]
+        if not (repo / ".git").is_dir():
+            repo.mkdir(parents=True, exist_ok=True)
+            _git(repo, "init", "-q")
+            (repo / ".git" / "objects" / "info" / "alternates").write_text(
+                str((store / "objects").resolve()) + "\n")
+            _git(repo, "config", "gc.auto", "0")
+            _git(repo, "config", "user.email", "lreview-bench@invalid")
+            _git(repo, "config", "user.name", "lreview bench")
+        repos[case["id"]] = repo
+    return repos
+
+
+def bench_change(case: dict) -> LocalChange:
+    return LocalChange(ref_name=f"bench-{case['id']}", sha=case["sha"],
+                       subject=case["subject"],
+                       change_id=case.get("change_id"))
 
 
 def environment(config, cases_path: Path = CASES_PATH) -> dict:
@@ -134,14 +145,18 @@ def environment(config, cases_path: Path = CASES_PATH) -> dict:
 
 
 def run_bench(config_for, cases: list, label_dir: Path, reps: int,
-              repo: Path, log=print, cases_path: Path = CASES_PATH) -> None:
+              repos: dict, jobs: int = 4, log=print,
+              cases_path: Path = CASES_PATH) -> None:
     """Review every case `reps` times; rep k's results go to
-    label_dir/rep<k>.  config_for(results_dir) gives the BatchConfig.
+    label_dir/rep<k>.  config_for(results_dir, repo) gives the
+    BatchConfig for one case; each case runs as its own batch, in its
+    own repository, `jobs` at a time.
 
     With review memory, the reps are rounds: every rep's config names
     the same database, label_dir/db, so round k reads the notes round
     k-1 wrote."""
-    from .runner import run_batch
+    from concurrent.futures import ThreadPoolExecutor
+    from .runner import kill_running_reviews, run_batch
     label_dir.mkdir(parents=True, exist_ok=True)
     meta_path = label_dir / RUN_FILE
     meta = (json.loads(meta_path.read_text()) if meta_path.exists()
@@ -150,14 +165,25 @@ def run_bench(config_for, cases: list, label_dir: Path, reps: int,
     for _ in range(reps):
         rep = len(meta["reps"]) + 1
         results_dir = label_dir / f"rep{rep}"
-        config = config_for(results_dir)
+        config = config_for(results_dir, repos[cases[0]["id"]])
         meta.setdefault("environment", environment(config, cases_path))
+        meta["memory"] = config.memory_db is not None
         meta["cases"] = sorted(set(meta.get("cases", []))
                                | {c["id"] for c in cases})
         log(f"bench rep {rep}: {len(cases)} case(s) -> {results_dir}")
         started = time.time()
-        run_batch(config, bench_changes(repo, cases))
-        meta["memory"] = config.memory_db is not None
+        pool = ThreadPoolExecutor(max_workers=jobs)
+        try:
+            futures = [pool.submit(run_batch,
+                                   config_for(results_dir, repos[c["id"]]),
+                                   [bench_change(c)]) for c in cases]
+            for future in futures:
+                future.result()
+        except KeyboardInterrupt:
+            kill_running_reviews()
+            pool.shutdown(wait=True, cancel_futures=True)
+            raise
+        pool.shutdown(wait=True)
         meta["reps"].append({"rep": rep, "dir": results_dir.name,
                              "cases": [c["id"] for c in cases],
                              "wall_s": round(time.time() - started)})
@@ -413,5 +439,3 @@ def default_label(args) -> str:
     return f"{stamp}-{'-'.join(parts)}"
 
 
-def remove_repo(bench_dir: Path) -> None:
-    shutil.rmtree(bench_dir / "repo", ignore_errors=True)

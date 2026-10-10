@@ -764,25 +764,26 @@ def cmd_bench(args) -> int:
     label = args.label or bench.default_label(args)
     label_dir = bench_dir / label
     source = Path(args.repo).expanduser().resolve() if args.repo else None
-    print(f"bench: preparing the case repository in {bench_dir / 'repo'}")
+    print(f"bench: preparing the case repositories in {bench_dir}")
     try:
-        repo = bench.prepare_repo(bench_dir, cases, source)
+        repos = bench.prepare_repos(bench_dir, cases, source)
     except (subprocess.SubprocessError, RuntimeError) as exc:
         print(f"error: {exc}")
         return 1
 
-    def config_for(results_dir: Path) -> BatchConfig:
+    def config_for(results_dir: Path, repo: Path) -> BatchConfig:
         return BatchConfig(
             repo=repo, results_dir=results_dir,
             worktrees_dir=bench_dir / "worktrees",
-            prompts_dir=prompts_status.prompts_dir, jobs=args.jobs,
+            prompts_dir=prompts_status.prompts_dir, jobs=1,
             timeout=args.timeout, mode=args.mode, agent=args.agent,
             model=model, effort=args.effort,
             memory_db=(label_dir / "db") if args.memory else None,
             resume=args.resume, lean=args.lean, preload=args.preload,
             agent_args=args.agent_arg or [])
     try:
-        bench.run_bench(config_for, cases, label_dir, args.reps, repo,
+        bench.run_bench(config_for, cases, label_dir, args.reps, repos,
+                        jobs=args.jobs,
                         cases_path=Path(args.cases_file or bench.CASES_PATH))
     except KeyboardInterrupt:
         print("\ninterrupted -- finished reps are kept")
