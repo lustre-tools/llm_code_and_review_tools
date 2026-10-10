@@ -191,11 +191,12 @@ violates them cannot be pushed:
 
 - Subject `LU-nnnnn component: short description`, under 64 columns. Use
   `LU-0000` when no ticket has been given.
-- Body wrapped to 60 columns. ASCII only -- no em dashes, no curly
-  quotes; write `--`.
+- Body wrapped to 60 columns. ASCII only: no em dashes, no curly
+  quotes. Reviewers also object to `--` used as a dash, so use none:
+  a comma, a colon, parentheses or a new sentence instead.
 - The signoff section must be contiguous: no blank lines between
   trailers.
-- **Never `Co-Authored-By:`** -- the hook rejects it. Credit an agent with
+- **Never `Co-Authored-By:`**: the hook rejects it. Credit an agent with
   `Assisted-by: ClaudeCode:<model-id>` instead, with the id of the model
   actually running.
 - Accepted trailers: `Assisted-by`, `Build-Parameters`, `Change-Id`,
