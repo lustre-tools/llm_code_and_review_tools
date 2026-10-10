@@ -39,6 +39,7 @@ PRICES = {
 }
 
 CHARS_PER_TOKEN = 4
+CODEX_PLAN_PCT_PER_MTOK = 0.057
 
 # What a tool call was for.  Order matters: the first match wins.
 CATEGORIES = (
@@ -207,6 +208,9 @@ class Telemetry:
     side_models: dict = field(default_factory=dict)
     subagents: int = 0
     mcp_servers: list = field(default_factory=list)
+    # codex reports one usage total and no per-call detail
+    codex_usage: dict = field(default_factory=dict)
+    codex_messages: int = 0
     tool_count: int = 0
     complete: bool = False
 
@@ -282,6 +286,30 @@ class Telemetry:
             row["first"] = row.get("first", call.index) or call.index
         return {k: dict(v) for k, v in out.items()}
 
+    def _tokens(self) -> dict:
+        if self.codex_usage:
+            u = self.codex_usage
+            return {"new_input": u["input_tokens"] - u["cached_input_tokens"],
+                    "cache_write": 0,
+                    "cache_read": u["cached_input_tokens"],
+                    "output": u["output_tokens"],
+                    "thinking": u["reasoning_output_tokens"]}
+        return {"new_input": sum(c.new_input for c in self.calls),
+                "cache_write": sum(c.cache_write for c in self.calls),
+                "cache_read": sum(c.cache_read for c in self.calls),
+                "output": sum(c.output for c in self.calls),
+                "thinking": self.thinking_tokens}
+
+    def plan_estimate(self) -> Optional[float]:
+        """codex: an upper bound on the share of the weekly plan the
+        review used, from cached input (measured 2026-09-30 on
+        gpt-6.1-sol at 0.057% per million; nearly all of a run's
+        volume is cached input)."""
+        if not self.codex_usage:
+            return None
+        return round(self.codex_usage["cached_input_tokens"] / 1e6
+                     * CODEX_PLAN_PCT_PER_MTOK, 4)
+
     def summary(self) -> dict:
         split = self.split()
         main = self.main_calls()
@@ -298,23 +326,20 @@ class Telemetry:
             "api_s": (round(self.reported_api_seconds, 1)
                       if self.reported_api_seconds else None),
             "calls": len(self.calls),
-            "main_calls": len(main),
+            "main_calls": (len(main) if not self.codex_usage
+                           else len(self.tools) + 1),
             "subagents": self.subagents,
             "tool_calls": len(self.tools),
             "cost_usd": (round(self.reported_cost, 4)
                          if self.reported_cost is not None
+                         else None if self.codex_usage
                          else round(computed, 4)),
             "computed_cost_usd": round(computed, 4),
             "split_usd": {k: round(v, 4) for k, v in split.items()},
             "side_models_usd": {k: round(v, 4)
                                 for k, v in self.side_models.items()},
-            "tokens": {
-                "new_input": sum(c.new_input for c in self.calls),
-                "cache_write": sum(c.cache_write for c in self.calls),
-                "cache_read": sum(c.cache_read for c in self.calls),
-                "output": sum(c.output for c in self.calls),
-                "thinking": self.thinking_tokens,
-            },
+            "tokens": self._tokens(),
+            "plan_pct_est": self.plan_estimate(),
             "starting_context": self.starting_context,
             "peak_context": self.peak_context,
             "tool_output_tokens": carried,
@@ -377,11 +402,33 @@ def parse_log(path: Path) -> Telemetry:
             if kind == "thread.started":
                 tel.agent = "codex"
                 continue
+            if kind == "item.completed":
+                item = event.get("item") or {}
+                if item.get("type") == "command_execution":
+                    command = item.get("command") or ""
+                    what = "Bash: " + " ".join(command.split())[:160]
+                    tools[item.get("id") or f"cx{len(tools)}"] = ToolUse(
+                        id=item.get("id") or "", name="Bash", what=what,
+                        category=categorize("Bash", command), call=len(tools),
+                        agent="main",
+                        chars=len(item.get("aggregated_output") or ""),
+                        tokens=len(item.get("aggregated_output") or "")
+                        // CHARS_PER_TOKEN,
+                        error=item.get("exit_code") not in (0, None))
+                elif item.get("type") == "agent_message":
+                    tel.codex_messages += 1
+                continue
             if kind == "turn.completed":
                 tel.agent = "codex"
                 usage = event.get("usage") or {}
+                # codex counts cached input inside input_tokens
+                tel.codex_usage = {k: usage.get(k, 0) or 0 for k in (
+                    "input_tokens", "cached_input_tokens", "output_tokens",
+                    "reasoning_output_tokens")}
                 tel.reported_tokens = (usage.get("input_tokens", 0)
                                        + usage.get("output_tokens", 0))
+                tel.reported_output = usage.get("output_tokens")
+                tel.thinking_tokens = usage.get("reasoning_output_tokens")
                 tel.complete = True
                 continue
 

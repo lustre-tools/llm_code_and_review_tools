@@ -384,6 +384,10 @@ def review_prompt(config: BatchConfig,
         prompt += ".\n\n" + focus_prompt(focus, change.sha)
     if preloaded and worktree is not None:
         prompt += commit_text(worktree)
+    if preloaded and config.agent == "codex":
+        # The protocol first: the same text leads every review's prompt,
+        # so the provider's prefix cache shares it between them.
+        prompt = preload_file(config).read_text() + "\n\n" + prompt
     return prompt
 
 
@@ -399,8 +403,14 @@ PRELOAD_COMMIT_LIMIT = 96 * 1024
 
 def _preloading(config: BatchConfig, change) -> bool:
     return (config.preload and config.mode == "full"
-            and config.agent == "claude"
+            and config.agent in ("claude", "codex")
             and getattr(change, "provider", None) != "github")
+
+
+def _prompt_on_stdin(config: BatchConfig, change) -> bool:
+    """codex has no system-prompt file: its preloaded protocol leads the
+    first message, which goes in on stdin."""
+    return config.agent == "codex" and _preloading(config, change)
 
 
 def preload_file(config: BatchConfig) -> Path:
@@ -482,7 +492,9 @@ def build_agent_cmd(config: BatchConfig,
         resume=session.session_id if session is not None else None,
         settings=settings, lean=config.lean,
         system_file=(str(preload_file(config))
-                     if _preloading(config, change) else None))
+                     if _preloading(config, change)
+                     and config.agent == "claude" else None),
+        prompt_on_stdin=_prompt_on_stdin(config, change))
 
 
 def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:
@@ -645,7 +657,8 @@ class ProgressTracker:
 
 
 def _run_agent(cmd: list[str], cwd: Path, log_path: Path,
-               timeout: int, extra_env: Optional[dict] = None) -> int:
+               timeout: int, extra_env: Optional[dict] = None,
+               stdin_path: Optional[Path] = None) -> int:
     """Run the agent in its own process group; kill the whole group on
     timeout so MCP servers / hook children don't outlive the review.
 
@@ -660,15 +673,18 @@ def _run_agent(cmd: list[str], cwd: Path, log_path: Path,
         if os.environ.get("CI"):
             env.setdefault("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
         env.update(extra_env or {})
+        stdin = open(stdin_path, "rb") if stdin_path else subprocess.DEVNULL
         proc = subprocess.Popen(
             cmd,
             cwd=str(cwd),
-            stdin=subprocess.DEVNULL,
+            stdin=stdin,
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
             env=env,
         )
+        if stdin_path:
+            stdin.close()
         with _RUNNING_PGIDS_LOCK:
             _RUNNING_PGIDS.add(proc.pid)
         try:
@@ -757,13 +773,18 @@ def run_review(
         log_path = run_log_path(config, change)
     cmd = build_agent_cmd(config, change, session, worktree_dir)
     extra_env = get_agent(config.agent).env(config.lean)
+    stdin_path = None
+    if _prompt_on_stdin(config, change):
+        stdin_path = log_path.with_suffix(".prompt.md")
+        stdin_path.write_text(
+            review_prompt(config, change, session, worktree_dir))
     start = time.monotonic()
 
     _log(f"[{change.slug}] {console.color('cyan', 'review started')}: "
          f"{change.subject[:60]}")
     try:
         returncode = _run_agent(cmd, worktree_dir, log_path,
-                                config.timeout, extra_env)
+                                config.timeout, extra_env, stdin_path)
         if (session is not None and returncode != 0
                 and _NO_SESSION_TEXT in _read_tail(log_path, 4096)):
             _log(f"[{change.slug}] note: Claude could not resume session "
@@ -1038,6 +1059,7 @@ def record_telemetry(config: BatchConfig, result: ReviewResult):
         "prompts_rev": _git_out(config.prompts_dir, "rev-parse",
                                 "--short=12", "HEAD"),
         "status": result.status, "findings": result.findings,
+        "duration_s": round(result.duration, 1),
     }
     try:
         summary = write_telemetry(

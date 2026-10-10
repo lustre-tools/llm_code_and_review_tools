@@ -45,6 +45,7 @@ class TestBuildCmd:
         assert cmd == [
             "codex", "exec", "--json",
             "--dangerously-bypass-approvals-and-sandbox",
+            "--disable", "fast_mode",
             PROMPT,
         ]
 
@@ -53,11 +54,13 @@ class TestBuildCmd:
         assert cmd == [
             "codex", "exec", "--json",
             "--dangerously-bypass-approvals-and-sandbox",
+            "--disable", "fast_mode",
             "-c", 'model_reasoning_effort="high"',
             PROMPT,
         ]
         cmd = get_agent("codex").build_cmd("gpt-5.6-sol", None, [], PROMPT)
-        assert cmd[3:6] == ["--dangerously-bypass-approvals-and-sandbox",
+        assert cmd[3:8] == ["--dangerously-bypass-approvals-and-sandbox",
+                            "--disable", "fast_mode",
                             "-m", "gpt-5.6-sol"]
         # --agent-arg after effort so a later -c can override
         cmd = get_agent("codex").build_cmd(
@@ -66,6 +69,7 @@ class TestBuildCmd:
         assert cmd == [
             "codex", "exec", "--json",
             "--dangerously-bypass-approvals-and-sandbox",
+            "--disable", "fast_mode",
             "-m", "gpt-6-astra",
             "-c", 'model_reasoning_effort="ultra"',
             "-c", 'model_reasoning_effort="low"',
@@ -153,3 +157,18 @@ class TestLean:
         cmd = get_agent("claude").build_cmd(
             None, None, [], PROMPT, system_file="/r/.preload-x.md")
         assert cmd[-2:] == ["--append-system-prompt-file", "/r/.preload-x.md"]
+
+
+class TestCodexLean:
+
+    def test_lean_disables_unused_features(self):
+        from lreview.agents import LEAN_CODEX_ARGS
+        cmd = get_agent("codex").build_cmd(None, None, [], PROMPT, lean=True)
+        assert cmd[-1] == PROMPT
+        assert cmd[-1 - len(LEAN_CODEX_ARGS):-1] == LEAN_CODEX_ARGS
+        assert "plugins" in LEAN_CODEX_ARGS
+
+    def test_prompt_on_stdin(self):
+        cmd = get_agent("codex").build_cmd(None, None, [], PROMPT,
+                                           prompt_on_stdin=True)
+        assert cmd[-1] == "-" and PROMPT not in cmd

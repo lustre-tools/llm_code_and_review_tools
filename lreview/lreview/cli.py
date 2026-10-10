@@ -1109,18 +1109,18 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--lean", action=argparse.BooleanOptionalAction,
         default=_env_flag("LREVIEW_LEAN"),
-        help="claude: start the reviewer with only the tools a review "
-             "uses -- no MCP servers, skills or CLAUDE.md files -- and a "
-             "5-minute prompt cache (default: on; $LREVIEW_LEAN=0 turns "
-             "it off)")
+        help="Start the reviewer with only what a review uses -- claude: "
+             "six tools, no MCP servers, skills or CLAUDE.md, a 5-minute "
+             "prompt cache; codex: unused features off (default: on; "
+             "$LREVIEW_LEAN=0 turns it off)")
     run_p.add_argument(
         "--preload", action=argparse.BooleanOptionalAction,
         default=_env_flag("LREVIEW_PRELOAD"),
-        help="claude, full mode: give the reviewer the protocol and the "
-             "files it always loads in its system prompt, and the commit "
-             "in its first message, instead of having it read them one "
-             "call at a time (default: on; $LREVIEW_PRELOAD=0 turns it "
-             "off)")
+        help="Full mode: give the reviewer the protocol and the files it "
+             "always loads up front (claude: system prompt; codex: start "
+             "of the prompt) and the commit in its first message, instead "
+             "of having it read them one call at a time (default: on; "
+             "$LREVIEW_PRELOAD=0 turns it off)")
     run_p.add_argument(
         "--agent-arg", "--claude-arg", action="append", dest="agent_arg",
         metavar="ARG",

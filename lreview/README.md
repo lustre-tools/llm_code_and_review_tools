@@ -250,6 +250,14 @@ writes (most of it thinking). Two defaults keep both down:
   longer spends its first calls reading them one at a time, and no
   longer skips any.
 
+For codex, `--lean` turns off the features whose tools a review never
+uses (apps, browser and computer use, image generation, plugins,
+multi-agent, goals, skill search), about 3K of its 17K starting
+tokens; `--preload` puts the protocol first in the prompt, then the
+instruction and the commit, all on stdin, so the provider's prefix
+cache shares the protocol between reviews. Codex reviews never use
+fast mode (`--disable fast_mode`), whatever `config.toml` says.
+
 Measured on four merged Gerrit changes, twice each (2026-10-09, Opus
 5.5): $1.82 and 3.7 minutes a review with both off, $0.74 and 2.4
 minutes with both on, with the same known bugs found.
@@ -676,8 +684,8 @@ opencode's `--model` wants the `provider/model` form.
 | `--clear-memory, -c` | off | With `-m`: delete the change's memory document first |
 | `--no-resume` | off | With `-m` (claude): start a fresh session from the memory document instead of resuming the recorded review conversation |
 | `--db DIR` | `$LREVIEW_DB`, else `<repo>/lreview-db` | Memory database directory |
-| `--lean` / `--no-lean` | on (`$LREVIEW_LEAN=0` for off) | claude: minimal tools, no MCP/skills/CLAUDE.md, 5-minute prompt cache (see "Cost, speed and telemetry") |
-| `--preload` / `--no-preload` | on (`$LREVIEW_PRELOAD=0` for off) | claude, full mode: protocol and its always-loaded files in the system prompt, the commit in the first message |
+| `--lean` / `--no-lean` | on (`$LREVIEW_LEAN=0` for off) | claude: minimal tools, no MCP/skills/CLAUDE.md, 5-minute prompt cache; codex: unused features off (see "Cost, speed and telemetry") |
+| `--preload` / `--no-preload` | on (`$LREVIEW_PRELOAD=0` for off) | full mode: the protocol and its always-loaded files up front (claude: system prompt; codex: start of the prompt), the commit in the first message |
 | `--agent-arg=ARG` | — | Extra agent-CLI arg (repeatable; `--claude-arg` is a legacy alias) |
 | `--post` | off | Post findings when batch finishes |
 | `--prefix TEXT` | `[AI review - <model>]` | Message prefix; `<model>` placeholder substituted (`$LREVIEW_PREFIX` overrides the default; `''` for none) |

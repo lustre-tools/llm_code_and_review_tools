@@ -180,9 +180,10 @@ class TestBuildAgentCmd:
         config = _config(tmp_path, tmp_path, agent="codex",
                          model="gpt-5.6-sol", effort="medium")
         cmd = build_agent_cmd(config)
-        assert cmd[:4] == ["codex", "exec", "--json",
-                           "--dangerously-bypass-approvals-and-sandbox"]
-        assert cmd[4:8] == ["-m", "gpt-5.6-sol",
+        assert cmd[:6] == ["codex", "exec", "--json",
+                           "--dangerously-bypass-approvals-and-sandbox",
+                           "--disable", "fast_mode"]
+        assert cmd[6:10] == ["-m", "gpt-5.6-sol",
                             "-c", 'model_reasoning_effort="medium"']
 
     def test_impossible_effort_rejected_before_any_review(self, tmp_path):
@@ -1273,3 +1274,28 @@ def test_run_batch_records_telemetry(repo, tmp_path, stub_claude):
     summary = json.loads((config.results_dir / "summary.json").read_text())
     assert summary["130"]["telemetry"] == result.telemetry
     assert "split_usd" in result.telemetry
+
+
+def test_codex_preload_goes_on_stdin(repo, tmp_path, monkeypatch):
+    from lreview.runner import PRELOAD_FILES, run_review
+    prompts = tmp_path / "prompts"
+    for name in PRELOAD_FILES:
+        (prompts / name).parent.mkdir(parents=True, exist_ok=True)
+        (prompts / name).write_text(f"contents of {name}\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "codex"
+    # Echo stdin back into the log so the test can see what codex got
+    stub.write_text("#!/bin/sh\ncat\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    sha = _commit_with_marker(repo, "NEW", "hello\n")
+    _git(repo, "checkout", "-q", sha)
+    config = _config(repo, tmp_path, prompts_dir=prompts, preload=True,
+                     agent="codex", lean=True)
+    config.results_dir.mkdir(parents=True)
+    result = run_review(config, _change(1, sha), repo)
+    seen = result.log_path.read_text()
+    assert seen.startswith("# Lustre review protocol")
+    assert seen.index("contents of review-core.md") < seen.index("+hello")
+    assert result.log_path.with_suffix(".prompt.md").is_file()

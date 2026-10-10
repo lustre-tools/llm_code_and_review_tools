@@ -319,10 +319,20 @@ def score(label_dir: Path, cases: list, judge: bool = False) -> dict:
             if log is not None:
                 row["leaked"] = leaked(log, case)
                 summary = parse_log(log).summary()
-                row.update(cost=summary["cost_usd"], wall=summary["wall_s"],
+                wall = summary["wall_s"]
+                saved = log.with_suffix(".telemetry.json")
+                if not wall and saved.exists():
+                    # codex logs carry no timestamps; lreview timed it
+                    wall = (json.loads(saved.read_text()).get("run") or {}
+                            ).get("duration_s") or 0
+                tokens = summary["tokens"]
+                row.update(cost=summary["cost_usd"], wall=wall,
                            calls=summary["main_calls"],
                            peak=summary["peak_context"],
-                           output=summary["tokens"]["output"])
+                           output=tokens["output"],
+                           tokens=sum(v or 0 for k, v in tokens.items()
+                                      if k != "thinking"),
+                           plan_pct=summary.get("plan_pct_est"))
             for bug in case.get("bugs") or []:
                 hit = regex_found(bug, findings or [])
                 verdict = {"regex": hit is not None}
@@ -349,7 +359,7 @@ def summarize(scored: dict, judge: bool = False) -> dict:
     rows = [r for rep in scored["reps"] for r in rep["rows"]]
     # Means over finished reviews: a running or failed one has spent
     # only part of what a review costs.
-    done = [r for r in rows if r.get("cost") is not None and r["complete"]]
+    done = [r for r in rows if "wall" in r and r["complete"]]
     bugs = [(r["case"], b, v) for r in rows if r["complete"]
             for b, v in r["bugs"].items()]
     union = defaultdict(bool)
@@ -357,7 +367,8 @@ def summarize(scored: dict, judge: bool = False) -> dict:
         union[(case, bug)] |= _found(verdict, judge)
 
     def mean(key):
-        return round(statistics.mean(r[key] for r in done), 3) if done else None
+        vals = [r[key] for r in done if r.get(key) is not None]
+        return round(statistics.mean(vals), 3) if vals else None
     return {
         "label": scored["label"],
         "reviews": len(rows),
@@ -365,6 +376,10 @@ def summarize(scored: dict, judge: bool = False) -> dict:
         "cost_mean": mean("cost"), "wall_mean": mean("wall"),
         "calls_mean": mean("calls"), "peak_mean": mean("peak"),
         "output_mean": mean("output"),
+        "tokens_mean": mean("tokens"),
+        "plan_pct_mean": (round(statistics.mean(r["plan_pct"] for r in done), 4)
+                          if done and all(r.get("plan_pct") is not None
+                                          for r in done) else None),
         "findings_mean": (round(statistics.mean(r["findings"] for r in rows
                                                 if r["complete"]), 2)
                           if any(r["complete"] for r in rows) else None),
@@ -376,9 +391,17 @@ def summarize(scored: dict, judge: bool = False) -> dict:
     }
 
 
+def _cost_cell(s: dict) -> str:
+    if s["cost_mean"] is not None:
+        return "$%.2f" % s["cost_mean"]
+    if s.get("plan_pct_mean") is not None:
+        return "%.3f%%p" % s["plan_pct_mean"]
+    return "-"
+
+
 def render(scoreds: list, judge: bool = False) -> str:
     lines = []
-    head = (f"{'arm':28s} {'reviews':>7s} {'$/review':>9s} {'min':>5s} "
+    head = (f"{'arm':28s} {'reviews':>7s} {'$/review':>9s} {'Mtok':>5s} {'min':>5s} "
             f"{'calls':>5s} {'peak':>6s} {'finds':>5s} "
             f"{'bugs/run':>9s} {'any run':>8s}")
     lines.append(head)
@@ -390,7 +413,8 @@ def render(scoreds: list, judge: bool = False) -> str:
                   if s["bugs_known"] else "-")
         lines.append(
             f"{s['label'][:28]:28s} {s['reviews']:7d} "
-            f"{'$%.2f' % s['cost_mean'] if s['cost_mean'] is not None else '-':>9s} "
+            f"{_cost_cell(s):>9s} "
+            f"{(s['tokens_mean'] or 0) / 1e6:5.2f} "
             f"{(s['wall_mean'] or 0) / 60:5.1f} "
             f"{s['calls_mean'] or 0:5.0f} "
             f"{(s['peak_mean'] or 0) / 1000:5.0f}K "
@@ -402,6 +426,9 @@ def render(scoreds: list, judge: bool = False) -> str:
     if leaky:
         lines.append("WARNING: reviews in " + ", ".join(leaky) + " saw a "
                      "case's later fix; their bug counts do not hold.")
+    lines.append("$/review is Claude's list-price figure; for codex, N%p is an "
+                 "upper bound on the share of the weekly plan a review used.  "
+                 "Mtok: tokens processed per review.")
     lines.append("bugs/run: known bugs found, over every review of a case "
                  "with known bugs; any run: found in at least one rep.  "
                  + ("Verdicts from the LLM judge." if judge else

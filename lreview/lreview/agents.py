@@ -31,6 +31,16 @@ LEAN_CLAUDE_ARGS = [
     # concurrent reviews share its cache.
     "--exclude-dynamic-system-prompt-sections",
 ]
+# codex's equivalent: the features that add tools a review never uses.
+# The user's config.toml stays in force (its service tier, for one).
+LEAN_CODEX_FEATURES = (
+    "apps", "browser_use", "browser_use_external", "computer_use",
+    "image_generation", "multi_agent", "plugins", "remote_plugin", "goals",
+    "skill_search", "skill_mcp_dependency_install", "in_app_browser",
+    "sleep_tool",
+)
+LEAN_CODEX_ARGS = [arg for name in LEAN_CODEX_FEATURES
+                   for arg in ("--disable", name)]
 # Calls in a review are seconds apart, so the 1h cache Claude Code
 # defaults to only makes every cache write cost 2x input, not 1.25x.
 LEAN_CLAUDE_ENV = {
@@ -59,6 +69,7 @@ class AgentSpec:
         settings: Optional[str] = None,
         lean: bool = False,
         system_file: Optional[str] = None,
+        prompt_on_stdin: bool = False,
     ) -> list[str]:
         # resume and settings are claude's: a session to fork and
         # continue, and per-run settings (hooks). Other agents ignore
@@ -88,13 +99,20 @@ class AgentSpec:
             # --json makes exec stream JSONL events (thread/turn/item)
             # instead of prose, ending in the turn.completed usage the
             # runner reads for the token total.
+            # Never fast mode: it bills reviews at a premium for speed a
+            # background review does not need, whatever config.toml says.
             cmd = ["codex", "exec", "--json",
-                   "--dangerously-bypass-approvals-and-sandbox"]
+                   "--dangerously-bypass-approvals-and-sandbox",
+                   "--disable", "fast_mode"]
             if model:
                 cmd += ["-m", model]
             if effort:
                 cmd += ["-c", f'model_reasoning_effort="{effort}"']
-            return cmd + extra_args + [prompt_text]
+            if lean:
+                cmd += LEAN_CODEX_ARGS
+            # "-" reads the prompt from stdin: a preloaded one is past
+            # what one command-line argument may hold.
+            return cmd + extra_args + ["-" if prompt_on_stdin else prompt_text]
         if self.name == "gemini":
             cmd = ["gemini", "--yolo"]
             if model:

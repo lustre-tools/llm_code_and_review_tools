@@ -165,3 +165,27 @@ class TestStats:
 
     def test_no_logs(self, tmp_path):
         assert render([]) == "no review logs found"
+
+
+def test_codex_log(tmp_path):
+    log = tmp_path / "kreview-3_ps1-x.1.log"
+    events = [
+        {"type": "thread.started", "thread_id": "t"},
+        {"type": "item.completed", "item": {
+            "id": "item_1", "type": "command_execution",
+            "command": "/bin/bash -lc 'git show HEAD'",
+            "aggregated_output": "x" * 400, "exit_code": 0}},
+        {"type": "item.completed", "item": {"id": "item_2",
+                                            "type": "agent_message",
+                                            "text": "done"}},
+        {"type": "turn.completed", "usage": {
+            "input_tokens": 2_000_000, "cached_input_tokens": 1_500_000,
+            "output_tokens": 9000, "reasoning_output_tokens": 3000}}]
+    log.write_text("\n".join(json.dumps(e) for e in events))
+    s = parse_log(log).summary()
+    assert s["agent"] == "codex" and s["cost_usd"] is None
+    assert s["tokens"]["cache_read"] == 1_500_000
+    assert s["tokens"]["new_input"] == 500_000
+    assert s["plan_pct_est"] == pytest.approx(1.5 * 0.057)
+    assert s["categories"]["git"]["count"] == 1
+    assert s["main_calls"] == 2
