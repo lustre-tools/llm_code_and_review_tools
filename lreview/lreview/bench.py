@@ -340,7 +340,9 @@ def _found(verdict: dict, judge: bool) -> bool:
 
 def summarize(scored: dict, judge: bool = False) -> dict:
     rows = [r for rep in scored["reps"] for r in rep["rows"]]
-    done = [r for r in rows if r.get("cost") is not None]
+    # Means over finished reviews: a running or failed one has spent
+    # only part of what a review costs.
+    done = [r for r in rows if r.get("cost") is not None and r["complete"]]
     bugs = [(r["case"], b, v) for r in rows if r["complete"]
             for b, v in r["bugs"].items()]
     union = defaultdict(bool)
