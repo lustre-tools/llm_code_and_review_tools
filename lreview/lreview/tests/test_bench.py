@@ -172,7 +172,8 @@ def test_bundled_cases_are_well_formed():
     for case in data["cases"]:
         assert len(case["sha"]) == 40
         assert case["kind"] in ("bug", "control")
-        assert "eval" in case["sets"]
+        assert set(case["sets"]) <= {"quick", "eval", "hard"}
+        assert ("eval" in case["sets"]) != ("hard" in case["sets"])
         assert bool(case.get("bugs")) == (case["kind"] == "bug")
         for bug in case.get("bugs") or []:
             assert bug["summary"] and bug["match"]

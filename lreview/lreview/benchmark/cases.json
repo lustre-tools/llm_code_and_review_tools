@@ -1,6 +1,6 @@
 {
  "version": 1,
- "description": "lreview benchmark: merged Lustre changes whose bugs a later commit fixed (its Fixes: trailer names the change), plus controls with no known bug. Each bug has a summary for the LLM judge and regex match sets: a finding matches a set when it matches every pattern in it. Sets: 'quick' is a few cheap cases with reliable hits, for cost checks and quick verification; 'eval' is every validated case.",
+ "description": "lreview benchmark: merged Lustre changes with bugs a later commit fixed, found from Fixes: trailers, git blame of bug-fix commits (SZZ) and same-ticket follow-ups (the last two vetted by Claude reading both commits), plus controls with no known bug. Each bug has a summary for the LLM judge, regex match sets (a finding matches a set when it matches every pattern in it), and its measured hit rate. Sets: 'quick' (a few cheap cases for cost checks and quick verification), 'eval' (cases whose bugs the default setup finds at least sometimes, plus controls), 'hard' (cases whose bugs it never found), 'all'.",
  "cases": [
   {
    "id": "swap-layouts-interop",
@@ -31,7 +31,13 @@
        "(never|not|isn.t) (be )?swabbed",
        "dv1|dv2|msl_dv"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     },
     {
      "id": "pack-before-set-size",
@@ -55,13 +61,19 @@
        "(already|after).{0,60}pack|packed",
        "24 bytes|8 bytes|overwrit|clobber"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
    "sets": [
-    "quick",
-    "eval"
+    "eval",
+    "quick"
    ]
   },
   {
@@ -101,7 +113,13 @@
        "OBD_ALLOC",
        "returns? 0|still returns|never (reported|fails)"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "Two later commits (0498ab0fd6, 0a5ee1a2a2) also change the timeout formula; they are design changes, not counted.",
@@ -134,12 +152,17 @@
        "qos_exclude|exclude.?list|exclude_list",
        "without|no lock|unlocked|lockless|race|use.after.free|UAF|freed|lmv_lock"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
    "sets": [
-    "quick",
     "eval"
    ]
   },
@@ -168,7 +191,13 @@
        "nidlist",
        "legacy|LARGE_NID|large NID|out.of.bounds|OOB|overrun|beyond|past|not allocated|uninitiali"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "The fix is on the same LU ticket (LU-18986); a reviewer reading the JIRA ticket could see it. bench report flags that as a leak.",
@@ -205,7 +234,13 @@
        "kvasprintf_const",
        "NULL|kfree_const"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
@@ -239,13 +274,19 @@
        "LNetPeerDiscovered|lnet_peerni_by_nid_locked|import_select_connection",
        "sleep|spinlock|spin lock|atomic|mutex|might_sleep"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
    "sets": [
-    "quick",
-    "eval"
+    "eval",
+    "quick"
    ]
   },
   {
@@ -273,7 +314,13 @@
        "rtnl",
        "rcu"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     },
     {
      "id": "rtnl-under-global-lock",
@@ -288,7 +335,13 @@
        "rtnl|lnet_get_link_status|link status",
        "kib_global_lock|write_lock|irqsave|atomic|spinlock"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
@@ -326,7 +379,13 @@
        "nodemap",
        "reference|use.after|freed|putref"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
@@ -359,7 +418,13 @@
        "mgc_nid_notify_interpret",
        "reply|repmsg|rq_repmsg|rc|NULL"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
@@ -392,12 +457,18 @@
        "osc_extent_tree_dump",
        "lock|unlocked|without"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "hard"
     }
    ],
    "notes": "A second later fix (39a24e8028, osc shrinker NULL deref) names this change too, but mostly reorders teardown that predates it; not counted.",
    "sets": [
-    "eval"
+    "hard"
    ]
   },
   {
@@ -425,7 +496,13 @@
        "wait.?queue|init_waitqueue_head",
        "lnet_acceptor_ready|data_ready|before|initiali"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     },
     {
      "id": "callback-not-restored",
@@ -440,7 +517,13 @@
        "callback|sk_data_ready|data_ready",
        "restor|release|free|teardown|shutdown"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "hard"
     }
    ],
    "notes": "",
@@ -474,12 +557,19 @@
        "LASSERT",
        "side.effect|disable-libcfs-assert|compil(ed|es) (out|away)|not (be )?evaluated|no-op|state change"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
    "sets": [
-    "eval"
+    "eval",
+    "quick"
    ]
   },
   {
@@ -496,8 +586,8 @@
    "bugs": [],
    "notes": "No known later fix.",
    "sets": [
-    "quick",
-    "eval"
+    "eval",
+    "quick"
    ]
   },
   {
@@ -542,12 +632,18 @@
        "ban_range_search",
        "lock|sem|race|unlocked|without"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "hard"
     }
    ],
    "notes": "",
    "sets": [
-    "eval"
+    "hard"
    ]
   },
   {
@@ -575,7 +671,13 @@
        "append_param|memmove|tail",
        "NUL|null.terminat|terminat|\\\\0"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
@@ -608,7 +710,13 @@
        "get_root_path_fast|get_root_path",
        "WANT_INDEX|WANT_NID|want"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 0,
+      "reviews": 0,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "unmeasured"
     }
    ],
    "notes": "",
@@ -641,12 +749,18 @@
        "fgets",
        "len|strlen|overflow|size|room|remaining"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "hard"
     }
    ],
    "notes": "",
    "sets": [
-    "eval"
+    "hard"
    ]
   },
   {
@@ -674,7 +788,13 @@
        "args|arg",
        "leak|free|freed"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
@@ -707,7 +827,13 @@
        "start|offset",
        "block|bytes|units|shift|blkbits"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
@@ -740,12 +866,18 @@
        "lod_fld_lookup|fld|range",
        "uninitiali|not initiali|garbage|LU_SEQ_RANGE_MDT|type"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "hard"
     }
    ],
    "notes": "",
    "sets": [
-    "eval"
+    "hard"
    ]
   },
   {
@@ -773,7 +905,13 @@
        "subtree|sub.range|rn_tree",
        "free|dangl|orphan|delete|use.after"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
@@ -806,7 +944,13 @@
        "out_clean_llog_fileset|nodemap_del",
        "NULL"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "The fix also names an older change (40cd140b85); the dereference is in lines this change touches.",
@@ -839,7 +983,13 @@
        "mdt_check_resource_ids|resource.?id",
        "init_ucred|ucred|identity|order|before"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
@@ -872,13 +1022,18 @@
        "osc_device_free|device_free|obd",
        "NULL|registration|fail"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "hard"
     }
    ],
    "notes": "",
    "sets": [
-    "quick",
-    "eval"
+    "hard"
    ]
   },
   {
@@ -906,13 +1061,19 @@
        "jt_llog_check|llog_check",
        "remove|jt_llog_remove"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
    "sets": [
-    "quick",
-    "eval"
+    "eval",
+    "quick"
    ]
   },
   {
@@ -941,12 +1102,18 @@
        "fileset",
        "primary|alternate|outside|bypass|escape|restrict"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "hard"
     }
    ],
    "notes": "",
    "sets": [
-    "eval"
+    "hard"
    ]
   },
   {
@@ -974,7 +1141,13 @@
        "mdd_changelog_ns_store|target",
        "NULL|rm_entry|not defined|invalid|deref"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 1,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "medium"
     }
    ],
    "notes": "",
@@ -1007,12 +1180,19 @@
        "nfd_skip_ipv6|nfd_has_ipv6|tgt_import_update",
        "uninitiali|not initiali|garbage|stack"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 1,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "medium"
     }
    ],
    "notes": "",
    "sets": [
-    "eval"
+    "eval",
+    "quick"
    ]
   },
   {
@@ -1040,7 +1220,13 @@
        "delayed.work|cpu_latency_work|cancel_delayed_work",
        "cancel|flush|sync|fini|unload|free"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 1,
+      "reviews": 1,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     },
     {
      "id": "svc-stats-unprotected",
@@ -1055,7 +1241,13 @@
        "obd_svc_stats|svc_stats",
        "lock|protect|race|concurrent|freed|NULL"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 0,
+      "reviews": 1,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "hard"
     },
     {
      "id": "cpu-index-math",
@@ -1070,7 +1262,13 @@
        "sizeof",
        "pointer|index|cpu"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 1,
+      "reviews": 1,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "A fourth later fix (69bf4ec09b) moves a completion-time boundary by one jiffy; not counted.",
@@ -1103,12 +1301,19 @@
        "ERR_PTR|request_module",
        "positive|negative|errno"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
    "sets": [
-    "eval"
+    "eval",
+    "quick"
    ]
   },
   {
@@ -1136,7 +1341,13 @@
        "o_grant|tgt_grant_dealloc",
        "reset|zero|stale|not cleared|left"
       ]
-     ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "notes": "",
@@ -1181,11 +1392,17 @@
        "(include|shrinker\\.h)"
       ]
      ],
-     "source": "same-ticket"
+     "source": "same-ticket",
+     "calibration": {
+      "found": 0,
+      "reviews": 1,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "hard"
     }
    ],
    "sets": [
-    "eval"
+    "hard"
    ],
    "notes": "Found without a Fixes: tag (same-ticket), vetted by an LLM reading both commits."
   },
@@ -1224,7 +1441,13 @@
        "(MAX_SCHEDULE_TIMEOUT|goto again|loop|retry)"
       ]
      ],
-     "source": "same-ticket"
+     "source": "same-ticket",
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "sets": [
@@ -1269,11 +1492,17 @@
        "NULL|destroyed|use-after-free|shutdown|fini"
       ]
      ],
-     "source": "same-ticket"
+     "source": "same-ticket",
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "hard"
     }
    ],
    "sets": [
-    "eval"
+    "hard"
    ],
    "notes": "Found without a Fixes: tag (same-ticket), vetted by an LLM reading both commits."
   },
@@ -1311,11 +1540,18 @@
        "fp_exclude_obd"
       ]
      ],
-     "source": "szz"
+     "source": "szz",
+     "calibration": {
+      "found": 1,
+      "reviews": 1,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "sets": [
-    "eval"
+    "eval",
+    "quick"
    ],
    "notes": "Found without a Fixes: tag (szz), vetted by an LLM reading both commits."
   },
@@ -1356,11 +1592,17 @@
        "ifdef|guard|configure|disable-o2ib|not defined"
       ]
      ],
-     "source": "szz"
+     "source": "szz",
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "hard"
     }
    ],
    "sets": [
-    "eval"
+    "hard"
    ],
    "notes": "Found without a Fixes: tag (szz), vetted by an LLM reading both commits."
   },
@@ -1399,7 +1641,13 @@
        "leak|cfs_free_nidlist|nidlist"
       ]
      ],
-     "source": "szz"
+     "source": "szz",
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "sets": [
@@ -1444,11 +1692,17 @@
        "ESTALE|verify|error"
       ]
      ],
-     "source": "szz"
+     "source": "szz",
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "hard"
     }
    ],
    "sets": [
-    "eval"
+    "hard"
    ],
    "notes": "Found without a Fixes: tag (szz), vetted by an LLM reading both commits."
   },
@@ -1490,11 +1744,17 @@
        "force|ignore"
       ]
      ],
-     "source": "szz"
+     "source": "szz",
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "hard"
     }
    ],
    "sets": [
-    "eval"
+    "hard"
    ],
    "notes": "Found without a Fixes: tag (szz), vetted by an LLM reading both commits."
   },
@@ -1530,7 +1790,13 @@
        "free"
       ]
      ],
-     "source": "szz"
+     "source": "szz",
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     },
     {
      "id": "fix-error-handling-in-dma-mapp",
@@ -1552,7 +1818,13 @@
        "unmap|sg_free_table|leak|double.?free|not checked|unchecked"
       ]
      ],
-     "source": "szz"
+     "source": "szz",
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "sets": [
@@ -1596,7 +1868,13 @@
        "overflow|ns_nr_unused \\*|multipl"
       ]
      ],
-     "source": "szz"
+     "source": "szz",
+     "calibration": {
+      "found": 1,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "medium"
     }
    ],
    "sets": [
@@ -1639,7 +1917,13 @@
        "leak|not closed|close|error path"
       ]
      ],
-     "source": "szz"
+     "source": "szz",
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
+     },
+     "difficulty": "easy"
     }
    ],
    "sets": [

@@ -281,10 +281,23 @@ lreview stats --json                   # the summaries, for scripts
 ## Benchmark (`lreview bench`)
 
 `lreview/benchmark/cases.json` is a fixed set of merged Lustre changes
-to measure lreview against. Most carry bugs that a later commit fixed
-(its `Fixes:` trailer names the change), with a summary of each bug and
-regex patterns that a finding describing it would match; a few
-controls have no known bug and calibrate cost and noise. Use it before
+to measure lreview against. Most carry bugs that a later commit fixed --
+found from `Fixes:` trailers, from `git blame` of bug-fix commits (SZZ)
+and from same-ticket follow-ups, the last two vetted by Claude reading
+both commits -- with a summary of each bug, regex patterns that a
+finding describing it would match, and the rate at which the default
+setup found it; a few controls have no known bug and calibrate cost and
+noise. The sets:
+
+- `quick` (the default): 8 cheap cases, about $4 a pass, mixing bugs that
+  separate configurations with easy ones as regression guards. For cost
+  checks and quick verification.
+- `eval`: every case whose bugs the default setup finds at least some
+  of the time, plus the controls (32 cases). For real comparisons;
+  expensive.
+- `hard`: cases whose bugs the default setup never found (11). Where a
+  better model or setting would show.
+- `all`: everything. Use it before
 and after changing lreview, its defaults, the review prompts, or the
 model, so the comparison is cost, time *and* bugs found on the same
 inputs.
