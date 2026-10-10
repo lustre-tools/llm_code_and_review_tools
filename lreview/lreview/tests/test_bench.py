@@ -223,3 +223,17 @@ def test_render_bugs(tmp_path):
     _rep(label, 2, "c1", [])
     text = bench.render_bugs([bench.score(label, [_case("0" * 40)])])
     assert "c1/b1" in text and "1/2" in text
+
+
+def test_fix_reusing_the_subject_is_no_leak(tmp_path):
+    label = tmp_path / "arm"
+    _rep(label, 1, "c1", ["a is uninitialized"])
+    log = next((label / "rep1").glob("kreview-*.log"))
+    with open(log, "a") as handle:
+        handle.write("\n" + json.dumps({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t",
+             "content": "commit 0000 LU-1 llite: the change"}]}}))
+    case = _case("0" * 40)
+    case["bugs"][0].update(fix_sha="abcdef1234567",
+                           fix_subject="LU-1 llite: the change")
+    assert bench.summarize(bench.score(label, [case]))["leaked"] == 0

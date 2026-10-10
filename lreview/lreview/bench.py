@@ -254,7 +254,9 @@ def leaked(log: Path, case: dict) -> list:
     for bug in case.get("bugs") or []:
         if bug.get("fix_sha"):
             marks.add(bug["fix_sha"][:10])
-        if bug.get("fix_subject"):
+        # A fix can reuse the change's own subject; then the subject
+        # marks nothing but the commit under review.
+        if bug.get("fix_subject") and bug["fix_subject"] != case.get("subject"):
             marks.add(bug["fix_subject"])
     seen = set()
     if not marks:
