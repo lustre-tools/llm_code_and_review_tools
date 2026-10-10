@@ -114,9 +114,11 @@ CODEX_MODELS = (
 # times less of the plan. Override with --model / $LREVIEW_MODEL.
 CODEX_DEFAULT_MODEL = "gpt-6.1-sol"
 
-CLAUDE_DEFAULT_MODEL = "opus"
+# Sonnet 5.5 found as many known bugs as Opus 5.5 on lreview bench at
+# under half the cost and time (2026-10-09). --model opus for the rest.
+CLAUDE_DEFAULT_MODEL = "sonnet"
 
-CLAUDE_MODELS = ("opus", "sonnet", "fable", "haiku")
+CLAUDE_MODELS = ("sonnet", "opus", "fable", "haiku")
 
 DEFAULT_MODELS = {
     "claude": CLAUDE_DEFAULT_MODEL,

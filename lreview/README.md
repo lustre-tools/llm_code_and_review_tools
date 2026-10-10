@@ -176,9 +176,10 @@ disables colors. Logs are stream-json event files — pipe through `jq`
 to read, e.g. `jq -r '.result // empty' kreview-*.log` for the final
 review text.
 
-Reviews run on **opus** by default (`--model sonnet` / `--model fable`
+Reviews run on **sonnet** by default (`--model opus` / `--model fable`
 or `LREVIEW_MODEL` to change; `--agent codex` defaults to
-**gpt-6.1-sol**). Posted messages are prefixed
+**gpt-6.1-sol**). On `lreview bench` Sonnet 5.5 found as many known bugs
+as Opus 5.5 at under half the cost and time (2026-10-09). Posted messages are prefixed
 `[AI review - <model>]`, stamped with the model that actually ran the
 review and rendered as a bold standalone first line with a blank line
 before the message body:
@@ -696,7 +697,7 @@ opencode's `--model` wants the `provider/model` form.
 | `--worktrees-dir DIR` | auto | Where worktrees are created |
 | `--keep-worktrees` | off | Keep worktrees after review |
 | `--agent NAME` | `claude` (or `$LREVIEW_AGENT`) | Agent backend: claude, codex (verified), gemini, opencode |
-| `--model NAME` | `opus` for claude, `gpt-6.1-sol` for codex (or `$LREVIEW_MODEL`); gemini/opencode use their own default | Model for the review runs; see `lreview models` |
+| `--model NAME` | `sonnet` for claude, `gpt-6.1-sol` for codex (or `$LREVIEW_MODEL`); gemini/opencode use their own default | Model for the review runs; see `lreview models` |
 | `--effort LEVEL` | agent's default (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max, plus `ultra` on the codex models that have it — claude (`--effort`) or codex (`-c model_reasoning_effort=...`); ignored for gemini/opencode. The ladder is per model and checked before the run |
 | `--memory, -m` | off | Read/update the per-change review memory document |
 | `--clear-memory, -c` | off | With `-m`: delete the change's memory document first |
@@ -730,7 +731,7 @@ in psN." message, but only when named (`lreview post 69459`, or
 | Variable | Effect |
 |---|---|
 | `LREVIEW_AGENT` | Default for `--agent` (else `claude`) |
-| `LREVIEW_MODEL` | Default for `--model` (else `opus` for claude, `gpt-6.1-sol` for codex); a name from another agent's models, such as `opus` under `--agent codex`, gives way to that agent's default |
+| `LREVIEW_MODEL` | Default for `--model` (else `sonnet` for claude, `gpt-6.1-sol` for codex); a name from another agent's models, such as `opus` under `--agent codex`, gives way to that agent's default |
 | `LREVIEW_EFFORT` | Default for `--effort` (else the agent's own) |
 | `LREVIEW_DB` | Default for `--db` (memory database directory) |
 | `LREVIEW_LEAN` | `0` turns `--lean` off by default |

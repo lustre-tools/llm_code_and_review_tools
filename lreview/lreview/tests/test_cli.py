@@ -74,12 +74,12 @@ class TestParser:
     def test_resolve_model(self, monkeypatch):
         from lreview.cli import resolve_model
         monkeypatch.delenv("LREVIEW_MODEL", raising=False)
-        assert resolve_model("claude") == "opus"
+        assert resolve_model("claude") == "sonnet"
         assert resolve_model("codex") == "gpt-6.1-sol"
         assert resolve_model("gemini") is None
         assert resolve_model("claude", "fable") == "fable"
-        monkeypatch.setenv("LREVIEW_MODEL", "sonnet")
-        assert resolve_model("claude") == "sonnet"
+        monkeypatch.setenv("LREVIEW_MODEL", "opus")
+        assert resolve_model("claude") == "opus"
         assert resolve_model("claude", "fable") == "fable"
 
     def test_resolve_model_expands_codex_aliases(self, monkeypatch):
@@ -101,7 +101,7 @@ class TestParser:
         assert resolve_model("gemini") is None
         assert resolve_model("claude") == "opus"
         monkeypatch.setenv("LREVIEW_MODEL", "sol")
-        assert resolve_model("claude") == "opus"
+        assert resolve_model("claude") == "sonnet"
         assert resolve_model("opencode") is None
         assert resolve_model("codex") == "gpt-6.1-sol"
         # names in no catalog reach every agent untouched
@@ -742,8 +742,8 @@ class TestRunDryRun:
         assert rc == 0
         assert "numbers" not in reviewed  # run_batch never called
         assert freshness == {"allow_update": False}
-        assert "model opus" in out
-        assert "as '[Bot - opus]'" in out
+        assert "model sonnet" in out
+        assert "as '[Bot - sonnet]'" in out
         assert "dry run: 3 change(s) would be reviewed" in out
 
     def test_clear_memory_is_not_applied(self, tmp_path, monkeypatch,

@@ -80,7 +80,7 @@ def resolve_model(agent: str, model: str = None) -> str:
     Explicit --model wins, then $LREVIEW_MODEL unless another agent's
     catalog lists that name: the variable is shared by every agent,
     and `codex -m opus` only fails. claude defaults to
-    opus and codex to gpt-6.1-sol,
+    sonnet and codex to gpt-6.1-sol,
     gemini and opencode to whatever their own CLI defaults to.
 
     codex aliases are expanded to the slug the CLI expects, so
@@ -834,14 +834,14 @@ def cmd_chat(args) -> int:
 
 def cmd_models(args) -> int:
     """Print what each agent will accept for --model and --effort."""
-    from .models import (CLAUDE_EFFORTS, CLAUDE_DEFAULT_MODEL,
+    from .models import (CLAUDE_EFFORTS, CLAUDE_DEFAULT_MODEL, CLAUDE_MODELS,
                          codex_catalog_lines)
     agents = [args.agent] if args.agent else ["claude", "codex"]
     for agent in agents:
         if agent == "claude":
             print("claude")
-            print(f"  {CLAUDE_DEFAULT_MODEL} (default), sonnet, "
-                  "fable, haiku")
+            others = [m for m in CLAUDE_MODELS if m != CLAUDE_DEFAULT_MODEL]
+            print(f"  {CLAUDE_DEFAULT_MODEL} (default), {', '.join(others)}")
             print(f"  effort: {', '.join(CLAUDE_EFFORTS)} "
                   "(default: claude's own)")
         elif agent == "codex":
@@ -930,7 +930,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  --mode NAME      full (default) or light — one cheap\n"
             "                   focused pass instead of the deep dive\n"
             "  --agent NAME     claude (default), codex, gemini, opencode\n"
-            "  --model NAME     claude: opus (default), sonnet, fable\n"
+            "  --model NAME     claude: sonnet (default), opus, fable\n"
             "                   codex: gpt-6.1-sol (default), astra, terra,\n"
             "                   luna, ... — see 'lreview models'\n"
             "  --effort LEVEL   low..max, ultra (codex, per model)\n"
@@ -1073,8 +1073,8 @@ def build_parser() -> argparse.ArgumentParser:
              "gemini and opencode are best-effort)")
     run_p.add_argument(
         "--model", default=None,
-        help="Model for the review runs — claude: opus (default), "
-             "sonnet, fable, haiku; codex: gpt-6.1-sol (default), "
+        help="Model for the review runs — claude: sonnet (default), opus, "
+             "fable, haiku; codex: gpt-6.1-sol (default), "
              "gpt-6-sol, gpt-6-astra, gpt-5.6-sol/-terra/-luna, gpt-5.5, "
              "gpt-5.3-codex-spark, or their aliases (sol, astra, terra, "
              "luna, spark). "

@@ -113,15 +113,24 @@ benchmark (`lreview bench`) a round that read the previous round's notes
 found only what round 1 had found, and over three rounds memory found
 8 of 20 known bugs where three independent rounds found 11.
 
-Before spending another round on the same backend, get a second opinion:
+Reviews run on Sonnet by default; on the benchmark it found as many
+known bugs as Opus at under half the cost and time.
+
+Before spending another round on the same backend, get a second opinion
+from codex if you have it -- most do not. `lreview check --agent codex`
+says whether it is installed and logged in:
 
 ```bash
 lreview run --repo <tree> --last 2 --agent codex -o /tmp/lreview-codex.txt   # codex defaults to gpt-6.1-sol
 ```
 
+On the benchmark codex found the most known bugs, including some both
+Claude models missed, and different ones. Without codex, take the second
+opinion from the other Claude model instead (`--model opus`).
+
 A second backend regularly finds real defects that more rounds on the
 first keep missing. Different backends fail differently; `lreview models` lists what each accepts
-(claude: opus, sonnet, fable, haiku; codex: astra, sol, terra, luna,
+(claude: sonnet, opus, fable, haiku; codex: astra, sol, terra, luna,
 spark, with an `--effort` level).
 
 Inside a Patch Watcher run, use lreview for reviews and do not start

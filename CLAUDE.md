@@ -182,7 +182,7 @@ writes the whole batch as one plain-text dump -- assessment and
 findings per commit, including the clean and failed ones.
 
 
-Defaults: opus model (`--model` / `$LREVIEW_MODEL` for sonnet/fable),
+Defaults: sonnet model (`--model` / `$LREVIEW_MODEL` for opus/fable),
 5 parallel reviews (`--jobs`), 2h per-review timeout, results in
 `lreview-results/` in this checkout (per-change JSON + log +
 summary.json; `--results-dir` / `$LREVIEW_RESULTS_DIR` override), a live
