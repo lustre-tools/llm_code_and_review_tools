@@ -21,6 +21,7 @@ import shutil
 import statistics
 import subprocess
 import time
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -316,11 +317,12 @@ def summarize(scored: dict, judge: bool = False) -> dict:
     done = [r for r in rows if r.get("cost") is not None]
     bugs = [(r["case"], b, v) for r in rows if r["complete"]
             for b, v in r["bugs"].items()]
-    union = defaultdict_set()
+    union = defaultdict(bool)
     for case, bug, verdict in bugs:
         union[(case, bug)] |= _found(verdict, judge)
-    mean = (lambda key: round(statistics.mean(r[key] for r in done), 3)
-            if done else None)
+
+    def mean(key):
+        return round(statistics.mean(r[key] for r in done), 3) if done else None
     return {
         "label": scored["label"],
         "reviews": len(rows),
@@ -337,11 +339,6 @@ def summarize(scored: dict, judge: bool = False) -> dict:
         "bugs_known": len(union),
         "leaked": sum(1 for r in rows if r.get("leaked")),
     }
-
-
-class defaultdict_set(dict):
-    def __missing__(self, key):
-        return False
 
 
 def render(scoreds: list, judge: bool = False) -> str:
