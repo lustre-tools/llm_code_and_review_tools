@@ -192,7 +192,9 @@ def test_leak_is_reported(tmp_path):
     case = _case("0" * 40)
     case["bugs"][0].update(fix_sha="abcdef1234567", fix_subject="LU-2 llite: the fix")
     scored = bench.score(label, [case])
-    assert bench.summarize(scored)["leaked"] == 1
+    summary = bench.summarize(scored)
+    assert summary["leaked"] == 1
+    assert summary["bug_chances"] == 0     # the leaked review is not counted
     assert "LEAKED" in bench.render([scored])
 
 

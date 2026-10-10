@@ -296,9 +296,12 @@ def llm_found(case: dict, bug: dict, findings: list,
                 "why": f"judge failed: {result.stderr[-200:]}"}
 
 
-def score(label_dir: Path, cases: list, judge: bool = False) -> dict:
+def score(label_dir: Path, cases: list, judge: bool = False,
+          judge_jobs: int = 6) -> dict:
     """Per rep and case: telemetry and which known bugs were found.
-    LLM verdicts are cached in each rep directory."""
+    LLM verdicts are asked `judge_jobs` at a time and cached in each
+    rep directory."""
+    from concurrent.futures import ThreadPoolExecutor
     by_id = {c["id"]: c for c in cases}
     reps = []
     for rep_dir in sorted(label_dir.glob("rep*"),
@@ -306,7 +309,7 @@ def score(label_dir: Path, cases: list, judge: bool = False) -> dict:
         cache_path = rep_dir / "judge.json"
         cache = (json.loads(cache_path.read_text())
                  if cache_path.exists() else {})
-        rows = []
+        rows, asks = [], []
         for case_id, case in by_id.items():
             findings = _findings(rep_dir, case_id)
             log = _log_for(rep_dir, case_id)
@@ -340,13 +343,22 @@ def score(label_dir: Path, cases: list, judge: bool = False) -> dict:
                     key = hashlib.sha256(json.dumps(
                         [bug["summary"], findings]).encode()).hexdigest()[:16]
                     if key not in cache:
-                        cache[key] = llm_found(case, bug, findings)
-                    verdict["judge"] = cache[key]["found"]
-                    verdict["why"] = cache[key]["why"]
+                        asks.append((key, case, bug, findings))
+                    verdict["key"] = key
                 row["bugs"][bug["id"]] = verdict
             rows.append(row)
-        if judge:
+        if asks:
+            with ThreadPoolExecutor(judge_jobs) as pool:
+                answers = pool.map(lambda a: llm_found(a[1], a[2], a[3]), asks)
+                for (key, *_), answer in zip(asks, answers):
+                    cache[key] = answer
             cache_path.write_text(json.dumps(cache, indent=1))
+        for row in rows:
+            for verdict in row["bugs"].values():
+                key = verdict.pop("key", None)
+                if key is not None:
+                    verdict["judge"] = cache[key]["found"]
+                    verdict["why"] = cache[key]["why"]
         reps.append({"rep": rep_dir.name, "rows": rows})
     return {"label": label_dir.name, "reps": reps}
 
@@ -360,7 +372,9 @@ def summarize(scored: dict, judge: bool = False) -> dict:
     # Means over finished reviews: a running or failed one has spent
     # only part of what a review costs.
     done = [r for r in rows if "wall" in r and r["complete"]]
-    bugs = [(r["case"], b, v) for r in rows if r["complete"]
+    # A review that saw a later fix says nothing about finding the bug
+    bugs = [(r["case"], b, v) for r in rows
+            if r["complete"] and not r.get("leaked")
             for b, v in r["bugs"].items()]
     union = defaultdict(bool)
     for case, bug, verdict in bugs:
@@ -424,8 +438,9 @@ def render(scoreds: list, judge: bool = False) -> str:
     leaky = [summarize(sc, judge)["label"] for sc in scoreds
              if summarize(sc, judge)["leaked"]]
     if leaky:
-        lines.append("WARNING: reviews in " + ", ".join(leaky) + " saw a "
-                     "case's later fix; their bug counts do not hold.")
+        lines.append("Reviews in " + ", ".join(leaky) + " saw a case's "
+                     "later fix (marked LEAKED below); their bugs are left "
+                     "out of the counts.")
     lines.append("$/review is Claude's list-price figure; for codex, N%p is an "
                  "upper bound on the share of the weekly plan a review used.  "
                  "Mtok: tokens processed per review.")
@@ -438,7 +453,8 @@ def render(scoreds: list, judge: bool = False) -> str:
         lines.append("")
         lines.append(f"{scored['label']}:")
         for rep in scored["reps"]:
-            got = [_found(v, judge) for r in rep["rows"] if r["complete"]
+            got = [_found(v, judge) for r in rep["rows"]
+                   if r["complete"] and not r.get("leaked")
                    for v in r["bugs"].values()]
             costs = [r["cost"] for r in rep["rows"] if r.get("cost") is not None]
             lines.append(f"  {rep['rep']}: known bugs {sum(got)}/{len(got)}, "
