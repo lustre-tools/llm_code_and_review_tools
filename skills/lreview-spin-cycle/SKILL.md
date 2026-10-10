@@ -108,6 +108,11 @@ interface, or on-disk or wire format -- both whole-commit rounds may be
 `--mode light`; a light round that finds anything serious puts you back to
 full rounds.
 
+Keep the rounds independent: do not use `--memory` for them. On the
+benchmark (`lreview bench`) a round that read the previous round's notes
+found only what round 1 had found, and over three rounds memory found
+8 of 20 known bugs where three independent rounds found 11.
+
 Before spending another round on the same backend, get a second opinion:
 
 ```bash
