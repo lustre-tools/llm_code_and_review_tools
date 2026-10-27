@@ -43,6 +43,9 @@ def mock_client():
     """Create a mock MalooClient and patch _make_client to return it."""
     client = MagicMock()
     client.get_session_review.return_value = None
+    # No id is a test session unless a test says so; the commands that
+    # take a test set id refuse a session id.
+    client.get_session.return_value = None
     with patch("maloo_tool.cli._make_client", return_value=client):
         yield client
 
@@ -386,6 +389,109 @@ class TestSubtests:
         assert env["data"]["filter"] is None
 
 
+# -- session and test set ids given to the wrong command --
+
+
+def _session_ids(client, sessions):
+    """Make get_session know only the session ids in SESSIONS."""
+    client.get_session.side_effect = lambda sid: (
+        {"id": sid, "test_name": "t"} if sid in sessions else None
+    )
+
+
+class TestIdKinds:
+    """Agents give a test set id to `maloo session`, and a session id to
+    the commands that take a test set id."""
+
+    def test_session_resolves_a_test_set_id(self, runner, mock_client):
+        _session_ids(mock_client, {SID_1})
+        mock_client.get_test_set.return_value = {
+            "id": TSID_1, "test_session_id": SID_1, "status": "FAIL",
+        }
+        mock_client.get_test_sets.return_value = []
+        env = _parse_output(runner.invoke(main, ["--envelope", "session", TSID_1]))
+        assert env["data"]["session_id"] == SID_1
+        assert env["data"]["resolved_from"] == {
+            "id_kind": "test_set", "test_set_id": TSID_1, "session_id": SID_1,
+        }
+        mock_client.get_test_sets.assert_called_once_with(SID_1)
+
+    def test_session_id_output_has_no_resolved_from(self, runner, mock_client):
+        _session_ids(mock_client, {SID_1})
+        mock_client.get_test_sets.return_value = []
+        env = _parse_output(runner.invoke(main, ["--envelope", "session", SID_1]))
+        assert "resolved_from" not in env["data"]
+        mock_client.get_test_set.assert_not_called()
+
+    def test_session_neither_kind_is_not_found(self, runner, mock_client):
+        mock_client.get_test_set.return_value = None
+        result = runner.invoke(main, ["session", SID_3])
+        assert result.exit_code == 3
+        err = json.loads(result.output)
+        assert err["code"] == "NOT_FOUND"
+        assert err["message"] == (
+            f"{SID_3} is neither a test session nor a test set"
+        )
+
+    def test_failures_resolves_a_test_set_id(self, runner, mock_client):
+        _session_ids(mock_client, {SID_1})
+        mock_client.get_test_set.return_value = {"test_session_id": SID_1}
+        mock_client.get_test_sets.return_value = []
+        env = _parse_output(runner.invoke(main, ["--envelope", "failures", TSID_1]))
+        assert env["data"]["session_id"] == SID_1
+        assert env["data"]["resolved_from"]["test_set_id"] == TSID_1
+
+    def test_subtests_refuses_a_session_id(self, runner, mock_client):
+        _session_ids(mock_client, {SID_1})
+        mock_client.get_test_set.return_value = None
+        result = runner.invoke(main, ["subtests", SID_1])
+        assert result.exit_code == 4
+        err = json.loads(result.output)
+        assert err["code"] == "INVALID_INPUT"
+        assert f"{SID_1} is a test session id, not a test set id" in err["message"]
+        assert f"maloo session {SID_1}" in err["message"]
+        mock_client.get_subtests.assert_not_called()
+
+    def test_subtests_unknown_id_keeps_not_found(self, runner, mock_client):
+        mock_client.get_test_set.return_value = None
+        result = runner.invoke(main, ["subtests", SID_3])
+        assert result.exit_code == 3
+        assert json.loads(result.output)["code"] == "NOT_FOUND"
+
+    def test_logs_names_a_session_id(self, runner, mock_client):
+        _session_ids(mock_client, {SID_1})
+        mock_client.download_logs.side_effect = Exception("404 Not Found")
+        result = runner.invoke(main, ["logs", SID_1])
+        assert result.exit_code == 4
+        assert "is a test session id" in json.loads(result.output)["message"]
+
+    def test_logs_other_failure_keeps_download_failed(self, runner, mock_client):
+        mock_client.download_logs.side_effect = Exception("404 Not Found")
+        result = runner.invoke(main, ["logs", TSID_1])
+        assert json.loads(result.output)["code"] == "DOWNLOAD_FAILED"
+
+    def test_link_bug_refuses_a_session_id_before_writing(self, runner, mock_client):
+        _session_ids(mock_client, {SID_1})
+        result = runner.invoke(main, ["link-bug", SID_1, "LU-1"])
+        assert result.exit_code == 4
+        assert "is a test session id" in json.loads(result.output)["message"]
+        mock_client.create_bug_link.assert_not_called()
+
+    def test_raise_bug_refuses_a_session_id_before_writing(self, runner, mock_client):
+        _session_ids(mock_client, {SID_1})
+        result = runner.invoke(main, ["raise-bug", SID_1])
+        assert result.exit_code == 4
+        mock_client.raise_bug.assert_not_called()
+
+    def test_reject_bug_names_a_session_id(self, runner, mock_client):
+        _session_ids(mock_client, {SID_1})
+        mock_client.get_bug_links.return_value = []
+        result = runner.invoke(main, ["reject-bug", SID_1, "LU-1"])
+        assert result.exit_code == 4
+        assert "is a test session id" in json.loads(result.output)["message"]
+        mock_client.review_bug_link.assert_not_called()
+
+
 # -- review command --
 
 
@@ -625,7 +731,7 @@ class TestBugs:
         assert result.exit_code != 0
         env = json.loads(result.output)
         assert env["ok"] is False
-        assert "is a test session" in env["error"]["message"]
+        assert "is a test session id" in env["error"]["message"]
         assert f"maloo failures {SID_1}" in env["error"]["message"]
 
 

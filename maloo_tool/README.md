@@ -45,6 +45,14 @@ Maloo uses two distinct UUID types:
 
 Both can be found in the output of `session` and `failures`.
 
+The two kinds are easy to mix up. `session` and `failures` given a test set
+UUID show the session that holds the test set, and add `resolved_from`
+(`id_kind`, `test_set_id`, `session_id`) to say so. An id that is neither
+kind is `NOT_FOUND`. `subtests`, `logs`, `bugs`, `link-bug`, `reject-bug`
+and `raise-bug` given a session UUID fail with `INVALID_INPUT` (exit 4),
+and the message names `maloo session <id>`, which lists the session's test
+sets. `link-bug` and `raise-bug` check before they send anything.
+
 ## Quick Start
 
 ```bash
