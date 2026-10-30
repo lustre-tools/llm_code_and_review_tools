@@ -1227,6 +1227,21 @@ class MalooClient:
         resp.raise_for_status()
         return web, resp.text
 
+    #: The queue page's actions: the ``call`` it posts, the row class
+    #: that offers it, the name it shows, and the result's count key.
+    QUEUE_ACTIONS: dict[str, dict[str, Any]] = {
+        "prioritize": {
+            "cls": "priority", "label": "Prioritize",
+            "count": "prioritizable",
+            "not_offered": ErrorCode.PRIORITIZE_NOT_OFFERED,
+        },
+        "abandon": {
+            "cls": "abandon", "label": "Abandon",
+            "count": "abandonable",
+            "not_offered": ErrorCode.ABANDON_NOT_OFFERED,
+        },
+    }
+
     def prioritize(
         self,
         job: str,
@@ -1238,17 +1253,54 @@ class MalooClient:
 
         Does what the queue page does when Prioritize is picked on a
         row: "This session" (``idx`` given) or "Entire build" (no
-        ``idx``).  The page posts ``call=prioritize``, ``kind=idx`` or
-        ``kind=all``, and the ``session`` key of the row picked to
-        /test_queue/actionable.
+        ``idx``).  Access-controlled: Maloo offers it only to accounts
+        given the prioritize permission, which many lack, and in
+        practice on sessions still waiting for a test cluster.  See
+        :meth:`queue_action`.
+        """
+        return self.queue_action("prioritize", job, buildno, idx, dry_run)
+
+    def abandon(
+        self,
+        job: str,
+        buildno: int,
+        idx: int | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Abandon a build's sessions in the test queue.
+
+        Does what the queue page does when Abandon is picked on a row:
+        "This session" (``idx`` given) or "Entire build" (no ``idx``).
+        Access-controlled: Maloo offers it only to accounts given the
+        abandon permission, and by the session's state.  See
+        :meth:`queue_action`.
+        """
+        return self.queue_action("abandon", job, buildno, idx, dry_run)
+
+    def queue_action(
+        self,
+        call: str,
+        job: str,
+        buildno: int,
+        idx: int | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Prioritize or abandon a build's sessions in the test queue.
+
+        The queue page posts ``call`` (prioritize or abandon),
+        ``kind=idx`` ("This session") or ``kind=all`` ("Entire build"),
+        and the ``session`` key of the row picked to
+        /test_queue/actionable.  It is not in the REST API.
 
         The page is read first, and nothing is sent unless it offers
-        Prioritize on that row (for the whole build, on some row of
-        it).  Maloo decides where: to accounts it lets prioritize, and
-        in practice on sessions still waiting for a test cluster.  The
-        post is not retried.
+        the action on that row (for the whole build, on some row of
+        it).  Both actions are access-controlled: Maloo shows them only
+        to accounts given the permission, then by the session's state,
+        so an account without it is refused on every row.  The post is
+        not retried.
 
         Args:
+            call: "prioritize" or "abandon".
             job: Jenkins job of the build (e.g. "lustre-reviews").
             buildno: Jenkins build number.
             idx: The session's queue idx, or None for the whole build.
@@ -1260,20 +1312,22 @@ class MalooClient:
         Raises:
             NotFoundError: QUEUE_ENTRY_NOT_FOUND, the build (or that
                 session of it) is not in the test queue.
-            ToolError: PRIORITIZE_NOT_OFFERED, the page does not offer
-                Prioritize there.
+            ToolError: PRIORITIZE_NOT_OFFERED or ABANDON_NOT_OFFERED,
+                the page does not offer the action there.
             RuntimeError: the page had no CSRF token.
         """
+        action = self.QUEUE_ACTIONS[call]
+        label = action["label"]
         web, page = self.get_queue_page(job, buildno)
         rows = [
             r for r in self.parse_queue_rows(page)
             if r["job"] == job and r["buildno"] == buildno
         ]
-        offered = [r for r in rows if "priority" in r["actions"]]
+        offered = [r for r in rows if action["cls"] in r["actions"]]
         statuses: dict[str, int] = {}
         for r in rows:
             statuses[r["status"]] = statuses.get(r["status"], 0) + 1
-        details = {"sessions": len(rows), "prioritizable": len(offered),
+        details = {"sessions": len(rows), action["count"]: len(offered),
                    "statuses": statuses}
 
         if idx is not None:
@@ -1285,13 +1339,16 @@ class MalooClient:
                     "in the test queue",
                     details=details,
                 )
-            if "priority" not in target["actions"]:
+            if action["cls"] not in target["actions"]:
                 raise ToolError(
-                    ErrorCode.PRIORITIZE_NOT_OFFERED,
-                    f"The test queue does not offer Prioritize for {job} "
+                    action["not_offered"],
+                    f"The test queue does not offer {label} for {job} "
                     f"build {buildno} idx {idx} (status "
                     f"{target['status'] or 'unknown'}); it offers it on "
-                    f"{len(offered)} of the build's {len(rows)} sessions",
+                    f"{len(offered)} of the build's {len(rows)} sessions"
+                    + (f"; offered nowhere, so this Maloo account may "
+                       f"lack the {call} permission" if not offered
+                       else ""),
                     details=details,
                 )
         else:
@@ -1304,9 +1361,10 @@ class MalooClient:
                 )
             if not offered:
                 raise ToolError(
-                    ErrorCode.PRIORITIZE_NOT_OFFERED,
-                    f"The test queue does not offer Prioritize on any of "
-                    f"{job} build {buildno}'s {len(rows)} sessions",
+                    action["not_offered"],
+                    f"The test queue does not offer {label} on any of "
+                    f"{job} build {buildno}'s {len(rows)} sessions; "
+                    f"this Maloo account may lack the {call} permission",
                     details=details,
                 )
             target = offered[0]
@@ -1319,7 +1377,7 @@ class MalooClient:
         data = {
             "kind": "idx" if idx is not None else "all",
             "session": target["key"],
-            "call": "prioritize",
+            "call": call,
         }
         result: dict[str, Any] = {
             "job": job,

@@ -258,6 +258,30 @@ Rules that matter:
   post exactly `BUILD` as a change comment
   (`gerrit message <change> BUILD`).
 
+## Abandon sessions nobody needs
+
+A build superseded by a newer patchset, or one known to be broken,
+still holds its queued and running sessions.  Abandoning them frees the
+test clusters; there is no undo.
+
+```bash
+maloo queue --review <change>                    # find the build and idx
+maloo abandon <build> --dry-run                  # what the page offers
+maloo abandon <build> --idx 41                   # one session
+maloo abandon <build>                            # the entire build
+```
+
+Abandon only sessions of builds you own or were asked to, and confirm
+with the patch owner first: another change's sessions are not yours to
+stop.  `--branch` names a job other than `lustre-reviews`.
+
+`maloo abandon` and `maloo prioritize` are access-controlled: Maloo
+offers each only to accounts given that permission, and many accounts
+have neither (prioritize especially).  Without it the command sends
+nothing and fails with `ABANDON_NOT_OFFERED` or
+`PRIORITIZE_NOT_OFFERED` on every session; that is the account, not
+the build, so do not retry -- ask someone who has the permission.
+
 ## Build failures go to Jenkins
 
 A Verified-1 with no Maloo session is a build:

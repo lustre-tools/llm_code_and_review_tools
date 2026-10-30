@@ -1929,3 +1929,41 @@ class TestExplicitErrorExitCodes:
             self._error(
                 runner.invoke(main, ["review", "54321"]), "RESOLVE_FAILED", 1
             )
+
+
+# -- abandon command --
+
+
+class TestAbandon:
+    def test_session(self, runner, mock_client):
+        mock_client.abandon.return_value = {"sent": True}
+        result = runner.invoke(main, ["--envelope", "abandon", "134303",
+                                      "--idx", "25"])
+        env = _parse_output(result)
+        assert env["ok"] is True
+        mock_client.abandon.assert_called_once_with(
+            job="lustre-reviews", buildno=134303, idx=25, dry_run=False)
+        mock_client.prioritize.assert_not_called()
+
+    def test_dry_run_suggests_the_send(self, runner, mock_client):
+        mock_client.abandon.return_value = {"sent": False}
+        result = runner.invoke(main, ["--envelope", "abandon", "27341",
+                                      "--branch", "b_es6_0", "--dry-run"])
+        env = _parse_output(result)
+        assert any(a.startswith(
+            "maloo abandon 27341 --branch lustre-b_es-reviews ")
+            for a in env["next_actions"])
+
+    def test_not_offered_is_an_error(self, runner, mock_client):
+        from maloo_tool.errors import ToolError
+        mock_client.abandon.side_effect = ToolError(
+            "ABANDON_NOT_OFFERED", "not offered")
+        result = runner.invoke(main, ["abandon", "134303", "--idx", "41"])
+        assert result.exit_code == 1
+        assert json.loads(result.output)["code"] == "ABANDON_NOT_OFFERED"
+
+    def test_runtime_error_is_abandon_failed(self, runner, mock_client):
+        mock_client.abandon.side_effect = RuntimeError("no CSRF token")
+        result = runner.invoke(main, ["abandon", "134303"])
+        assert result.exit_code == 1
+        assert json.loads(result.output)["code"] == "ABANDON_FAILED"

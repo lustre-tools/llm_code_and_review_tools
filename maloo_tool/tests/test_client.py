@@ -987,6 +987,7 @@ class TestPrioritize:
         with pytest.raises(ToolError) as exc:
             client.prioritize("lustre-reviews", 134303)
         assert exc.value.code == "PRIORITIZE_NOT_OFFERED"
+        assert "lack the prioritize permission" in exc.value.message
         web.post.assert_not_called()
 
     def test_missing_csrf_token(self, client, web):
@@ -1002,6 +1003,50 @@ class TestPrioritize:
             raise_for_status=requests.exceptions.HTTPError("422"))
         with pytest.raises(requests.exceptions.HTTPError):
             client.prioritize("lustre-reviews", 134303, idx=41)
+
+
+class TestAbandon:
+    @pytest.fixture
+    def web(self, client):
+        web = MagicMock()
+        client._web_login = MagicMock(return_value=web)
+        web.get.return_value = _mock_response(text=QUEUE_PAGE)
+        web.post.return_value = _mock_response(text="")
+        return web
+
+    def test_running_session(self, client, web):
+        result = client.abandon("lustre-reviews", 134303, idx=25)
+        args, kwargs = web.post.call_args
+        assert args[0] == "https://testing.example.com/test_queue/actionable"
+        assert kwargs["data"] == {
+            "kind": "idx", "session": "lustre-reviews#134303#25",
+            "call": "abandon", "authenticity_token": "queue-tok",
+        }
+        assert result["sent"] is True
+        assert result["abandonable"] == 4
+
+    def test_whole_build(self, client, web):
+        result = client.abandon("lustre-reviews", 134303)
+        data = web.post.call_args[1]["data"]
+        assert data == {"kind": "all", "session": "lustre-reviews#134303#25",
+                        "call": "abandon",
+                        "authenticity_token": "queue-tok"}
+        assert result["scope"] == "build"
+
+    def test_dry_run_sends_nothing(self, client, web):
+        result = client.abandon("lustre-reviews", 134303, dry_run=True)
+        web.post.assert_not_called()
+        assert result["request"]["data"]["call"] == "abandon"
+
+    def test_not_offered_sends_nothing(self, client, web):
+        from maloo_tool.errors import ToolError
+        web.get.return_value = _mock_response(
+            text=QUEUE_PAGE.replace(" abandon\"", "\""))
+        with pytest.raises(ToolError) as exc:
+            client.abandon("lustre-reviews", 134303, idx=41)
+        assert exc.value.code == "ABANDON_NOT_OFFERED"
+        assert "lack the abandon permission" in exc.value.message
+        web.post.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
