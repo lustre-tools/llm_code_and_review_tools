@@ -1445,8 +1445,9 @@ class MalooClient:
                         f"'{bad.group(0)}' cannot be requested for an "
                         "existing build (not allowed: forjanitoronly, "
                         "forbuildonly, fortestonly, ignore, optional, "
-                        "trivial); use --optional for a session that "
-                        "does not gate the Maloo vote",
+                        "trivial). Once Maloo has voted, requested "
+                        "sessions are optional; before that, "
+                        "signofftest=false (--optional) makes them so",
                     )
                 if optional and "signofftest=" not in line:
                     line += " signofftest=false"

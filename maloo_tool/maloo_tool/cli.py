@@ -1740,8 +1740,8 @@ def _queue_action(
               help="Git branch or Jenkins job of the build "
                    "(default: lustre-reviews)")
 @click.option("--optional", is_flag=True,
-              help="Add signofftest=false: the sessions do not gate the "
-                   "Maloo vote")
+              help="Add signofftest=false, for a run asked for as optional "
+                   "while Maloo has not voted yet")
 @click.option("--dry-run", is_flag=True,
               help="Check the lines and show the request, but do not send it")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON")
@@ -1754,9 +1754,10 @@ def request_tests(
     Does what "Test-Parameter request" on Maloo's related sessions page
     does.  Each TEST_PARAMETERS argument is one 'Test-Parameters:' line,
     in commit message syntax; the prefix may be left out.  Maloo runs
-    them in addition to the build's sessions.  They are enforced while
-    Maloo has not voted on the patchset yet, and optional once it has;
-    --optional (signofftest=false) makes them optional either way.
+    them in addition to the build's sessions.  Once Maloo has voted on
+    the patchset they are optional; while its enforced sessions still
+    run, they are enforced too, unless --optional (signofftest=false)
+    is given.
     forjanitoronly, forbuildonly, fortestonly, ignore, optional and
     trivial are refused.  The sessions show up in the test queue a few
     minutes later; Maloo emails the account if it cannot run them.
@@ -1768,7 +1769,7 @@ def request_tests(
     Examples:
       maloo request-tests 134964 \\
           "testgroup=review-dne-selinux-ssk-part-2 testlist=sanity-sec"
-      maloo request-tests 134964 "testlist=sanity env=ONLY=56" --optional
+      maloo request-tests 134964 "testlist=sanity env=ONLY=56"
       maloo request-tests 31445 "testlist=sanity-compr" --branch b_es7_0
       maloo request-tests 134964 "testlist=sanity-sec" --dry-run
     """

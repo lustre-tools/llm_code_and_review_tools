@@ -267,13 +267,14 @@ them the way a `Test-Parameters:` line in the commit message would:
 ```bash
 jenkins review <change>                          # the build number
 maloo request-tests <build> "testgroup=review-dne-selinux-ssk-part-2 testlist=sanity-sec"
-maloo request-tests <build> "testlist=sanity env=ONLY=56" --optional
+maloo request-tests <build> "testlist=sanity env=ONLY=56"
 maloo queue --build <build>                      # a few minutes later
 ```
 
-- The sessions are enforced while Maloo has not voted on the patchset,
-  and optional once it has. `--optional` (`signofftest=false`) keeps
-  them from gating the vote either way; use it for extra coverage.
+- Once Maloo has voted (+1 or -1) on the patchset, requested sessions
+  are optional. While its enforced sessions are still running, they are
+  enforced too. Only then does `--optional` (`signofftest=false`)
+  matter; add it only when someone asked for an optional run.
 - `optional`, `trivial`, `forjanitoronly`, `forbuildonly`, `fortestonly`
   and `ignore` cannot be requested this way.
 - Each request is real CI time on shared clusters: ask for what the
