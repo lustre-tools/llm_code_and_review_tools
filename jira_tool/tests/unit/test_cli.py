@@ -15,6 +15,7 @@ from jira_tool.cli import (
     extract_field,
     main,
 )
+from jira_tool.commands._helpers import _trim_issue
 
 
 @pytest.fixture
@@ -50,6 +51,16 @@ class TestExtractField:
         data = {"key": "PROJ-123"}
         assert extract_field(data, "status") is None
         assert extract_field(data, "assignee.name") is None
+
+
+class TestTrimIssue:
+    """Tests for _trim_issue, which --fields output goes through."""
+
+    def test_a_field_under_another_name_survives(self):
+        issue = _normalize_issue({"key": "A-1", "fields": {
+            "fixVersions": [{"name": "2.18"}]}})
+        assert _trim_issue(issue, ["fixVersions"]) == {
+            "key": "A-1", "fix_versions": ["2.18"]}
 
 
 class TestExtractIssueKey:
@@ -584,6 +595,29 @@ class TestCLIIssueSearch:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["data"]["jql"] == "project = PROJ"
+
+    @responses.activate
+    def test_search_fields_returns_only_those(self, runner, mock_env):
+        """--fields leaves no nulls, description or API links behind."""
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/search",
+            json={"total": 1, "issues": [{
+                "key": "PROJ-1", "id": "7", "self": "https://x/7",
+                "fields": {"summary": "s", "status": {"name": "Open"},
+                           "assignee": None},
+            }]},
+            status=200,
+        )
+
+        result = runner.invoke(main, [
+            "--envelope", "search", "project = PROJ",
+            "--fields", "summary,status,assignee",
+        ])
+
+        assert json.loads(result.output)["data"]["issues"] == [{
+            "key": "PROJ-1", "summary": "s", "status": "Open", "assignee": None,
+        }]
 
 
 class TestCLIIssueComment:

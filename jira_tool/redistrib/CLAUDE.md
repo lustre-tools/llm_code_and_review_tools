@@ -14,6 +14,7 @@ jira get LU-12345 --output status              # single field as plain text (no 
 jira comments LU-12345                         # comments with pagination
 jira comments LU-12345 --limit 20              # more comments
 jira search "project = LU AND status = Open"   # JQL search
+jira search "project = LU AND text ~ 'foo'" --fields key,summary,status  # compact results, for duplicate checks
 jira search "assignee = currentUser()"         # current user's issues
 jira comment LU-12345 "text"                   # add a comment
 jira create --project LU --type Bug --summary "title"  # create issue

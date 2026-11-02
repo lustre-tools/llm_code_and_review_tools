@@ -343,6 +343,17 @@ def _normalize_issue(raw_issue: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _trim_issue(issue: dict[str, Any], asked: list[str]) -> dict[str, Any]:
+    """An issue as --fields asked for it: the key, what was named, and
+    what came back under another name (fixVersions is fix_versions).
+    The rest would only be nulls and API links."""
+    return {
+        name: value for name, value in issue.items()
+        if name == "key" or name in asked
+        or (value and name not in ("id", "self"))
+    }
+
+
 def _names(items: list[dict[str, Any]] | None) -> list[str]:
     """Names of a list of named JIRA objects (versions, components)."""
     return [i.get("name") for i in items or [] if i.get("name")]

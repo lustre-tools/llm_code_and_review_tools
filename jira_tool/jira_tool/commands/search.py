@@ -10,6 +10,7 @@ from ..envelope import error_response_from_dict, success_response
 from ..errors import ConfigError, ErrorCode, ExitCode, JiraToolError
 from ._helpers import (
     _normalize_issue,
+    _trim_issue,
     extract_field,
     get_client,
     handle_error,
@@ -62,7 +63,7 @@ def register(main):
     @click.option("--limit", default=20, help="Maximum results to return (default: 20)")
     @click.option("--offset", default=0, help="Skip first N results (default: 0)")
     @click.option("--page-token", help="Cloud only: resume from a next_page_token (overrides --offset)")
-    @click.option("--fields", help="Comma-separated list of fields to return")
+    @click.option("--fields", help="Comma-separated fields to return, and only those: use it for duplicate checks (key,summary,status)")
     @click.option("--output", "output_field_name", help="Output only this field from each issue (one per line)")
     @click.pass_context
     def issue_search(ctx: click.Context, jql: str, limit: int, offset: int, page_token: str | None, fields: str | None, output_field_name: str | None) -> None:
@@ -73,7 +74,10 @@ def register(main):
 
         Example: jira search "project = PROJ AND status = Open"
 
-        Use --output to extract a field from each result (e.g., --output key).
+        Full descriptions make the default output long. To check for
+        duplicates, use --fields key,summary,status, then jira get the
+        candidates. Use --output to extract a field from each result
+        (e.g., --output key).
         """
         command = "search"
         pretty = ctx.obj.get("pretty", False)
@@ -159,6 +163,9 @@ def register(main):
             else:
                 total = raw_results.get("total", len(issues))
                 total_complete = True
+
+            if field_list:
+                issues = [_trim_issue(issue, field_list) for issue in issues]
 
             search_data: dict = {
                 "jql": jql,

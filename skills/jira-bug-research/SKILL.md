@@ -1,6 +1,6 @@
 ---
 name: jira-bug-research
-description: This skill should be used for JIRA work with the jira CLI - "look up LU-12345", "is there a bug for this failure", "search JIRA for this assertion", "file a bug for this", "comment on that ticket", "link these two issues", "who is this assigned to", "what LU covers this test failure", "move this ticket to In Progress". Covers JQL search for known-issue research, multi-instance and Cloud routing, and issue creation and linking.
+description: This skill should be used for JIRA work with the jira CLI - "look up LU-12345", "is there a bug for this failure", "search JIRA for this assertion", "file a bug for this", "comment on that ticket", "link these two issues", "who is this assigned to", "what LU covers this test failure", "move this ticket to In Progress". Covers JQL search for known-issue research with compact results (--fields, --output), multi-instance and Cloud routing, and issue creation and linking.
 version: 0.1.0
 ---
 
@@ -21,13 +21,16 @@ anything, and search on the failure's own words -- the assertion text, the
 function name, the test name:
 
 ```bash
-jira search 'project = LU AND text ~ "\"sanity test_39b\""' --limit 20
+jira search 'project = LU AND text ~ "\"sanity test_39b\""' --fields key,summary,status --limit 20
 jira search "project = LU AND text ~ 'LBUG ldlm_lock_decref'" --fields key,summary,status   # both words, any order; no regex
 jira search "project = LU AND status != Closed AND text ~ 'osc_extent'" --output key
 ```
 
 `--output <field>` prints one field per line, which is what to use when
-feeding keys into another command. `--fields` trims the payload.
+feeding keys into another command. Without `--fields`, every result
+carries its full description, which is long and costs tokens: pass
+`--fields key,summary,status` when searching for duplicates, and return
+only the fields named. `jira get` takes it too.
 
 Then read the candidates:
 

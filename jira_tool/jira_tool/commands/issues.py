@@ -10,6 +10,7 @@ from ..errors import ConfigError, ExitCode, JiraToolError
 from ._helpers import (
     _normalize_comments,
     _normalize_issue,
+    _trim_issue,
     extract_field,
     extract_issue_key,
     get_client,
@@ -58,6 +59,9 @@ def register(main):
             if output_field_name:
                 output_field(issue_data, output_field_name)
                 sys.exit(ExitCode.SUCCESS)
+
+            if field_list:
+                issue_data = _trim_issue(issue_data, field_list)
 
             # If --comments specified, fetch and inline comments
             if include_comments:
