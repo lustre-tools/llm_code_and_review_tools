@@ -1,5 +1,6 @@
 """Tests for the client module."""
 
+import json
 import os
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
@@ -366,8 +367,36 @@ class TestGerritCommentsClientWithMocks:
         mock_rest.post.assert_called_once()
         call_args = mock_rest.post.call_args
         assert "/changes/123/revisions/abc123/review" in call_args[0][0]
-        assert call_args[1]["json"]["message"] == "LGTM"
-        assert call_args[1]["json"]["labels"]["Code-Review"] == 1
+        review = call_args[1]["json"]
+        assert "message" not in review
+        assert review["comments"] == {
+            "/PATCHSET_LEVEL": [{"message": "LGTM", "unresolved": False}]}
+        assert review["labels"]["Code-Review"] == 1
+
+    @patch.dict(os.environ, {"GERRIT_CLI_MODE": "full"})
+    @patch("gerrit_cli.client.GerritRestAPI")
+    @patch("gerrit_cli.client.HTTPBasicAuth")
+    def test_post_review_message_goes_first_among_comments(self, mock_auth, mock_api):
+        """64441: a review "message" is a change log entry nobody can
+        reply to; the web UI posts its reply box as a patchset-level
+        comment, and so does post_review."""
+        mock_rest = MagicMock()
+        mock_api.return_value = mock_rest
+        comments = {"/PATCHSET_LEVEL": [{"message": "old", "in_reply_to": "x"}],
+                    "a.c": [{"message": "fix", "line": 3}]}
+
+        GerritCommentsClient().post_review(
+            change_number=1, revision_id="current", message="Change-log",
+            comments=comments, unresolved=True)
+
+        review = mock_rest.post.call_args[1]["json"]
+        assert review["comments"]["/PATCHSET_LEVEL"] == [
+            {"message": "Change-log", "unresolved": True},
+            {"message": "old", "in_reply_to": "x"},
+        ]
+        assert review["comments"]["a.c"] == [{"message": "fix", "line": 3}]
+        assert comments["/PATCHSET_LEVEL"] == [
+            {"message": "old", "in_reply_to": "x"}]
 
     @patch.dict(os.environ, {"GERRIT_CLI_MODE": "full"})
     @patch("gerrit_cli.client.GerritRestAPI")
@@ -525,3 +554,33 @@ class TestClientDraftMode:
 
         assert os.environ["GERRIT_CLI_MODE"] == "drafts"
         assert get_mode() == "drafts"
+
+
+class TestCmdMessage:
+    """gc message posts a patchset-level comment, as the web UI's reply
+    box does, so the text can be replied to (64441)."""
+
+    @staticmethod
+    def _run(capsys, argv):
+        from gerrit_cli.cli import main
+        with patch("gerrit_cli.cli.GerritCommentsClient") as MockClient, \
+             patch("sys.argv", ["gerrit"] + argv), \
+             pytest.raises(SystemExit) as exc_info:
+            MockClient.parse_gerrit_url.return_value = (
+                "https://example.com", 64441)
+            main()
+        assert exc_info.value.code == 0
+        return MockClient.return_value, json.loads(capsys.readouterr().out)
+
+    def test_resolved_by_default(self, capsys):
+        client, out = self._run(capsys, ["message", "64441", "Change-log"])
+        client.post_review.assert_called_once_with(
+            change_number=64441, revision_id="current",
+            message="Change-log", unresolved=False)
+        assert out["unresolved"] is False
+
+    def test_unresolved(self, capsys):
+        client, out = self._run(
+            capsys, ["message", "64441", "Question?", "--unresolved"])
+        assert client.post_review.call_args.kwargs["unresolved"] is True
+        assert out["unresolved"] is True

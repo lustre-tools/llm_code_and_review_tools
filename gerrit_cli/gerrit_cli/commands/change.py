@@ -295,16 +295,19 @@ def cmd_message(args):
         base_url, change_number = cli.GerritCommentsClient.parse_gerrit_url(args.url)
         client = cli.GerritCommentsClient()
 
+        unresolved = getattr(args, 'unresolved', False)
         client.post_review(
             change_number=change_number,
             revision_id="current",
             message=args.text,
+            unresolved=unresolved,
         )
 
         data = {
             "success": True,
             "change_number": change_number,
             "message": args.text,
+            "unresolved": unresolved,
             **result_fields(),
         }
         output_success(data, command, pretty)

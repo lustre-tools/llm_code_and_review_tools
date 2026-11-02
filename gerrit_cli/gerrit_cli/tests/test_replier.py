@@ -327,7 +327,7 @@ class TestCommentReplier:
 
         assert len(results) == 1
         assert results[0].success is False
-        assert results[0].error == "Batch failed"
+        assert results[0].error == "Error posting replies: Batch failed"
 
     @patch("gerrit_cli.replier.GerritCommentsClient")
     def test_batch_reply_on_a_file_the_new_patchset_deleted(self, mock_client_class):
@@ -384,6 +384,9 @@ class TestCommentReplier:
                 "ps3sha": {"_number": 3},
             },
         }
+        mock_client.get_drafts.return_value = {}
+        mock_client.create_draft.side_effect = (
+            lambda change, revision, comment: {"id": f"d-{comment['in_reply_to']}"})
         mock_client_class.return_value = mock_client
         span = {"start_line": 40, "start_character": 0,
                 "end_line": 42, "end_character": 7}
@@ -407,16 +410,51 @@ class TestCommentReplier:
         )
 
         assert all(r.success for r in results)
-        posts = {
-            c.kwargs["revision_id"]: c.kwargs["comments"]["lustre/mdt/mdt_reint.c"]
-            for c in mock_client.post_review.call_args_list
+        drafts = [(c.args[1], c.args[2])
+                  for c in mock_client.create_draft.call_args_list]
+        assert drafts == [
+            ("ps1sha", {"path": "lustre/mdt/mdt_reint.c", "in_reply_to": "a",
+                        "message": "Done.", "unresolved": False, "line": 42,
+                        "range": span}),
+            ("ps2sha", {"path": "lustre/mdt/mdt_reint.c", "in_reply_to": "b",
+                        "message": "Why?", "unresolved": True, "line": 9,
+                        "side": "PARENT"}),
+        ]
+        mock_client.publish_drafts.assert_called_once_with(68672)
+        mock_client.post_review.assert_not_called()
+
+    @patch("gerrit_cli.replier.GerritCommentsClient")
+    def test_batch_reply_on_several_patchsets_keeps_the_users_drafts(
+            self, mock_client_class):
+        """64441: replies on PS24 and PS32 went out as two reviews in the
+        same second; Gerrit filed all comments under one message and the
+        other showed empty.  Publishing would take the user's drafts too,
+        so with drafts on the change nothing is posted."""
+        mock_client = MagicMock()
+        mock_client.get_change_detail.return_value = {
+            "current_revision": "ps34sha",
+            "revisions": {"ps24sha": {"_number": 24}, "ps32sha": {"_number": 32},
+                          "ps34sha": {"_number": 34}},
         }
-        assert posts == {
-            "ps1sha": [{"in_reply_to": "a", "message": "Done.",
-                        "unresolved": False, "line": 42, "range": span}],
-            "ps2sha": [{"in_reply_to": "b", "message": "Why?",
-                        "unresolved": True, "line": 9, "side": "PARENT"}],
-        }
+        mock_client.get_drafts.return_value = {"a.c": [{"id": "mine", "line": 3}]}
+        mock_client_class.return_value = mock_client
+
+        def comment(cid, patch_set):
+            return Comment(id=cid, patch_set=patch_set, file_path="x.c",
+                           line=1, message="x", author=Author(name="R"),
+                           unresolved=True, updated="2026-11-02")
+
+        results = CommentReplier().batch_reply(
+            change_number=64441,
+            replies=[{"comment": comment("p24", 24), "message": "Done."},
+                     {"comment": comment("p32", 32), "message": "Done."}],
+        )
+
+        assert not any(r.success for r in results)
+        assert "a.c:3" in results[0].error
+        mock_client.create_draft.assert_not_called()
+        mock_client.post_review.assert_not_called()
+        mock_client.publish_drafts.assert_not_called()
 
     @patch("gerrit_cli.replier.GerritCommentsClient")
     def test_batch_reply_failure_carries_gerrits_reason(self, mock_client_class):
@@ -436,9 +474,8 @@ class TestCommentReplier:
         )
 
         assert result.success is False
-        assert result.error == (
-            "400 Client Error: Bad Request: file x not found in revision 51164,9"
-        )
+        assert ("400 Client Error: Bad Request: file x not found in "
+                "revision 51164,9") in result.error
 
     @patch("gerrit_cli.replier.GerritCommentsClient")
     def test_reply_from_extracted(self, mock_client_class):
@@ -580,8 +617,9 @@ class TestConvenienceFunctions:
 
 
 class TestPushStaged:
-    """push_staged: one draft per reply on its parent's patchset, then a
-    single publish, so the replies make one Gerrit message."""
+    """push_staged: replies on one patchset are one review; on several,
+    one draft per reply on its parent's patchset, then a single publish,
+    so the replies make one Gerrit message."""
 
     @staticmethod
     def _setup(mock_staging_class, mock_client_class, operations,
@@ -606,6 +644,11 @@ class TestPushStaged:
         staging.load_staged.return_value = staged
         mock_staging_class.return_value = staging
         return client, staging, staged
+
+    #: id1 on PS1 and id2 on PS2: replies on two patchsets, which
+    #: go out as drafts and one publish
+    TWO_PATCHSETS = {"test.c": [{"id": "id1", "patch_set": 1, "line": 10},
+                                {"id": "id2", "patch_set": 2, "line": 10}]}
 
     @staticmethod
     def _op(index, message, comment_id, resolve=True, line=10):
@@ -680,12 +723,56 @@ class TestPushStaged:
 
     @patch("gerrit_cli.replier.GerritCommentsClient")
     @patch("gerrit_cli.replier.StagingManager")
+    def test_replies_on_one_patchset_are_one_review(
+            self, mock_staging_class, mock_client_class, monkeypatch):
+        """No drafts are needed, so the user's own drafts neither stop
+        the push nor get published (a review keeps drafts by default)."""
+        monkeypatch.delenv("GERRIT_CLI_MODE", raising=False)
+        client, staging, _ = self._setup(
+            mock_staging_class, mock_client_class,
+            [self._op(0, "Done", "id1"), self._op(1, "Ok", "id2", line=12)],
+            drafts={"other.c": [{"id": "theirs", "line": 7}]})
+
+        success, msg, count = CommentReplier().push_staged(12345)
+
+        assert success is True and count == 2
+        client.post_review.assert_called_once_with(
+            change_number=12345, revision_id="ps3sha",
+            comments={"test.c": [
+                {"in_reply_to": "id1", "message": "Done",
+                 "unresolved": False, "line": 10},
+                {"in_reply_to": "id2", "message": "Ok",
+                 "unresolved": False, "line": 12},
+            ]})
+        client.create_draft.assert_not_called()
+        client.get_drafts.assert_not_called()
+        client.publish_drafts.assert_not_called()
+        staging.clear_staged.assert_called_once_with(12345)
+
+    @patch("gerrit_cli.replier.GerritCommentsClient")
+    @patch("gerrit_cli.replier.StagingManager")
+    def test_a_failed_review_on_one_patchset_keeps_everything_staged(
+            self, mock_staging_class, mock_client_class, monkeypatch):
+        monkeypatch.delenv("GERRIT_CLI_MODE", raising=False)
+        client, staging, _ = self._setup(
+            mock_staging_class, mock_client_class, [self._op(0, "Done", "id1")])
+        client.post_review.side_effect = Exception("API Error")
+
+        success, msg, count = CommentReplier().push_staged(12345)
+
+        assert success is False and "API Error" in msg
+        assert "all 1 are still staged" in msg
+        staging.clear_staged.assert_not_called()
+
+    @patch("gerrit_cli.replier.GerritCommentsClient")
+    @patch("gerrit_cli.replier.StagingManager")
     def test_existing_drafts_are_not_published_with_the_replies(
             self, mock_staging_class, mock_client_class, monkeypatch):
         monkeypatch.delenv("GERRIT_CLI_MODE", raising=False)
         client, staging, _ = self._setup(
             mock_staging_class, mock_client_class,
-            [self._op(0, "Done", "id1")],
+            [self._op(0, "Done", "id1"), self._op(1, "Ok", "id2")],
+            comments=self.TWO_PATCHSETS,
             drafts={"lustre/llite/file.c": [{"id": "x", "line": 42}]})
 
         success, msg, count = CommentReplier().push_staged(12345)
@@ -706,6 +793,7 @@ class TestPushStaged:
         client, staging, _ = self._setup(
             mock_staging_class, mock_client_class,
             [self._op(0, "Done", "id1"), self._op(1, "Ok", "id2")],
+            comments=self.TWO_PATCHSETS,
             drafts={"other.c": [{"id": "x", "line": 1}]})
 
         success, msg, count = CommentReplier().push_staged(12345)
@@ -724,14 +812,15 @@ class TestPushStaged:
         monkeypatch.delenv("GERRIT_CLI_MODE", raising=False)
         client, staging, _ = self._setup(
             mock_staging_class, mock_client_class,
-            [self._op(0, "Done", "id1"), self._op(1, "Ok", "id2")])
+            [self._op(0, "Done", "id1"), self._op(1, "Ok", "id2")],
+            comments=self.TWO_PATCHSETS)
         client.create_draft.side_effect = [{"id": "d1"}, Exception("API Error")]
 
         success, msg, count = CommentReplier().push_staged(12345)
 
         assert success is False and "API Error" in msg
         assert "all 2 are still staged" in msg
-        client.delete_draft.assert_called_once_with(12345, "ps3sha", "d1")
+        client.delete_draft.assert_called_once_with(12345, "ps1sha", "d1")
         client.publish_drafts.assert_not_called()
         staging.clear_staged.assert_not_called()
         staging.save_staged.assert_not_called()
@@ -743,7 +832,8 @@ class TestPushStaged:
         monkeypatch.delenv("GERRIT_CLI_MODE", raising=False)
         client, staging, _ = self._setup(
             mock_staging_class, mock_client_class,
-            [self._op(0, "Done", "id1"), self._op(1, "Ok", "id2")])
+            [self._op(0, "Done", "id1"), self._op(1, "Ok", "id2")],
+            comments=self.TWO_PATCHSETS)
         client.publish_drafts.side_effect = Exception("API Error")
         ours = {"test.c": [{"id": "d-Done", "line": 10},
                            {"id": "d-Ok", "line": 10}]}
@@ -762,7 +852,9 @@ class TestPushStaged:
             self, mock_staging_class, mock_client_class, monkeypatch):
         monkeypatch.delenv("GERRIT_CLI_MODE", raising=False)
         client, staging, _ = self._setup(
-            mock_staging_class, mock_client_class, [self._op(0, "Done", "id1")])
+            mock_staging_class, mock_client_class,
+            [self._op(0, "Done", "id1"), self._op(1, "Ok", "id2")],
+            comments=self.TWO_PATCHSETS)
         client.get_drafts.side_effect = Exception("API Error")
 
         success, msg, count = CommentReplier().push_staged(12345)
@@ -780,10 +872,12 @@ class TestPushStaged:
         publish: the push refuses, removes its own drafts, keeps theirs."""
         monkeypatch.delenv("GERRIT_CLI_MODE", raising=False)
         client, staging, _ = self._setup(
-            mock_staging_class, mock_client_class, [self._op(0, "Done", "id1")])
+            mock_staging_class, mock_client_class,
+            [self._op(0, "Done", "id1"), self._op(1, "Ok", "id2")],
+            comments=self.TWO_PATCHSETS)
         client.get_drafts.side_effect = [
             {},
-            {"test.c": [{"id": "d-Done", "line": 10}],
+            {"test.c": [{"id": "d-Done", "line": 10}, {"id": "d-Ok", "line": 10}],
              "other.c": [{"id": "theirs", "line": 7}]},
         ]
 
@@ -791,7 +885,8 @@ class TestPushStaged:
 
         assert success is False and "other.c:7" in msg
         client.publish_drafts.assert_not_called()
-        client.delete_draft.assert_called_once_with(12345, "ps3sha", "d-Done")
+        assert sorted(c.args[1:] for c in client.delete_draft.call_args_list) \
+            == [("ps1sha", "d-Done"), ("ps2sha", "d-Ok")]
         staging.clear_staged.assert_not_called()
 
     @patch("gerrit_cli.replier.GerritCommentsClient")
@@ -804,7 +899,8 @@ class TestPushStaged:
         monkeypatch.delenv("GERRIT_CLI_MODE", raising=False)
         client, staging, _ = self._setup(
             mock_staging_class, mock_client_class,
-            [self._op(0, "Done", "id1"), self._op(1, "Ok", "id2")])
+            [self._op(0, "Done", "id1"), self._op(1, "Ok", "id2")],
+            comments=self.TWO_PATCHSETS)
         client.publish_drafts.side_effect = TimeoutError("read timed out")
         client.get_drafts.side_effect = [
             {}, {"test.c": [{"id": "d-Done"}, {"id": "d-Ok"}]}, {}]
@@ -824,10 +920,13 @@ class TestPushStaged:
         so do the staged replies."""
         monkeypatch.delenv("GERRIT_CLI_MODE", raising=False)
         client, staging, _ = self._setup(
-            mock_staging_class, mock_client_class, [self._op(0, "Done", "id1")])
+            mock_staging_class, mock_client_class,
+            [self._op(0, "Done", "id1"), self._op(1, "Ok", "id2")],
+            comments=self.TWO_PATCHSETS)
         client.publish_drafts.side_effect = TimeoutError("read timed out")
         client.get_drafts.side_effect = [
-            {}, {"test.c": [{"id": "d-Done"}]}, TimeoutError("again")]
+            {}, {"test.c": [{"id": "d-Done"}, {"id": "d-Ok"}]},
+            TimeoutError("again")]
 
         success, msg, count = CommentReplier().push_staged(12345)
 

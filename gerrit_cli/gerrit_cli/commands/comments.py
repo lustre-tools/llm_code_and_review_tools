@@ -523,10 +523,10 @@ def cmd_batch_reply(args):
             f"were not posted: {skipped}." if skipped else ""
         )
         if failed:
-            # One review carries every reply, so they fail together.
+            # The replies are posted together, so they fail together.
             code = ErrorCode.API_ERROR
             message = (
-                f"Gerrit did not take the replies: {failed[0].error}. "
+                f"Gerrit did not take the replies: {failed[0].error.rstrip('.')}. "
                 f"{success_count} of {len(results)} posted. {unmatched}"
             ).strip()
         elif skipped:

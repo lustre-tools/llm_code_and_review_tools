@@ -221,10 +221,12 @@ class CommentReplier:
         change_number: int,
         replies: list[dict[str, Any]],
     ) -> list[ReplyResult]:
-        """Post multiple replies, in one review per patchset they go on.
+        """Post multiple replies as one change message.
 
         Each reply goes on its parent comment's patchset (see
-        _reply_revisions).
+        _reply_revisions); see _post_replies for how replies on several
+        patchsets are posted, and when that refuses.  All replies are
+        posted or none is.
 
         Args:
             change_number: The change number
@@ -251,40 +253,31 @@ class CommentReplier:
                 for reply_spec in replies
             ]
 
-        groups: dict[str, list[int]] = {}
-        for index, revision in enumerate(revisions):
-            groups.setdefault(revision, []).append(index)
-
-        results: list[Optional[ReplyResult]] = [None] * len(replies)
-        for revision, indexes in groups.items():
-            comments_dict: dict[str, list[dict[str, Any]]] = {}
-            for index in indexes:
-                reply_spec = replies[index]
-                comment = reply_spec["comment"]
-                comments_dict.setdefault(comment.file_path, []).append(_reply_input(
-                    comment, reply_spec["message"], reply_spec.get("mark_resolved", False),
-                ))
-
-            error = None
-            try:
-                self.client.post_review(
-                    change_number=change_number,
-                    revision_id=revision,
-                    comments=comments_dict,
-                )
-            except Exception as e:
-                error = _error_text(e)
-            for index in indexes:
-                reply_spec = replies[index]
-                results[index] = ReplyResult(
-                    success=error is None,
-                    comment_id=reply_spec["comment"].id,
-                    message=reply_spec["message"],
-                    marked_resolved=error is None and reply_spec.get("mark_resolved", False),
-                    error=error,
-                )
-
-        return [result for result in results if result is not None]
+        failure = self._post_replies(change_number, [
+            (revision, {
+                "path": reply_spec["comment"].file_path,
+                **_reply_input(reply_spec["comment"], reply_spec["message"],
+                               reply_spec.get("mark_resolved", False)),
+            })
+            for revision, reply_spec in zip(revisions, replies)
+        ])
+        error = None
+        if failure is not None:
+            reason, uncertain = failure
+            error = reason + (
+                "\nCheck the change in the web UI: if the replies are "
+                "there, they were posted; if not, publish or delete their "
+                "drafts." if uncertain else "")
+        return [
+            ReplyResult(
+                success=error is None,
+                comment_id=reply_spec["comment"].id,
+                message=reply_spec["message"],
+                marked_resolved=error is None and reply_spec.get("mark_resolved", False),
+                error=error,
+            )
+            for reply_spec in replies
+        ]
 
     def reply_from_extracted(
         self,
@@ -330,17 +323,8 @@ class CommentReplier:
 
         Each reply goes on its parent comment's patchset, found by the
         comment_id, so a reply staged before a new patchset still lands in
-        its thread. As in the web UI, every reply is first a draft on its
-        patchset and then all are published at once: a review POST can
-        carry comments for its own revision only, and one post per
-        patchset makes as many messages, which Gerrit's one-second
-        timestamps mix up. Publishing takes every draft of the account on
-        the change, so drafts it already had make the push refuse, and so
-        does one saved while the push runs. In drafts mode the replies
-        stay drafts. Nothing is posted unless all drafts are made; on a
-        failure the ones made are deleted and everything stays staged.
-        When the publish itself fails, the drafts tell what happened:
-        gone means Gerrit published them and only its answer was lost.
+        its thread. All are posted as one message (see _post_replies) or
+        none is, and only a push that posted clears the staged replies.
 
         Args:
             change_number: The change number
@@ -400,21 +384,84 @@ class CommentReplier:
             }))
 
         total = len(replies)
+        failure = self._post_replies(change_number, replies)
+        if failure is not None:
+            reason, uncertain = failure
+            if uncertain:
+                return False, (
+                    f"{reason}\nThe {total} replies are still staged and "
+                    "their drafts may still be on the change: check it in "
+                    "the web UI. If the replies are there, run 'gerrit "
+                    f"staged clear {change_number}'; if not, publish or "
+                    "delete those drafts. Push refuses while they exist, "
+                    "so it cannot post them twice."
+                ), total
+            return False, (f"{reason}\nNothing was posted; all {total} are "
+                           "still staged."), total
+
+        self.staging_manager.clear_staged(change_number)
+        if is_drafts_mode():
+            return True, (
+                f"✓ Created {total} draft replies on Change {change_number}; "
+                f"not published ({MODE_ENV_VAR}={MODE_DRAFTS}). Publish them "
+                "in the Gerrit web UI."
+            ), total
+        return True, f"✓ Pushed {total} operations to Change {change_number}", total
+
+    def _post_replies(
+        self,
+        change_number: int,
+        replies: list[tuple[str, dict[str, Any]]],
+    ) -> Optional[tuple[str, bool]]:
+        """Post replies, each a (revision, CommentInput with "path"), as
+        one change message.
+
+        A review POST carries comments for its own revision only, and
+        one post per patchset makes as many messages, which Gerrit's
+        one-second timestamps mix up: every comment is filed under one of
+        them and the others show empty.  So replies on several patchsets
+        are first drafts on their patchsets and then published at once,
+        as the web UI does.  Publishing takes every draft of the account
+        on the change, so drafts it already had make this refuse, and so
+        does one saved meanwhile; on any failure the drafts made are
+        deleted.  When the publish fails, the drafts tell what happened:
+        gone means Gerrit published them and only its answer was lost.
+        In drafts mode the replies stay drafts.
+
+        Return: None when posted, else (why not, uncertain); uncertain
+                means it could not be told whether the publish went
+                through, and the drafts were left in place.
+        """
+        revisions = {revision for revision, _ in replies}
+        if len(revisions) == 1:
+            comments: dict[str, list[dict[str, Any]]] = {}
+            for _, comment in replies:
+                comment = dict(comment)
+                comments.setdefault(comment.pop("path"), []).append(comment)
+            try:
+                self.client.post_review(
+                    change_number=change_number,
+                    revision_id=revisions.pop(),
+                    comments=comments,
+                )
+            except Exception as e:
+                return self._failure(e, change_number), False
+            return None
+
         drafts_mode = is_drafts_mode()
         if not drafts_mode:
             try:
                 existing = self.client.get_drafts(change_number) or {}
             except Exception as e:
-                return False, self._push_error(e, change_number, total), total
+                return self._failure(e, change_number), False
             mine = [label for _, label in _draft_labels(existing)]
             if mine:
-                return False, (
+                return (
                     f"Change {change_number} already has {len(mine)} draft "
                     f"comment(s) of yours ({', '.join(mine)}); publishing the "
                     "replies would publish them too. Publish or delete them "
-                    f"in the web UI, then push again. All {total} replies "
-                    "are still staged."
-                ), total
+                    "in the web UI, then try again."
+                ), False
 
         created: list[tuple[str, Optional[str]]] = []
         try:
@@ -423,56 +470,43 @@ class CommentReplier:
                 created.append((revision, (draft or {}).get("id")))
         except Exception as e:
             self._delete_drafts(change_number, created)
-            return False, self._push_error(e, change_number, total), total
-
-        if not drafts_mode:
-            ours = {draft_id for _, draft_id in created}
-            try:
-                # a draft saved in the web UI since the first check
-                others = [label for draft_id, label
-                          in _draft_labels(self.client.get_drafts(change_number))
-                          if draft_id not in ours]
-            except Exception as e:
-                self._delete_drafts(change_number, created)
-                return False, self._push_error(e, change_number, total), total
-            if others:
-                self._delete_drafts(change_number, created)
-                return False, (
-                    f"You saved {len(others)} draft comment(s) on change "
-                    f"{change_number} during the push ({', '.join(others)}); "
-                    "publishing would have taken them along, so nothing was "
-                    f"posted. All {total} replies are still staged."
-                ), total
-            try:
-                self.client.publish_drafts(change_number)
-            except Exception as e:
-                published = self._published(change_number, ours)
-                if published is None:
-                    return False, (
-                        f"Publishing failed or its answer was lost ({_error_text(e)}), "
-                        "and gerrit-cli could not tell whether it went through. "
-                        f"The {total} replies are still staged and their drafts "
-                        "may still be on the change: check it in the web UI. If "
-                        f"the replies are there, run 'gerrit staged clear {change_number}'; "
-                        "if not, publish or delete those drafts. Push refuses "
-                        "while they exist, so it cannot post them twice."
-                    ), total
-                if not published:
-                    self._delete_drafts(change_number, created)
-                    return False, self._push_error(e, change_number, total), total
-
-        self.staging_manager.clear_staged(change_number)
+            return self._failure(e, change_number), False
         if drafts_mode:
-            return True, (
-                f"✓ Created {total} draft replies on Change {change_number}; "
-                f"not published ({MODE_ENV_VAR}={MODE_DRAFTS}). Publish them "
-                "in the Gerrit web UI."
-            ), total
-        return True, f"✓ Pushed {total} operations to Change {change_number}", total
+            return None
+
+        ours = {draft_id for _, draft_id in created}
+        try:
+            # a draft saved in the web UI since the first check
+            others = [label for draft_id, label
+                      in _draft_labels(self.client.get_drafts(change_number))
+                      if draft_id not in ours]
+        except Exception as e:
+            self._delete_drafts(change_number, created)
+            return self._failure(e, change_number), False
+        if others:
+            self._delete_drafts(change_number, created)
+            return (
+                f"You saved {len(others)} draft comment(s) on change "
+                f"{change_number} meanwhile ({', '.join(others)}); "
+                "publishing would have taken them along."
+            ), False
+        try:
+            self.client.publish_drafts(change_number)
+        except Exception as e:
+            published = self._published(change_number, ours)
+            if published is None:
+                return (
+                    f"Publishing failed or its answer was lost ({_error_text(e)}), "
+                    "and gerrit-cli could not tell whether it went through."
+                ), True
+            if not published:
+                self._delete_drafts(change_number, created)
+                return self._failure(e, change_number), False
+        return None
 
     def _delete_drafts(self, change_number: int,
                        created: list[tuple[str, Optional[str]]]) -> None:
-        """Remove the drafts this push made, best effort."""
+        """Remove the drafts _post_replies made, best effort."""
         for revision, draft_id in created:
             if draft_id:
                 try:
@@ -492,20 +526,19 @@ class CommentReplier:
         return not (ours & left)
 
     @staticmethod
-    def _push_error(e: Exception, change_number: int, total: int) -> str:
+    def _failure(e: Exception, change_number: int) -> str:
         if isinstance(e, ConnectionError):
             msg = f"Network error: Could not connect to Gerrit server.\nDetails: {e}\nPlease check your connection and try again."
         elif isinstance(e, TimeoutError):
             msg = f"Timeout error: Gerrit server did not respond.\nDetails: {e}\nPlease try again later."
         else:
-            msg = f"Error pushing operations: {_error_text(e)}"
+            msg = f"Error posting replies: {_error_text(e)}"
             if "401" in str(e) or "Unauthorized" in str(e):
                 msg += "\nPossible cause: Invalid credentials. Check your .env file or environment variables."
             elif "403" in str(e) or "Forbidden" in str(e):
                 msg += "\nPossible cause: Insufficient permissions for this operation."
             elif "404" in str(e):
                 msg += f"\nPossible cause: Change {change_number} not found or has been deleted."
-        msg += f"\nNothing was posted; all {total} are still staged."
         return msg
 
 

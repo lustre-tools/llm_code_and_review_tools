@@ -159,12 +159,12 @@ The 'push' command posts all staged replies to Gerrit. Use --dry-run to
 preview what would be posted without actually sending.
 
 Each reply goes in its thread, on the patchset its parent comment was
-made on, and all of them are published together as one message, the
-way the web UI does it: drafts first, then one publish. Publishing
-takes every draft of yours on the change, so push refuses while you
-have other drafts there; publish or delete them first. If anything
-fails, nothing is posted and the replies stay staged. With
-GERRIT_CLI_MODE=drafts the replies are left as drafts.
+made on, and all of them are posted together as one message. Replies
+on several patchsets go the way the web UI does it: drafts first, then
+one publish. Publishing takes every draft of yours on the change, so
+push then refuses while you have other drafts there; publish or delete
+them first. If anything fails, nothing is posted and the replies stay
+staged. With GERRIT_CLI_MODE=drafts the replies are left as drafts.
 
 It does not push commits. To upload a patchset, use 'upload'.
 """,
@@ -415,6 +415,8 @@ The JSON file may contain "message", "vote", "tag", and "comments".
 Comments are either a flat list ([{path, line, message, unresolved}])
 or the Gerrit REST format ({path: [{line, message, unresolved}]}).
 Explicit CLI --message/--vote/--tag flags override the file values.
+The message is posted as a resolved patchset-level comment, as the web
+UI's reply box does, so it can be replied to.
 Use --prefix to prepend text (e.g. a bot name) to the message and
 every comment, and --dry-run to preview the payload without posting.
 """,
@@ -715,9 +717,10 @@ accounts, by the same list as 'reviewers' (Gerrit leaves some untagged).
 Post multiple replies at once from a JSON file. The file should contain
 an array of objects with thread_index, message, and optionally mark_resolved.
 
-The replies go up as one review. It exits 0 only when every entry was
-posted: 1 when Gerrit refused the review, 4 when an entry matched no
-thread or comment (the others are still posted). Either way the error's
+The replies go up as one message, as with 'push' (replies on several
+patchsets refuse while you have other drafts on the change). It exits 0
+only when every entry was posted: 1 when nothing was, 4 when an entry
+matched no thread or comment (the others are still posted). Either way the error's
 details carry posted, skipped_indices and the per-reply results.
 """,
         "examples": [
@@ -917,13 +920,18 @@ Verified, with an optional message. 'label' is an alias.
         "summary": "Post a change-level message",
         "description": """
 Post a top-level message on a change, as the reply box of the Gerrit web
-UI does. It is not attached to a file or line. To vote at the same time,
-use 'gc vote -m'.
+UI does: a patchset-level comment, not attached to a file or line, that
+anyone can reply to. It is resolved; --unresolved opens it as a thread
+that wants an answer. To vote at the same time, use 'gc vote -m'.
 """,
         "examples": [
             {
                 "command": "gc message URL \"Rebased on the new master\"",
                 "description": "Post a message on the change",
+            },
+            {
+                "command": "gc message URL --unresolved \"Can the bot rerun sanity-sec?\"",
+                "description": "Ask something that needs an answer",
             },
         ],
         "related": ["vote", "reply"],

@@ -13,7 +13,24 @@ from pygerrit2 import (  # type: ignore[import-untyped]
     HTTPBasicAuth,
 )
 
-from .mode import MODE_ENV_VAR, wrap_rest
+from .mode import MODE_ENV_VAR, PATCHSET_LEVEL, wrap_rest
+
+
+def with_patchset_comment(
+    comments: Optional[dict[str, list[dict[str, Any]]]],
+    message: str,
+    unresolved: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
+    """comments plus message as the first patchset-level comment.
+
+    The web UI posts its reply box this way, as a thread anyone can
+    answer; a review's own "message" only makes a change log entry,
+    which nobody can reply to.
+    """
+    merged = {path: list(entries) for path, entries in (comments or {}).items()}
+    merged.setdefault(PATCHSET_LEVEL, []).insert(
+        0, {"message": message, "unresolved": unresolved})
+    return merged
 
 
 # Credential loading is shared with jira-tool, maloo-tool and jenkins-tool so
@@ -444,15 +461,18 @@ class GerritCommentsClient:
         message: Optional[str] = None,
         comments: Optional[dict[str, list[dict[str, Any]]]] = None,
         labels: Optional[dict[str, int]] = None,
+        unresolved: bool = False,
     ) -> dict[str, Any]:
         """Post a review with optional comments and labels.
 
         Args:
             change_number: The change number
             revision_id: The revision SHA or "current"
-            message: Optional overall review message
+            message: Optional overall review message, posted as a
+                patchset-level comment (see with_patchset_comment)
             comments: Optional dict mapping file paths to comment lists
             labels: Optional dict mapping label names to values
+            unresolved: Open the message's thread as unresolved
 
         Returns:
             Response from the API
@@ -460,7 +480,7 @@ class GerritCommentsClient:
         review_input: dict[str, Any] = {}
 
         if message:
-            review_input["message"] = message
+            comments = with_patchset_comment(comments, message, unresolved)
 
         if comments:
             review_input["comments"] = comments

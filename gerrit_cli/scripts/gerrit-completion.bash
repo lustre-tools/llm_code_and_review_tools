@@ -63,7 +63,7 @@ _gerrit_completions() {
         info) opts="--envelope --help --pretty --show-bots --user -U -h -p" ;;
         label|vote) opts="--envelope --help --message --pretty --user -U -h -m -p" ;;
         maloo) opts="--envelope --help --patchset --pretty --user -U -h -p -r" ;;
-        message) opts="--envelope --help --pretty --user -U -h -p" ;;
+        message) opts="--envelope --help --pretty --unresolved --user -U -h -p" ;;
         next-patch) opts="--envelope --help --user --with-comments -U -h" ;;
         publish-drafts) opts="--dry-run --envelope --expect-patchset --help --pretty --user -U -h -n -p" ;;
         push) opts="--dry-run --envelope --help --user -U -h -n" ;;

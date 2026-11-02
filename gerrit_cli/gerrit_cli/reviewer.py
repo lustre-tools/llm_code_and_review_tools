@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from urllib.parse import quote
 
-from .client import GerritCommentsClient
+from .client import GerritCommentsClient, with_patchset_comment
 from .mode import result_fields
 from .models import Author, ChangeInfo
 
@@ -565,7 +565,8 @@ class CodeReviewer:
             comments: Either a flat list of comment dicts with keys:
                 path, line, message, unresolved (optional), or the
                 Gerrit REST format dict mapping path -> comment list
-            message: Overall review message
+            message: Overall review message, posted as a resolved
+                patchset-level comment (see with_patchset_comment)
             vote: Code-Review vote (-2 to +2), None to not vote
             revision: Revision to review
             prefix: Text prepended to the review message and every
@@ -578,9 +579,6 @@ class CodeReviewer:
         try:
             comments = normalize_review_comments(comments)
             review_input: dict[str, Any] = {}
-
-            if message:
-                review_input["message"] = apply_review_prefix(prefix, message)
 
             if vote is not None:
                 review_input["labels"] = {"Code-Review": vote}
@@ -608,6 +606,12 @@ class CodeReviewer:
                     comments_dict[path].append(comment_input)
 
                 review_input["comments"] = comments_dict
+
+            if message:
+                review_input["comments"] = with_patchset_comment(
+                    review_input.get("comments"),
+                    apply_review_prefix(prefix, message),
+                )
 
             self.client.rest.post(
                 f"/changes/{change_number}/revisions/{revision}/review",

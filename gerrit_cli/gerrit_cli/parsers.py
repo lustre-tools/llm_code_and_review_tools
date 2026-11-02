@@ -1484,14 +1484,19 @@ def add_message_parser(subparsers):
     parser = subparsers.add_parser(
         "message",
         help="Post a top-level message on a Gerrit change",
-        description="Post a top-level review message (not a file comment) "
-                    "on a Gerrit change: a change message, as a vote's message "
-                    "is. The web UI's reply box makes a patchset-level comment "
-                    "instead. Patch Watcher reads a tag in either, and answers "
-                    "one in a change message with a new patchset-level comment.",
+        description="Post a top-level message (not a file comment) on a "
+                    "Gerrit change: a patchset-level comment, as the web UI's "
+                    "reply box makes, which anyone can reply to. It is "
+                    "resolved unless --unresolved is given.",
     )
     parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument("text", help="Message text to post")
+    parser.add_argument(
+        "--unresolved",
+        action="store_true",
+        help="Open the comment as an unresolved thread, one that wants "
+             "an answer",
+    )
     parser.add_argument(
         "--pretty", "-p",
         action="store_true",

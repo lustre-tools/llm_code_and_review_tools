@@ -49,8 +49,8 @@ In `drafts` mode:
   `gc push`, `gc review --post-comments`) become draft comments. They
   are visible only to you, in the Gerrit web UI, until you publish them.
 - A cover message (`gc message`, or the `message` field of a review)
-  becomes a patchset-level draft comment, because Gerrit publishes
-  review messages at once and has no draft form for them.
+  becomes a patchset-level draft comment, as it is a patchset-level
+  comment in `full` mode too.
 - Votes are refused: Gerrit has no draft vote. `gc vote`, and
   `gc review` with a `vote`, fail with a message that names the mode.
 - The review tag is dropped: Gerrit rejects it on draft comments.
@@ -555,7 +555,7 @@ hashtag <URL> --add <tag>        # Add/remove hashtags (--add/--remove)
 rebase <URL>                     # Rebase a change onto its target branch
 abandon <URL>                    # Abandon a Gerrit change
 restore <URL>                    # Restore an abandoned change
-message <URL> "text"             # Post a top-level message
+message <URL> "text"             # Post a top-level (patchset-level) comment
 ```
 
 ### Interactive Mode
