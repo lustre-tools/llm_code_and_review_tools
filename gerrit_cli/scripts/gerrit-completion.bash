@@ -61,9 +61,9 @@ _gerrit_completions() {
         hashtag) opts="--add --envelope --help --pretty --remove --user -U -a -h -p -r" ;;
         i|interactive) opts="--envelope --help --user -U -h" ;;
         info) opts="--envelope --help --pretty --show-bots --user -U -h -p" ;;
-        label|vote) opts="--envelope --help --message --pretty --user -U -h -m -p" ;;
+        label|vote) opts="--envelope --help --message --no-thread --pretty --user -U -h -m -p" ;;
         maloo) opts="--envelope --help --patchset --pretty --user -U -h -p -r" ;;
-        message) opts="--envelope --help --pretty --unresolved --user -U -h -p" ;;
+        message) opts="--envelope --help --no-thread --pretty --unresolved --user -U -h -p" ;;
         next-patch) opts="--envelope --help --user --with-comments -U -h" ;;
         publish-drafts) opts="--dry-run --envelope --expect-patchset --help --pretty --user -U -h -n -p" ;;
         push) opts="--dry-run --envelope --help --user -U -h -n" ;;
@@ -72,7 +72,7 @@ _gerrit_completions() {
         remove-reviewer) opts="--dry-run --envelope --help --pretty --user -U -h -n -p" ;;
         reply) opts="--ack --done --dry-run --envelope --help --pretty --resolve --url --user -U -a -d -h -n -p -r -u" ;;
         restore) opts="--envelope --help --message --pretty --user -U -h -m -p" ;;
-        review) opts="--base --changes-only --dry-run --envelope --full-content --full-context --help --message --post-comments --prefix --pretty --summary --tag --unified --user --vote -U -b -c -f -h -m -n -p -s -u" ;;
+        review) opts="--base --changes-only --dry-run --envelope --full-content --full-context --help --message --no-thread --post-comments --prefix --pretty --summary --tag --unified --user --vote -U -b -c -f -h -m -n -p -s -u" ;;
         review-series) opts="--checkout --envelope --help --include-abandoned --no-checkout --no-prompt --numbers-only --pretty --urls-only --user -U -a -c -h -n -p -u" ;;
         reviewer-candidates) opts="--brief --envelope --exclude --help --limit --months --path --pretty --ref --repo --user -C -U -h -n -p" ;;
         reviewers) opts="--envelope --help --pretty --user -U -h -p" ;;

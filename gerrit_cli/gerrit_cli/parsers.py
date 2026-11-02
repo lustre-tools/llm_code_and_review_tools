@@ -286,6 +286,13 @@ def add_review_parser(subparsers):
         help="Review message",
     )
     parser.add_argument(
+        "--no-thread",
+        dest="thread",
+        action="store_false",
+        help="Post the message as a bare change message, a change log "
+             "entry nobody can reply to, instead of a patchset-level comment",
+    )
+    parser.add_argument(
         "--prefix",
         metavar="TEXT",
         help="Prefix prepended to the review message and every comment, "
@@ -1435,6 +1442,13 @@ def add_vote_parser(subparsers):
         help="Optional review message",
     )
     parser.add_argument(
+        "--no-thread",
+        dest="thread",
+        action="store_false",
+        help="Post the message as a bare change message, a change log "
+             "entry nobody can reply to, instead of a patchset-level comment",
+    )
+    parser.add_argument(
         "--pretty", "-p",
         action="store_true",
         help="Pretty-print JSON output",
@@ -1487,7 +1501,8 @@ def add_message_parser(subparsers):
         description="Post a top-level message (not a file comment) on a "
                     "Gerrit change: a patchset-level comment, as the web UI's "
                     "reply box makes, which anyone can reply to. It is "
-                    "resolved unless --unresolved is given.",
+                    "resolved unless --unresolved is given; --no-thread "
+                    "posts a bare change message instead.",
     )
     parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument("text", help="Message text to post")
@@ -1496,6 +1511,13 @@ def add_message_parser(subparsers):
         action="store_true",
         help="Open the comment as an unresolved thread, one that wants "
              "an answer",
+    )
+    parser.add_argument(
+        "--no-thread",
+        dest="thread",
+        action="store_false",
+        help="Post the message as a bare change message, a change log "
+             "entry nobody can reply to, instead of a patchset-level comment",
     )
     parser.add_argument(
         "--pretty", "-p",

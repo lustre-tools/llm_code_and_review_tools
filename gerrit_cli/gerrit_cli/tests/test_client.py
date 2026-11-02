@@ -376,6 +376,20 @@ class TestGerritCommentsClientWithMocks:
     @patch.dict(os.environ, {"GERRIT_CLI_MODE": "full"})
     @patch("gerrit_cli.client.GerritRestAPI")
     @patch("gerrit_cli.client.HTTPBasicAuth")
+    def test_post_review_without_thread_is_a_change_message(self, mock_auth, mock_api):
+        mock_rest = MagicMock()
+        mock_api.return_value = mock_rest
+
+        GerritCommentsClient().post_review(
+            change_number=1, revision_id="current", message="Notice",
+            labels={"Code-Review": 1}, thread=False)
+
+        review = mock_rest.post.call_args[1]["json"]
+        assert review == {"message": "Notice", "labels": {"Code-Review": 1}}
+
+    @patch.dict(os.environ, {"GERRIT_CLI_MODE": "full"})
+    @patch("gerrit_cli.client.GerritRestAPI")
+    @patch("gerrit_cli.client.HTTPBasicAuth")
     def test_post_review_message_goes_first_among_comments(self, mock_auth, mock_api):
         """64441: a review "message" is a change log entry nobody can
         reply to; the web UI posts its reply box as a patchset-level
@@ -576,11 +590,30 @@ class TestCmdMessage:
         client, out = self._run(capsys, ["message", "64441", "Change-log"])
         client.post_review.assert_called_once_with(
             change_number=64441, revision_id="current",
-            message="Change-log", unresolved=False)
+            message="Change-log", unresolved=False, thread=True)
         assert out["unresolved"] is False
+        assert out["thread"] is True
 
     def test_unresolved(self, capsys):
         client, out = self._run(
             capsys, ["message", "64441", "Question?", "--unresolved"])
         assert client.post_review.call_args.kwargs["unresolved"] is True
         assert out["unresolved"] is True
+
+    def test_no_thread(self, capsys):
+        client, out = self._run(
+            capsys, ["message", "64441", "Notice", "--no-thread"])
+        assert client.post_review.call_args.kwargs["thread"] is False
+        assert out["thread"] is False
+
+    def test_no_thread_cannot_be_unresolved(self, capsys):
+        from gerrit_cli.cli import main
+        with patch("gerrit_cli.cli.GerritCommentsClient") as MockClient, \
+             patch("sys.argv", ["gerrit", "message", "64441", "x",
+                                "--no-thread", "--unresolved"]), \
+             pytest.raises(SystemExit) as exc_info:
+            MockClient.parse_gerrit_url.return_value = (
+                "https://example.com", 64441)
+            main()
+        assert exc_info.value.code == 4
+        MockClient.return_value.post_review.assert_not_called()

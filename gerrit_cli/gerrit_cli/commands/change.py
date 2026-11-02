@@ -150,6 +150,7 @@ def cmd_vote(args):
             revision_id="current",
             message=message or None,
             labels=labels,
+            thread=getattr(args, 'thread', True),
         )
 
         data = {
@@ -296,11 +297,18 @@ def cmd_message(args):
         client = cli.GerritCommentsClient()
 
         unresolved = getattr(args, 'unresolved', False)
+        thread = getattr(args, 'thread', True)
+        if unresolved and not thread:
+            sys.exit(output_error(
+                ErrorCode.INVALID_INPUT,
+                "--unresolved needs a thread; it cannot go with --no-thread",
+                command, pretty))
         client.post_review(
             change_number=change_number,
             revision_id="current",
             message=args.text,
             unresolved=unresolved,
+            thread=thread,
         )
 
         data = {
@@ -308,6 +316,7 @@ def cmd_message(args):
             "change_number": change_number,
             "message": args.text,
             "unresolved": unresolved,
+            "thread": thread,
             **result_fields(),
         }
         output_success(data, command, pretty)

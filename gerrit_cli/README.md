@@ -555,7 +555,8 @@ hashtag <URL> --add <tag>        # Add/remove hashtags (--add/--remove)
 rebase <URL>                     # Rebase a change onto its target branch
 abandon <URL>                    # Abandon a Gerrit change
 restore <URL>                    # Restore an abandoned change
-message <URL> "text"             # Post a top-level (patchset-level) comment
+message <URL> "text"             # Post a top-level (patchset-level) comment;
+                                 #   --no-thread: a bare change message
 ```
 
 ### Interactive Mode

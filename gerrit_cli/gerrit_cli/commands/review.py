@@ -90,6 +90,7 @@ def cmd_review(args):
                         "vote": vote,
                         "prefix": prefix,
                         "tag": tag,
+                        "thread": getattr(args, 'thread', True),
                         "comment_count": len(comments),
                     },
                 }
@@ -103,6 +104,7 @@ def cmd_review(args):
                 vote=vote,
                 prefix=prefix,
                 tag=tag,
+                thread=getattr(args, 'thread', True),
             )
 
             if result.success:

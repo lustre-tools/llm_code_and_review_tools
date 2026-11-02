@@ -462,6 +462,7 @@ class GerritCommentsClient:
         comments: Optional[dict[str, list[dict[str, Any]]]] = None,
         labels: Optional[dict[str, int]] = None,
         unresolved: bool = False,
+        thread: bool = True,
     ) -> dict[str, Any]:
         """Post a review with optional comments and labels.
 
@@ -473,14 +474,18 @@ class GerritCommentsClient:
             comments: Optional dict mapping file paths to comment lists
             labels: Optional dict mapping label names to values
             unresolved: Open the message's thread as unresolved
+            thread: False posts the message as a bare change message,
+                a change log entry nobody can reply to
 
         Returns:
             Response from the API
         """
         review_input: dict[str, Any] = {}
 
-        if message:
+        if message and thread:
             comments = with_patchset_comment(comments, message, unresolved)
+        elif message:
+            review_input["message"] = message
 
         if comments:
             review_input["comments"] = comments

@@ -364,6 +364,22 @@ class TestCodeReviewer:
         assert comment["message"] == "**[Marc Bot]**\n\nFix this"
 
     @patch("gerrit_cli.reviewer.GerritCommentsClient")
+    def test_post_review_without_thread(self, mock_client_class):
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+
+        result = CodeReviewer().post_review(
+            change_number=123,
+            comments=[{"path": "test.py", "line": 10, "message": "Fix this"}],
+            message="Overall message", prefix="[Marc Bot]", thread=False,
+        )
+
+        assert result.success is True
+        json_data = mock_client.rest.post.call_args[1]["json"]
+        assert json_data["message"] == "**[Marc Bot]**\n\nOverall message"
+        assert list(json_data["comments"]) == ["test.py"]
+
+    @patch("gerrit_cli.reviewer.GerritCommentsClient")
     def test_post_review_range_comment(self, mock_client_class):
         """Test that a range comment passes the range through."""
         mock_client = MagicMock()

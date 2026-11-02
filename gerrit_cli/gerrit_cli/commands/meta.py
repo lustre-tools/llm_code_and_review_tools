@@ -416,7 +416,8 @@ Comments are either a flat list ([{path, line, message, unresolved}])
 or the Gerrit REST format ({path: [{line, message, unresolved}]}).
 Explicit CLI --message/--vote/--tag flags override the file values.
 The message is posted as a resolved patchset-level comment, as the web
-UI's reply box does, so it can be replied to.
+UI's reply box does, so it can be replied to; --no-thread posts it as a
+bare change message instead.
 Use --prefix to prepend text (e.g. a bot name) to the message and
 every comment, and --dry-run to preview the payload without posting.
 """,
@@ -922,7 +923,9 @@ Verified, with an optional message. 'label' is an alias.
 Post a top-level message on a change, as the reply box of the Gerrit web
 UI does: a patchset-level comment, not attached to a file or line, that
 anyone can reply to. It is resolved; --unresolved opens it as a thread
-that wants an answer. To vote at the same time, use 'gc vote -m'.
+that wants an answer. --no-thread posts a bare change message instead,
+a change log entry nobody can reply to (for a notice). To vote at the
+same time, use 'gc vote -m'.
 """,
         "examples": [
             {
