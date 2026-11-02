@@ -1119,12 +1119,15 @@ def _check_privacy(plan: list[dict[str, Any]], private: bool | None) -> None:
 
 
 def _push_options(
-    topic: str | None, private: bool | None, plan: list[dict[str, Any]]
+    topic: str | None, private: bool | None, plan: list[dict[str, Any]],
+    ci_reviewers: bool = True,
 ) -> list[str]:
     """The %options of the refs/for push."""
     options = [f"topic={topic}"] if topic else []
     if private:
-        options += ["private", *(f"r={r}" for r in PRIVATE_REVIEWERS)]
+        options.append("private")
+        if ci_reviewers:
+            options += [f"r={r}" for r in PRIVATE_REVIEWERS]
     elif private is False and any(e.get("is_private") for e in plan):
         options.append("remove-private")
     return options
@@ -1393,6 +1396,7 @@ def upload(
     expect_patchset: int | None = None,
     base: str | None = None,
     private: bool | None = None,
+    ci_reviewers: bool = True,
 ) -> dict[str, Any]:
     """Push HEAD to refs/for/<branch> as the client's account.
 
@@ -1405,8 +1409,10 @@ def upload(
     it are left out of the range as Gerrit leaves them out of the push.
 
     Changes are public unless ``private`` is True, which uploads them
-    private with Jenkins and Maloo as reviewers; False makes private
-    ones public.  Left at None, updating a private change is refused.
+    private with Jenkins and Maloo as reviewers (without them when
+    ``ci_reviewers`` is False, so CI neither builds nor tests them);
+    False makes private ones public.  Left at None, updating a private
+    change is refused.
 
     Raises:
         UploadError: on every refusal and failure.  Nothing has been
@@ -1426,6 +1432,14 @@ def upload(
             f"Topic '{topic}' cannot be passed as a push option (no "
             "whitespace, ',' or '%'). Upload without --topic and set it "
             "with: gerrit set-topic <change> <topic>",
+            exit_code=ExitCode.INVALID_INPUT,
+        )
+
+    if not ci_reviewers and not private:
+        raise UploadError(
+            ErrorCode.INVALID_INPUT,
+            "--no-ci-reviewers applies to a private upload only; a public "
+            "change is built and tested without being asked.",
             exit_code=ExitCode.INVALID_INPUT,
         )
 
@@ -1532,7 +1546,7 @@ def upload(
         ]
 
         ref = f"refs/for/{branch}"
-        options = _push_options(topic, private, plan)
+        options = _push_options(topic, private, plan, ci_reviewers)
         if options:
             ref += "%" + ",".join(options)
 
@@ -1550,7 +1564,8 @@ def upload(
             "ref": ref,
             "topic": topic,
             "private": bool(private),
-            "reviewers_added": list(PRIVATE_REVIEWERS) if private else [],
+            "reviewers_added": (list(PRIVATE_REVIEWERS)
+                                if private and ci_reviewers else []),
             "account": account.username,
             "sha": head.sha,
             "change_number": head_entry.get("change_number"),

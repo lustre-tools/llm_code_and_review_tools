@@ -207,7 +207,9 @@ Change-Id, and CHANGE, if given, must be one of them rather than HEAD.
 
 Changes go up public. --private uploads them private, naming Jenkins
 (devops@whamcloud.com) and Maloo (maloo@whamcloud.com) as reviewers in
-the push so they can build and test the first patchset. Updating a
+the push so they can build and test the first patchset;
+--no-ci-reviewers leaves them out, and CI then neither builds nor tests
+the change. Updating a
 change that is already private is refused (PRIVATE_CHANGE) unless
 --private keeps it private or --public makes it public.
 

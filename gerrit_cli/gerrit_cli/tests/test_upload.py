@@ -1022,6 +1022,30 @@ def test_public_on_a_public_change_adds_nothing(gerrit):
     assert pushed_refs(bare) == {"refs/for/master": head}
 
 
+def test_private_without_ci_reviewers(gerrit):
+    fake, bare, work = gerrit
+    head = commit(work, "LU-3 mdt: new work", cid=CID_NEW, committer=BOT)
+
+    data = upload(fake, repo=str(work), project=PROJECT, branch="master",
+                  private=True, ci_reviewers=False)
+
+    assert pushed_refs(bare) == {"refs/for/master%private": head}
+    assert data["private"] is True and data["reviewers_added"] == []
+
+
+@pytest.mark.parametrize("private", [None, False])
+def test_no_ci_reviewers_needs_private(gerrit, private):
+    fake, bare, work = gerrit
+    commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)
+
+    with pytest.raises(UploadError) as err:
+        upload(fake, repo=str(work), change="51164", private=private,
+               ci_reviewers=False)
+
+    assert err.value.exit_code == ExitCode.INVALID_INPUT
+    assert pushed_refs(bare) == {}
+
+
 def test_dry_run_shows_the_private_push(gerrit):
     fake, bare, work = gerrit
     head = commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)

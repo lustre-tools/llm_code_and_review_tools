@@ -355,6 +355,7 @@ up unseen.
 gc upload --project fs/lustre-release --branch master --private
 gc upload 70236 --private     # next patchset, kept private
 gc upload 70236 --public      # next patchset, and make it public
+gc upload ... --private --no-ci-reviewers   # private, no Jenkins/Maloo
 ```
 
 - `--private` pushes with `%private` and names Jenkins
@@ -362,6 +363,10 @@ gc upload 70236 --public      # next patchset, and make it public
   reviewers in the same push. A private change is visible only to its
   owner and reviewers, and CI builds and tests only the patchsets it saw
   created, so reviewers added afterwards miss the first patchset.
+- `--private --no-ci-reviewers` leaves Jenkins and Maloo out, so CI
+  neither builds nor tests the change. Use it only when the user asked
+  for a private change without CI. It does not remove CI reviewers the
+  change already has.
 - A new patchset for a change that is already private is refused
   (`PRIVATE_CHANGE`) without `--private` or `--public`. Ask the user
   which they want; do not pick one to get past the refusal.

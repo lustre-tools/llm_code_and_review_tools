@@ -700,6 +700,13 @@ def add_upload_parser(subparsers):
         help="Make a private change public with this upload",
     )
     parser.add_argument(
+        "--no-ci-reviewers",
+        action="store_true",
+        help="With --private, leave out Jenkins and Maloo: CI neither "
+             "builds nor tests the change. Only when asked for. Reviewers "
+             "the change already has stay",
+    )
+    parser.add_argument(
         "--expect-patchset",
         type=int,
         default=None,

@@ -28,6 +28,7 @@ def cmd_upload(args):
             expect_patchset=args.expect_patchset,
             base=args.base,
             private=getattr(args, "private", None),
+            ci_reviewers=not getattr(args, "no_ci_reviewers", False),
         )
     except UploadError as e:
         output_result(
