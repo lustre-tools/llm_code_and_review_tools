@@ -946,6 +946,104 @@ def test_a_topic_that_cannot_be_a_push_option_is_refused(gerrit):
     assert err.value.exit_code == ExitCode.INVALID_INPUT
 
 
+PRIVATE_OPTIONS = "private,r=devops@whamcloud.com,r=maloo@whamcloud.com"
+
+
+def test_a_new_change_is_public_by_default(gerrit):
+    fake, bare, work = gerrit
+    head = commit(work, "LU-3 mdt: new work", cid=CID_NEW, committer=BOT)
+
+    data = upload(fake, repo=str(work), project=PROJECT, branch="master")
+
+    assert data["private"] is False and data["reviewers_added"] == []
+    assert pushed_refs(bare) == {"refs/for/master": head}
+
+
+def test_private_names_jenkins_and_maloo_in_the_push(gerrit):
+    """70236: a private change Jenkins and Maloo were added to only
+    after its first patchset was never built; they have to see the
+    patchset created."""
+    fake, bare, work = gerrit
+    head = commit(work, "LU-3 mdt: new work", cid=CID_NEW, committer=BOT)
+
+    data = upload(fake, repo=str(work), project=PROJECT, branch="master",
+                  private=True, topic="t1")
+
+    assert data["ref"] == f"refs/for/master%topic=t1,{PRIVATE_OPTIONS}"
+    assert pushed_refs(bare) == {data["ref"]: head}
+    assert data["private"] is True
+    assert data["reviewers_added"] == ["devops@whamcloud.com",
+                                       "maloo@whamcloud.com"]
+
+
+def test_a_private_change_is_not_updated_without_a_choice(gerrit):
+    fake, bare, work = gerrit
+    fake.changes[51164]["is_private"] = True
+    commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)
+
+    with pytest.raises(UploadError) as err:
+        upload(fake, repo=str(work), change="51164")
+
+    assert err.value.code == ErrorCode.PRIVATE_CHANGE
+    assert err.value.exit_code == ExitCode.INVALID_INPUT
+    assert "--private" in err.value.message and "--public" in err.value.message
+    assert err.value.details["private_changes"] == [51164]
+    assert pushed_refs(bare) == {}
+
+
+def test_a_private_change_kept_private(gerrit):
+    fake, bare, work = gerrit
+    fake.changes[51164]["is_private"] = True
+    head = commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)
+
+    data = upload(fake, repo=str(work), change="51164", private=True)
+
+    assert pushed_refs(bare) == {f"refs/for/master%{PRIVATE_OPTIONS}": head}
+    assert data["commits"][-1]["is_private"] is True
+
+
+def test_public_makes_a_private_change_public(gerrit):
+    fake, bare, work = gerrit
+    fake.changes[51164]["is_private"] = True
+    head = commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)
+
+    data = upload(fake, repo=str(work), change="51164", private=False)
+
+    assert pushed_refs(bare) == {"refs/for/master%remove-private": head}
+    assert data["private"] is False
+
+
+def test_public_on_a_public_change_adds_nothing(gerrit):
+    fake, bare, work = gerrit
+    head = commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)
+
+    upload(fake, repo=str(work), change="51164", private=False)
+
+    assert pushed_refs(bare) == {"refs/for/master": head}
+
+
+def test_dry_run_shows_the_private_push(gerrit):
+    fake, bare, work = gerrit
+    head = commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)
+
+    data = upload(fake, repo=str(work), change="51164", dry_run=True,
+                  private=True)
+
+    assert data["push"]["command"].endswith(
+        f"{head}:refs/for/master%{PRIVATE_OPTIONS}")
+    assert pushed_refs(bare) == {}
+
+
+def test_private_and_public_are_exclusive_on_the_command_line():
+    from gerrit_cli.cli import build_parser
+    parser = build_parser()
+    assert parser.parse_args(["upload", "--private"]).private is True
+    assert parser.parse_args(["upload", "--public"]).private is False
+    assert parser.parse_args(["upload"]).private is None
+    with pytest.raises(SystemExit):
+        parser.parse_args(["upload", "--private", "--public"])
+
+
 def test_a_rejected_push_carries_gerrits_message(gerrit):
     fake, bare, work = gerrit
     hook = Path(bare) / "hooks" / "pre-receive"

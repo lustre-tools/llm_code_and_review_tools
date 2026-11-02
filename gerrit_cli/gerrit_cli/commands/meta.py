@@ -205,6 +205,12 @@ and HEAD is new to Gerrit, it refuses and lists them.
 Change-Id names (updating it, or creating it). Every commit needs a
 Change-Id, and CHANGE, if given, must be one of them rather than HEAD.
 
+Changes go up public. --private uploads them private, naming Jenkins
+(devops@whamcloud.com) and Maloo (maloo@whamcloud.com) as reviewers in
+the push so they can build and test the first patchset. Updating a
+change that is already private is refused (PRIVATE_CHANGE) unless
+--private keeps it private or --public makes it public.
+
 Two commits between the branch and HEAD with one Change-Id are refused
 (DUPLICATE_CHANGE_ID): Gerrit would reject the push as "same Change-Id
 in multiple changes". It usually means a commit was made on top of an

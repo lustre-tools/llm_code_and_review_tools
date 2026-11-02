@@ -136,7 +136,7 @@ gc review --post-comments review.json --prefix '[Marc Bot]' <URL>
 ```bash
 gc [--user SET] upload [CHANGE] [--series] [--branch B] [--base BRANCH]
                        [--project P] [--topic T] [--repo PATH] [--no-amend]
-                       [--dry-run]
+                       [--private | --public] [--dry-run]
 
 # An automated run uploading the next patchset of change 12345 as the bot:
 gc --user patrickbot upload 12345 --repo /path/to/checkout
@@ -166,6 +166,13 @@ gc --user patrickbot upload 12345 --repo /path/to/checkout
   own Change-Id names (updated, or created if new); every commit needs a
   Change-Id, and CHANGE, if given, may be any commit in the range rather
   than HEAD. Commits Gerrit already has are not uploaded again.
+- **Public unless asked.** Changes go up public. `--private` uploads
+  them private, with Jenkins (`devops@whamcloud.com`) and Maloo
+  (`maloo@whamcloud.com`) named as reviewers in the push itself: they see
+  a private change only as reviewers, and build and test only the
+  patchsets they saw created. A new patchset for a change that is
+  already private is refused as `PRIVATE_CHANGE` unless `--private`
+  keeps it private or `--public` makes it public.
 - **`--base BRANCH`.** Rebased onto `master-next` at a reviewer's
   request: `--base master-next` leaves that branch's commits out of the
   range, and the change still targets master.

@@ -679,6 +679,26 @@ def add_upload_parser(subparsers):
         help="Refuse, rather than rewrite, when a committer email is "
              "not registered to the account",
     )
+    visibility = parser.add_mutually_exclusive_group()
+    visibility.add_argument(
+        "--private",
+        dest="private",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Upload as private changes, with Jenkins (devops@whamcloud.com) "
+             "and Maloo (maloo@whamcloud.com) as reviewers so they can "
+             "build and test them. Only when a private change was asked "
+             "for; without it a change is public, and updating a private "
+             "one is refused",
+    )
+    visibility.add_argument(
+        "--public",
+        dest="private",
+        action="store_const",
+        const=False,
+        help="Make a private change public with this upload",
+    )
     parser.add_argument(
         "--expect-patchset",
         type=int,

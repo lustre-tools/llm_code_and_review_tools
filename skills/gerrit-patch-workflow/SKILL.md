@@ -1,6 +1,6 @@
 ---
 name: gerrit-patch-workflow
-description: This skill should be used for work on Gerrit changes with the gerrit/gc CLI - "what comments are on this patch", "reply to the review feedback", "address the reviewer comments", "mark that thread done", "shepherd this patch series", "what is the status of my patches", "post a review on this change", "add a reviewer", "check the CI status of my patches", "upload the new patchset", "push this commit to Gerrit", "rebase and repush the series", "is there already a patch for this", "find the follow-up to this change". Covers comment triage, staged replies, uploading patchsets, multi-patch series sessions, finding related changes, and Lustre commit-message rules.
+description: This skill should be used for work on Gerrit changes with the gerrit/gc CLI - "what comments are on this patch", "reply to the review feedback", "address the reviewer comments", "mark that thread done", "shepherd this patch series", "what is the status of my patches", "post a review on this change", "add a reviewer", "check the CI status of my patches", "upload the new patchset", "push this commit to Gerrit", "push this as a private patch", "upload a private change", "rebase and repush the series", "is there already a patch for this", "find the follow-up to this change". Covers comment triage, staged replies, uploading patchsets, multi-patch series sessions, finding related changes, and Lustre commit-message rules.
 version: 0.1.0
 ---
 
@@ -343,6 +343,30 @@ is not the working directory.
 - The output carries `patchset`, `url` and per-commit `action`
   (`update`, `create`, `none`). A refused push is `PUSH_REJECTED`, with
   Gerrit's reason in the message and, when the cause is known, a hint.
+
+### Private changes
+
+Changes go up public. Upload a private one only when the user asked
+for a private patch in so many words -- never because it is a test, a
+draft, or looks unfinished; private changes nobody meant to make pile
+up unseen.
+
+```bash
+gc upload --project fs/lustre-release --branch master --private
+gc upload 70236 --private     # next patchset, kept private
+gc upload 70236 --public      # next patchset, and make it public
+```
+
+- `--private` pushes with `%private` and names Jenkins
+  (`devops@whamcloud.com`) and Maloo (`maloo@whamcloud.com`) as
+  reviewers in the same push. A private change is visible only to its
+  owner and reviewers, and CI builds and tests only the patchsets it saw
+  created, so reviewers added afterwards miss the first patchset.
+- A new patchset for a change that is already private is refused
+  (`PRIVATE_CHANGE`) without `--private` or `--public`. Ask the user
+  which they want; do not pick one to get past the refusal.
+- Never put `%private` on a push by hand; `gc upload --private` is the
+  only way a private change is made.
 
 ## Before pushing
 

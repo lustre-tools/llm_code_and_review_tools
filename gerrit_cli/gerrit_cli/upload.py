@@ -51,6 +51,11 @@ MAX_COMMITS = 50
 
 _KNOWN_SHA_BATCH = 10
 
+# Jenkins (devops) and Maloo see a private change only as its reviewers,
+# and build and test only the patchsets they saw created: a private
+# upload names them in the push itself.
+PRIVATE_REVIEWERS = ("devops@whamcloud.com", "maloo@whamcloud.com")
+
 
 class UploadError(Exception):
     """A refusal or failure, carrying what the JSON error needs."""
@@ -1091,9 +1096,38 @@ def _plan(
                 number = int(existing["_number"])
                 entry["action"] = "update"
                 entry["change_number"] = number
+                entry["is_private"] = bool(existing.get("is_private"))
                 entry["url"] = f"{base}/c/{project}/+/{number}"
         plan.append(entry)
     return plan
+
+
+def _check_privacy(plan: list[dict[str, Any]], private: bool | None) -> None:
+    """Refuse to update a private change nobody said to keep private."""
+    numbers = [e["change_number"] for e in plan if e.get("is_private")]
+    if private is not None or not numbers:
+        return
+    raise UploadError(
+        ErrorCode.PRIVATE_CHANGE,
+        f"Change {', '.join(map(str, numbers))} is private. Upload with "
+        "--private to keep it private (with Jenkins and Maloo as "
+        "reviewers), or with --public to make it public. Nothing was "
+        "pushed.",
+        exit_code=ExitCode.INVALID_INPUT,
+        details={"private_changes": numbers},
+    )
+
+
+def _push_options(
+    topic: str | None, private: bool | None, plan: list[dict[str, Any]]
+) -> list[str]:
+    """The %options of the refs/for push."""
+    options = [f"topic={topic}"] if topic else []
+    if private:
+        options += ["private", *(f"r={r}" for r in PRIVATE_REVIEWERS)]
+    elif private is False and any(e.get("is_private") for e in plan):
+        options.append("remove-private")
+    return options
 
 
 def _check_signoffs(
@@ -1358,6 +1392,7 @@ def upload(
     series: bool = False,
     expect_patchset: int | None = None,
     base: str | None = None,
+    private: bool | None = None,
 ) -> dict[str, Any]:
     """Push HEAD to refs/for/<branch> as the client's account.
 
@@ -1368,6 +1403,10 @@ def upload(
     ``base`` names another server branch HEAD is built on (a change
     rebased onto master-next while it still targets master): commits on
     it are left out of the range as Gerrit leaves them out of the push.
+
+    Changes are public unless ``private`` is True, which uploads them
+    private with Jenkins and Maloo as reviewers; False makes private
+    ones public.  Left at None, updating a private change is refused.
 
     Raises:
         UploadError: on every refusal and failure.  Nothing has been
@@ -1483,6 +1522,7 @@ def upload(
                 e.message += hint
                 e.details["hint"] = hint.strip()
             raise
+        _check_privacy(plan, private)
 
         to = f"{account.name} <{account.preferred_email}>"
         amended = [
@@ -1492,8 +1532,9 @@ def upload(
         ]
 
         ref = f"refs/for/{branch}"
-        if topic:
-            ref += f"%topic={topic}"
+        options = _push_options(topic, private, plan)
+        if options:
+            ref += "%" + ",".join(options)
 
         def push_args(sha: str) -> list[str]:
             return [*_GIT_AUTH_ARGS, "push", "--porcelain", url,
@@ -1508,6 +1549,8 @@ def upload(
             "base": base,
             "ref": ref,
             "topic": topic,
+            "private": bool(private),
+            "reviewers_added": list(PRIVATE_REVIEWERS) if private else [],
             "account": account.username,
             "sha": head.sha,
             "change_number": head_entry.get("change_number"),

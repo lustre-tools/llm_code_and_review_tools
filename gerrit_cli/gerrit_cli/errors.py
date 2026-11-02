@@ -57,6 +57,7 @@ class ErrorCode(BaseErrorCode):
     WRONG_AUTHOR = "WRONG_AUTHOR"
     PUSH_REJECTED = "PUSH_REJECTED"
     STALE_PATCHSET = "STALE_PATCHSET"
+    PRIVATE_CHANGE = "PRIVATE_CHANGE"
 
 
 # Re-export all base classes
