@@ -1233,6 +1233,76 @@ class TestPrioritize:
         assert json.loads(result.output)["code"] == "PRIORITIZE_FAILED"
 
 
+# -- request-tests command --
+
+
+class TestRequestTests:
+    def _result(self, **kw):
+        result = {"job": "lustre-reviews", "buildno": 134964, "sent": True}
+        result.update(kw)
+        return result
+
+    def test_sends_the_lines(self, runner, mock_client):
+        mock_client.request_tests.return_value = self._result()
+        result = runner.invoke(main, [
+            "--envelope", "request-tests", "134964",
+            "testgroup=review-dne-selinux-ssk-part-2 testlist=sanity-sec"])
+        env = _parse_output(result)
+        assert env["ok"] is True
+        mock_client.request_tests.assert_called_once_with(
+            job="lustre-reviews", buildno=134964, dry_run=False,
+            lines=["Test-Parameters: testgroup=review-dne-selinux-ssk-part-2 "
+                   "testlist=sanity-sec"])
+
+    def test_optional_and_branch(self, runner, mock_client):
+        mock_client.request_tests.return_value = self._result()
+        result = runner.invoke(main, [
+            "request-tests", "31445", "testlist=sanity", "testlist=sanityn",
+            "--optional", "--branch", "b_es7_0"])
+        assert result.exit_code == 0, result.output
+        kwargs = mock_client.request_tests.call_args[1]
+        assert kwargs["job"] == "lustre-b_es-reviews"
+        assert kwargs["lines"] == [
+            "Test-Parameters: testlist=sanity signofftest=false",
+            "Test-Parameters: testlist=sanityn signofftest=false",
+        ]
+
+    def test_dry_run_suggests_the_send(self, runner, mock_client):
+        mock_client.request_tests.return_value = self._result(sent=False)
+        result = runner.invoke(main, ["--envelope", "request-tests", "134964",
+                                      "testlist=sanity", "--dry-run"])
+        env = _parse_output(result)
+        assert mock_client.request_tests.call_args[1]["dry_run"] is True
+        assert env["next_actions"][0].startswith(
+            'maloo request-tests 134964 "Test-Parameters: testlist=sanity" ')
+
+    def test_refused_attribute_sends_nothing(self, runner, mock_client):
+        result = runner.invoke(main, ["request-tests", "134964",
+                                      "optional testlist=sanity"])
+        assert result.exit_code == 4
+        assert json.loads(result.output)["code"] == "INVALID_INPUT"
+        mock_client.request_tests.assert_not_called()
+
+    def test_needs_a_line(self, runner, mock_client):
+        result = runner.invoke(main, ["request-tests", "134964"])
+        assert result.exit_code != 0
+        mock_client.request_tests.assert_not_called()
+
+    def test_maloo_refusal(self, runner, mock_client):
+        from maloo_tool.errors import ToolError
+        mock_client.request_tests.side_effect = ToolError(
+            "TEST_REQUEST_FAILED", "Maloo refused the request: not ready")
+        result = runner.invoke(main, ["request-tests", "1", "testlist=sanity"])
+        assert result.exit_code == 1
+        assert json.loads(result.output)["code"] == "TEST_REQUEST_FAILED"
+
+    def test_runtime_error_is_test_request_failed(self, runner, mock_client):
+        mock_client.request_tests.side_effect = RuntimeError("no CSRF token")
+        result = runner.invoke(main, ["request-tests", "134964",
+                                      "testlist=sanity"])
+        assert json.loads(result.output)["code"] == "TEST_REQUEST_FAILED"
+
+
 # -- logs command --
 
 

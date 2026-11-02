@@ -1,6 +1,6 @@
 ---
 name: lustre-ci-triage
-description: This skill should be used when a Lustre Gerrit change has failing CI and the question is why, or what to do about it - "my patch failed CI", "what failed on this change", "is this failure mine or known", "triage these test failures", "should I retest", "link this to a bug", "why is this patch Verified-1", "check the Janitor results", "get the console log for this build", "is there an LU for this test failure", "has this test been failing elsewhere", "triage this Maloo failure". Covers the maloo, jenkins and janitor CLIs and the order they are used in.
+description: This skill should be used when a Lustre Gerrit change has failing CI and the question is why, or what to do about it - "my patch failed CI", "what failed on this change", "is this failure mine or known", "triage these test failures", "should I retest", "link this to a bug", "why is this patch Verified-1", "check the Janitor results", "get the console log for this build", "is there an LU for this test failure", "has this test been failing elsewhere", "triage this Maloo failure", "run additional tests on this build", "add a testlist run to the current build", "request extra Test-Parameters sessions". Covers the maloo, jenkins and janitor CLIs and the order they are used in.
 version: 0.1.0
 ---
 
@@ -257,6 +257,27 @@ Rules that matter:
   already current, or a rebase would drop unmerged parents in a series,
   post exactly `BUILD` as a change comment
   (`gerrit message <change> BUILD`).
+
+## Add test sessions to an existing build
+
+To run more tests on a build without a new patchset -- a suite the
+default sessions skip, a configuration a reviewer asked for -- request
+them the way a `Test-Parameters:` line in the commit message would:
+
+```bash
+jenkins review <change>                          # the build number
+maloo request-tests <build> "testgroup=review-dne-selinux-ssk-part-2 testlist=sanity-sec"
+maloo request-tests <build> "testlist=sanity env=ONLY=56" --optional
+maloo queue --build <build>                      # a few minutes later
+```
+
+- The sessions are enforced while Maloo has not voted on the patchset,
+  and optional once it has. `--optional` (`signofftest=false`) keeps
+  them from gating the vote either way; use it for extra coverage.
+- `optional`, `trivial`, `forjanitoronly`, `forbuildonly`, `fortestonly`
+  and `ignore` cannot be requested this way.
+- Each request is real CI time on shared clusters: ask for what the
+  question needs (`testlist`, `env=ONLY=`), not whole test groups.
 
 ## Abandon sessions nobody needs
 

@@ -1733,6 +1733,75 @@ def _queue_action(
     _output(env, pretty)
 
 
+@main.command(name="request-tests")
+@click.argument("build", type=int)
+@click.argument("test_parameters", nargs=-1, required=True)
+@click.option("--branch", "job", type=str, default="lustre-reviews",
+              help="Git branch or Jenkins job of the build "
+                   "(default: lustre-reviews)")
+@click.option("--optional", is_flag=True,
+              help="Add signofftest=false: the sessions do not gate the "
+                   "Maloo vote")
+@click.option("--dry-run", is_flag=True,
+              help="Check the lines and show the request, but do not send it")
+@click.option("--pretty", is_flag=True, help="Pretty-print JSON")
+def request_tests(
+    build: int, test_parameters: tuple[str, ...], job: str, optional: bool,
+    dry_run: bool, pretty: bool,
+) -> None:
+    """Request additional test sessions for an existing build.
+
+    Does what "Test-Parameter request" on Maloo's related sessions page
+    does.  Each TEST_PARAMETERS argument is one 'Test-Parameters:' line,
+    in commit message syntax; the prefix may be left out.  Maloo runs
+    them in addition to the build's sessions.  They are enforced while
+    Maloo has not voted on the patchset yet, and optional once it has;
+    --optional (signofftest=false) makes them optional either way.
+    forjanitoronly, forbuildonly, fortestonly, ignore, optional and
+    trivial are refused.  The sessions show up in the test queue a few
+    minutes later; Maloo emails the account if it cannot run them.
+
+    BUILD is the Jenkins build number (from `jenkins review <change>`
+    or Maloo's Gerrit message "sessions will be run for Build N").
+
+    \b
+    Examples:
+      maloo request-tests 134964 \\
+          "testgroup=review-dne-selinux-ssk-part-2 testlist=sanity-sec"
+      maloo request-tests 134964 "testlist=sanity env=ONLY=56" --optional
+      maloo request-tests 31445 "testlist=sanity-compr" --branch b_es7_0
+      maloo request-tests 134964 "testlist=sanity-sec" --dry-run
+    """
+    job = _resolve_branch_to_job(job)
+    command = "request-tests"
+    try:
+        lines = MalooClient.tp_request_lines(test_parameters, optional)
+        client = _make_client()
+        result = client.request_tests(
+            job=job, buildno=build, lines=lines, dry_run=dry_run,
+        )
+    except ToolError as exc:
+        _error(exc.code, exc.message, command, pretty,
+               details=exc.details or None, exit_code=exc.exit_code)
+        return
+    except RuntimeError as exc:
+        _error(ErrorCode.TEST_REQUEST_FAILED, str(exc), command, pretty)
+        return
+    except Exception as exc:
+        _fail(exc, command, pretty)
+        return
+
+    next_actions = [f"maloo queue --build {build} -- see the sessions once "
+                    "queued (takes a few minutes)"]
+    if dry_run:
+        args = " ".join(f'"{line}"' for line in lines)
+        branch = f" --branch {job}" if job != "lustre-reviews" else ""
+        next_actions.insert(
+            0, f"maloo request-tests {build} {args}{branch} -- send it")
+    env = success_response(result, TOOL_NAME, command, next_actions)
+    _output(env, pretty)
+
+
 @main.command()
 @click.argument("test_set_id")
 @click.option("--output-dir", type=str, default=None,

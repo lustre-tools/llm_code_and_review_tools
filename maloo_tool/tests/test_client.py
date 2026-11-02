@@ -1050,6 +1050,121 @@ class TestAbandon:
 
 
 # ---------------------------------------------------------------------------
+# request_tests
+# ---------------------------------------------------------------------------
+
+RELATED_PAGE = """<html><head>
+<meta name="csrf-param" content="authenticity_token" />
+<meta name="csrf-token" content="related-tok" />
+</head><body></body></html>"""
+
+TP_LINE = ("Test-Parameters: testgroup=review-dne-selinux-ssk-part-2 "
+           "testlist=sanity-sec")
+
+
+class TestTpRequestLines:
+    def test_prefix_added_and_kept(self):
+        lines = MalooClient.tp_request_lines(
+            ["testlist=sanity", "test-parameters:  testlist=sanityn"])
+        assert lines == ["Test-Parameters: testlist=sanity",
+                         "Test-Parameters: testlist=sanityn"]
+
+    def test_entry_with_several_lines(self):
+        lines = MalooClient.tp_request_lines(
+            ["Test-Parameters: testlist=sanity\n\n  testlist=sanityn  \n"])
+        assert lines == ["Test-Parameters: testlist=sanity",
+                         "Test-Parameters: testlist=sanityn"]
+
+    def test_optional_adds_signofftest_false(self):
+        lines = MalooClient.tp_request_lines(
+            ["testlist=sanity", "testlist=sanityn signofftest=true"],
+            optional=True)
+        assert lines == [
+            "Test-Parameters: testlist=sanity signofftest=false",
+            "Test-Parameters: testlist=sanityn signofftest=true",
+        ]
+
+    @pytest.mark.parametrize("attr", [
+        "optional", "trivial", "forjanitoronly", "forbuildonly",
+        "fortestonly", "ignore", "Optional",
+    ])
+    def test_refused_attributes(self, attr):
+        from maloo_tool.errors import InvalidInputError
+        with pytest.raises(InvalidInputError) as exc:
+            MalooClient.tp_request_lines([f"{attr} testlist=sanity"])
+        assert exc.value.exit_code == 4
+        assert attr in exc.value.message
+
+    @pytest.mark.parametrize("params", [[], ["", "  \n"], ["Test-Parameters:"]])
+    def test_no_line(self, params):
+        from maloo_tool.errors import InvalidInputError
+        with pytest.raises(InvalidInputError, match="No Test-Parameters"):
+            MalooClient.tp_request_lines(params)
+
+
+class TestRequestTests:
+    @pytest.fixture
+    def web(self, client):
+        web = MagicMock()
+        client._web_login = MagicMock(return_value=web)
+        web.get.return_value = _mock_response(text=RELATED_PAGE)
+        web.post.return_value = _mock_response(
+            text="Build 134964 Test-Parameter retest successful")
+        return web
+
+    def test_posts_what_the_page_posts(self, client, web):
+        result = client.request_tests("lustre-reviews", 134964,
+                                      [TP_LINE, "Test-Parameters: x=1"])
+        assert web.get.call_args[0][0] == (
+            "https://testing.example.com/test_sessions/related")
+        args, kwargs = web.post.call_args
+        assert args[0] == (
+            "https://testing.example.com/test_sessions/related_retest")
+        assert kwargs["data"] == {
+            "job": "lustre-reviews", "build": 134964,
+            "name": "Test-Parameter", "tp": f"{TP_LINE}\nTest-Parameters: x=1",
+        }
+        assert kwargs["headers"]["X-CSRF-Token"] == "related-tok"
+        assert result["sent"] is True
+        assert result["response"] == (
+            "Build 134964 Test-Parameter retest successful")
+
+    def test_dry_run_sends_nothing(self, client, web):
+        result = client.request_tests("lustre-reviews", 134964, [TP_LINE],
+                                      dry_run=True)
+        client._web_login.assert_not_called()
+        web.post.assert_not_called()
+        assert result["sent"] is False
+        assert result["request"]["path"] == "/test_sessions/related_retest"
+        assert result["request"]["data"]["tp"] == TP_LINE
+
+    def test_refused_carries_maloos_reason(self, client, web):
+        from maloo_tool.errors import ToolError
+        web.post.return_value = _mock_response(
+            status_code=406,
+            text="Looks like lustre-reviews build 1 isn't ready in Jenkins. "
+                 "Contact Maloo admin if it is")
+        with pytest.raises(ToolError) as exc:
+            client.request_tests("lustre-reviews", 1, [TP_LINE])
+        assert exc.value.code == "TEST_REQUEST_FAILED"
+        assert "isn't ready in Jenkins" in exc.value.message
+        assert exc.value.http_status == 406
+
+    def test_missing_csrf_token(self, client, web):
+        web.get.return_value = _mock_response(text="<html></html>")
+        with pytest.raises(RuntimeError, match="CSRF"):
+            client.request_tests("lustre-reviews", 134964, [TP_LINE])
+        web.post.assert_not_called()
+
+    def test_server_error_raises(self, client, web):
+        web.post.return_value = _mock_response(
+            status_code=500,
+            raise_for_status=requests.exceptions.HTTPError("500"))
+        with pytest.raises(requests.exceptions.HTTPError):
+            client.request_tests("lustre-reviews", 134964, [TP_LINE])
+
+
+# ---------------------------------------------------------------------------
 # raise_bug
 # ---------------------------------------------------------------------------
 

@@ -6,6 +6,7 @@ import os
 import re
 import tempfile
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -14,7 +15,7 @@ import requests
 from llm_tool_common.config import parse_env_file, resolve_env_file
 
 from .config import MalooConfig
-from .errors import ErrorCode, NotFoundError, ToolError
+from .errors import ErrorCode, InvalidInputError, NotFoundError, ToolError
 
 CSRF_RE = re.compile(
     r'<meta\s+name="csrf-token"\s+content="([^"]+)"'
@@ -39,6 +40,15 @@ QUEUE_ACTION_RE = re.compile(
 
 #: Where the queue page's script posts Prioritize and Abandon.
 QUEUE_ACTION_PATH = "/test_queue/actionable"
+
+#: Where the related sessions page's script posts a Test-Parameter
+#: request, and the TP attributes that page refuses to send.
+TP_REQUEST_PATH = "/test_sessions/related_retest"
+TP_PREFIX = "Test-Parameters:"
+TP_NOT_ALLOWED_RE = re.compile(
+    r"forjanitoronly|forbuildonly|fortestonly|ignore|optional|trivial",
+    re.IGNORECASE,
+)
 
 #: Where Maloo sends a request it has no session for.
 SIGNIN_PATH = "/signin"
@@ -1402,6 +1412,117 @@ class MalooClient:
         result["sent"] = True
         result["http_status"] = resp.status_code
         result["response"] = resp.text.strip()[:500]
+        return result
+
+    # -- Test-Parameter request (web page script, not REST API) --
+
+    @staticmethod
+    def tp_request_lines(
+        params: Iterable[str], optional: bool = False
+    ) -> list[str]:
+        """The 'Test-Parameters:' lines for a Test-Parameter request.
+
+        Each entry may hold several lines and may leave out the
+        'Test-Parameters:' prefix.  ``optional`` adds signofftest=false
+        to a line that does not set signofftest.
+
+        Raises:
+            InvalidInputError: no line, or an attribute the related
+                sessions page refuses (optional, trivial, ...).
+        """
+        lines = []
+        for entry in params:
+            for line in entry.splitlines():
+                line = line.strip()
+                if line[:len(TP_PREFIX)].lower() == TP_PREFIX.lower():
+                    line = line[len(TP_PREFIX):].strip()
+                if not line:
+                    continue
+                bad = TP_NOT_ALLOWED_RE.search(line)
+                if bad:
+                    raise InvalidInputError(
+                        ErrorCode.INVALID_INPUT,
+                        f"'{bad.group(0)}' cannot be requested for an "
+                        "existing build (not allowed: forjanitoronly, "
+                        "forbuildonly, fortestonly, ignore, optional, "
+                        "trivial); use --optional for a session that "
+                        "does not gate the Maloo vote",
+                    )
+                if optional and "signofftest=" not in line:
+                    line += " signofftest=false"
+                lines.append(f"{TP_PREFIX} {line}")
+        if not lines:
+            raise InvalidInputError(
+                ErrorCode.INVALID_INPUT, "No Test-Parameters line given"
+            )
+        return lines
+
+    def request_tests(
+        self,
+        job: str,
+        buildno: int,
+        lines: list[str],
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Request additional test sessions for an existing build.
+
+        Does what the related sessions page's "Test-Parameter request"
+        does: posts the lines from :meth:`tp_request_lines` to
+        /test_sessions/related_retest.  Maloo runs them in addition to
+        the build's sessions; they are enforced unless Maloo has already
+        voted on the patchset or a line sets signofftest=false.  They
+        reach the test queue a few minutes later.  The post is not
+        retried.
+
+        Raises:
+            ToolError: TEST_REQUEST_FAILED, Maloo refused the request
+                (e.g. the build is not in Jenkins); its reason is the
+                message.
+            RuntimeError: the page had no CSRF token.
+        """
+        data = {"job": job, "build": buildno, "name": "Test-Parameter",
+                "tp": "\n".join(lines)}
+        result: dict[str, Any] = {
+            "job": job,
+            "buildno": buildno,
+            "test_parameters": lines,
+            "request": {"path": TP_REQUEST_PATH, "data": data},
+            "sent": False,
+        }
+        if dry_run:
+            return result
+
+        web = self._web_login()
+        page = self._retried(
+            web.get, f"{self.config.base_url}/test_sessions/related",
+            timeout=60,
+        )
+        page.raise_for_status()
+        token = CSRF_RE.search(page.text)
+        if not token:
+            raise RuntimeError(
+                "Could not extract CSRF token from the related sessions page"
+            )
+        resp = web.post(
+            f"{self.config.base_url}{TP_REQUEST_PATH}",
+            data=data,
+            headers={"X-CSRF-Token": token.group(1),
+                     "X-Requested-With": "XMLHttpRequest"},
+            timeout=60,
+        )
+        reply = resp.text.strip()[:500]
+        # Maloo answers a refused request with 406 and its reason as text
+        if 400 <= resp.status_code < 500:
+            raise ToolError(
+                ErrorCode.TEST_REQUEST_FAILED,
+                f"Maloo refused the request for {job} build {buildno}: "
+                f"{reply or f'HTTP {resp.status_code}'}",
+                http_status=resp.status_code,
+            )
+        resp.raise_for_status()
+        result["sent"] = True
+        result["http_status"] = resp.status_code
+        result["response"] = reply
         return result
 
     # -- Raise bug (web form, not REST API) --
