@@ -395,3 +395,145 @@ def cmd_publish_drafts(args):
 
     except Exception as e:
         sys.exit(output_error(error_code_for(e), str(e), command, pretty))
+
+
+# Gerrit's own text for a deleted comment or change message
+_REMOVED = ("Comment removed by:", "Change message removed by:")
+
+
+def _delete_refusal(command, pretty):
+    """Exit when a delete cannot or should not be sent."""
+    if get_mode() != MODE_FULL:
+        sys.exit(output_error(
+            ErrorCode.CONFIG_ERROR,
+            f"{MODE_ENV_VAR} is not '{MODE_FULL}': a deletion cannot be "
+            "drafted or undone. Have the account owner run it in full mode.",
+            command, pretty))
+
+
+def _delete_error(e, command, pretty):
+    message = str(e)
+    if "403" in message or "Forbidden" in message:
+        message += (" -- deleting needs Gerrit's Administrate Server "
+                    "capability, which this account does not have")
+    sys.exit(output_error(error_code_for(e), message, command, pretty))
+
+
+def cmd_delete_comment(args):
+    """Delete a published comment (Gerrit admins only).
+
+    Gerrit keeps the comment in its thread but replaces its text with
+    "Comment removed by: <name>; Reason: <reason>" and resolves it.
+    """
+    cli = _cli()
+    command = "delete-comment"
+    pretty = getattr(args, 'pretty', False)
+
+    try:
+        base_url, change_number = cli.GerritCommentsClient.parse_gerrit_url(args.url)
+        client = cli.GerritCommentsClient()
+        if not getattr(args, 'dry_run', False):
+            _delete_refusal(command, pretty)
+
+        found = [
+            (path, c) for path, items in (client.get_comments(change_number) or {}).items()
+            for c in items if c.get("id") == args.comment_id
+        ]
+        if not found:
+            sys.exit(output_error(
+                ErrorCode.NOT_FOUND,
+                f"Change {change_number} has no published comment "
+                f"{args.comment_id}. Comment ids are in 'gc comments <url> "
+                "--all' (root_comment.id, replies[].id); a draft is not "
+                "deleted this way.", command, pretty))
+        path, comment = found[0]
+        if comment.get("message", "").startswith(_REMOVED):
+            sys.exit(output_error(
+                ErrorCode.INVALID_INPUT,
+                f"Comment {args.comment_id} is already deleted: "
+                f"{comment['message']}", command, pretty))
+
+        data = {
+            "change_number": change_number,
+            "comment_id": args.comment_id,
+            "path": path,
+            "line": comment.get("line"),
+            "patch_set": comment.get("patch_set"),
+            "author": (comment.get("author") or {}).get("name"),
+            "message": comment.get("message", ""),
+            "reason": args.reason,
+        }
+        if getattr(args, 'dry_run', False):
+            data.update(dry_run=True, deleted=False)
+            output_success(data, command, pretty)
+            sys.exit(ExitCode.SUCCESS)
+
+        result = client.delete_comment(
+            change_number, str(comment.get("patch_set")), args.comment_id,
+            args.reason)
+        data.update(deleted=True, new_message=(result or {}).get("message"))
+        output_success(data, command, pretty)
+        sys.exit(ExitCode.SUCCESS)
+
+    except Exception as e:
+        _delete_error(e, command, pretty)
+
+
+def cmd_delete_message(args):
+    """Delete a change message (Gerrit admins only).
+
+    Gerrit replaces its text with "Change message removed by: <name>"
+    and the reason. The message and every later one get new ids.
+    """
+    cli = _cli()
+    command = "delete-message"
+    pretty = getattr(args, 'pretty', False)
+
+    try:
+        base_url, change_number = cli.GerritCommentsClient.parse_gerrit_url(args.url)
+        client = cli.GerritCommentsClient()
+        if not getattr(args, 'dry_run', False):
+            _delete_refusal(command, pretty)
+
+        wanted = args.message_id.lower()
+        found = [m for m in client.get_messages(change_number) or []
+                 if m.get("id", "").startswith(wanted)]
+        if len(found) != 1:
+            sys.exit(output_error(
+                ErrorCode.NOT_FOUND if not found else ErrorCode.INVALID_INPUT,
+                (f"Change {change_number} has no change message "
+                 f"{args.message_id}. Message ids change whenever a comment "
+                 "or message on the change is deleted; list them again "
+                 "with 'gc comments <url> --messages'."
+                 if not found else
+                 f"{args.message_id} matches {len(found)} change messages; "
+                 "give more of the id."), command, pretty))
+        message = found[0]
+        if message.get("message", "").startswith(_REMOVED):
+            sys.exit(output_error(
+                ErrorCode.INVALID_INPUT,
+                f"Change message {message['id']} is already deleted: "
+                f"{message['message']}", command, pretty))
+
+        data = {
+            "change_number": change_number,
+            "message_id": message["id"],
+            "date": message.get("date"),
+            "patch_set": message.get("_revision_number"),
+            "author": (message.get("author") or {}).get("name"),
+            "message": message.get("message", ""),
+            "reason": args.reason,
+        }
+        if getattr(args, 'dry_run', False):
+            data.update(dry_run=True, deleted=False)
+            output_success(data, command, pretty)
+            sys.exit(ExitCode.SUCCESS)
+
+        result = client.delete_message(change_number, message["id"], args.reason)
+        data.update(deleted=True, new_message_id=(result or {}).get("id"),
+                    new_message=(result or {}).get("message"))
+        output_success(data, command, pretty)
+        sys.exit(ExitCode.SUCCESS)
+
+    except Exception as e:
+        _delete_error(e, command, pretty)

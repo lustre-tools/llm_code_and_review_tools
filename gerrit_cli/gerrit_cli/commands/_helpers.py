@@ -175,10 +175,11 @@ def comment_timeline(threads: list, since: str = "") -> list[dict]:
 
 
 def message_list(review_messages: list, since: str = "") -> list[dict]:
-    """The change-level messages, oldest first: when, patchset, author and
-    text of each, as 'comments --messages' lists them."""
+    """The change-level messages, oldest first: id, when, patchset, author
+    and text of each, as 'comments --messages' lists them."""
     entries = [
         {
+            "id": message.id,
             "date": message.date,
             "patch_set": message.patch_set,
             "author": message.author.name,

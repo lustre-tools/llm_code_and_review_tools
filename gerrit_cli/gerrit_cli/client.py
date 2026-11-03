@@ -521,6 +521,28 @@ class GerritCommentsClient:
         self.rest.delete(
             f"/changes/{change_number}/revisions/{revision_id}/drafts/{draft_id}")
 
+    def delete_comment(self, change_number: int, revision_id: str,
+                       comment_id: str, reason: str) -> dict[str, Any]:
+        """Replace a published comment's text with Gerrit's removal notice
+        and the reason, and resolve it; needs the Administrate Server
+        capability. Gerrit rewrites the change's history, so every
+        change-message id from this point on changes."""
+        return self.rest.post(
+            f"/changes/{change_number}/revisions/{revision_id}"
+            f"/comments/{comment_id}/delete",
+            json={"reason": reason},
+        )
+
+    def delete_message(self, change_number: int, message_id: str,
+                       reason: str) -> dict[str, Any]:
+        """Replace a change message with Gerrit's removal notice and the
+        reason; needs the Administrate Server capability. The message and
+        every later one get new ids."""
+        return self.rest.post(
+            f"/changes/{change_number}/messages/{message_id}/delete",
+            json={"reason": reason},
+        )
+
     def publish_drafts(self, change_number: int) -> dict[str, Any]:
         """Publish every draft comment of the logged-in account on the
         change, on all patch sets.

@@ -504,6 +504,7 @@ class TestCmdExtract:
         assert exc_info.value.code == 0
         data = json.loads(capsys.readouterr().out)
         assert data["messages"] == [{
+            "id": "m2",
             "date": "2026-10-02 10:00:00.000000000",
             "patch_set": 3,
             "author": "Andreas Dilger",

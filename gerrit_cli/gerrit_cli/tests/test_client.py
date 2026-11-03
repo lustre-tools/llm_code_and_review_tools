@@ -617,3 +617,114 @@ class TestCmdMessage:
             main()
         assert exc_info.value.code == 4
         MockClient.return_value.post_review.assert_not_called()
+
+
+class TestCmdDelete:
+    """delete-comment and delete-message (Gerrit admins only)."""
+
+    COMMENTS = {"/PATCHSET_LEVEL": [
+        {"id": "c1", "patch_set": 2, "message": "[Marc Bot] test",
+         "author": {"name": "Marc Vef"}},
+        {"id": "gone", "patch_set": 1,
+         "message": "Comment removed by: Marc Vef; Reason: x"},
+    ]}
+    MESSAGES = [
+        {"id": "6e79929940e1", "message": "Patch Set 2:\n\nnotice",
+         "_revision_number": 2, "author": {"name": "Marc Vef"}},
+        {"id": "6e7aaa", "message": "Patch Set 2:\n\nother"},
+        {"id": "9b6a51", "message": "Change message removed by: Marc Vef"},
+    ]
+
+    def _run(self, capsys, monkeypatch, argv, mode="full"):
+        from gerrit_cli.cli import main
+        monkeypatch.setenv("GERRIT_CLI_MODE", mode)
+        with patch("gerrit_cli.cli.GerritCommentsClient") as MockClient, \
+             patch("sys.argv", ["gerrit"] + argv), \
+             pytest.raises(SystemExit) as exc_info:
+            MockClient.parse_gerrit_url.return_value = (
+                "https://example.com", 70236)
+            client = MockClient.return_value
+            client.get_comments.return_value = self.COMMENTS
+            client.get_messages.return_value = self.MESSAGES
+            client.delete_comment.return_value = {
+                "message": "Comment removed by: Marc Vef; Reason: r"}
+            client.delete_message.return_value = {
+                "id": "new", "message": "Change message removed by: Marc Vef"}
+            main()
+        return exc_info.value.code, client, json.loads(capsys.readouterr().out)
+
+    def test_delete_comment_on_its_patchset(self, capsys, monkeypatch):
+        code, client, out = self._run(
+            capsys, monkeypatch, ["delete-comment", "70236", "c1", "--reason", "r"])
+        assert code == 0
+        client.delete_comment.assert_called_once_with(70236, "2", "c1", "r")
+        assert out["deleted"] is True and out["message"] == "[Marc Bot] test"
+
+    def test_dry_run_deletes_nothing(self, capsys, monkeypatch):
+        code, client, out = self._run(capsys, monkeypatch, [
+            "delete-comment", "70236", "c1", "--reason", "r", "--dry-run"])
+        assert code == 0 and out["deleted"] is False
+        client.delete_comment.assert_not_called()
+
+    def test_unknown_comment(self, capsys, monkeypatch):
+        code, client, out = self._run(
+            capsys, monkeypatch, ["delete-comment", "70236", "nope", "--reason", "r"])
+        assert code == 3
+        client.delete_comment.assert_not_called()
+
+    def test_already_deleted_comment(self, capsys, monkeypatch):
+        code, client, out = self._run(
+            capsys, monkeypatch, ["delete-comment", "70236", "gone", "--reason", "r"])
+        assert code == 4 and "already deleted" in out["message"]
+        client.delete_comment.assert_not_called()
+
+    def test_refused_in_drafts_mode(self, capsys, monkeypatch):
+        code, client, out = self._run(capsys, monkeypatch, [
+            "delete-comment", "70236", "c1", "--reason", "r"], mode="drafts")
+        assert code != 0 and "undone" in out["message"]
+        client.get_comments.assert_not_called()
+        client.delete_comment.assert_not_called()
+
+    def test_reason_is_required(self, capsys, monkeypatch):
+        from gerrit_cli.cli import build_parser
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(["delete-comment", "70236", "c1"])
+
+    def test_no_admin_says_so(self, capsys, monkeypatch):
+        from gerrit_cli.cli import main
+        monkeypatch.setenv("GERRIT_CLI_MODE", "full")
+        with patch("gerrit_cli.cli.GerritCommentsClient") as MockClient, \
+             patch("sys.argv", ["gerrit", "delete-comment", "70236", "c1",
+                                "--reason", "r"]), \
+             pytest.raises(SystemExit):
+            MockClient.parse_gerrit_url.return_value = ("https://x", 70236)
+            MockClient.return_value.get_comments.return_value = self.COMMENTS
+            MockClient.return_value.delete_comment.side_effect = Exception(
+                "403 Client Error: Forbidden")
+            main()
+        assert "Administrate Server" in json.loads(capsys.readouterr().out)["message"]
+
+    def test_delete_message_by_unique_prefix(self, capsys, monkeypatch):
+        code, client, out = self._run(capsys, monkeypatch, [
+            "delete-message", "70236", "6e7992", "--reason", "r"])
+        assert code == 0
+        client.delete_message.assert_called_once_with(70236, "6e79929940e1", "r")
+        assert out["new_message_id"] == "new"
+
+    def test_ambiguous_message_prefix(self, capsys, monkeypatch):
+        code, client, out = self._run(capsys, monkeypatch, [
+            "delete-message", "70236", "6e7", "--reason", "r"])
+        assert code == 4 and "matches 2" in out["message"]
+        client.delete_message.assert_not_called()
+
+    def test_stale_message_id_says_ids_change(self, capsys, monkeypatch):
+        code, client, out = self._run(capsys, monkeypatch, [
+            "delete-message", "70236", "58cd545d", "--reason", "r"])
+        assert code == 3 and "--messages" in out["message"]
+        client.delete_message.assert_not_called()
+
+    def test_already_deleted_message(self, capsys, monkeypatch):
+        code, client, out = self._run(capsys, monkeypatch, [
+            "delete-message", "70236", "9b6a51", "--reason", "r"])
+        assert code == 4
+        client.delete_message.assert_not_called()

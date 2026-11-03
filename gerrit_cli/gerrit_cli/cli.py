@@ -198,6 +198,8 @@ cmd_hashtag = _cmd_change.cmd_hashtag
 cmd_related = _cmd_change.cmd_related
 cmd_message = _cmd_change.cmd_message
 cmd_publish_drafts = _cmd_change.cmd_publish_drafts
+cmd_delete_comment = _cmd_change.cmd_delete_comment
+cmd_delete_message = _cmd_change.cmd_delete_message
 
 cmd_reviewers = _cmd_reviewers.cmd_reviewers
 cmd_add_reviewer = _cmd_reviewers.cmd_add_reviewer
@@ -450,6 +452,8 @@ def build_handlers():
         'diff': cmd_diff,
         'message': cmd_message,
         'publish_drafts': cmd_publish_drafts,
+        'delete_comment': cmd_delete_comment,
+        'delete_message': cmd_delete_message,
         'explain': cmd_explain,
         'examples': cmd_examples,
         'done': cmd_done,

@@ -205,6 +205,31 @@ gc search 'project:fs/lustre-release hashtag:pt_ecro after:2026-08-22'
   trailer -- use `message:` for both. `comment:<number>` matches far too
   much to be useful there.
 
+## Deleting comments and change messages
+
+Published comments cannot be edited -- Gerrit has no such operation. A
+correction is a reply in the thread. Deleting is for an account with
+Gerrit's Administrate Server capability, and only when the user asked
+for that comment or message to go:
+
+```bash
+gc comments <url> --all                 # comment ids: root_comment.id, replies[].id
+gc delete-comment <url> <comment_id> --reason "..." --dry-run
+gc comments <url> --messages            # change-message ids
+gc delete-message <url> <id-prefix> --reason "..." --dry-run
+```
+
+- Run `--dry-run` first and check it names the text you mean to delete.
+  There is no undo: Gerrit keeps the entry but replaces its text with
+  "Comment removed by: <name>; Reason: <reason>" (a comment is also
+  resolved). The reason is public; it follows the same prefix rule as
+  anything else posted from the account.
+- Every deletion rewrites the change's history: the deleted message and
+  every later change message get new ids. List `--messages` again
+  before each `delete-message`; never reuse an id from before a
+  deletion. Comment ids do not change.
+- Both are refused in drafts mode.
+
 ## Change metadata
 
 ```bash

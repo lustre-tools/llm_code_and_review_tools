@@ -10,7 +10,7 @@ _gerrit_completions() {
     _init_completion || return
 
     local global_opts="--envelope --help --user --version -U -h"
-    local commands="abandon abort ack add-reviewer batch check checkout co comments continue-reintegration describe diff done examples explain extract find-user finish-patch graph hashtag i info interactive label maloo message next-patch publish-drafts push rebase related remove-reviewer reply restore review review-series reviewer-candidates reviewers s sashiko-review search series-comments series-info series-status set-topic skip-reintegration sr stage staged status upload vote watch work-on-patch"
+    local commands="abandon abort ack add-reviewer batch check checkout co comments continue-reintegration delete-comment delete-message describe diff done examples explain extract find-user finish-patch graph hashtag i info interactive label maloo message next-patch publish-drafts push rebase related remove-reviewer reply restore review review-series reviewer-candidates reviewers s sashiko-review search series-comments series-info series-status set-topic skip-reintegration sr stage staged status upload vote watch work-on-patch"
 
     # The command is the first word that is not a global option.
     local cmd="" i=1
@@ -50,6 +50,8 @@ _gerrit_completions() {
         checkout|co) opts="--branch --envelope --help --patchset --pretty --user -U -b -h -p -r" ;;
         comments|extract) opts="--all --context-lines --envelope --fields --help --include-ci --include-lint --include-system --messages --no-context --pretty --since --summary --timeline --user -U -a -c -h -p -s" ;;
         continue-reintegration) opts="--envelope --help --user -U -h" ;;
+        delete-comment) opts="--dry-run --envelope --help --pretty --reason --user -U -h -n -p" ;;
+        delete-message) opts="--dry-run --envelope --help --pretty --reason --user -U -h -n -p" ;;
         describe) opts="--command --envelope --help --pretty --user -U -h -p" ;;
         diff) opts="--envelope --help --pretty --unified --user -U -h -p -u" ;;
         done) opts="--envelope --help --pretty --user -U -h -p" ;;

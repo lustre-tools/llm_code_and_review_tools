@@ -1554,6 +1554,72 @@ def add_message_parser(subparsers):
     return parser
 
 
+def add_delete_comment_parser(subparsers):
+    """Add the 'delete-comment' subcommand parser."""
+    parser = subparsers.add_parser(
+        "delete-comment",
+        help="Delete a published comment (Gerrit admins only)",
+        description="Delete a published comment. Gerrit keeps it in its "
+                    "thread but replaces the text with 'Comment removed by: "
+                    "<name>; Reason: <reason>' and resolves it; there is no "
+                    "undo. Needs the Administrate Server capability. "
+                    "Published comments cannot be edited, only deleted.",
+    )
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
+    parser.add_argument(
+        "comment_id",
+        help="The comment's id (root_comment.id or replies[].id in "
+             "'gc comments --all')",
+    )
+    parser.add_argument(
+        "--reason", required=True,
+        help="Why it is deleted; Gerrit shows it in place of the comment",
+    )
+    parser.add_argument(
+        "--dry-run", "-n", action="store_true",
+        help="Show the comment that would be deleted, without deleting it",
+    )
+    parser.add_argument(
+        "--pretty", "-p", action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
+def add_delete_message_parser(subparsers):
+    """Add the 'delete-message' subcommand parser."""
+    parser = subparsers.add_parser(
+        "delete-message",
+        help="Delete a change message (Gerrit admins only)",
+        description="Delete a change message (a change log entry). Gerrit "
+                    "replaces its text with 'Change message removed by: "
+                    "<name>' and the reason; there is no undo. It rewrites "
+                    "the change's history, so this message and every later "
+                    "one get new ids. Needs the Administrate Server "
+                    "capability.",
+    )
+    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
+    parser.add_argument(
+        "message_id",
+        help="The message's id, or a unique prefix of it, from "
+             "'gc comments <url> --messages'; list it again after any "
+             "deletion",
+    )
+    parser.add_argument(
+        "--reason", required=True,
+        help="Why it is deleted; Gerrit shows it in place of the message",
+    )
+    parser.add_argument(
+        "--dry-run", "-n", action="store_true",
+        help="Show the message that would be deleted, without deleting it",
+    )
+    parser.add_argument(
+        "--pretty", "-p", action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
 def add_publish_drafts_parser(subparsers):
     """Add the 'publish-drafts' subcommand parser."""
     parser = subparsers.add_parser(
@@ -1786,6 +1852,10 @@ def setup_parsers(subparsers, handlers):
     add_message_parser(subparsers).set_defaults(func=handlers['message'])
     add_publish_drafts_parser(subparsers).set_defaults(
         func=handlers['publish_drafts'])
+    add_delete_comment_parser(subparsers).set_defaults(
+        func=handlers['delete_comment'])
+    add_delete_message_parser(subparsers).set_defaults(
+        func=handlers['delete_message'])
 
     # Help/documentation commands
     add_explain_parser(subparsers).set_defaults(func=handlers['explain'])

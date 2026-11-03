@@ -947,6 +947,44 @@ same time, use 'gc vote -m'.
         ],
         "related": ["vote", "reply"],
     },
+    "delete-comment": {
+        "summary": "Delete a published comment (Gerrit admins only)",
+        "description": """
+Delete a published comment. Gerrit keeps it in its thread, replaces the
+text with "Comment removed by: <name>; Reason: <reason>" and marks it
+resolved; there is no undo. --reason is required, and --dry-run shows
+the comment first. Needs Gerrit's Administrate Server capability;
+refused in drafts mode.
+
+Published comments cannot be edited -- Gerrit has no such operation --
+only deleted. A draft is edited or deleted in the web UI.
+""",
+        "examples": [
+            {
+                "command": "gc delete-comment URL 5f25c886_7881c599 --reason \"posted on the wrong change\" --dry-run",
+                "description": "Show the comment that would be deleted",
+            },
+        ],
+        "related": ["delete-message", "comments"],
+    },
+    "delete-message": {
+        "summary": "Delete a change message (Gerrit admins only)",
+        "description": """
+Delete a change message, a change log entry. Gerrit replaces its text
+with "Change message removed by: <name>" and the reason; there is no
+undo. Take the id from 'gc comments URL --messages' (a unique prefix is
+enough) right before deleting: every deletion on a change rewrites its
+history, and this message and every later one get new ids. Needs
+Gerrit's Administrate Server capability; refused in drafts mode.
+""",
+        "examples": [
+            {
+                "command": "gc delete-message URL 6e799299 --reason \"test message\" --dry-run",
+                "description": "Show the message that would be deleted",
+            },
+        ],
+        "related": ["delete-comment", "comments"],
+    },
     "publish-drafts": {
         "summary": "Publish your draft comments on a change",
         "description": """

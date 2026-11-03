@@ -567,6 +567,10 @@ abandon <URL>                    # Abandon a Gerrit change
 restore <URL>                    # Restore an abandoned change
 message <URL> "text"             # Post a top-level (patchset-level) comment;
                                  #   --no-thread: a bare change message
+delete-comment <URL> <ID> --reason R    # Gerrit admins: replace a published
+                                 #   comment with a removal notice (no edit)
+delete-message <URL> <ID> --reason R    # Gerrit admins: same for a change
+                                 #   message; ids change after any deletion
 ```
 
 ### Interactive Mode
