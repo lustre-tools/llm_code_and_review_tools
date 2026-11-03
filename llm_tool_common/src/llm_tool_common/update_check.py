@@ -19,10 +19,10 @@ stdout is never touched: it carries the tools' JSON.  The prompt and
 the notice both go to stderr.
 
 **Acting without a TTY is forbidden, not merely skipped.**  A
-successful update stops the process instead of running the command
-the caller asked for (the old modules are already imported); a script
-or agent would read that exit as the command having run.  So ``auto``
-mode with no TTY degrades to the notice.
+successful update replaces the process with a fresh run of the same
+command (the old modules are already imported), and a script or agent
+would see installer output and a restart nobody asked for.  So
+``auto`` mode with no TTY degrades to the notice.
 
 Nothing here may fail a command: every error is swallowed and costs at
 most one more network check.
@@ -93,6 +93,9 @@ COMMANDS = frozenset({
 })
 
 DISABLE_ENV = "LLM_TOOLS_NO_UPDATE_CHECK"
+# Set on the command re-run after an update, for that process only:
+# _check() removes it, so the tools it starts check as usual.
+_RERUN_ENV = "LLM_TOOLS_RERUN_AFTER_UPDATE"
 
 _CONFIG_DIR = (
     Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
@@ -415,14 +418,19 @@ def _apply_update() -> bool:
     return True
 
 
-def _exit_after_update() -> None:
-    """Stop instead of running the command with the old modules.
+def _rerun_after_update() -> None:
+    """Run the command again in a fresh process, on the updated code.
 
     The pull replaced the source under a process that has already
     imported it; the rest of this run would mix old and new code.
     """
-    _say("  LLM tools updated.  Re-run your command.")
-    raise SystemExit(0)
+    _say("  LLM tools updated.  Running your command again...")
+    env = dict(os.environ, **{_RERUN_ENV: "1"})
+    try:
+        os.execve(sys.executable, [sys.executable, *sys.argv], env)
+    except OSError as e:
+        _say(f"  Could not run it again ({e}); re-run your command.")
+        raise SystemExit(1) from e
 
 
 def _handle_interactive(
@@ -445,7 +453,7 @@ def _handle_interactive(
     if choice in ("y", "a"):
         if _apply_update():
             _clear_pending(state)
-            _exit_after_update()
+            _rerun_after_update()
     elif choice == "x":
         cfg["update_check"]["mode"] = "never"
         _save_config(cfg)
@@ -474,7 +482,8 @@ def maybe_check_for_updates() -> None:
 
     Cheap when there is nothing to do: two small file reads, and a git
     call only when the daily check is due or an update is pending.
-    Never raises, except SystemExit after a successful update.
+    Never raises, except SystemExit when the command cannot be run
+    again after a successful update.
     """
     try:
         _check()
@@ -485,6 +494,8 @@ def maybe_check_for_updates() -> None:
 
 
 def _check() -> None:
+    if os.environ.pop(_RERUN_ENV, None):
+        return
     if os.environ.get(DISABLE_ENV, "").strip() not in ("", "0"):
         return
     if not _launched_as_tool() or _under_test():

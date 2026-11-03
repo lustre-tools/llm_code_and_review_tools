@@ -253,14 +253,56 @@ def test_no_means_tomorrow(env):
     assert state()["last_notice_iso"] == prompted
 
 
-def test_yes_updates_and_stops(env):
+class _Execed(BaseException):
+    """Stands in for an exec, which never returns; BaseException gets it
+    past maybe_check_for_updates(), which swallows Exception."""
+
+
+@pytest.fixture
+def execve(monkeypatch):
+    """Record os.execve instead of replacing the test process."""
+    calls = []
+
+    def fake(path, args, environ):
+        calls.append((path, args, environ))
+        raise _Execed
+    monkeypatch.setattr(uc.os, "execve", fake)
+    return calls
+
+
+def test_yes_updates_and_runs_the_command_again(env, execve):
+    """After "y" the command the user typed runs, on the new code."""
+    env.interactive = True
+    env.answer = "y"
+    with pytest.raises(_Execed):
+        uc.maybe_check_for_updates()
+    assert env.applied == [True]
+    assert state()["pending_update"] is None
+    [(path, args, environ)] = execve
+    assert path == sys.executable
+    assert args == [sys.executable, "/home/u/.local/bin/jira", "get", "LU-1"]
+    assert environ[uc._RERUN_ENV] == "1"
+
+
+def test_the_rerun_does_not_check_but_its_children_do(env, monkeypatch):
+    monkeypatch.setenv(uc._RERUN_ENV, "1")
+    env.interactive = True
+    env.answer = "y"
+    uc.maybe_check_for_updates()
+    assert env.remote_calls == 0 and env.applied == []
+    assert uc._RERUN_ENV not in uc.os.environ
+
+
+def test_a_rerun_that_cannot_start_says_so(env, monkeypatch, capsys):
+    def fail(*a):
+        raise OSError("exec format error")
+    monkeypatch.setattr(uc.os, "execve", fail)
     env.interactive = True
     env.answer = "y"
     with pytest.raises(SystemExit) as e:
         uc.maybe_check_for_updates()
-    assert e.value.code == 0
-    assert env.applied == [True]
-    assert state()["pending_update"] is None
+    assert e.value.code == 1
+    assert "re-run your command" in capsys.readouterr().err
 
 
 def test_failed_update_runs_the_command_anyway(env):
@@ -271,19 +313,19 @@ def test_failed_update_runs_the_command_anyway(env):
     assert state()["pending_update"] is not None
 
 
-def test_auto_remembers_and_updates(env):
+def test_auto_remembers_and_updates(env, execve):
     env.interactive = True
     env.answer = "a"
-    with pytest.raises(SystemExit):
+    with pytest.raises(_Execed):
         uc.maybe_check_for_updates()
     assert uc._load_config()["update_check"]["mode"] == "auto"
 
 
-def test_auto_mode_updates_without_asking(env, monkeypatch):
+def test_auto_mode_updates_without_asking(env, monkeypatch, execve):
     env.interactive = True
     uc._save_config({"update_check": {"mode": "auto"}})
     monkeypatch.setattr(uc, "_prompt_choice", lambda *a: pytest.fail("asked"))
-    with pytest.raises(SystemExit):
+    with pytest.raises(_Execed):
         uc.maybe_check_for_updates()
     assert env.applied == [True]
 

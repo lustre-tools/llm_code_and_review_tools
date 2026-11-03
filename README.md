@@ -95,7 +95,8 @@ A newer version of the LLM tools is available (local=3507cba, remote=8c1f2e4).
   [x] don't ask again (stops checking for updates)
 ```
 
-"y" runs `./install.sh --update` and stops; re-run your command.
+"y" runs `./install.sh --update`, then runs your command again on the
+updated tools.
 Scripts and agents (no terminal) are never prompted and never
 updated: they get one line on stderr, at most daily, and stdout stays
 clean JSON. `--update` refuses a checkout that is on another branch or
