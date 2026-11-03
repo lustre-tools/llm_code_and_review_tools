@@ -86,7 +86,10 @@ with `may_change` and `halt.you_may_clear` what you could do about it.
   and reports on the rest. Never uploads to the change.
 - **shepherd**: retest, and once CI passes, adds reviewers if too few are
   active, pings them at 7 and 21 days, and adds a second set after 14 quiet
-  days. Its only upload is a simple rebase (a cherry-pick veto, or a patchset
+  days. It adds them 16 hours after Maloo's +1, once the patchset's AI review
+  is in (24 hours at most), not while that review found concerns, and never
+  on a change whose subject starts with WIP; it says on the change whom it
+  added. Its only upload is a simple rebase (a cherry-pick veto, or a patchset
   over 30 days old): when the rebase needs no code changes, or only
   mechanical substitutions, it uploads and says so on the change; any other
   conflict is left for a person.
@@ -97,7 +100,7 @@ with `may_change` and `halt.you_may_clear` what you could do about it.
 - **own**: as bigfix, without waiting on design changes.
 
 Retest and shepherd are refused (`CONFLICT`, `server_code: level_refused`,
-with the reason) on a change not meant to land as it stands: more than five
+with the reason) on a change not meant to land as it stands: more than four
 deep in its series of open changes, against LU-0000, or marked
 `fortestonly` or `forbuildonly`. Do not retry those. Smallfix and up still
 work on them.
