@@ -874,6 +874,13 @@ def add_reviewer_candidates_parser(subparsers):
                         help="Leave this person out too (repeatable)")
     parser.add_argument("--brief", action="store_true",
                         help="Files as bare paths, without per-file counts")
+    parser.add_argument("--load", action="store_true",
+                        help="Read each listed candidate's review load from "
+                             "Gerrit and order by balanced (two queries a "
+                             "person)")
+    parser.add_argument("--asked", metavar="FILE",
+                        help="JSON of the caller's earlier reviewer asks per "
+                             "person, to weigh and hold by; orders by balanced")
     parser.add_argument("--pretty", "-p", action="store_true",
                         help="Pretty-print JSON output")
     return parser

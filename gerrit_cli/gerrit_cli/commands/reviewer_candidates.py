@@ -266,6 +266,7 @@ def cmd_reviewer_candidates(args):
         data = {}
         exclude = [(e, e, "excluded") for e in (args.exclude or [])]
         on_change = []
+        client = None
         if args.url:
             cli = _cli()
             _base, change_number = cli.GerritCommentsClient.parse_gerrit_url(args.url)
@@ -285,6 +286,21 @@ def cmd_reviewer_candidates(args):
         total = len(candidates)
         if args.limit > 0:
             candidates = candidates[:args.limit]
+        load = getattr(args, "load", False)
+        asked_path = getattr(args, "asked", None)
+        order = "score"
+        if load or asked_path:
+            from . import reviewer_load
+            asked = reviewer_load.read_asked(asked_path) if asked_path else None
+            if load:
+                if client is None:
+                    client = _cli().GerritCommentsClient()
+                reviewer_load.add_gerrit_load(client, candidates)
+            candidates = reviewer_load.balance(candidates, asked)
+            order = "balanced"
+            if asked is not None:
+                data["asked_by"] = asked.get("by")
+                data["asked_generated_at"] = asked.get("generated_at")
         if args.brief:
             for entry in candidates + excluded:
                 entry["files"] = [f["path"] for f in entry["files"]]
@@ -297,6 +313,7 @@ def cmd_reviewer_candidates(args):
             "paths_without_history": [p for p in paths if p not in known
                                       and not any(k.startswith(p.rstrip("/") + "/")
                                                   for k in known)],
+            "order": order,
             "candidates": candidates,
             "count": len(candidates),
             "total_candidates": total,

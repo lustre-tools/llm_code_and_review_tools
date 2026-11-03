@@ -642,6 +642,25 @@ paths_without_history names files with no commit in the window (new
 files, or a repo that is not lustre-release): widen --months, or rank the
 directory with --path. Picking who to add is still yours: check
 MAINTAINERS and whether a candidate is active.
+
+--load and --asked weigh the listed candidates by the review they already
+carry, so the same few experts are not asked every time, and order them by
+balanced instead of score (order says which). --load reads Gerrit for each
+(account_id; null when no account matches their emails or exact name):
+load.waiting is open changes updated in the last 30 days that they review,
+do not own and have not voted on; load.reviewed is changes updated in that
+window carrying their Code-Review vote. --asked FILE gives the caller's
+own earlier asks, {"by", "generated_at", "people": [{account_id, name,
+email, asked, answered, pending, asked_14d, last_asked,
+median_answer_days}]}, matched by account, email, then name; asked is that
+record, or null for someone never asked.
+
+balanced = sqrt(score) x factors: queue (reviewed+1)/(reviewed+1+waiting),
+asks 1/(1 + (pending + asked_14d/2)/3), answers min(1, 2(answered+1)/
+(asked+2)). hold lists reasons not to ask them now: no Code-Review vote in
+the window, 6 or more asks already pending, asked 4 or more times and
+answered none, or a review_share of 0.8 or more (the gatekeeper). Held
+candidates sort last.
 """,
         "examples": [
             {
@@ -655,6 +674,10 @@ MAINTAINERS and whether a candidate is active.
             {
                 "command": "gc reviewer-candidates 12345 --brief --limit 5",
                 "description": "Top five, files as bare paths",
+            },
+            {
+                "command": "gc reviewer-candidates 12345 --limit 15 --load --asked asks.json",
+                "description": "Fifteen who know the files, ordered by load",
             },
         ],
         "related": ["reviewers", "add-reviewer", "find-user"],

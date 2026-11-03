@@ -76,7 +76,7 @@ _gerrit_completions() {
         restore) opts="--envelope --help --message --pretty --user -U -h -m -p" ;;
         review) opts="--base --changes-only --dry-run --envelope --full-content --full-context --help --message --no-thread --post-comments --prefix --pretty --summary --tag --unified --user --vote -U -b -c -f -h -m -n -p -s -u" ;;
         review-series) opts="--checkout --envelope --help --include-abandoned --no-checkout --no-prompt --numbers-only --pretty --urls-only --user -U -a -c -h -n -p -u" ;;
-        reviewer-candidates) opts="--brief --envelope --exclude --help --limit --months --path --pretty --ref --repo --user -C -U -h -n -p" ;;
+        reviewer-candidates) opts="--asked --brief --envelope --exclude --help --limit --load --months --path --pretty --ref --repo --user -C -U -h -n -p" ;;
         reviewers) opts="--envelope --help --pretty --user -U -h -p" ;;
         s|search) opts="--all --envelope --help --limit --max --pretty --start --user -S -U -a -h -n -p" ;;
         sashiko-review|sr) opts="--dry-run --envelope --help --repo --sashiko-url --timeout --user --vote -U -h" ;;

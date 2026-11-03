@@ -271,6 +271,13 @@ and the five-person cap; a `review_share` near 1 is the gatekeeper who
 lands everything, not a file expert. `paths_without_history` lists new
 files: rank their directory with `--path`.
 
+Add `--load` to weigh the listed candidates by the review they already
+carry (Gerrit's queue of recent changes waiting on their vote against the
+votes they cast lately), and `--asked FILE` for your own earlier asks per
+person (Patch Watcher's runs are given one): the list is then in
+`balanced` order, and `hold` says why not to ask someone now. Use it when
+you add reviewers often, so the same few experts are not asked every time.
+
 ## Lustre commit-message rules
 
 These are enforced by the tree's `commit-msg` hook, and a patch that
