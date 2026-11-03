@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
+from .ci_parse import is_bot_participant
 from .errors import ErrorCode, ExitCode
 
 # Base URL git pushes to; the project is appended.  Defaults to
@@ -1334,6 +1335,45 @@ def _check_expected_patchset(
     )
 
 
+def _bot_rebase_warnings(
+    client: Any, plan: list[dict[str, Any]], commits: list[Commit], account: Account,
+) -> list[str]:
+    """A warning for each change whose current patchset an agent such as
+    Patch Watcher uploaded onto another parent than the commit replacing
+    it: pushing an edit of an earlier patchset would undo that rebase."""
+    parent_of = {c.sha: (c.parents[0] if c.parents else "") for c in commits}
+    found = []
+    for entry in plan:
+        if entry["action"] != "update" or not entry.get("change_number"):
+            continue
+        number = entry["change_number"]
+        try:
+            detail = client.get_change(
+                number, ["CURRENT_REVISION", "CURRENT_COMMIT", "DETAILED_ACCOUNTS"])
+        except Exception:
+            continue
+        current = detail.get("current_revision")
+        revision = (detail.get("revisions") or {}).get(current) or {}
+        uploader = revision.get("uploader") or {}
+        if not is_bot_participant(uploader) or (
+            (uploader.get("username") or "") == account.username
+        ):
+            continue
+        parents = [p.get("commit") for p in (revision.get("commit") or {}).get("parents") or ()]
+        ours = parent_of.get(entry["sha"], "")
+        if not parents or not ours or ours in parents:
+            continue
+        found.append(
+            f"Change {number}'s patchset {revision.get('_number')} was uploaded by "
+            f"{uploader.get('name') or uploader.get('username')} onto "
+            f"{parents[0][:12]}, and this commit sits on {ours[:12]}. If it "
+            "edits an earlier patchset, pushing it undoes that upload (often a "
+            "rebase): check out the current patchset (`gerrit checkout`) and "
+            "redo the edit on it, unless moving the base is what you meant."
+        )
+    return found
+
+
 def _push_failure(
     stderr: str,
     status: tuple[str, str] | None,
@@ -1537,6 +1577,7 @@ def upload(
                 e.details["hint"] = hint.strip()
             raise
         _check_privacy(plan, private)
+        warnings.extend(_bot_rebase_warnings(client, plan, commits, account))
 
         to = f"{account.name} <{account.preferred_email}>"
         amended = [

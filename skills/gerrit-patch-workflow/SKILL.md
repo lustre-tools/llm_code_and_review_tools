@@ -359,6 +359,12 @@ is not the working directory.
   something else might be touching the change: any bot, any concurrent
   session. On a refusal, rebase onto the patchset that is now current
   rather than pushing over it. It does not apply to `--series`.
+- Patch Watcher (Patrickbot) rebases a change at level shepherd when
+  checkpatch says it cannot be cherry-picked, and higher levels upload
+  more. When the current patchset is a bot's, on another parent than your
+  commit, `warnings` says so: your push would undo its rebase. Check out
+  the current patchset (`gerrit checkout`) and redo the edit on it, unless
+  moving the base is what you meant.
 - Rebased onto `master-next` at a reviewer's request: `--base master-next`;
   the change still targets master.
 - A commit-message-only amend -- wording, a `Test-Parameters:` line -- is

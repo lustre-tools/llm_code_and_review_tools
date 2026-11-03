@@ -263,6 +263,41 @@ def test_uploads_the_next_patchset_of_the_named_change(gerrit):
     assert pushed_refs(bare) == {"refs/for/master": head}
 
 
+def _bot_rebased(fake, parent):
+    """Change 51164's current patchset, as Patch Watcher's rebase left it."""
+    change = fake.changes[51164]
+    change["revisions"][change["current_revision"]].update(
+        uploader={"_account_id": 7, "name": "patrick bot", "username": "Patrickbot"},
+        commit={"parents": [{"commit": parent}]},
+    )
+
+
+def test_warns_when_the_push_would_undo_a_bot_rebase(gerrit):
+    fake, bare, work = gerrit
+    fake.username = "pfarrell2"
+    fake.account.update(username="pfarrell2", name=OPERATOR[0], email=OPERATOR[1])
+    fake.emails = [{"email": OPERATOR[1], "preferred": True}]
+    _bot_rebased(fake, "c" * 40)
+    commit(work, "LU-1 llite: fix", cid=CID_A, committer=OPERATOR, signoff=OPERATOR)
+
+    data = upload(fake, repo=str(work), change="51164", dry_run=True)
+
+    [warning] = data["warnings"]
+    assert "uploaded by patrick bot onto cccccccccccc" in warning
+    assert "gerrit checkout" in warning
+
+
+def test_no_warning_on_the_bots_own_parent_or_its_own_upload(gerrit):
+    fake, bare, work = gerrit
+    base = git(work, "rev-parse", "HEAD")
+    _bot_rebased(fake, base)
+    commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)
+    assert upload(fake, repo=str(work), change="51164", dry_run=True)["warnings"] == []
+    # The bot itself re-uploading onto another base is not warned either.
+    _bot_rebased(fake, "c" * 40)
+    assert upload(fake, repo=str(work), change="51164", dry_run=True)["warnings"] == []
+
+
 def test_the_change_can_be_named_by_url_or_change_id(gerrit):
     fake, bare, work = gerrit
     commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)
