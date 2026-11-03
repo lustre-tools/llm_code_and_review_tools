@@ -3,6 +3,7 @@ every change in an area, and some were asked a dozen times without ever
 answering."""
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 
@@ -95,19 +96,40 @@ def test_the_expert_with_a_queue_of_asks_yields_to_a_free_one():
     assert busy["factors"]["asks"] == round(1 / (1 + (5 + 4) / 3), 2)
 
 
+NOW = datetime(2026, 11, 3, 20, tzinfo=UTC)
+
+
 def test_holds_go_last_with_their_reasons():
     silent = {"name": "Silent", "score": 400, "asked": {
-        "asked": 17, "answered": 0, "pending": 2, "asked_14d": 1}}
+        "asked": 17, "answered": 0, "pending": 2, "asked_14d": 1,
+        "last_asked": "2026-10-30T00:00:00Z"}}
     swamped = {"name": "Swamped", "score": 400, "asked": {
         "asked": 29, "answered": 4, "pending": 23, "asked_14d": 18}}
     absent = {"name": "Absent", "score": 400,
-              "load": {"window_days": 30, "waiting": 3, "reviewed": 0}}
+              "load": {"window_days": 30, "waiting": 3, "reviewed": 0},
+              "asked": {"asked": 1, "answered": 0, "pending": 1,
+                        "asked_14d": 1, "last_asked": "2026-11-01T00:00:00Z"}}
     fine = {"name": "Fine", "score": 4}
-    ordered = balance([silent, swamped, absent, fine])
+    ordered = balance([silent, swamped, absent, fine], now=NOW)
     assert ordered[0]["name"] == "Fine"
-    assert silent["hold"] == ["asked 17 times, answered none"]
+    assert silent["hold"] == ["asked 17 times, answered none; last asked 5 days ago"]
     assert swamped["hold"] == ["23 asks already waiting on them"]
-    assert absent["hold"] == ["no Code-Review vote on Gerrit in 30 days"]
+    assert absent["hold"] == [
+        "no Code-Review vote on Gerrit in 30 days; last asked 3 days ago"]
+
+
+def test_someone_who_seldom_reviews_is_asked_again_after_a_while():
+    seldom = {"name": "Seldom", "score": 100,
+              "load": {"window_days": 30, "waiting": 51, "reviewed": 3},
+              "asked": {"asked": 17, "answered": 0, "pending": 1,
+                        "asked_14d": 0, "last_asked": "2026-10-10T00:00:00Z"}}
+    never = {"name": "Never asked", "score": 100,
+             "load": {"window_days": 30, "waiting": 3, "reviewed": 0}}
+    balance([seldom, never], now=NOW)
+    assert seldom["hold"] is None and never["hold"] is None
+    assert seldom["factors"]["answers"] == 0.5
+    assert seldom["factors"]["queue"] == 0.5
+    assert never["factors"]["queue"] == 0.5
 
 
 def test_the_gatekeeper_is_held():
@@ -136,14 +158,15 @@ def test_someone_who_reviews_a_lot_carries_more_asks_unheld():
 
 
 def test_never_answering_holds_only_someone_who_reviews_little():
-    asks = {"asked": 17, "answered": 0, "pending": 2, "asked_14d": 1}
+    asks = {"asked": 17, "answered": 0, "pending": 2, "asked_14d": 1,
+            "last_asked": "2026-11-01T00:00:00Z"}
     busy = {"name": "Busy", "score": 9, "asked": dict(asks),
             "load": {"window_days": 30, "waiting": 30, "reviewed": 150}}
     idle = {"name": "Idle", "score": 9, "asked": dict(asks),
             "load": {"window_days": 30, "waiting": 51, "reviewed": 3}}
-    balance([busy, idle])
+    balance([busy, idle], now=NOW)
     assert busy["hold"] is None and busy["factors"]["answers"] == 0.11
-    assert idle["hold"] == ["asked 17 times, answered none"]
+    assert idle["hold"] == ["asked 17 times, answered none; last asked 3 days ago"]
 
 
 def test_queue_against_rate():

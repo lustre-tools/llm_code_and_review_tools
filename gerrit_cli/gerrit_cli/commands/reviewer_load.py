@@ -19,6 +19,7 @@ know the code, and a hold marks someone not to ask now.
 import json
 import math
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 
 from .reviewer_candidates import normalize_name
 
@@ -37,9 +38,14 @@ CAPACITY_MIN = 3
 HOLD_PENDING = 6
 HOLD_PENDING_DAYS = 7
 # Asked at least this many times and answered none, and fewer than this many
-# votes on Gerrit in the window: they do not review, for us or anyone.
+# votes on Gerrit in the window: they seldom review, for us or anyone.
 HOLD_UNANSWERED_ASKS = 4
 HOLD_UNANSWERED_REVIEWED = 20
+# Someone who seldom reviews still gets an ask now and then: held only this
+# long after the last one, and past it their queue and answers weigh no
+# less than SELDOM_FLOOR, so they come round in turn.
+SELDOM_COOLDOWN_DAYS = 14
+SELDOM_FLOOR = 0.5
 # A Reviewed-by on this share of the commits, and at least this many, is the
 # gatekeeper who lands them, not an expert in these files.
 GATEKEEPER_SHARE = 0.8
@@ -163,15 +169,25 @@ def match_asked(candidate, index):
     return None
 
 
-def weigh(candidate):
+def _days_since(stamp, now):
+    try:
+        then = datetime.strptime(str(stamp), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+    return (now - then).total_seconds() / 86400
+
+
+def weigh(candidate, now=None):
     """(balanced, factors, holds) for one candidate.
 
     balanced = sqrt(score) x queue x asks x answers.  The square root
     keeps a big expertise gap decisive while letting load decide among
     people who all know the code.
     """
+    now = now or datetime.now(UTC)
     factors = {}
     holds = []
+    seldom = None
     balanced = math.sqrt(max(0, candidate.get("score") or 0))
     if ((candidate.get("review_share") or 0) >= GATEKEEPER_SHARE
             and (candidate.get("reviewed") or 0) >= GATEKEEPER_REVIEWS):
@@ -182,8 +198,7 @@ def weigh(candidate):
         waiting, reviewed = load["waiting"], load["reviewed"]
         factors["queue"] = round((reviewed + 1) / (reviewed + 1 + waiting), 2)
         if reviewed == 0:
-            holds.append(f"no Code-Review vote on Gerrit in "
-                         f"{load['window_days']} days")
+            seldom = f"no Code-Review vote on Gerrit in {load['window_days']} days"
     asked = candidate.get("asked")
     if asked:
         pending = int(asked.get("pending") or 0)
@@ -198,13 +213,21 @@ def weigh(candidate):
             holds.append(f"{pending} asks already waiting on them")
         if (total >= HOLD_UNANSWERED_ASKS and answered == 0
                 and (reviewed is None or reviewed < HOLD_UNANSWERED_REVIEWED)):
-            holds.append(f"asked {total} times, answered none")
+            seldom = f"asked {total} times, answered none"
+    if seldom:
+        since = _days_since((asked or {}).get("last_asked"), now)
+        if since is not None and since < SELDOM_COOLDOWN_DAYS:
+            holds.append(f"{seldom}; last asked {since:.0f} days ago")
+        else:
+            for name in ("queue", "answers"):
+                if name in factors:
+                    factors[name] = max(factors[name], SELDOM_FLOOR)
     for value in factors.values():
         balanced *= value
     return round(balanced, 2), factors, holds
 
 
-def balance(candidates, asked=None):
+def balance(candidates, asked=None, now=None):
     """Attach asked, balanced, factors and hold to each candidate and
     return them in balanced order, held ones last."""
     index = _asked_index((asked or {}).get("people") or [])
@@ -214,7 +237,7 @@ def balance(candidates, asked=None):
             candidate["asked"] = ({k: record.get(k) for k in (
                 "asked", "answered", "pending", "asked_14d", "last_asked",
                 "median_answer_days") if k in record} if record else None)
-        balanced, factors, holds = weigh(candidate)
+        balanced, factors, holds = weigh(candidate, now)
         candidate["balanced"] = balanced
         candidate["factors"] = factors
         candidate["hold"] = holds or None
