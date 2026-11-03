@@ -28,10 +28,18 @@ LOAD_DAYS = 30
 LOAD_COUNT_CAP = 500
 LOAD_WORKERS = 4
 
-# Asks of the caller's still waiting on someone: past this many, ask others.
+# How many of the caller's asks someone can carry: about three days of the
+# Code-Review votes they cast, and never less than CAPACITY_MIN.  People who
+# review the most are asked the most; this only keeps them from being buried.
+CAPACITY_DAYS = 3
+CAPACITY_MIN = 3
+# Held when this many asks wait on them, or a week of their votes if more.
 HOLD_PENDING = 6
-# Asked at least this many times and answered none: they do not answer.
+HOLD_PENDING_DAYS = 7
+# Asked at least this many times and answered none, and fewer than this many
+# votes on Gerrit in the window: they do not review, for us or anyone.
 HOLD_UNANSWERED_ASKS = 4
+HOLD_UNANSWERED_REVIEWED = 20
 # A Reviewed-by on this share of the commits, and at least this many, is the
 # gatekeeper who lands them, not an expert in these files.
 GATEKEEPER_SHARE = 0.8
@@ -169,6 +177,7 @@ def weigh(candidate):
             and (candidate.get("reviewed") or 0) >= GATEKEEPER_REVIEWS):
         holds.append("on nearly every commit: the gatekeeper who lands them")
     load = candidate.get("load")
+    reviewed = None
     if load:
         waiting, reviewed = load["waiting"], load["reviewed"]
         factors["queue"] = round((reviewed + 1) / (reviewed + 1 + waiting), 2)
@@ -181,11 +190,14 @@ def weigh(candidate):
         recent = int(asked.get("asked_14d") or 0)
         total = int(asked.get("asked") or 0)
         answered = int(asked.get("answered") or 0)
-        factors["asks"] = round(1 / (1 + (pending + recent / 2) / 3), 2)
+        rate = (reviewed or 0) / load["window_days"] if load else 0
+        capacity = max(CAPACITY_MIN, rate * CAPACITY_DAYS)
+        factors["asks"] = round(1 / (1 + (pending + recent / 2) / capacity), 2)
         factors["answers"] = round(min(1.0, 2 * (answered + 1) / (total + 2)), 2)
-        if pending >= HOLD_PENDING:
+        if pending >= max(HOLD_PENDING, rate * HOLD_PENDING_DAYS):
             holds.append(f"{pending} asks already waiting on them")
-        if total >= HOLD_UNANSWERED_ASKS and answered == 0:
+        if (total >= HOLD_UNANSWERED_ASKS and answered == 0
+                and (reviewed is None or reviewed < HOLD_UNANSWERED_REVIEWED)):
             holds.append(f"asked {total} times, answered none")
     for value in factors.values():
         balanced *= value

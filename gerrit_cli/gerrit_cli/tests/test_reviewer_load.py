@@ -119,6 +119,33 @@ def test_the_gatekeeper_is_held():
     assert few["hold"] is None
 
 
+def test_someone_who_reviews_a_lot_carries_more_asks_unheld():
+    asks = {"asked": 36, "answered": 20, "pending": 13, "asked_14d": 13}
+    prolific = {"name": "Andreas", "score": 286, "asked": dict(asks),
+                "load": {"window_days": 30, "waiting": 255, "reviewed": 355}}
+    sparse = {"name": "Sparse", "score": 286, "asked": dict(asks),
+              "load": {"window_days": 30, "waiting": 10, "reviewed": 12}}
+    balance([prolific, sparse])
+    assert prolific["hold"] is None
+    assert prolific["factors"]["asks"] == round(1 / (1 + 19.5 / 35.5), 2)
+    assert sparse["hold"] == ["13 asks already waiting on them"]
+    # A week of a prolific reviewer's votes does hold them.
+    flooded = dict(prolific, asked=dict(asks, pending=90))
+    balance([flooded])
+    assert flooded["hold"] == ["90 asks already waiting on them"]
+
+
+def test_never_answering_holds_only_someone_who_reviews_little():
+    asks = {"asked": 17, "answered": 0, "pending": 2, "asked_14d": 1}
+    busy = {"name": "Busy", "score": 9, "asked": dict(asks),
+            "load": {"window_days": 30, "waiting": 30, "reviewed": 150}}
+    idle = {"name": "Idle", "score": 9, "asked": dict(asks),
+            "load": {"window_days": 30, "waiting": 51, "reviewed": 3}}
+    balance([busy, idle])
+    assert busy["hold"] is None and busy["factors"]["answers"] == 0.11
+    assert idle["hold"] == ["asked 17 times, answered none"]
+
+
 def test_queue_against_rate():
     _, factors, _ = weigh({"score": 4, "load": {
         "window_days": 30, "waiting": 51, "reviewed": 3}})

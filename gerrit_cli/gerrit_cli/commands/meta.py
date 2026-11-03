@@ -656,11 +656,13 @@ median_answer_days}]}, matched by account, email, then name; asked is that
 record, or null for someone never asked.
 
 balanced = sqrt(score) x factors: queue (reviewed+1)/(reviewed+1+waiting),
-asks 1/(1 + (pending + asked_14d/2)/3), answers min(1, 2(answered+1)/
-(asked+2)). hold lists reasons not to ask them now: no Code-Review vote in
-the window, 6 or more asks already pending, asked 4 or more times and
-answered none, or a review_share of 0.8 or more (the gatekeeper). Held
-candidates sort last.
+asks 1/(1 + (pending + asked_14d/2)/capacity), answers min(1,
+2(answered+1)/(asked+2)). capacity is three days of their votes
+(reviewed/10 over 30 days), at least 3: someone who reviews a lot can
+carry more asks. hold lists reasons not to ask them now: no Code-Review
+vote in the window; pending at least 6, or a week of their votes if more;
+asked 4 or more times, answered none, and under 20 votes in the window; or
+a review_share of 0.8 or more (the gatekeeper). Held candidates sort last.
 """,
         "examples": [
             {
