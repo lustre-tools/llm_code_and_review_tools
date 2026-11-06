@@ -92,7 +92,7 @@ _gerrit_completions() {
         staged:remove) opts="--envelope --help --user -U -h" ;;
         staged:show) opts="--envelope --help --pretty --user -U -h -p" ;;
         status) opts="--envelope --help --user -U -h" ;;
-        upload) opts="--base --branch --dry-run --envelope --expect-patchset --help --no-amend --no-ci-reviewers --private --project --public --repo --series --topic --user -C -U -b -h -n -t" ;;
+        upload) opts="--base --branch --dry-run --envelope --expect-patchset --help --no-amend --no-author-edit --no-ci-reviewers --private --project --public --repo --series --topic --user -C -U -b -h -n -t" ;;
         watch) opts="--envelope --help --user -U -h" ;;
         work-on-patch) opts="--envelope --help --user -U -h" ;;
     esac

@@ -368,11 +368,18 @@ def get_tool_description() -> ToolDescription:
                     "A committer email not registered to the "
                     "account is rewritten to the account's name and preferred "
                     "email; author, tree and message are untouched. "
+                    "With GERRIT_UPLOAD_AUTHOR naming a person, their commits "
+                    "are pushed authored and signed off by the account, then "
+                    "edited back to their author and message on Gerrit with "
+                    "notify NONE (changes above are rebased first), so Gerrit "
+                    "does not add them as a reviewer; author_edit[] lists "
+                    "each, and HEAD moves to the edited commits. "
+                    "--no-author-edit skips this. "
                     "--expect-patchset N refuses the push when the change has "
                     "moved past patchset N, so a concurrent uploader's "
                     "patchset is not silently replaced."
                 ),
-                usage="gc [--user SET] upload [CHANGE] [--series] [--branch B] [--base BRANCH] [--project P] [--topic T] [--repo PATH] [--no-amend] [--expect-patchset N] [--dry-run]",
+                usage="gc [--user SET] upload [CHANGE] [--series] [--branch B] [--base BRANCH] [--project P] [--topic T] [--repo PATH] [--no-amend] [--no-author-edit] [--expect-patchset N] [--dry-run]",
                 arguments=[
                     Argument(name="change", description="Change number, URL or Change-Id that HEAD (with --series: one of the uploaded commits) must belong to (default: the one HEAD's Change-Id names)"),
                     Argument(name="--series", description="Upload every commit between the branch and HEAD, each to its own change by its Change-Id", type="boolean", default=False),
@@ -382,6 +389,7 @@ def get_tool_description() -> ToolDescription:
                     Argument(name="--topic", description="Topic to set on the upload"),
                     Argument(name="--repo", description="Repository to upload from", default="."),
                     Argument(name="--no-amend", description="Refuse instead of rewriting an unregistered committer", type="boolean", default=False),
+                    Argument(name="--no-author-edit", description="With GERRIT_UPLOAD_AUTHOR set, push that person's commits as they are, adding them as a reviewer, instead of as the account with the author and Signed-off-by edited back on Gerrit (notify none) after the push", type="boolean", default=False),
                     Argument(name="--expect-patchset", description="Refuse unless the change is still at this patchset, the one HEAD replaces; catches another uploader having got there first. Not for --series", type="integer"),
                     Argument(name="--dry-run", description="Do every check, print the push with the password redacted and what each commit would update or create; push nothing", type="boolean", default=False),
                 ],
@@ -393,7 +401,7 @@ def get_tool_description() -> ToolDescription:
                     "gc --user patrickbot upload 12345 --base master-next",
                     "gc upload --project fs/lustre-release --branch master",
                 ],
-                output_fields=["sha", "change_number", "url", "patchset", "new_change", "committer_amended[]", "commits[].action", "commits[].change_number", "commits[].patchset", "base", "remote_messages", "warnings"],
+                output_fields=["sha", "change_number", "url", "patchset", "new_change", "committer_amended[]", "author_edit[]", "commits[].action", "commits[].change_number", "commits[].patchset", "base", "remote_messages", "warnings"],
                 next_actions=["info", "comments"],
             ),
             Command(

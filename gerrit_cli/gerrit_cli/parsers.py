@@ -625,7 +625,12 @@ def add_upload_parser(subparsers):
                     "committer email not registered to the account is "
                     "rewritten to the account's own. --expect-patchset "
                     "refuses when the change has moved on since HEAD was "
-                    "written. Unlike 'push', which posts staged comment "
+                    "written. With GERRIT_UPLOAD_AUTHOR set, that "
+                    "person's commits are pushed as the account and "
+                    "edited back to their author on Gerrit (notify none), "
+                    "so they are not added as a reviewer; "
+                    "--no-author-edit pushes them as they are. "
+                    "Unlike 'push', which posts staged comment "
                     "replies.",
     )
     parser.add_argument(
@@ -678,6 +683,14 @@ def add_upload_parser(subparsers):
         action="store_true",
         help="Refuse, rather than rewrite, when a committer email is "
              "not registered to the account",
+    )
+    parser.add_argument(
+        "--no-author-edit",
+        action="store_true",
+        help="With GERRIT_UPLOAD_AUTHOR set, push that person's commits "
+             "as they are instead of as the account with the author "
+             "edited back afterwards. Gerrit then adds the person as a "
+             "reviewer of their own change; give a reason to use it",
     )
     visibility = parser.add_mutually_exclusive_group()
     visibility.add_argument(

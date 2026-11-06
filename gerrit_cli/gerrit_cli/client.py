@@ -1024,6 +1024,37 @@ class GerritCommentsClient:
                 raise
             return self._rebase_via_ssh(change_number)
 
+    def rebase_change_onto(
+        self, change_number: int, base: str
+    ) -> dict[str, Any]:
+        """Rebase a change onto a commit (a patchset of another change)."""
+        return self.rest.post(
+            f"/changes/{change_number}/rebase", json={"base": base}
+        )
+
+    def set_edit_author(
+        self, change_number: int, name: str, email: str
+    ) -> Any:
+        """Set the author in the change edit, creating the edit."""
+        return self.rest.put(
+            f"/changes/{change_number}/edit:identity",
+            json={"name": name, "email": email, "type": "AUTHOR"},
+        )
+
+    def set_edit_message(self, change_number: int, message: str) -> Any:
+        """Set the commit message in the change edit."""
+        return self.rest.put(
+            f"/changes/{change_number}/edit:message",
+            json={"message": message},
+        )
+
+    def publish_edit(self, change_number: int, notify: str = "NONE") -> Any:
+        """Publish the change edit as a new patchset."""
+        return self.rest.post(
+            f"/changes/{change_number}/edit:publish",
+            json={"notify": notify},
+        )
+
     def _rebase_via_ssh(
         self,
         change_number: int,

@@ -136,6 +136,7 @@ gc review --post-comments review.json --prefix '[Marc Bot]' <URL>
 ```bash
 gc [--user SET] upload [CHANGE] [--series] [--branch B] [--base BRANCH]
                        [--project P] [--topic T] [--repo PATH] [--no-amend]
+                       [--no-author-edit]
                        [--private [--no-ci-reviewers] | --public]
                        [--dry-run]
 
@@ -190,6 +191,22 @@ gc --user patrickbot upload 12345 --repo /path/to/checkout
   new commit authored by the uploading account, or by that person
   without their `Signed-off-by` or with the account's beside it. Someone
   else's commit keeps its author.
+- **The person is not made a reviewer of their own change.** Gerrit adds
+  a pushed commit's author and everyone its `Signed-off-by` lines name
+  as reviewers, and puts them in the attention set. So with
+  `GERRIT_UPLOAD_AUTHOR` set, that person's new commits are pushed
+  authored and signed off by the account (name and preferred email),
+  then edited back on Gerrit, bottom up: a change whose parent moved is
+  rebased onto the parent's new patchset, then a change edit restores
+  the author and the original message and is published with notify
+  `NONE`. A published edit adds no reviewers. HEAD is then moved, by
+  compare and swap, to the fetched final commits if their tree is the
+  same. `author_edit[]` lists each change (`change_number`, `patchset`,
+  `sha`, `pushed_sha`, `rebased`, `author`). If an edit fails after the
+  push, the upload still reports `pushed` with a warning naming the
+  changes left with the account as author and how to fix them. The
+  checks above run on the original commits. `--no-author-edit` pushes
+  the commits as they are; a bot needs a reason to use it.
 - **One Change-Id, one commit.** Two commits in the range with the same
   Change-Id (most often a commit made on top of a patchset of its own
   change instead of amending it) are refused as `DUPLICATE_CHANGE_ID`

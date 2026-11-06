@@ -29,6 +29,7 @@ def cmd_upload(args):
             base=args.base,
             private=getattr(args, "private", None),
             ci_reviewers=not getattr(args, "no_ci_reviewers", False),
+            author_edit=not getattr(args, "no_author_edit", False),
         )
     except UploadError as e:
         output_result(

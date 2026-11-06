@@ -351,6 +351,13 @@ is not the working directory.
   first such one up. Author and content are untouched, but the SHAs
   change and HEAD moves; `committer_amended` lists each rewrite.
   `--no-amend` refuses instead.
+- With `GERRIT_UPLOAD_AUTHOR` set (a bot's credential set), that
+  person's commits go up authored and signed off by the bot and are
+  then edited back to their author on Gerrit with notify none, so the
+  person is not added as a reviewer of their own change. HEAD moves to
+  the edited commits; `author_edit` lists them, and a warning says if an
+  edit failed. This is the default; upload another way, or with
+  `--no-author-edit`, only for a stated reason.
 - `--expect-patchset N` refuses unless the change is still at patchset N,
   the one the local commit was written to replace. Without it, a patchset
   someone uploaded while you were working is replaced by yours with no

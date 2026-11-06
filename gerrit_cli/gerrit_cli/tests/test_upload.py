@@ -109,6 +109,9 @@ class FakeGerrit:
         self.changes: dict[int, dict] = {}
         self.absorbed: set[str] = set()
         self.queries: list[str] = []
+        self.calls: list[tuple] = []
+        self.edits: dict[int, dict] = {}
+        self.fail_publish = False
 
     @property
     def authenticated(self):
@@ -192,6 +195,52 @@ class FakeGerrit:
 
     def get_self_emails(self):
         return copy.deepcopy(self.emails)
+
+    # Change edits and rebases, as Gerrit makes them: a new patchset
+    # under refs/changes/, with no reviewer added.
+
+    def _recommit(self, number, parent=None, author=None, message=None):
+        change = self.changes[number]
+        sha = change["current_revision"]
+        name, email, date, tree, parents, body = git(
+            self.bare, "log", "-1", "--format=%an%x00%ae%x00%ad%x00%T%x00%P%x00%B",
+            "--date=raw", sha,
+        ).split("\x00")
+        if author:
+            name, email = author
+        env = dict(os.environ, GIT_AUTHOR_NAME=name, GIT_AUTHOR_EMAIL=email,
+                   GIT_AUTHOR_DATE=date, GIT_COMMITTER_NAME=BOT[0],
+                   GIT_COMMITTER_EMAIL=BOT[1])
+        new = git(self.bare, "commit-tree", tree, "-p", parent or parents,
+                  env=env, input=message if message is not None else body + "\n")
+        ps = max(r["_number"] for r in change["revisions"].values()) + 1
+        change["revisions"][new] = {"_number": ps}
+        change["current_revision"] = new
+        git(self.bare, "update-ref",
+            f"refs/changes/{number % 100:02d}/{number}/{ps}", new)
+        self.absorbed.add(new)
+
+    def rebase_change_onto(self, number, base):
+        self._absorb()
+        self.calls.append(("rebase", number, base))
+        self._recommit(number, parent=base)
+
+    def set_edit_author(self, number, name, email):
+        self.calls.append(("identity", number, name, email))
+        self.edits.setdefault(number, {})["author"] = (name, email)
+
+    def set_edit_message(self, number, message):
+        self.calls.append(("message", number))
+        self.edits.setdefault(number, {})["message"] = message
+
+    def publish_edit(self, number, notify="NONE"):
+        self.calls.append(("publish", number, notify))
+        if self.fail_publish:
+            raise RuntimeError("409 Conflict: edit not based on current patchset")
+        self._absorb()
+        edit = self.edits.pop(number)
+        self._recommit(number, author=edit.get("author"),
+                       message=edit.get("message"))
 
 
 @pytest.fixture(autouse=True)
@@ -1721,3 +1770,108 @@ def test_a_malformed_setting_is_a_config_error(gerrit, monkeypatch):
     with pytest.raises(UploadError) as err:
         upload(fake, repo=str(work), change="51164", dry_run=True)
     assert err.value.code == ErrorCode.CONFIG_ERROR
+
+
+# The person's commits go up as the bot and are edited back, so Gerrit
+# does not add the person as a reviewer of their own change.
+
+def _author_and_message(repo, rev):
+    return git(repo, "log", "-1", "--format=%an <%ae>%x00%B", rev).split("\x00")
+
+
+def test_the_persons_commit_is_pushed_as_the_bot_and_edited_back(gerrit, monkeypatch):
+    fake, bare, work = gerrit
+    monkeypatch.setenv("GERRIT_UPLOAD_AUTHOR", PERSON)
+    old = commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT, author=OPERATOR)
+    _, old_message = _author_and_message(work, old)
+
+    data = upload(fake, repo=str(work), change="51164")
+
+    pushed = pushed_refs(bare)["refs/for/master"]
+    author, message = _author_and_message(bare, pushed)
+    assert author == f"{BOT[0]} <{BOT[1]}>"
+    assert f"Signed-off-by: {BOT[0]} <{BOT[1]}>" in message
+    assert OPERATOR[1] not in message
+    assert fake.calls == [
+        ("identity", 51164, OPERATOR[0], OPERATOR[1]),
+        ("message", 51164),
+        ("publish", 51164, "NONE"),
+    ]
+    final = fake.changes[51164]["current_revision"]
+    assert _author_and_message(bare, final) == [PERSON, old_message]
+    assert data["pushed"] is True
+    assert data["patchset"] == 4
+    assert data["sha"] == final
+    assert data["author_edit"] == [{
+        "change_number": 51164, "patchset": 4, "sha": final,
+        "pushed_sha": pushed, "rebased": False, "author": PERSON,
+    }]
+    assert git(work, "rev-parse", "HEAD") == final
+    assert data["warnings"] == []
+
+
+def test_a_series_child_is_rebased_onto_its_edited_parent_first(gerrit, monkeypatch):
+    fake, bare, work = gerrit
+    monkeypatch.setenv("GERRIT_UPLOAD_AUTHOR", PERSON)
+    commit(work, "LU-2 osc: parent", cid=CID_B, committer=BOT, author=OPERATOR)
+    commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT, author=OPERATOR)
+
+    data = upload(fake, repo=str(work), series=True)
+
+    child = 51164
+    parent_final = fake.changes[max(fake.changes)]["current_revision"]
+    assert [c[0] for c in fake.calls] == [
+        "identity", "message", "publish",
+        "rebase", "identity", "message", "publish",
+    ]
+    assert fake.calls[3] == ("rebase", child, parent_final)
+    final = fake.changes[child]["current_revision"]
+    assert git(bare, "rev-parse", f"{final}^") == parent_final
+    assert _author_and_message(bare, final)[0] == PERSON
+    assert [e["rebased"] for e in data["author_edit"]] == [False, True]
+    assert git(work, "rev-parse", "HEAD") == final
+
+
+def test_no_author_edit_pushes_the_commit_as_it_is(gerrit, monkeypatch):
+    fake, bare, work = gerrit
+    monkeypatch.setenv("GERRIT_UPLOAD_AUTHOR", PERSON)
+    head = commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT, author=OPERATOR)
+
+    data = upload(fake, repo=str(work), change="51164", author_edit=False)
+
+    assert pushed_refs(bare) == {"refs/for/master": head}
+    assert fake.calls == []
+    assert data["author_edit"] == []
+
+
+def test_an_edit_failing_after_the_push_still_reports_pushed(gerrit, monkeypatch):
+    fake, bare, work = gerrit
+    monkeypatch.setenv("GERRIT_UPLOAD_AUTHOR", PERSON)
+    commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT, author=OPERATOR)
+    fake.fail_publish = True
+
+    data = upload(fake, repo=str(work), change="51164")
+
+    pushed = pushed_refs(bare)["refs/for/master"]
+    assert data["pushed"] is True
+    assert data["sha"] == pushed
+    assert data["patchset"] == 3
+    assert data["author_edit"] == []
+    [warning] = data["warnings"]
+    assert "publish of change 51164 failed" in warning
+    assert "edit:identity" in warning
+    assert git(work, "rev-parse", "HEAD") == pushed
+
+
+def test_a_dry_run_lists_the_author_edits_and_does_nothing(gerrit, monkeypatch):
+    fake, bare, work = gerrit
+    monkeypatch.setenv("GERRIT_UPLOAD_AUTHOR", PERSON)
+    head = commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT, author=OPERATOR)
+
+    data = upload(fake, repo=str(work), change="51164", dry_run=True)
+
+    assert [(e["sha"], e["author"], e["change_number"])
+            for e in data["author_edit"]] == [(head, PERSON, 51164)]
+    assert "<HEAD after author and committer rewrite>" in data["push"]["command"]
+    assert git(work, "rev-parse", "HEAD") == head
+    assert pushed_refs(bare) == {} and fake.calls == []

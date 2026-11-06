@@ -234,14 +234,28 @@ def _read_commits(repo: str, revs: list[str]) -> list[Commit]:
     return commits
 
 
+def _swap_signoffs(message: bytes, person_email: str, to: str) -> bytes:
+    """Replace each Signed-off-by naming person_email with one of `to`."""
+    text = message.decode("utf-8", errors="surrogateescape")
+    pattern = re.compile(
+        r"^Signed-off-by:[^\n]*<" + re.escape(person_email) + r">[ \t]*$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    text = pattern.sub(lambda _: f"Signed-off-by: {to}", text)
+    return text.encode("utf-8", errors="surrogateescape")
+
+
 def _recommit(
-    repo: str, sha: str, parent_map: dict[str, str], name: str, email: str
+    repo: str, sha: str, parent_map: dict[str, str], name: str, email: str,
+    as_author: tuple[str, str] | None = None,
 ) -> str:
     """Copy a commit with a new committer and, if remapped, new parents.
 
-    Author, tree and message are carried over byte for byte.  Built with
-    commit-tree rather than `commit --amend`, which would also take
-    whatever is staged in the index.
+    Author, tree and message are carried over byte for byte, unless
+    ``as_author`` (name, email) is given: then that is the author, and
+    each Signed-off-by of the old author becomes one of ``as_author``.
+    Built with commit-tree rather than `commit --amend`, which would also
+    take whatever is staged in the index.
     """
     raw = _git(repo, ["cat-file", "commit", sha]).stdout
     header, _, message = raw.partition(b"\n\n")
@@ -265,10 +279,16 @@ def _recommit(
             ErrorCode.GIT_ERROR, f"Cannot parse commit {sha} to rewrite it"
         )
 
+    author_name, author_email = match.group(1), match.group(2)
+    if as_author:
+        message = _swap_signoffs(
+            message, author_email, f"{as_author[0]} <{as_author[1]}>"
+        )
+        author_name, author_email = as_author
     env = dict(os.environ)
     env.update({
-        "GIT_AUTHOR_NAME": match.group(1),
-        "GIT_AUTHOR_EMAIL": match.group(2),
+        "GIT_AUTHOR_NAME": author_name,
+        "GIT_AUTHOR_EMAIL": author_email,
         "GIT_AUTHOR_DATE": f"@{match.group(3)} {match.group(4)}",
         "GIT_COMMITTER_NAME": name,
         "GIT_COMMITTER_EMAIL": email,
@@ -284,12 +304,20 @@ def _recommit(
 
 
 def _rewrite_chain(
-    repo: str, commits: list[Commit], head: str, name: str, email: str
+    repo: str, commits: list[Commit], head: str, name: str, email: str,
+    author_edits: set[str] = frozenset(),
 ) -> dict[str, str]:
-    """Recommit these (parents first) and move HEAD to the new tip."""
+    """Recommit these (parents first) and move HEAD to the new tip.
+
+    Those in ``author_edits`` are also authored and signed off by
+    (name, email) instead of their author.
+    """
     mapping: dict[str, str] = {}
     for commit in commits:
-        mapping[commit.sha] = _recommit(repo, commit.sha, mapping, name, email)
+        mapping[commit.sha] = _recommit(
+            repo, commit.sha, mapping, name, email,
+            as_author=(name, email) if commit.sha in author_edits else None,
+        )
     # Compare-and-swap, so a HEAD that moved since it was read is not
     # silently replaced.
     _git(repo, [
@@ -1177,6 +1205,21 @@ def _check_signoffs(
 AUTHOR_VAR = "GERRIT_UPLOAD_AUTHOR"
 
 
+def _named_author() -> tuple[str, str] | None:
+    """(name, email) AUTHOR_VAR names, or None when it is not set."""
+    named = os.environ.get(AUTHOR_VAR, "").strip()
+    if not named:
+        return None
+    found = re.fullmatch(r"(.+?)\s*<([^<>\s]+@[^<>\s]+)>", named)
+    if found is None:
+        raise UploadError(
+            ErrorCode.CONFIG_ERROR,
+            f"{AUTHOR_VAR} must be 'Name <email>', not {named!r}.",
+            exit_code=ExitCode.INVALID_INPUT,
+        )
+    return found.group(1), found.group(2)
+
+
 def _check_authorship(new: list[Commit], account: Account) -> None:
     """Refuse a commit the uploading account wrote as itself.
 
@@ -1185,17 +1228,11 @@ def _check_authorship(new: list[Commit], account: Account) -> None:
     Signed-off-by beside theirs, is not uploaded.  Someone else's commit
     keeps its author.
     """
-    named = os.environ.get(AUTHOR_VAR, "").strip()
-    found = re.fullmatch(r"(.+?)\s*<([^<>\s]+@[^<>\s]+)>", named)
-    if not named:
+    person_id = _named_author()
+    if person_id is None:
         return
-    if found is None:
-        raise UploadError(
-            ErrorCode.CONFIG_ERROR,
-            f"{AUTHOR_VAR} must be 'Name <email>', not {named!r}.",
-            exit_code=ExitCode.INVALID_INPUT,
-        )
-    person = found.group(2).lower()
+    named = f"{person_id[0]} <{person_id[1]}>"
+    person = person_id[1].lower()
     own = {e.lower() for e in account.emails}
     bad = []
     for c in new:
@@ -1229,25 +1266,27 @@ def _check_authorship(new: list[Commit], account: Account) -> None:
 
 
 def _committer_rewrites(
-    commits: list[Commit], known: set[str], account: Account, amend: bool
+    commits: list[Commit], known: set[str], account: Account, amend: bool,
+    also: set[str] = frozenset(),
 ) -> list[Commit]:
     """The commits to recommit, parents first.
 
-    One with a committer the account has not registered, and everything
-    above it, since its parent changes.
+    One with a committer the account has not registered, or in ``also``
+    (pushed with the account as author), and everything above it, since
+    its parent changes.
     """
     rewrite: list[Commit] = []
     rewritten: set[str] = set()
     for c in commits:
         if c.sha in known:
             continue
-        if c.committer_email not in account.emails or (
+        if c.committer_email not in account.emails or c.sha in also or (
             set(c.parents) & rewritten
         ):
             rewrite.append(c)
             rewritten.add(c.sha)
-    if rewrite and (not amend or not account.preferred_email):
-        foreign = [c for c in rewrite if c.committer_email not in account.emails]
+    foreign = [c for c in rewrite if c.committer_email not in account.emails]
+    if foreign and (not amend or not account.preferred_email):
         to = f"{account.name} <{account.preferred_email}>"
         reason = (
             "--no-amend was given" if account.preferred_email
@@ -1423,6 +1462,177 @@ def _push_failure(
     )
 
 
+# --------------------------------------------------------------------------
+# Author edit: push as the account, then edit the author back
+# --------------------------------------------------------------------------
+
+def _author_edit_targets(
+    new: list[Commit], account: Account, enabled: bool
+) -> tuple[tuple[str, str] | None, set[str]]:
+    """(person, shas) of the new commits AUTHOR_VAR's person wrote.
+
+    Gerrit adds a pushed commit's author and the people its footers
+    name as reviewers, and puts them in the attention set; a change
+    edit published afterwards adds neither.  So these are pushed with
+    the account as author and signer, and edited back once on Gerrit.
+    """
+    person = _named_author() if enabled else None
+    if person is None:
+        return None, set()
+    email = person[1].lower()
+    shas = {c.sha for c in new if c.author_email == email}
+    if shas and not account.preferred_email:
+        raise UploadError(
+            ErrorCode.CONFIG_ERROR,
+            f"Account {account.username} has no preferred email to push "
+            f"{person[0]}'s commits as before editing the author back. "
+            "Set one, or upload with --no-author-edit (the person is then "
+            "added as a reviewer).",
+            exit_code=ExitCode.INVALID_INPUT,
+        )
+    return person, shas
+
+
+def _author_and_message(repo: str, sha: str) -> tuple[str, str, str]:
+    """(author name, author email, message) of a commit, as text."""
+    raw = _git(repo, ["cat-file", "commit", sha]).stdout
+    header, _, message = raw.partition(b"\n\n")
+    for line in _text(header).split("\n"):
+        key, _, value = line.partition(" ")
+        if key == "author":
+            found = re.fullmatch(r"(.*) <(.*)> \d+ [+-]\d{4}", value)
+            if found:
+                return (found.group(1), found.group(2),
+                        message.decode("utf-8", errors="replace"))
+    raise UploadError(
+        ErrorCode.GIT_ERROR, f"Cannot read the author of commit {sha}"
+    )
+
+
+def _edit_authors_back(
+    client: Any, repo: str, plan: list[dict[str, Any]],
+    originals: dict[str, tuple[str, str, str]], warnings: list[str],
+) -> list[dict[str, Any]]:
+    """Give each change pushed as the account its author and message back.
+
+    Bottom up: a change whose parent moved is first rebased onto the
+    parent's new patchset, then (if it is one of ``originals``, keyed by
+    pushed sha) its author and message are set in a change edit, which
+    is published with notify NONE.  Stops at the first failure with a
+    warning naming what is left.  Returns what was done.
+    """
+    moved: dict[str, str] = {}
+    done: list[dict[str, Any]] = []
+    for entry in plan:
+        number = entry.get("change_number")
+        if entry["action"] == "none":
+            continue
+        if number is None:
+            if entry["sha"] in originals or moved:
+                warnings.append(
+                    f"Pushed, but the change {entry['sha'][:12]} became "
+                    "could not be found, so its author was not edited "
+                    "back; it and the changes above it keep the account "
+                    "as author."
+                )
+                break
+            continue
+        pushed = entry["sha"]
+        parent = _out(repo, ["rev-parse", f"{pushed}^"])
+        original = originals.get(pushed)
+        if parent not in moved and original is None:
+            continue
+        step = "rebase"
+        try:
+            rebased = parent in moved
+            if rebased:
+                client.rebase_change_onto(number, moved[parent])
+            if original is not None:
+                step = "edit"
+                client.set_edit_author(number, original[0], original[1])
+                client.set_edit_message(number, original[2])
+                step = "publish"
+                client.publish_edit(number, "NONE")
+            step = "read"
+            detail = client.get_change(number, ["CURRENT_REVISION"])
+            final = detail["current_revision"]
+            patchset = detail["revisions"][final]["_number"]
+        except Exception as e:  # noqa: BLE001 -- reported as a warning
+            # Entries done so far carry their final sha, not a pushed one.
+            left = [
+                other.get("change_number") for other in plan
+                if other["sha"] in originals
+            ]
+            warnings.append(
+                f"Pushed, but the {step} of change {number} failed ({e}), "
+                f"so change(s) {', '.join(str(n) for n in left)} still "
+                "have the account as author and signer. To fix one: edit "
+                "it on Gerrit (author via REST PUT "
+                "/changes/N/edit:identity, message via PUT "
+                "/changes/N/edit:message, then POST /changes/N/edit:publish "
+                "with notify NONE), then rebase the changes above it. "
+                "Local HEAD was left at the pushed commits."
+            )
+            break
+        moved[pushed] = final
+        entry["pushed_sha"] = pushed
+        entry["sha"] = final
+        entry["patchset"] = patchset
+        done.append({
+            "change_number": number,
+            "patchset": patchset,
+            "sha": final,
+            "pushed_sha": pushed,
+            "rebased": rebased,
+            "author": (f"{original[0]} <{original[1]}>"
+                       if original is not None else None),
+        })
+    return done
+
+
+def _move_head_to(
+    client: Any, repo: str, url: str, number: int, patchset: int,
+    final: str, pushed_head: str, warnings: list[str],
+) -> bool:
+    """Fetch the edited head and move HEAD to it if the tree is the same."""
+    ref = f"refs/changes/{number % 100:02d}/{number}/{patchset}"
+    with _Askpass(client.username, client.password) as askpass:
+        fetched = _git(
+            repo, [*_GIT_AUTH_ARGS, "fetch", "--no-tags", url, ref],
+            env=askpass.env(), check=False,
+        )
+    if fetched.returncode != 0:
+        warnings.append(
+            f"Could not fetch {ref} to move HEAD to the edited commits; "
+            f"HEAD is still {pushed_head[:12]}, authored by the account. "
+            f"Run: gerrit checkout {number}"
+        )
+        return False
+    trees = [
+        _git(repo, ["rev-parse", "--verify", f"{sha}^{{tree}}"],
+             check=False).stdout.strip()
+        for sha in (final, pushed_head)
+    ]
+    if not trees[0] or trees[0] != trees[1]:
+        warnings.append(
+            f"Change {number} patchset {patchset} ({final[:12]}) does not "
+            f"have the tree HEAD {pushed_head[:12]} has; HEAD was not "
+            "moved to it."
+        )
+        return False
+    moved = _git(
+        repo, ["update-ref", "-m", "gerrit upload: author edited back",
+               "HEAD", final, pushed_head], check=False,
+    )
+    if moved.returncode != 0:
+        warnings.append(
+            f"HEAD moved during the upload; it was not set to {final[:12]}, "
+            f"change {number} patchset {patchset}."
+        )
+        return False
+    return True
+
+
 def upload(
     client: Any,
     repo: str = ".",
@@ -1437,8 +1647,14 @@ def upload(
     base: str | None = None,
     private: bool | None = None,
     ci_reviewers: bool = True,
+    author_edit: bool = True,
 ) -> dict[str, Any]:
     """Push HEAD to refs/for/<branch> as the client's account.
+
+    With AUTHOR_VAR naming a person and ``author_edit`` on, that
+    person's new commits are pushed authored and signed off by the
+    account and then edited back on Gerrit with notify NONE, so the
+    person is not added as a reviewer of their own change.
 
     Without ``series``, HEAD must be the only commit Gerrit does not
     have yet.  With it, every such commit between the branch and HEAD is
@@ -1566,7 +1782,12 @@ def upload(
             plan = _plan(client, commits, known, project, branch)
             _check_authorship(new, account)
             _check_signoffs(new, account)
-            rewrite = _committer_rewrites(commits, known, account, amend)
+            person, author_edits = _author_edit_targets(
+                new, account, author_edit
+            )
+            rewrite = _committer_rewrites(
+                commits, known, account, amend, also=author_edits
+            )
             head_entry = plan[-1]
             if expect_patchset is not None:
                 _check_expected_patchset(client, head_entry, expect_patchset)
@@ -1614,6 +1835,13 @@ def upload(
             "url": head_entry.get("url"),
             "new_change": head_entry["action"] == "create",
             "committer_amended": amended,
+            "author_edit": [
+                {"sha": c.sha, "subject": c.subject,
+                 "change_number": e.get("change_number"),
+                 "author": f"{person[0]} <{person[1]}>" if person else None,
+                 "pushed_as": to}
+                for c, e in zip(commits, plan) if c.sha in author_edits
+            ],
             "commits": plan,
             "warnings": warnings,
         }
@@ -1623,17 +1851,23 @@ def upload(
             data["current_patchset"] = head_entry.get("current_patchset")
             data["push"] = {
                 "command": shlex.join(["git", *push_args(
-                    "<HEAD after committer amend>" if rewrite else head.sha
+                    ("<HEAD after author and committer rewrite>"
+                     if author_edits else "<HEAD after committer amend>")
+                    if rewrite else head.sha
                 )]),
                 "env": askpass.overrides(redact=True),
             }
             return data
 
+        originals = {
+            sha: _author_and_message(repo, sha) for sha in author_edits
+        }
         if rewrite:
             mapping = _rewrite_chain(
                 repo, rewrite, head.sha, account.name,
-                account.preferred_email or "",
+                account.preferred_email or "", author_edits=author_edits,
             )
+            originals = {mapping[k]: v for k, v in originals.items()}
             for entry in amended:
                 entry["new_sha"] = mapping[entry["old_sha"]]
             for entry in plan:
@@ -1651,6 +1885,12 @@ def upload(
     remote = _remote_lines(stderr)
     status = _porcelain_status(stdout)
     if result.returncode != 0 or status is None or status[0] == "!":
+        if author_edits and _git(
+            repo, ["update-ref", "-m", "gerrit upload: push failed",
+                   "HEAD", head.sha, data["sha"]], check=False,
+        ).returncode == 0:
+            # The account-authored copies were only for the push.
+            amended, data["sha"] = [], head.sha
         raise _push_failure(
             stderr, status, remote, url, client.username, amended, data["sha"]
         )
@@ -1666,6 +1906,17 @@ def upload(
         entry["patchset"] = patchset
         if number:
             entry["url"] = f"{client.url.rstrip('/')}/c/{project}/+/{number}"
+
+    if author_edits:
+        pushed_head = data["sha"]
+        done = _edit_authors_back(client, repo, plan, originals, warnings)
+        data["author_edit"] = done
+        if (done and head_entry.get("pushed_sha") == pushed_head
+                and _move_head_to(
+                    client, repo, url, head_entry["change_number"],
+                    head_entry["patchset"], head_entry["sha"], pushed_head,
+                    warnings)):
+            data["sha"] = head_entry["sha"]
 
     data.update({
         "pushed": True,
