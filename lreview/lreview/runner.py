@@ -343,6 +343,8 @@ class BatchConfig:
     # claude, full mode: put the protocol and the files it always loads
     # in the system prompt and the commit in the first message
     preload: bool = False
+    # Review a commit with Lustre-change: trailers as a backport
+    backport: bool = False
     # Added to the agent's environment (e.g. lreview bench's offline PATH)
     env: dict = field(default_factory=dict)
     agent_args: list[str] = field(default_factory=list)
@@ -404,6 +406,9 @@ def review_prompt(config: BatchConfig,
 
     A change with a --since focus gets a closing section that limits
     the review to what changed from the earlier version.
+
+    A port gets the backport rules, so only reviews of ports pay for
+    them. They stay out of preload_file(): reviews share that file.
     """
     if getattr(change, "provider", None) == "github":
         # GitHub PR reviews use their own prompt and output contract
@@ -447,6 +452,10 @@ def review_prompt(config: BatchConfig,
     if focus is not None:
         from .since import focus_prompt
         prompt += ".\n\n" + focus_prompt(focus, change.sha)
+    upstreams = getattr(change, "backport", None)
+    if upstreams:
+        from .backport import backport_prompt
+        prompt += ".\n\n" + backport_prompt(upstreams)
     if config.mode == "full" and not preloaded:
         prompt += ".\n\n" + CLOSING_NOTE
     if preloaded and worktree is not None:
@@ -536,14 +545,21 @@ def commit_text(worktree: Path) -> str:
             "again.\n\n" + shown)
 
 
-def compaction_settings(doc: Path) -> str:
+def compaction_settings(doc: Optional[Path] = None,
+                        upstreams: Optional[list] = None) -> str:
     """Claude settings for one review: when the conversation is
-    compacted, a SessionStart hook puts the memory instructions back."""
-    from .memory import MEMORY_PROMPT_PATH
-    text = (f"The conversation was compacted. Before continuing the "
-            f"review, re-read the memory protocol {MEMORY_PROMPT_PATH} "
-            f"and your review memory document {doc}, and keep saving "
-            f"your notes to that document as the protocol says.")
+    compacted, a SessionStart hook puts the memory instructions and
+    the backport rules back."""
+    text = "The conversation was compacted."
+    if doc is not None:
+        from .memory import MEMORY_PROMPT_PATH
+        text += (f" Before continuing the "
+                 f"review, re-read the memory protocol {MEMORY_PROMPT_PATH} "
+                 f"and your review memory document {doc}, and keep saving "
+                 f"your notes to that document as the protocol says.")
+    if upstreams:
+        from .backport import compaction_note
+        text += " " + compaction_note(upstreams)
     return json.dumps({"hooks": {"SessionStart": [{
         "matcher": "compact",
         "hooks": [{"type": "command", "command": "echo " + shlex.quote(text)}],
@@ -581,11 +597,13 @@ def build_agent_cmd(config: BatchConfig,
     everything until the end).
     """
     spec = get_agent(config.agent)
-    settings = None
+    doc = None
     if (config.memory_db is not None and change is not None
             and getattr(change, "provider", None) != "github"):
         from .memory import ensure_doc
-        settings = compaction_settings(ensure_doc(config.memory_db, change))
+        doc = ensure_doc(config.memory_db, change)
+    upstreams = getattr(change, "backport", None)
+    settings = compaction_settings(doc, upstreams) if doc or upstreams else None
     return spec.build_cmd(
         config.model, config.effort, config.agent_args,
         review_prompt(config, change, session, worktree),
@@ -596,6 +614,23 @@ def build_agent_cmd(config: BatchConfig,
                      and config.agent == "claude" else None),
         prompt_on_stdin=_prompt_on_stdin(config, change),
         allowed_tools=expand_allowed_tools(config, worktree))
+
+
+def attach_backport(config: BatchConfig, change: ResolvedChange) -> None:
+    """Mark a port for a backport review. A failure leaves a normal
+    review: the trailers are a hint, not a reason to skip the review."""
+    if not config.backport or getattr(change, "provider", None) == "github":
+        return
+    from .backport import detect
+    try:
+        change.backport = detect(config.repo, change.sha)
+    except Exception as exc:  # noqa: BLE001 - see above
+        _log(f"[{change.slug}] warning: backport check failed: {exc}")
+    if change.backport:
+        missing = sum(1 for u in change.backport if u.sha is None)
+        _log(f"[{change.slug}] backport review, "
+             f"{len(change.backport)} upstream change(s)"
+             + (f", {missing} not found" if missing else ""))
 
 
 def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:
@@ -633,12 +668,14 @@ def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:
 
 
 def count_findings(spec: dict) -> int:
-    if isinstance(spec.get("findings"), list):
-        return len(spec["findings"])
-    comments = spec.get("comments") or {}
-    if isinstance(comments, dict):
-        return sum(len(v) for v in comments.values())
-    return len(comments)
+    """The findings that need action. A comment with unresolved: false
+    is a note: it gets posted, but it does not count."""
+    entries = spec.get("findings")
+    if not isinstance(entries, list):
+        comments = spec.get("comments") or {}
+        entries = (sum(comments.values(), []) if isinstance(comments, dict)
+                   else comments)
+    return sum(1 for entry in entries if entry.get("unresolved", True))
 
 
 def short_model_name(text: str) -> Optional[str]:
@@ -1500,11 +1537,13 @@ def run_batch(
     for change in changes:
         if in_place:
             _stash_stale_artifacts(config, config.repo)
+            attach_backport(config, change)
             prepared.append((change, config.repo, False))
             continue
         try:
             prepared.append(
                 (change, prepare_worktree(config, change), True))
+            attach_backport(config, change)
         except Exception as exc:  # noqa: BLE001 - record and continue
             _log(f"[{change.slug}] worktree setup failed: {exc}")
             results.append(ReviewResult(

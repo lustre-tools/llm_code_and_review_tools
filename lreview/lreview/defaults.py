@@ -21,6 +21,7 @@ DEFAULT_MODE = "full"
 DEFAULT_AGENT = "claude"
 DEFAULT_LEAN = True
 DEFAULT_PRELOAD = True
+DEFAULT_BACKPORT = True
 
 # Placeholder <model> is replaced with the model that ran the review.
 DEFAULT_PREFIX = "[AI review - <model>]"
