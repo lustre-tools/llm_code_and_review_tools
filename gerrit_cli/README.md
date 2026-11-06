@@ -503,6 +503,7 @@ comments <URL>                   # Get unresolved comments
 comments <URL> --messages        # Change messages only, oldest first (e.g. an earlier "BUILD")
 comments <URL> --all --include-system  # Every review message too: votes, uploads, CI
 comments <URL> --all --include-ci --since "2026-10-01 17:00"  # Only threads and messages since then
+comments <URL> --all --timeline --since 2h                     # Or an age back from now: 90m, 2h, 1d, 1w
 reply <thread_index> "msg"       # Reply to a comment
 reply <comment_id> "msg"         # Same, by root_comment.id (stable; use for several)
 reply <thread_index> --done      # Mark as done

@@ -141,7 +141,7 @@ def get_tool_description() -> ToolDescription:
                     Argument(name="--fields", description="Comma-separated fields per thread: index,file,line,message,author,resolved,patch_set,updated,last_updated,code_context,replies"),
                     Argument(name="--timeline", description="Every comment, root or reply, oldest first: updated, patch_set, author, file, line, thread, id (the comment id reply and batch take), reply, thread_resolved, message"),
                     Argument(name="--messages", description="Only the change messages (top-level, e.g. a bare 'BUILD'), oldest first: date, patch_set, author, message"),
-                    Argument(name="--since", description="Only comments/messages/threads with activity at or after a UTC time, e.g. '2026-10-01 17:30'; in the default listing, threads (index kept) and review_messages"),
+                    Argument(name="--since", description="Only comments/messages/threads with activity at or after a UTC time, e.g. '2026-10-01 17:30', or an age back from now (90m, 2h, 1d, 1w); in the default listing, threads (index kept) and review_messages"),
                 ],
                 examples=[
                     "gc comments https://review.example.com/c/project/+/12345",

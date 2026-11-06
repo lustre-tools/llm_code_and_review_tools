@@ -170,6 +170,23 @@ class TestFilterThreadsByFields:
         with pytest.raises(ValueError):
             normalize_since("yesterday")
 
+    def test_since_takes_a_relative_age(self):
+        from datetime import datetime, timedelta, timezone
+
+        from gerrit_cli.commands.comments import normalize_since
+
+        now = datetime(2026, 11, 6, 12, 0, 0, tzinfo=timezone.utc)
+        assert normalize_since("2h", now=now) == "2026-11-06 10:00:00"
+        assert normalize_since("90m", now=now) == "2026-11-06 10:30:00"
+        assert normalize_since("1d", now=now) == "2026-11-05 12:00:00"
+        assert normalize_since("1w", now=now) == "2026-10-30 12:00:00"
+        # Without now it is taken from the clock.
+        got = datetime.strptime(normalize_since("1h"), "%Y-%m-%d %H:%M:%S")
+        want = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+        assert abs((got - want).total_seconds()) < 60
+        with pytest.raises(ValueError):
+            normalize_since("2x")
+
 
 class TestGenerateReviewPrompt:
     """Tests for generate_review_prompt function."""

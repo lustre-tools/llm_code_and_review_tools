@@ -1,6 +1,8 @@
 """Comment commands: comments/extract, reply, batch-reply, done, ack."""
 
+import re
 import sys
+from datetime import datetime, timedelta, timezone
 
 from ..envelope import error_response_from_dict
 from ..errors import ErrorCode, ExitCode
@@ -21,16 +23,28 @@ from ._helpers import (
 )
 
 
-def normalize_since(value):
-    """A --since time in Gerrit's own form ("2026-10-01 17:30:00"), or ""."""
+_AGE_UNITS = {"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+
+
+def normalize_since(value, now=None):
+    """A --since time in Gerrit's own form ("2026-10-01 17:30:00"), or "".
+
+    Takes a UTC time, or an age back from now: 90m, 2h, 1d, 1w.
+    """
     if not value:
         return ""
-    text = str(value).strip().replace("T", " ")
+    text = str(value).strip()
+    age = re.fullmatch(r"(\d+)([mhdw])", text)
+    if age:
+        now = now or datetime.now(timezone.utc)
+        then = now - timedelta(**{_AGE_UNITS[age.group(2)]: int(age.group(1))})
+        return then.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    text = text.replace("T", " ")
     for suffix in ("Z", "+00:00"):
         if text.endswith(suffix):
             text = text[:-len(suffix)]
     if len(text) < 10 or not text[:4].isdigit():
-        raise ValueError(f"--since wants a UTC time like 2026-10-01 or '2026-10-01 17:30', not {value!r}")
+        raise ValueError(f"--since wants a UTC time like 2026-10-01 or '2026-10-01 17:30', or an age like 2h or 1d, not {value!r}")
     return text
 
 

@@ -133,7 +133,7 @@ def add_extract_parser(subparsers):
              "or threads with something said at or after TIME (otherwise; the "
              "default listing also drops older review_messages, and threads "
              "keep their index), UTC as Gerrit gives it, e.g. 2026-10-01 or "
-             "'2026-10-01 17:30'",
+             "'2026-10-01 17:30', or an age back from now: 90m, 2h, 1d, 1w",
     )
     return parser
 

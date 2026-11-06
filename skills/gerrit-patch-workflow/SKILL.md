@@ -46,6 +46,8 @@ gc comments 64086 --all --include-system
 gc comments 64086 --all --include-ci --since '2026-10-01 17:00'
                                   # what happened since then: threads with a comment
                                   # at or after it (same index) and newer messages
+gc comments 64086 --all --timeline --since 2h
+                                  # --since also takes an age: 90m, 2h, 1d, 1w (UTC)
 ```
 
 Read **all** the feedback, human and bot. Bots -- `aireview` in particular
