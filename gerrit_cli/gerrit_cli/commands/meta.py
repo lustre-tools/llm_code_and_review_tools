@@ -664,8 +664,9 @@ carry more asks. hold lists reasons not to ask them now: pending at least
 gatekeeper); or, for someone who seldom reviews (no Code-Review vote in the
 window, or asked 4 or more times, answered none and under 20 votes), an ask
 in the last 14 days. Past those 14 days they still get asked now and then:
-their queue and answers factors are raised to 0.5. Held candidates sort
-last.
+their queue and answers factors are set to 0.5 (not left at 1.0 when
+nothing waits on them: no votes is no sign they are free). Held candidates
+sort last.
 """,
         "examples": [
             {

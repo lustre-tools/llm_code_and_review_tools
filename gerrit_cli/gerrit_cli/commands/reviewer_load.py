@@ -42,10 +42,12 @@ HOLD_PENDING_DAYS = 7
 HOLD_UNANSWERED_ASKS = 4
 HOLD_UNANSWERED_REVIEWED = 20
 # Someone who seldom reviews still gets an ask now and then: held only this
-# long after the last one, and past it their queue and answers weigh no
-# less than SELDOM_FLOOR, so they come round in turn.
+# long after the last one, and past it their queue and answers weigh
+# SELDOM_FACTOR, so they come round in turn.  Exactly that, not at least: with
+# no votes and nothing waiting the queue reads 1.0, as if they were the
+# freest reviewer of all, and put people who never review above those who do.
 SELDOM_COOLDOWN_DAYS = 14
-SELDOM_FLOOR = 0.5
+SELDOM_FACTOR = 0.5
 # A Reviewed-by on this share of the commits, and at least this many, is the
 # gatekeeper who lands them, not an expert in these files.
 GATEKEEPER_SHARE = 0.8
@@ -221,7 +223,7 @@ def weigh(candidate, now=None):
         else:
             for name in ("queue", "answers"):
                 if name in factors:
-                    factors[name] = max(factors[name], SELDOM_FLOOR)
+                    factors[name] = SELDOM_FACTOR
     for value in factors.values():
         balanced *= value
     return round(balanced, 2), factors, holds

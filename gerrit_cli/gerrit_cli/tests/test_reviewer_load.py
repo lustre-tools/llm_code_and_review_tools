@@ -132,6 +132,19 @@ def test_someone_who_seldom_reviews_is_asked_again_after_a_while():
     assert never["factors"]["queue"] == 0.5
 
 
+def test_someone_who_never_votes_is_not_the_freest_reviewer():
+    # 54493: an author with no Code-Review vote and nothing waiting read as
+    # queue 1.0 and outranked reviewers who answer (fb-e6e4b77e00df).
+    author = {"name": "Author only", "score": 8, "reviewed": 0,
+              "load": {"window_days": 30, "waiting": 0, "reviewed": 0}}
+    active = {"name": "Active", "score": 9, "reviewed": 4,
+              "load": {"window_days": 30, "waiting": 10, "reviewed": 10}}
+    ordered = balance([author, active], asked={"people": []}, now=NOW)
+    assert [c["name"] for c in ordered] == ["Active", "Author only"]
+    assert author["hold"] is None
+    assert author["factors"]["queue"] == 0.5
+
+
 def test_the_gatekeeper_is_held():
     oleg = {"name": "Oleg Drokin", "score": 422, "reviewed": 207,
             "review_share": 0.96}
