@@ -32,6 +32,37 @@ LEAN_CLAUDE_ARGS = [
     # concurrent reviews share its cache.
     "--exclude-dynamic-system-prompt-sections",
 ]
+# The patch under review could plant instructions, settings or skills in
+# the worktree; a review loads none of them, lean or not (Patrick,
+# 2026-11-06). claude reads only the user's settings, CLAUDE.md and
+# skills; codex reads no project AGENTS.md and turns off each skill the
+# worktree holds, by path, having no switch for the repo scope.
+CLAUDE_SOURCE_ARGS = ["--setting-sources", "user"]
+CODEX_SOURCE_ARGS = ["-c", "project_doc_max_bytes=0"]
+CHECKOUT_SKILL_DIRS = (".agents/skills", ".codex/skills")
+
+
+def checkout_skill_args(worktree: Optional[Path]) -> list[str]:
+    """codex -c overrides that disable every skill in ``worktree``."""
+    if worktree is None:
+        return []
+    found = set()
+    for top in CHECKOUT_SKILL_DIRS:
+        root = Path(worktree) / top
+        if root.is_dir():
+            for skill in root.rglob("SKILL.md"):
+                found.add(str(skill))
+                try:
+                    found.add(str(skill.resolve()))
+                except OSError:
+                    pass
+    if not found:
+        return []
+    entries = ", ".join(f"{{path = {json.dumps(path)}, enabled = false}}"
+                        for path in sorted(found))
+    return ["-c", f"skills.config=[{entries}]"]
+
+
 # codex's equivalent: the features that add tools a review never uses.
 # The user's config.toml stays in force (its service tier, for one).
 LEAN_CODEX_FEATURES = (
@@ -79,6 +110,7 @@ class AgentSpec:
         system_file: Optional[str] = None,
         prompt_on_stdin: bool = False,
         allowed_tools: Optional[list[str]] = None,
+        worktree: Optional[Path] = None,
     ) -> list[str]:
         # resume: a session to continue (claude forks it; cursor
         # continues the chat itself). settings: claude's per-run
@@ -93,7 +125,7 @@ class AgentSpec:
         # gemini/opencode/cursor ignore it (the CLI warns when dropped).
         # extra_args come after so a later --agent-arg=-c can override.
         if self.name == "claude":
-            cmd = ["claude", "-p", prompt_text]
+            cmd = ["claude", "-p", prompt_text, *CLAUDE_SOURCE_ARGS]
             if allowed_tools:
                 cmd += ["--permission-mode", "dontAsk",
                         "--allowedTools", ",".join(allowed_tools)]
@@ -151,7 +183,8 @@ class AgentSpec:
             # background review does not need, whatever config.toml says.
             cmd = ["codex", "exec", "--json",
                    "--dangerously-bypass-approvals-and-sandbox",
-                   "--disable", "fast_mode"]
+                   "--disable", "fast_mode",
+                   *CODEX_SOURCE_ARGS, *checkout_skill_args(worktree)]
             if model:
                 cmd += ["-m", model]
             if effort:

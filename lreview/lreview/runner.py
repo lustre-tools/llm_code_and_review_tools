@@ -595,7 +595,8 @@ def build_agent_cmd(config: BatchConfig,
                      if _preloading(config, change)
                      and config.agent == "claude" else None),
         prompt_on_stdin=_prompt_on_stdin(config, change),
-        allowed_tools=expand_allowed_tools(config, worktree))
+        allowed_tools=expand_allowed_tools(config, worktree),
+        worktree=worktree)
 
 
 def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:
@@ -807,7 +808,8 @@ def _ask_for_metadata(config: BatchConfig, change, log_path: Path,
         system_file=(str(preload_file(config))
                      if _preloading(config, change)
                      and config.agent == "claude" else None),
-        allowed_tools=expand_allowed_tools(config, worktree_dir))
+        allowed_tools=expand_allowed_tools(config, worktree_dir),
+        worktree=worktree_dir)
     _log(f"[{change.slug}] note: the review ended without "
          f"{METADATA_JSON_NAME}; asking for it once")
     try:
