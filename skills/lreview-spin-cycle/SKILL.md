@@ -205,6 +205,22 @@ Gerrit credentials for anything that touches Gerrit -- the same ones
 Unlike the other tools in this repo, `lreview` is operator-facing: it
 prints human-readable coloured output, not JSON, and has no `--envelope`.
 
+## Reviewing a backport
+
+`lreview` detects a port from its `Lustre-change:` trailer and tags each
+finding `BACKPORT`, `UPSTREAM` or `UPSTREAM-BLOCKER`. See "Backport reviews"
+in `lreview/README.md`.
+
+- Fix `BACKPORT` findings in the port.
+- An `UPSTREAM` finding does not make a round unclean. Check it. If it is
+  real, report it against master. The fix lands on master and gets its own
+  port. Do not fix it in this port.
+- An `UPSTREAM-BLOCKER` stops the port until master has the fix. Tell the
+  user at once.
+
+The user may override the `UPSTREAM` and `UPSTREAM-BLOCKER` directives by
+asking you to fix upstream defects in the port.
+
 ## Reporting findings back
 
 Say what was found and what was done with each item: fixed, or declined

@@ -26,7 +26,8 @@ from llm_tool_common.update_check import maybe_check_for_updates
 from . import __version__
 from .defaults import (
     CLAUDE_DEFAULT_MODEL, CODEX_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL,
-    DEFAULT_AGENT, DEFAULT_BENCH_JOBS, DEFAULT_JOBS, DEFAULT_LEAN,
+    DEFAULT_AGENT, DEFAULT_BACKPORT, DEFAULT_BENCH_JOBS, DEFAULT_JOBS,
+    DEFAULT_LEAN,
     DEFAULT_MODE, DEFAULT_PREFIX, DEFAULT_PRELOAD, DEFAULT_RESULTS_DIRNAME,
     DEFAULT_STALL_RETRY, DEFAULT_STALL_TIMEOUT, DEFAULT_TIMEOUT,
     DEFAULT_WORKTREES_DIRNAME)
@@ -639,6 +640,7 @@ def cmd_run(args) -> int:
         resume=not args.no_resume,
         lean=args.lean,
         preload=args.preload,
+        backport=args.backport,
         agent_args=args.agent_arg or [],
         allowed_tools=args.allow_tool or [],
     )
@@ -1131,6 +1133,13 @@ def build_parser() -> argparse.ArgumentParser:
              "as context. Findings outside the change are limited to "
              "real bugs. One local commit only (--last 1, a --local ref, "
              "or HEAD); no review runs when nothing changed")
+    run_p.add_argument(
+        "--backport", action=argparse.BooleanOptionalAction,
+        default=_env_flag("LREVIEW_BACKPORT", DEFAULT_BACKPORT),
+        help="Review a commit with a Lustre-change: or Lustre-commit: "
+             "trailer as a backport: compare it with the upstream change "
+             "and classify each finding as BACKPORT, UPSTREAM or "
+             "UPSTREAM-BLOCKER (default: on; $LREVIEW_BACKPORT)")
     run_p.add_argument(
         "--output", "-o", default=None, metavar="FILE",
         help="Write a plain-text dump of every review in the batch to "

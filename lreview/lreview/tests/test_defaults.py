@@ -32,6 +32,7 @@ def test_example_matches_defaults():
         "model": defaults.CLAUDE_DEFAULT_MODEL,
         "lean": defaults.DEFAULT_LEAN,
         "preload": defaults.DEFAULT_PRELOAD,
+        "backport": defaults.DEFAULT_BACKPORT,
         "prefix": defaults.DEFAULT_PREFIX,
     }
     shown = _commented_values()

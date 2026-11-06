@@ -26,6 +26,7 @@ class ResolvedChange:
     change_id: Optional[str] = None
     provider: str = "gerrit"
     status: Optional[str] = None  # NEW, MERGED or ABANDONED
+    backport: Optional[list] = None  # backport.Upstream, set by run_batch
 
     @property
     def slug(self) -> str:
@@ -60,6 +61,7 @@ class LocalChange:
     ref: str = ""
     change_id: Optional[str] = None
     since: Optional[Any] = None  # since.SinceFocus
+    backport: Optional[list] = None  # backport.Upstream, set by run_batch
 
     @property
     def slug(self) -> str:
