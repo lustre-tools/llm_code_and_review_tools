@@ -454,7 +454,7 @@ def get_tool_description() -> ToolDescription:
             Command(
                 name="reviewer-candidates",
                 description="Rank reviewer candidates for a change's files: Reviewed-by trailers and authored commits per file from local git history",
-                usage="gc reviewer-candidates [URL] [--path P ...] [--repo DIR] [--ref REF] [--months N] [--load] [--asked FILE]",
+                usage="gc reviewer-candidates [URL] [--path P ...] [--repo DIR] [--ref REF] [--months N] [--load] [--asked FILE] [--compact]",
                 arguments=[
                     Argument(name="url", description="Gerrit change URL, number or Change-Id (optional with --path)"),
                     Argument(name="--path", description="File or directory instead of the change's files (repeatable)"),
@@ -464,11 +464,13 @@ def get_tool_description() -> ToolDescription:
                     Argument(name="--limit", description="Candidates to list, 0 for all", type="integer", default=10),
                     Argument(name="--exclude", description="Name or email to leave out (repeatable)"),
                     Argument(name="--brief", description="Files as bare paths", type="boolean", default=False),
+                    Argument(name="--compact", description="Per candidate only name, email, account_id, score, reviewed, last_reviewed, on_change, balanced, waiting, votes, asks and hold; plus the change's on_change list", type="boolean", default=False),
                     Argument(name="--load", description="Weigh by each candidate's Gerrit review load", type="boolean", default=False),
                     Argument(name="--asked", description="JSON of the caller's earlier asks per person, to weigh and hold by"),
                 ],
                 examples=["gc reviewer-candidates 12345 --repo ~/lustre-release --ref upstream/master",
-                          "gc reviewer-candidates 12345 --load --asked asks.json"],
+                          "gc reviewer-candidates 12345 --load --asked asks.json",
+                          "gc reviewer-candidates 12345 --load --asked asks.json --compact"],
                 output_fields=[
                     "change_number", "project", "branch", "subject", "owner",
                     "commit_author", "repo", "ref", "window_months",

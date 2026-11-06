@@ -277,6 +277,9 @@ votes they cast lately), and `--asked FILE` for your own earlier asks per
 person (Patch Watcher's runs are given one): the list is then in
 `balanced` order, and `hold` says why not to ask someone now. Use it when
 you add reviewers often, so the same few experts are not asked every time.
+`--compact` prints only the fields the choice needs (who, score,
+balanced, load, asks, hold, and who is on the change now), a fraction
+of the full output: read it directly, no jq needed.
 
 ## Lustre commit-message rules
 

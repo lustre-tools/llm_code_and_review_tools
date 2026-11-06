@@ -245,3 +245,31 @@ def test_command_reads_load_through_the_client(monkeypatch, capsys, repo):  # no
     code, data = _run(monkeypatch, capsys, repo, load=True)
     assert code == 0 and data["order"] == "balanced"
     assert seen == [data["count"]]
+
+
+def test_compact_keeps_only_what_the_choice_needs(
+    monkeypatch, capsys, repo, tmp_path,  # noqa: F811
+):
+    # The full output ran to ~9 KB on one line and needed jq
+    # (fb-dfff59ef3605, fb-07b59bab66e8).
+    code, full = _run(monkeypatch, capsys, repo)
+    top = full["candidates"][0]
+    asks = tmp_path / "asks.json"
+    asks.write_text(json.dumps({"by": "Patrickbot", "people": [{
+        "email": top["email"], "asked": 3, "answered": 1, "pending": 1,
+        "asked_14d": 1, "last_asked": "2026-11-01T00:00:00Z"}]}))
+    code, data = _run(monkeypatch, capsys, repo, asked=str(asks), compact=True)
+    assert code == 0
+    assert data["order"] == "balanced" and data["change_number"] == 69999
+    assert "paths" not in data and "commits_examined" not in data
+    assert data["on_change"] and all(
+        set(p) == {"name", "email", "role"} for p in data["on_change"])
+    for entry in data["candidates"]:
+        assert set(entry) == {
+            "name", "email", "account_id", "score", "reviewed",
+            "last_reviewed", "on_change", "balanced", "asked", "answered",
+            "pending", "last_asked", "hold"}
+    first = next(c for c in data["candidates"] if c["email"] == top["email"])
+    assert (first["asked"], first["answered"], first["pending"]) == (3, 1, 1)
+    assert all(set(e) == {"name", "email", "reason"} for e in data["excluded"])
+    assert len(json.dumps(data)) < len(json.dumps(full))

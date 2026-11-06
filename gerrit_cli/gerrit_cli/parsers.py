@@ -887,6 +887,10 @@ def add_reviewer_candidates_parser(subparsers):
                         help="Leave this person out too (repeatable)")
     parser.add_argument("--brief", action="store_true",
                         help="Files as bare paths, without per-file counts")
+    parser.add_argument("--compact", action="store_true",
+                        help="Only what choosing needs: per candidate name, "
+                             "email, account, score, reviewed, balanced, "
+                             "load, asks and hold; plus who is on the change")
     parser.add_argument("--load", action="store_true",
                         help="Read each listed candidate's review load from "
                              "Gerrit and order by balanced (two queries a "

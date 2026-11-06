@@ -667,6 +667,15 @@ in the last 14 days. Past those 14 days they still get asked now and then:
 their queue and answers factors are set to 0.5 (not left at 1.0 when
 nothing waits on them: no votes is no sign they are free). Held candidates
 sort last.
+
+--compact prints only what the choice needs, in the same order: per
+candidate name, email, account_id, score, reviewed, last_reviewed,
+on_change, and with --load or --asked balanced, waiting and votes
+(load.waiting and load.reviewed), asked, answered, pending, last_asked and
+hold. At the top, the change, owner, commit_author, order and
+paths_without_history, and on_change: everyone on the change now but the
+owner, [{name, email, role}]. excluded keeps name, email and reason. Files,
+aliases, factors and the paths examined are left out.
 """,
         "examples": [
             {
@@ -684,6 +693,10 @@ sort last.
             {
                 "command": "gc reviewer-candidates 12345 --limit 15 --load --asked asks.json",
                 "description": "Fifteen who know the files, ordered by load",
+            },
+            {
+                "command": "gc reviewer-candidates 12345 --limit 15 --load --asked asks.json --compact",
+                "description": "The same, only the fields the choice needs",
             },
         ],
         "related": ["reviewers", "add-reviewer", "find-user"],

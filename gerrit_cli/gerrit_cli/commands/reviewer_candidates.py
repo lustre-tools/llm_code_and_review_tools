@@ -244,6 +244,45 @@ def change_context(client, change_number):
     return files, exclude, on_change, summary
 
 
+def compact_candidate(entry):
+    """What choosing a reviewer needs from one candidate, flat: who, how
+    well they know the files, their load and asks, and any hold."""
+    out = {key: entry.get(key) for key in (
+        "name", "email", "account_id", "score", "reviewed", "last_reviewed",
+        "on_change")}
+    if "balanced" in entry:
+        out["balanced"] = entry["balanced"]
+    if "load" in entry:
+        load = entry["load"] or {}
+        out["waiting"] = load.get("waiting")
+        out["votes"] = load.get("reviewed")
+    if "asked" in entry:
+        asked = entry["asked"] or {}
+        for key in ("asked", "answered", "pending", "last_asked"):
+            out[key] = asked.get(key)
+    if "hold" in entry:
+        out["hold"] = entry["hold"]
+    if entry.get("reason"):
+        out["reason"] = entry["reason"]
+    return out
+
+
+def compact_data(data, on_change):
+    """The --compact payload: the change, who is on it, and per candidate
+    only the fields compact_candidate keeps; files, factors and the
+    examined paths are left out."""
+    out = {key: data[key] for key in (
+        "change_number", "subject", "owner", "commit_author", "order",
+        "asked_by", "paths_without_history", "count", "total_candidates")
+        if key in data}
+    out["on_change"] = [{"name": name, "email": email or None, "role": role}
+                        for name, email, role in on_change]
+    out["candidates"] = [compact_candidate(c) for c in data["candidates"]]
+    out["excluded"] = [{"name": e.get("name"), "email": e.get("email"),
+                        "reason": e.get("reason")} for e in data["excluded"]]
+    return out
+
+
 def cmd_reviewer_candidates(args):
     """Rank reviewer candidates for a change's files from git history."""
     command = "reviewer-candidates"
@@ -319,6 +358,8 @@ def cmd_reviewer_candidates(args):
             "total_candidates": total,
             "excluded": excluded,
         })
+        if getattr(args, "compact", False):
+            data = compact_data(data, on_change)
         output_success(data, command, pretty)
         sys.exit(ExitCode.SUCCESS)
     except ValueError as e:

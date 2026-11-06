@@ -573,6 +573,10 @@ gc reviewer-candidates 69833 --repo ~/lustre-release --ref upstream/master
 gc reviewer-candidates --path lustre/llite/file.c --months 24 --brief
 ```
 
+`--compact` keeps only what choosing needs: per candidate name, email,
+account, score, reviewed, balanced, load, asks and hold, plus who is on
+the change now (`on_change`). The default output is unchanged.
+
 ### Change Management
 ```bash
 checkout <URL>                   # Fetch and checkout a Gerrit change
