@@ -124,6 +124,7 @@ class TestFailures:
             "script-san": "sanity",
         }
         failed = {
+            "id": "st-39b",
             "sub_test_script_id": "sub-39b",
             "status": "FAIL",
             "error": "assertion failed",
@@ -142,6 +143,8 @@ class TestFailures:
         assert env["ok"] is True
         assert len(env["data"]["failed_suites"]) == 1
         assert env["data"]["failed_suites"][0]["failed_subtests"][0]["name"] == "test_39b"
+        # The id is what "maloo link-bug --type SubTest" takes.
+        assert env["data"]["failed_suites"][0]["failed_subtests"][0]["id"] == "st-39b"
         assert len(env["data"]["failed_suites"][0]["failed_subtests"]) == 1
         # Names are one request each; only the failed ones are wanted.
         mock_client.resolve_subtest_names.assert_called_once_with([failed])

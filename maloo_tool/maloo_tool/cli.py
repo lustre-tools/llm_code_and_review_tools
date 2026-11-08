@@ -413,6 +413,7 @@ def failures(session_url: str, cleanup_error: bool, pretty: bool) -> None:
                 st.get("sub_test_script_id", ""), f"order_{st.get('order', '?')}"
             )
             row = {
+                "id": st.get("id"),
                 "name": st_name,
                 "status": st["status"],
                 "error": st.get("error", ""),
