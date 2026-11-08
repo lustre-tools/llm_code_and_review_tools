@@ -1,13 +1,14 @@
 """Backport detection and its prompt."""
 
 import subprocess
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from lreview import backport
-from lreview.backport import (Trailer, Upstream, backport_prompt, detect,
-                              parse_trailers)
+from lreview.backport import (AI_REVIEW_TAG, GerritFacts, ReviewThread,
+                              Trailer, Upstream, backport_prompt, detect,
+                              open_ai_threads, parse_trailers)
 from lreview.gerrit import LocalChange
 from lreview.runner import (BatchConfig, attach_backport, build_agent_cmd,
                             compaction_settings, count_findings, preload_file,
@@ -86,6 +87,49 @@ class TestParseTrailers:
         assert parse_trailers("Add the Lustre-change: trailer.\n") == []
 
 
+def facts(current, status, threads=()):
+    return GerritFacts(sha=current, patchset=3, status=status,
+                       change_id="I1", subject="s",
+                       patchsets={SHA_A: 1, SHA_B: 2, current: 3},
+                       threads=threads)
+
+
+def comment(cid, tag=None, unresolved=True, reply=None, updated="1"):
+    entry = {"id": cid, "line": 7, "patch_set": 2, "updated": updated,
+             "message": f"(defect) {cid}", "unresolved": unresolved}
+    if tag:
+        entry["tag"] = tag
+    if reply:
+        entry["in_reply_to"] = reply
+    return entry
+
+
+class TestOpenAiThreads:
+
+    def link(self, cid):
+        return f"L/{cid}"
+
+    def test_open_ai_thread(self):
+        found = open_ai_threads({"a.c": [comment("x", AI_REVIEW_TAG)]},
+                                self.link)
+        assert found == [ReviewThread("a.c", 7, 2, "L/x", "(defect) x")]
+
+    def test_human_comment_is_skipped(self):
+        assert open_ai_threads({"a.c": [comment("x")]}, self.link) == []
+
+    def test_resolved_by_a_reply(self):
+        comments = {"a.c": [
+            comment("x", AI_REVIEW_TAG),
+            comment("y", reply="x", unresolved=False, updated="2")]}
+        assert open_ai_threads(comments, self.link) == []
+
+    def test_reopened_by_a_reply(self):
+        comments = {"a.c": [
+            comment("x", AI_REVIEW_TAG, unresolved=False),
+            comment("y", reply="x", unresolved=True, updated="2")]}
+        assert [t.url for t in open_ai_threads(comments, self.link)] == ["L/x"]
+
+
 class TestDetect:
 
     def test_not_a_port(self, repo):
@@ -95,33 +139,40 @@ class TestDetect:
         upstream = git(repo, "rev-parse", "HEAD")
         sha = commit(repo, "port\n\nLustre-change: https://r/1\n"
                            f"Lustre-commit: {upstream}\n")
-        with patch.object(backport, "resolve_change") as resolve:
+        with patch.object(backport, "gerrit_facts") as facts:
             found = detect(repo, sha)
-        resolve.assert_not_called()
-        assert found == [Upstream("https://r/1", upstream, True)]
+        facts.assert_not_called()
+        assert found == [Upstream("https://r/1", upstream, True,
+                                  subject="upstream")]
 
-    def test_tbd_reports_a_moved_upstream(self, repo):
+    def test_tbd_reports_a_stale_port(self, repo):
         current = git(repo, "rev-parse", "HEAD")
         sha = commit(repo, "port\n\nLustre-change: https://r/1\n"
                            f"Lustre-commit: TBD (from {SHA_A})\n")
-        change = MagicMock(sha=current, status="NEW")
-        with patch.object(backport, "resolve_change", return_value=change):
+        thread = ReviewThread("a.c", 3, 2, "https://r/c/p/+/1/comment/x/",
+                              "(defect) leak")
+        with patch.object(backport, "gerrit_facts",
+                          return_value=facts(current, "NEW", (thread,))):
             found = detect(repo, sha)
-        assert found == [Upstream("https://r/1", current, False, SHA_A)]
+        assert found == [Upstream(
+            "https://r/1", current, False, SHA_A, change_id="I1",
+            subject="s", patchset=3, ported_patchset=1, threads=(thread,))]
 
     def test_tbd_that_landed(self, repo):
         current = git(repo, "rev-parse", "HEAD")
         sha = commit(repo, "port\n\nLustre-change: https://r/1\n"
                            f"Lustre-commit: TBD (from {current})\n")
-        change = MagicMock(sha=current, status="MERGED")
-        with patch.object(backport, "resolve_change", return_value=change):
+        with patch.object(backport, "gerrit_facts",
+                          return_value=facts(current, "MERGED")):
             found = detect(repo, sha)
-        assert found == [Upstream("https://r/1", current, True)]
+        assert found == [Upstream("https://r/1", current, True,
+                                  change_id="I1", subject="s", patchset=3,
+                                  ported_patchset=3)]
 
     def test_gerrit_failure_still_reports_a_port(self, repo):
         sha = commit(repo, "port\n\nLustre-change: https://r/1\n"
                            f"Lustre-commit: {SHA_A}\n")
-        with patch.object(backport, "resolve_change",
+        with patch.object(backport, "gerrit_facts",
                           side_effect=OSError("offline")):
             found = detect(repo, sha)
         assert found == [Upstream("https://r/1", None, True)]
@@ -138,6 +189,20 @@ class TestPrompt:
         text = backport_prompt([Upstream("https://r/1", None, True)])
         assert "could not get" in text and "range-diff" not in text.split(
             "# Backport review")[0]
+
+    def test_facts_reach_the_prompt(self):
+        thread = ReviewThread("a.c", 3, 2, "https://link", "(defect) leak")
+        text = backport_prompt([Upstream(
+            "https://r/1", SHA_B, False, SHA_A, change_id="I1", subject="s",
+            patchset=3, ported_patchset=1, threads=(thread,))])
+        assert "Change-Id: I1" in text
+        assert "patch set 1 of this change" in text
+        assert "a.c:3 (patch set 2) https://link" in text
+
+    def test_port_of_another_change(self):
+        text = backport_prompt([Upstream("u", SHA_B, False, SHA_A,
+                                         patchset=3)])
+        assert "no patch set of this change" in text
 
     def test_squash_note(self):
         text = backport_prompt([Upstream("a", SHA_A, True),

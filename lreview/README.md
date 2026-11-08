@@ -267,7 +267,13 @@ Each comment names a class:
 
 `UPSTREAM` comments get posted to Gerrit, but they do not count as findings.
 For a `Lustre-commit: TBD` trailer, `lreview` asks Gerrit for the current
-patch set of the upstream change. If it cannot get an upstream commit, the
+patch set of the upstream change. The prompt gets the upstream Change-Id and
+subject, the patch set that the port names, and the unresolved AI review
+comments of an upstream change that has not landed. The review checks the
+Change-Id, the `Lustre-change:` target, a stale port, and the
+`Was-Change-Id:` rules of a squashed port. An open upstream `(defect)` comment
+that applies to the port is an `UPSTREAM-BLOCKER`, because the port can land
+before the upstream change. If it cannot get an upstream commit, the
 review still runs and says so. `--no-backport` or `LREVIEW_BACKPORT=0` turns
 the check off. `lreview bench` and `lreview chat` do not use it.
 

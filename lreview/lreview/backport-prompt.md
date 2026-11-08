@@ -14,8 +14,38 @@ Classify every finding.
 - The upstream change does not depend on a commit that this branch lacks.
 - Code that exists only on this branch gets the same change where it needs it.
 - Trailers, `Fixes:` targets and test version gates suit this branch.
-- For a `Lustre-commit: TBD` trailer, the port matches the current upstream
-  patch set, and a landed upstream change has its landed hash in the trailer.
+- The `Change-Id:` is the same as the upstream Change-Id. A wrong Change-Id
+  needs a new Gerrit change, because Gerrit cannot change the Change-Id of an
+  existing change. Say so in the comment.
+- Each `Lustre-change:` names the right upstream change: its subject and
+  Change-Id match the port.
+- The port is not stale. It matches the landed commit, or the current patch
+  set of an upstream change that has not landed. A port of an older patch set
+  is a `BACKPORT` defect.
+- A landed upstream change has its landed hash in `Lustre-commit:`, not TBD.
+
+## Squashed ports
+
+A port can squash an upstream change with its upstream follow-up fixes. Then:
+- Each squashed change has its own `Lustre-change:` and `Lustre-commit:` pair.
+- The Change-Id of each squashed change becomes a `Was-Change-Id:` line.
+- Only the Change-Id of the final change stays as `Change-Id:`.
+- The port must not squash unrelated changes.
+
+## Unresolved upstream review comments
+
+The facts above can list unresolved AI review comments on an upstream change
+that has not landed. A port can land before its upstream change, so these
+comments can be the only record of a known defect. Check each comment against
+the port:
+- It is a real `(defect)`, and it applies to the port: report it as
+  `UPSTREAM-BLOCKER`, and link the upstream comment.
+- It is real but not a `(defect)`, and it applies to the port: report it as
+  `UPSTREAM`, and link the upstream comment.
+- It does not apply because the port code is different: report an
+  `UPSTREAM` note with `unresolved: false`. Say why it does not apply, and
+  link the upstream comment.
+- It is wrong: say so in one sentence in the top-level `message`.
 
 ## Classes
 
@@ -32,8 +62,10 @@ Start each comment with its severity marker and then its class, for example
 - `UPSTREAM-BLOCKER`: the same defect exists on master, the port adds it to
   this branch, and it is too severe to ship. Only these defects qualify: data
   loss or corruption, a reachable crash, LBUG or hang, a security fault, and
-  the failure of a common operation. Set `unresolved: true`. Say "Do not land
-  until fixed upstream." in the top-level `message`.
+  the failure of a common operation. An unresolved upstream review comment
+  can also make a finding `UPSTREAM-BLOCKER`; see the section above. Set
+  `unresolved: true`. Say "Do not land until fixed upstream." in the top-level
+  `message`.
 
 Every other inherited defect is `UPSTREAM`. This rule includes a performance
 cost, log noise, a rare leak and a wrong error code.
