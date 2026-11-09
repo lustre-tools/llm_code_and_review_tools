@@ -1911,6 +1911,12 @@ def upload(
         pushed_head = data["sha"]
         done = _edit_authors_back(client, repo, plan, originals, warnings)
         data["author_edit"] = done
+        if done:
+            data["author_edit_note"] = (
+                "Expected: each change in author_edit[] got two patchsets, "
+                "the push with the account as author, then the change edit "
+                "that put the author back (notify NONE). Not a bug; "
+                "patchset is the edited one.")
         if (done and head_entry.get("pushed_sha") == pushed_head
                 and _move_head_to(
                     client, repo, url, head_entry["change_number"],

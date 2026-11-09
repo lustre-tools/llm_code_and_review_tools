@@ -302,9 +302,18 @@ def cmd_add_reviewer(args):
             error_msg += "Try a different spelling or use 'gc find-user' to search."
             sys.exit(output_error(ErrorCode.NOT_FOUND, error_msg, command, pretty))
 
+        # An exact username or email wins over fuzzy neighbours
+        # ("LiX" also suggests "Lixin ..." accounts).
+        wanted = args.name.strip().lower()
+        exact = [m for m in matches
+                 if wanted and wanted in ((m.get("username") or "").lower(),
+                                          (m.get("email") or "").lower())]
+
         # If exactly one match, use it directly
         if len(matches) == 1:
             selected = matches[0]
+        elif len(exact) == 1:
+            selected = exact[0]
         else:
             # Multiple matches - show them and ask user to be more specific
             match_list = []

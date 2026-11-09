@@ -77,6 +77,7 @@ class TestBuildCmd:
         cmd = get_agent("claude").build_cmd(
             "opus", None, ["--extra"], PROMPT)
         assert cmd == ["claude", "-p", PROMPT,
+                       "--setting-sources", "user",
                        "--dangerously-skip-permissions",
                        "--verbose", "--output-format", "stream-json",
                        "--model", "opus", "--extra"]
@@ -86,7 +87,7 @@ class TestBuildCmd:
             "opus", None, [], PROMPT,
             allowed_tools=["Read", "Bash(git log *)"])
         assert "--dangerously-skip-permissions" not in cmd
-        assert cmd[3:7] == ["--permission-mode", "dontAsk",
+        assert cmd[5:9] == ["--permission-mode", "dontAsk",
                             "--allowedTools", "Read,Bash(git log *)"]
 
     def test_allowlist_needs_claude(self):
@@ -106,6 +107,7 @@ class TestBuildCmd:
             "codex", "exec", "--json",
             "--dangerously-bypass-approvals-and-sandbox",
             "--disable", "fast_mode",
+            "-c", "project_doc_max_bytes=0",
             PROMPT,
         ]
 
@@ -115,13 +117,15 @@ class TestBuildCmd:
             "codex", "exec", "--json",
             "--dangerously-bypass-approvals-and-sandbox",
             "--disable", "fast_mode",
+            "-c", "project_doc_max_bytes=0",
             "-c", 'model_reasoning_effort="high"',
             PROMPT,
         ]
         cmd = get_agent("codex").build_cmd("gpt-5.6-sol", None, [], PROMPT)
-        assert cmd[3:8] == ["--dangerously-bypass-approvals-and-sandbox",
-                            "--disable", "fast_mode",
-                            "-m", "gpt-5.6-sol"]
+        assert cmd[3:10] == ["--dangerously-bypass-approvals-and-sandbox",
+                             "--disable", "fast_mode",
+                             "-c", "project_doc_max_bytes=0",
+                             "-m", "gpt-5.6-sol"]
         # --agent-arg after effort so a later -c can override
         cmd = get_agent("codex").build_cmd(
             "gpt-6-astra", "ultra", ["-c", 'model_reasoning_effort="low"'],
@@ -130,11 +134,29 @@ class TestBuildCmd:
             "codex", "exec", "--json",
             "--dangerously-bypass-approvals-and-sandbox",
             "--disable", "fast_mode",
+            "-c", "project_doc_max_bytes=0",
             "-m", "gpt-6-astra",
             "-c", 'model_reasoning_effort="ultra"',
             "-c", 'model_reasoning_effort="low"',
             PROMPT,
         ]
+
+    def test_nothing_is_loaded_from_the_worktree(self, tmp_path):
+        # A patch could plant CLAUDE.md, settings or skills in the
+        # worktree; neither agent may load them.
+        cmd = get_agent("claude").build_cmd(None, None, [], PROMPT)
+        assert cmd[3:5] == ["--setting-sources", "user"]
+        skill = tmp_path / ".agents" / "skills" / "evil" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("x")
+        cmd = get_agent("codex").build_cmd(None, None, [], PROMPT,
+                                           worktree=tmp_path)
+        assert "project_doc_max_bytes=0" in cmd
+        override = cmd[cmd.index("project_doc_max_bytes=0") + 2]
+        import tomllib
+        parsed = tomllib.loads(override.replace("skills.config=",
+                                                "config=", 1))
+        assert {"path": str(skill), "enabled": False} in parsed["config"]
 
     def test_gemini_gets_prompt_text(self):
         cmd = get_agent("gemini").build_cmd(None, None, [], PROMPT)

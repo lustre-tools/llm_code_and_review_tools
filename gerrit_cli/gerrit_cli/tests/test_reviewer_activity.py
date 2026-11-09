@@ -365,3 +365,60 @@ def test_reviewers_patrickbot_is_no_person_whatever_its_case(monkeypatch, capsys
     assert data["human_participant_count"] == 2
     # bobijam: Andreas owns it.
     assert data["people_besides_owner"] == 1
+
+
+def _add_reviewer_client(matches, added):
+    class AddClient:
+        @staticmethod
+        def parse_gerrit_url(url):
+            return "https://review.whamcloud.com", int(url)
+
+        def suggest_accounts(self, query, limit=5):
+            return matches
+
+        def search_accounts(self, name=None, limit=5):
+            return []
+
+        def add_reviewer(self, change, reviewer, state="REVIEWER"):
+            added.append((change, reviewer, state))
+            return {}
+    return AddClient
+
+
+def test_add_reviewer_takes_the_exact_username_among_fuzzy_matches(
+        monkeypatch, capsys):
+    """add-reviewer LiX picks account LiX, not the other Li* suggestions."""
+    from gerrit_cli.commands.reviewers import cmd_add_reviewer
+
+    added = []
+    AddClient = _add_reviewer_client([
+        {"_account_id": 1, "name": "Lixin Liu", "username": "lixinliu"},
+        {"_account_id": 2, "name": "Xi Li", "username": "LiX",
+         "email": "lixi@example.com"},
+        {"_account_id": 3, "name": "Li Xiao", "username": "lixiao"},
+    ], added)
+    monkeypatch.setattr(cli, "GerritCommentsClient", AddClient)
+    with pytest.raises(SystemExit) as done:
+        cmd_add_reviewer(SimpleNamespace(url="70550", name="lix", cc=False,
+                                         dry_run=False, pretty=False))
+    assert done.value.code == 0
+    assert added == [(70550, "LiX", "REVIEWER")]
+
+
+def test_add_reviewer_still_asks_when_nothing_matches_exactly(
+        monkeypatch, capsys):
+    from gerrit_cli.commands.reviewers import cmd_add_reviewer
+
+    added = []
+    AddClient = _add_reviewer_client([
+        {"_account_id": 1, "name": "Lixin Liu", "username": "lixinliu"},
+        {"_account_id": 3, "name": "Li Xiao", "username": "lixiao"},
+    ], added)
+    monkeypatch.setattr(cli, "GerritCommentsClient", AddClient)
+    with pytest.raises(SystemExit) as done:
+        cmd_add_reviewer(SimpleNamespace(url="70550", name="Li", cc=False,
+                                         dry_run=False, pretty=False))
+    assert done.value.code != 0
+    assert added == []
+    out = json.loads(capsys.readouterr().out)
+    assert out.get("data", out)["error"] == "multiple_matches"

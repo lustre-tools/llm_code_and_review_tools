@@ -1806,6 +1806,8 @@ def test_the_persons_commit_is_pushed_as_the_bot_and_edited_back(gerrit, monkeyp
         "change_number": 51164, "patchset": 4, "sha": final,
         "pushed_sha": pushed, "rebased": False, "author": PERSON,
     }]
+    # Agents took the second patchset for a bug (fb-314f4c6b98b2).
+    assert "two patchsets" in data["author_edit_note"]
     assert git(work, "rev-parse", "HEAD") == final
     assert data["warnings"] == []
 
@@ -1842,6 +1844,7 @@ def test_no_author_edit_pushes_the_commit_as_it_is(gerrit, monkeypatch):
     assert pushed_refs(bare) == {"refs/for/master": head}
     assert fake.calls == []
     assert data["author_edit"] == []
+    assert "author_edit_note" not in data
 
 
 def test_an_edit_failing_after_the_push_still_reports_pushed(gerrit, monkeypatch):

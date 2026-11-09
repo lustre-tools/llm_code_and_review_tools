@@ -181,7 +181,8 @@ class TestBuildAgentCmd:
         assert cmd[2] == ("Using the prompt /p/kernel/review-core.md "
                           "run a deep dive regression analysis of the "
                           "top commit.\n\n" + CLOSING_NOTE)
-        assert cmd[3:] == ["--dangerously-skip-permissions",
+        assert cmd[3:] == ["--setting-sources", "user",
+                           "--dangerously-skip-permissions",
                            "--verbose", "--output-format", "stream-json"]
 
     def test_model_and_extra_args(self, tmp_path):
@@ -228,7 +229,8 @@ class TestBuildAgentCmd:
         assert cmd[:6] == ["codex", "exec", "--json",
                            "--dangerously-bypass-approvals-and-sandbox",
                            "--disable", "fast_mode"]
-        assert cmd[6:10] == ["-m", "gpt-5.6-sol",
+        assert cmd[6:8] == ["-c", "project_doc_max_bytes=0"]
+        assert cmd[8:12] == ["-m", "gpt-5.6-sol",
                             "-c", 'model_reasoning_effort="medium"']
 
     def test_impossible_effort_rejected_before_any_review(self, tmp_path):

@@ -202,7 +202,9 @@ gc --user patrickbot upload 12345 --repo /path/to/checkout
   `NONE`. A published edit adds no reviewers. HEAD is then moved, by
   compare and swap, to the fetched final commits if their tree is the
   same. `author_edit[]` lists each change (`change_number`, `patchset`,
-  `sha`, `pushed_sha`, `rebased`, `author`). If an edit fails after the
+  `sha`, `pushed_sha`, `rebased`, `author`), and `author_edit_note`
+  says that each such change gets two patchsets for one upload, the push
+  and the edit: expected, not a bug. If an edit fails after the
   push, the upload still reports `pushed` with a warning naming the
   changes left with the account as author and how to fix them. The
   checks above run on the original commits. `--no-author-edit` pushes
