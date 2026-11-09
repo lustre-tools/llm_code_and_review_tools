@@ -23,6 +23,7 @@
 # model = "sonnet"         # for the claude agent
 # lean = true
 # preload = true
+# backport = true
 # prefix = "[AI review - <model>]"
 
 # --- Options whose default is computed or empty ---

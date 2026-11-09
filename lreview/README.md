@@ -248,6 +248,35 @@ contain the `<model>` placeholder, e.g.
 `[Marc Bot - AI review - opus]`. The model is taken from `--model`,
 falling back to the model claude reports in the review log.
 
+## Backport reviews (`--backport`)
+
+A commit with a `Lustre-change:` or `Lustre-commit:` trailer is a port, and
+its review has a different goal: the port must be an honest and correct
+translation of the upstream change. `lreview` detects the trailers, fetches
+the upstream commit, and adds `lreview/backport-prompt.md` to the first
+message of that review. Other reviews do not get this text. The text stays
+out of the preloaded system prompt, because concurrent reviews share it.
+
+Each comment names a class:
+
+| Class | Meaning | `unresolved` |
+|-------|---------|--------------|
+| `BACKPORT` | The port introduces the problem, or the problem exists only on this branch. | `true` |
+| `UPSTREAM` | The same defect exists on master. Fix it on master first, then port the fix. | `false` |
+| `UPSTREAM-BLOCKER` | The same defect exists on master, and it is too severe to ship: data loss, a reachable crash or hang, a security fault, or a failed common operation. | `true` |
+
+`UPSTREAM` comments get posted to Gerrit, but they do not count as findings.
+For a `Lustre-commit: TBD` trailer, `lreview` asks Gerrit for the current
+patch set of the upstream change. The prompt gets the upstream Change-Id and
+subject, the patch set that the port names, and the unresolved AI review
+comments of an upstream change that has not landed. The review checks the
+Change-Id, the `Lustre-change:` target, a stale port, and the
+`Was-Change-Id:` rules of a squashed port. An open upstream `(defect)` comment
+that applies to the port is an `UPSTREAM-BLOCKER`, because the port can land
+before the upstream change. If it cannot get an upstream commit, the
+review still runs and says so. `--no-backport` or `LREVIEW_BACKPORT=0` turns
+the check off. `lreview bench` and `lreview chat` do not use it.
+
 ## Review modes (`--mode`)
 
 Two depths of review share the same pipeline, artifacts, and posting

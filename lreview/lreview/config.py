@@ -46,6 +46,7 @@ _ENV_VARS = {
     "prompts_dir": "REVIEW_PROMPTS_DIR",
     "lean": "LREVIEW_LEAN",
     "preload": "LREVIEW_PRELOAD",
+    "backport": "LREVIEW_BACKPORT",
     "stall_timeout": "LREVIEW_STALL_TIMEOUT",
     "results_dir": "LREVIEW_RESULTS_DIR",
     "db": "LREVIEW_DB",
