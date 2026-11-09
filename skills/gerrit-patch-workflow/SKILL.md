@@ -420,6 +420,9 @@ gc upload ... --private --no-ci-reviewers   # private, no Jenkins/Maloo
 - A new patchset for a change that is already private is refused
   (`PRIVATE_CHANGE`) without `--private` or `--public`. Ask the user
   which they want; do not pick one to get past the refusal.
+- When the user asks for a private change to go public with its next
+  patchset: amend the commit message, then `gc upload <change>
+  --public`. A message-only amend keeps the votes and does not rerun CI.
 - Never put `%private` on a push by hand; `gc upload --private` is the
   only way a private change is made.
 
