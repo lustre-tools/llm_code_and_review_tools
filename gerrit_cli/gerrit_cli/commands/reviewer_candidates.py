@@ -30,6 +30,21 @@ _CHANGE_OPTIONS = ["CURRENT_REVISION", "CURRENT_COMMIT", "CURRENT_FILES",
                    "DETAILED_LABELS", "DETAILED_ACCOUNTS"]
 
 
+# With --load or --asked, how many times --limit to weigh before cutting.
+BALANCE_POOL = 3
+
+ORDER_RULES = {
+    "score": "by score (git history: reviews x2, authorship x1), highest "
+             "first",
+    "balanced": "people without a hold first, then held people; within "
+                "each, by balanced (sqrt(score) x queue x asks x answers), "
+                "highest first. Hold: pending asks >= max(6, 7 days of "
+                "their Code-Review rate), a gatekeeper, or asked often and "
+                "never answering. eligible lists the people shown with no "
+                "hold who are not already on the change, in order",
+}
+
+
 def normalize_name(name):
     """Lowercase, accents and punctuation dropped, spaces collapsed."""
     text = unicodedata.normalize("NFKD", name or "")
@@ -273,7 +288,7 @@ def compact_data(data, on_change):
     examined paths are left out."""
     out = {key: data[key] for key in (
         "change_number", "subject", "owner", "commit_author", "order",
-        "asked_by", "paths_without_history", "count", "total_candidates")
+        "order_rule", "eligible", "asked_by", "paths_without_history", "count", "total_candidates")
         if key in data}
     out["on_change"] = [{"name": name, "email": email or None, "role": role}
                         for name, email, role in on_change]
@@ -323,12 +338,17 @@ def cmd_reviewer_candidates(args):
         candidates, excluded = rank_candidates(commits, exclude, on_change)
         known = {f for c in commits for f in c["files"]}
         total = len(candidates)
-        if args.limit > 0:
-            candidates = candidates[:args.limit]
         load = getattr(args, "load", False)
         asked_path = getattr(args, "asked", None)
+        balancing = bool(load or asked_path)
+        if args.limit > 0:
+            # Balancing puts held people last, so weigh a wider pool
+            # than the limit; otherwise held people near the top by score
+            # fill the list and push out people who could be asked.
+            pool = args.limit * BALANCE_POOL if balancing else args.limit
+            candidates = candidates[:pool]
         order = "score"
-        if load or asked_path:
+        if balancing:
             from . import reviewer_load
             asked = reviewer_load.read_asked(asked_path) if asked_path else None
             if load:
@@ -340,6 +360,8 @@ def cmd_reviewer_candidates(args):
             if asked is not None:
                 data["asked_by"] = asked.get("by")
                 data["asked_generated_at"] = asked.get("generated_at")
+        if args.limit > 0:
+            candidates = candidates[:args.limit]
         if args.brief:
             for entry in candidates + excluded:
                 entry["files"] = [f["path"] for f in entry["files"]]
@@ -353,7 +375,10 @@ def cmd_reviewer_candidates(args):
                                       and not any(k.startswith(p.rstrip("/") + "/")
                                                   for k in known)],
             "order": order,
+            "order_rule": ORDER_RULES[order],
             "candidates": candidates,
+            "eligible": [c["name"] for c in candidates
+                         if not c.get("hold") and not c.get("on_change")],
             "count": len(candidates),
             "total_candidates": total,
             "excluded": excluded,

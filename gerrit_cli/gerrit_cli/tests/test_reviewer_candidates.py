@@ -219,3 +219,24 @@ def test_not_a_checkout_is_invalid_input(monkeypatch, capsys, tmp_path):
                       paths=["x.c"])
     assert code == 4
     assert "not a git checkout" in json.dumps(data)
+
+
+def test_limit_applies_after_holds_and_the_order_is_stated(
+    monkeypatch, capsys, repo, tmp_path,
+):
+    """fb-8a9735ce7588, fb-1d0066201ba2, fb-cfb93b5c8d57: --limit cut the
+    list by score before holds were weighed, so held people filled it and
+    pushed out people who could be asked; the order was not stated."""
+    asked = tmp_path / "asks.json"
+    asked.write_text(json.dumps({"by": "test", "people": [
+        {"name": "Andreas Dilger", "email": "adilger@whamcloud.com",
+         "asked": 20, "answered": 5, "pending": 10, "asked_14d": 10}]}))
+    code, data = _run(monkeypatch, capsys, repo, url=None,
+                      paths=["lustre/llite"], limit=1, asked=str(asked))
+    assert code == 0
+    assert data["count"] == 1
+    top = data["candidates"][0]
+    assert top["name"] != "Andreas Dilger" and not top["hold"]
+    assert data["eligible"] == [top["name"]]
+    assert data["order"] == "balanced"
+    assert "held people" in data["order_rule"]

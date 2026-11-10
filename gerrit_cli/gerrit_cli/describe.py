@@ -461,7 +461,7 @@ def get_tool_description() -> ToolDescription:
                     Argument(name="--repo", description="lustre-release checkout to read history from", default="."),
                     Argument(name="--ref", description="History to read", default="HEAD"),
                     Argument(name="--months", description="Window in months", type="integer", default=12),
-                    Argument(name="--limit", description="Candidates to list, 0 for all", type="integer", default=10),
+                    Argument(name="--limit", description="Candidates to list, 0 for all; with --load or --asked, cut after holds are weighed (held people last)", type="integer", default=10),
                     Argument(name="--exclude", description="Name or email to leave out (repeatable)"),
                     Argument(name="--brief", description="Files as bare paths", type="boolean", default=False),
                     Argument(name="--compact", description="Per candidate only name, email, account_id, score, reviewed, last_reviewed, on_change, balanced, waiting, votes, asks and hold; plus the change's on_change list", type="boolean", default=False),
