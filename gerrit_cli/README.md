@@ -382,10 +382,11 @@ includes:
   ones in the main chain, it stays visible by default so the chain
   isn't cut. Pure trailing-abandoned tails are hidden unless
   "Show abandoned" is checked.
-- **Side panel**: click a node to see full details — status badge,
-  verified voters with clickable Jenkins/Maloo links, code-review votes
-  with reviewer names (author votes dimmed), unresolved comments (with
-  `--comments`), and walkable chains of dependents/dependencies.
+- **Side panel**: click a node to see its details — status, subject,
+  author, tags — and a Review card: what it needs to land, the
+  verified voters with Jenkins/Maloo links, the code-review votes with
+  reviewer names (the owner's dimmed) and their total, and unresolved
+  comments (with `--comments`).
 - **Search** (Ctrl/Cmd+F): fuzzy search across change number, subject,
   author, ticket; highlights matches and walks through them with
   Enter / Shift+Enter.
@@ -469,8 +470,10 @@ includes:
   with its place in the queue), so it can be rebased before that patch
   lands. "Show conflicts" draws those pairs as thick red edges and marks
   a change that does not apply with a red border and "✗ conflicts with
-  master"; the node panel gets a Conflicts section above Dependents,
-  including the conflicts it inherits through the changes below it.
+  master"; the node panel gets a Conflicts card: its own conflicts
+  first, then those it inherits through the changes below it, each
+  conflicting change with its hashtags and what it needs to land
+  (ready, a CI or review block, reviews short, CI pending).
   The results are in the payload as `conflicts` (`tip`, `results` per
   change with `parent` / `base` for those two causes, `pairs`, and
   `next` for master-next, `with` naming the queued patch); a collision

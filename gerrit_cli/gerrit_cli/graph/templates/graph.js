@@ -1923,19 +1923,51 @@ function reviewHealth(node) {
     // Maloo silent would silently pass that check. A patch can
     // only land when both CIs have voted +1, so both must be
     // present before we paint the node green.
-    if (rv.verified_pass) {
-        const passers = new Set(
-            (rv.verified_votes || [])
-                .filter(v => v.value > 0)
-                .map(v => v.name.toLowerCase())
-        );
-        if (!passers.has('jenkins') || !passers.has('maloo')) {
-            return 'pending';
-        }
-        if (crTotal(node) >= crRequired(node)) return 'good';
-    }
-
+    if (ciPassed(node) && crTotal(node) >= crRequired(node)) return 'good';
     return 'pending';
+}
+
+function ciPassed(node) {
+    const rv = node.review || {};
+    if (!rv.verified_pass) return false;
+    const passers = new Set((rv.verified_votes || []).filter(v => v.value > 0).map(v => v.name.toLowerCase()));
+    return passers.has('jenkins') && passers.has('maloo');
+}
+
+// What a change in flight still needs, in its node's color: ready, a
+// CI or Code-Review block, reviews short of the total, or CI to finish.
+function landingInfo(node) {
+    const C = getColors();
+    const rv = node.review || {};
+    const t = crTotal(node);
+    const [text, color] = {
+        good: ['\u2713 Ready', C.REVIEW_GOOD.border],
+        bad_block: ['\u2717 ' + (rv.cr_rejected ? 'CR -2' : 'Owner -1'), C.REVIEW_BAD_BLOCK.border],
+        bad_maloo: ['\u2717 Maloo -1', C.REVIEW_BAD_MALOO.border],
+        bad_jenkins: ['\u2717 Jenkins -1', C.REVIEW_BAD_JENKINS.border],
+        bad_other: ['\u2717 Verified -1', C.REVIEW_BAD_OTHER.border],
+    }[reviewHealth(node)] || (ciPassed(node)
+        ? [`Reviews ${t > 0 ? '+' : ''}${t} of +${crRequired(node)}`, C.STATUS.NEW.border]
+        : ['CI pending', 'var(--text-muted)']);
+    return { text, color };
+}
+
+function landingState(node) {
+    const { text, color } = landingInfo(node);
+    return (node.is_wip ? '<span style="color:var(--text-muted);font-size:12px;margin-right:6px">WIP</span>' : '')
+        + `<span style="color:${color};font-weight:600;font-size:12px;margin-right:8px">${text}</span>`;
+}
+
+// A change in flight in the panel: number, state and hashtags, then its
+// subject (both open it), then `foot` (the files it conflicts in).
+function changeItem(node, foot) {
+    return `<div class="pitem" style="border-left-color:${landingInfo(node).color}">
+        <div class="pitem-main" onclick="clickNode(${node.id})" title="${esc(node.subject)}">
+            <div class="pitem-top"><span class="snum">#${node.id}</span>${landingState(node)}${hashtagChips(node)}</div>
+            <div class="pitem-subj">${esc(node.subject)}</div>
+        </div>
+        ${foot ? `<div class="pitem-files">${foot}</div>` : ''}
+    </div>`;
 }
 
 // ─── STYLING ───
@@ -2464,29 +2496,11 @@ function renderReviewPanel(node) {
     const rv = node.review || {};
     if (node.status === 'ABANDONED') return '';
     if (node.status === 'MERGED') {
-        return `<div class="field">
-            <div class="fl">Review</div>
-            <div class="fv" style="color:#3fb950">Merged</div>
-        </div>`;
+        return `<section class="psec"><div class="psec-h"><span>Review</span>`
+            + `<span class="psum" style="color:${getColors().STATUS.MERGED.border}">Merged</span></div></section>`;
     }
 
-    // Health summary
-    const health = reviewHealth(node);
-    let healthBadge;
-    if (health === 'good') {
-        healthBadge = '<span style="color:#3fb950;font-weight:700">\u2713 Ready</span>';
-    } else if (health === 'bad_block') {
-        healthBadge = `<span style="color:#a82828;font-weight:700">\u2717 ${rv.cr_rejected ? 'CR -2' : 'Owner -1'}</span>`;
-    } else if (health === 'bad_maloo') {
-        healthBadge = '<span style="color:#f85149;font-weight:700">\u2717 Maloo Failed</span>';
-    } else if (health === 'bad_jenkins') {
-        healthBadge = '<span style="color:#e8a020;font-weight:700">\u2717 Jenkins Failed</span>';
-    } else if (health === 'bad_other') {
-        healthBadge = '<span style="color:#d63384;font-weight:700">\u2717 Verified Failed</span>';
-    } else {
-        healthBadge = '<span style="color:#8b949e">Pending</span>';
-    }
-
+    const healthBadge = landingState(node);
     // Verified section — show ALL voters with CI links
     const vVotes = rv.verified_votes || [];
     const jenkinsUrl = rv.jenkins_url || '';
@@ -2531,7 +2545,7 @@ function renderReviewPanel(node) {
         const total = crTotal(node), required = crRequired(node);
         crHtml += `<div style="font-size:13px;margin:2px 0;color:${total >= required ? '#3fb950' : 'var(--text)'}">`
             + `Total ${total > 0 ? '+' : ''}${total} of +${required} needed${node.is_backport ? ' (backport)' : ''}</div>`
-            + `<div style="font-size:11px;color:var(--text-muted)">Votes add up: a -1 lowers the total but does not block. Only a -2 blocks, or the owner's own -1 (not ready yet); the owner's +1 does not count.</div>`;
+            + `<div style="font-size:11px;color:var(--text-muted)">Votes add up: a -1 lowers the total but does not block; a -2 or the owner's own -1 does. The owner's +1 does not count.</div>`;
     }
 
     if (crVotes.length > 0) {
@@ -2561,20 +2575,15 @@ function renderReviewPanel(node) {
         crHtml = '<div style="color:#8b949e;font-size:13px">No reviews yet</div>';
     }
 
-    return `<div class="field">
-        <div class="fl">Review Health</div>
-        <div class="fv">${healthBadge}</div>
-    </div>
-    <div class="field">
-        <div class="fl">Verified</div>
-        <div class="fv">${verifiedHtml}</div>
-    </div>
-    <div class="field">
-        <div class="fl">Code Review</div>
-        <div class="fv">${crHtml}</div>
-    </div>
-    ${renderCommentsPanel(node)}
-    ${renderPreviousReviewsPanel(node)}`;
+    return `<section class="psec">
+        <div class="psec-h"><span>Review</span><span class="psum">${healthBadge}</span></div>
+        <div class="psec-b"><div class="pkv">
+            <div class="k">Verified</div><div class="v">${verifiedHtml}</div>
+            <div class="k">Code-Review</div><div class="v">${crHtml}</div>
+            ${renderCommentsPanel(node)}
+            ${renderPreviousReviewsPanel(node)}
+        </div></div>
+    </section>`;
 }
 
 // Pre-current-patchset Code-Review actions by human reviewers.
@@ -2587,10 +2596,8 @@ function renderReviewPanel(node) {
 // each reviewer thought of an earlier revision, even when the
 // reviewer hasn't (yet) voted again on the current patchset.
 //
-// Always rendered (with a "None" placeholder when empty) so the
-// section provides predictable visual separation from the Code
-// Review block above. Vote rows render at lower opacity to make
-// it obvious at a glance that these are NOT the current votes.
+// Left out when there are none. Vote rows render at lower opacity:
+// these are NOT the current votes.
 function renderPreviousReviewsPanel(node) {
     const rv = node.review || {};
     const history = rv.cr_history || [];
@@ -2602,10 +2609,9 @@ function renderPreviousReviewsPanel(node) {
     for (const h of history) lastByName.set(h.name, h);
     const entries = [...lastByName.values()].filter(h => h.value !== 0);
 
+    if (entries.length === 0) return '';
     let body;
-    if (entries.length === 0) {
-        body = '<div style="color:var(--text-muted);font-size:13px">None</div>';
-    } else {
+    {
         entries.sort((a, b) => (b.ps - a.ps) || a.name.localeCompare(b.name));
         const owner = node.owner || '';
         const author = node.author || '';
@@ -2625,10 +2631,7 @@ function renderPreviousReviewsPanel(node) {
             </div>`;
         }
     }
-    return `<div class="field">
-        <div class="fl">Review History (older patchsets)</div>
-        <div class="fv">${body}</div>
-    </div>`;
+    return `<div class="k">Earlier votes</div><div class="v">${body}</div>`;
 }
 
 function renderCommentsPanel(node) {
@@ -2636,9 +2639,7 @@ function renderCommentsPanel(node) {
     const count = rv.unresolved_count || 0;
     const comments = rv.unresolved_comments || [];
 
-    let html = `<div class="field">
-        <div class="fl">Unresolved Comments (${count})</div>
-        <div class="fv">`;
+    let html = `<div class="k">Unresolved</div><div class="v">`;
 
     if (count === 0 && comments.length === 0) {
         html += '<div style="color:var(--text-muted);font-size:13px">None</div>';
@@ -2669,7 +2670,7 @@ function renderCommentsPanel(node) {
         html += '<div style="color:var(--text-muted);font-size:10px;font-style:italic;margin-top:4px">Note: Gerrit API comment resolution tracking is unreliable; listed comments may not match exactly.</div>';
     }
 
-    html += '</div></div>';
+    html += '</div>';
     return html;
 }
 
@@ -2681,38 +2682,6 @@ function showNodeInfo(id) {
     if (node.context) {
         panel.innerHTML = contextNodeInfo(node);
         return;
-    }
-
-    // Find chain above (walk up from this node). Visibility is
-    // routed through the shared nodeVisible helper so this view
-    // stays in sync with the main graph filter state.
-    const above = [];
-    function walkUp(nid, depth) {
-        if (depth > 50) return;
-        const kids = (childrenOf[nid] || []).filter(k => nodeVisible(k));
-        // Sort: main chain first
-        kids.sort((a, b) => {
-            if (mainChain.has(a) && !mainChain.has(b)) return -1;
-            if (!mainChain.has(a) && mainChain.has(b)) return 1;
-            return a - b;
-        });
-        kids.forEach(k => {
-            const edge = edgeMap[nid + '->' + k];
-            above.push({ node: nodeMap[k], edge: edge });
-            walkUp(k, depth + 1);
-        });
-    }
-    walkUp(id, 0);
-
-    // Find chain below (walk down)
-    const below = [];
-    let cursor = parentOf[id];
-    while (cursor && nodeMap[cursor] && below.length < 30) {
-        if (!nodeVisible(cursor)) { id = cursor; cursor = parentOf[cursor]; continue; }
-        const edge = edgeMap[cursor + '->' + id];
-        below.push({ node: nodeMap[cursor], edge: edge });
-        id = cursor;
-        cursor = parentOf[cursor];
     }
 
     // Rebase debt = the node's CURRENT patchset sits on a parent that
@@ -2753,81 +2722,42 @@ function showNodeInfo(id) {
     }
     const tag = tagChip;
 
+    const stale = staleIncoming[0];
+    const staleBanner = stale
+        ? `<div class="pbanner" style="border-left-color:#d29922;color:#d29922">Needs a rebase: based on ps${stale.parent_patchset} of <a href="#" onclick="clickNode(${stale.from});return false">#${stale.from}</a>, now at ps${stale.parent_latest}</div>`
+        : '';
+    const tags = (node.topic ? tag('topic ' + node.topic, ref.size && inSelection({ topic: node.topic }, ref)) : '')
+        + (node.hashtags || []).map(h => tag(h, ref.size && inSelection({ hashtags: [h] }, ref))).join('');
+
     panel.innerHTML = `
         ${anchorBanner}
         ${unrelatedBanner}
         ${focusBanner}
-        <div class="field">
-            <div class="fl">Change</div>
-            <div class="fv">
-                <a href="${node.url}" target="_blank">#${node.id}</a>
+        ${staleBanner}
+        <div class="phead">
+            <div class="phead-id">
+                <a class="pnum" href="${node.url}" target="_blank">#${node.id}</a>
                 <span class="sbadge sbadge-${node.status}">${node.status}</span>
                 ${node.is_wip ? '<span class="stale-tag" style="background:#7a1a1a;color:#f85149;border-color:#f85149">WIP</span>' : ''}
                 ${staleTag}
-                &nbsp; ps${node.current_patchset}
-                ${node.checkout_cmd ? `<button onclick="navigator.clipboard.writeText('${node.checkout_cmd.replace(/'/g, "\\'")}');this.textContent='\u2713';setTimeout(()=>this.textContent='Checkout',1500)" style="cursor:pointer;font-size:11px;background:none;border:1px solid var(--border);border-radius:4px;padding:1px 8px;color:var(--accent);margin-left:6px;display:inline-block;min-width:65px;text-align:center" title="Copy checkout command to clipboard">Checkout</button>` : ''}
-                ${node.cherrypick_cmd ? `<button onclick="navigator.clipboard.writeText('${node.cherrypick_cmd.replace(/'/g, "\\'")}');this.textContent='\u2713';setTimeout(()=>this.textContent='Cherry-pick',1500)" style="cursor:pointer;font-size:11px;background:none;border:1px solid var(--border);border-radius:4px;padding:1px 8px;color:var(--accent);margin-left:4px;display:inline-block;min-width:80px;text-align:center" title="Copy cherry-pick command to clipboard">Cherry-pick</button>` : ''}
-                ${node.current_commit ? `<button onclick="navigator.clipboard.writeText('${node.current_commit}');const o=this.textContent;this.innerHTML='<span style=\\'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;font-size:11px\\'>\u2713</span>';setTimeout(()=>this.textContent=o,1500)" style="cursor:pointer;font-family:monospace;font-size:12px;background:none;border:1px solid var(--border);border-radius:4px;padding:1px 6px;color:var(--accent);margin-left:6px;display:inline-block;min-width:65px;text-align:center" title="Click to copy full SHA: ${node.current_commit}">${node.current_commit.substring(0, 7)}</button>` : ''}
+                ${node.is_backport ? '<span class="stale-tag" style="background:#1f6f6f;color:#fff" title="a review total of +1 is enough">BACKPORT</span>' : ''}
+                <span class="pps">ps${node.current_patchset}</span>
+            </div>
+            <div class="psubj">${esc(node.subject)}</div>
+            <div class="pacts">
+                ${node.checkout_cmd ? `<button onclick="navigator.clipboard.writeText('${node.checkout_cmd.replace(/'/g, "\\'")}');this.textContent='\u2713';setTimeout(()=>this.textContent='Checkout',1500)" style="cursor:pointer;font-size:11px;background:none;border:1px solid var(--border);border-radius:4px;padding:1px 8px;color:var(--accent);display:inline-block;min-width:65px;text-align:center" title="Copy checkout command to clipboard">Checkout</button>` : ''}
+                ${node.cherrypick_cmd ? `<button onclick="navigator.clipboard.writeText('${node.cherrypick_cmd.replace(/'/g, "\\'")}');this.textContent='\u2713';setTimeout(()=>this.textContent='Cherry-pick',1500)" style="cursor:pointer;font-size:11px;background:none;border:1px solid var(--border);border-radius:4px;padding:1px 8px;color:var(--accent);display:inline-block;min-width:80px;text-align:center" title="Copy cherry-pick command to clipboard">Cherry-pick</button>` : ''}
+                ${node.current_commit ? `<button onclick="navigator.clipboard.writeText('${node.current_commit}');const o=this.textContent;this.innerHTML='<span style=\\'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;font-size:11px\\'>\u2713</span>';setTimeout(()=>this.textContent=o,1500)" style="cursor:pointer;font-family:monospace;font-size:12px;background:none;border:1px solid var(--border);border-radius:4px;padding:1px 6px;color:var(--accent);display:inline-block;min-width:65px;text-align:center" title="Click to copy full SHA: ${node.current_commit}">${node.current_commit.substring(0, 7)}</button>` : ''}
+            </div>
+            <div class="pkv">
+                <div class="k">Author</div><div class="v">${esc(node.author)}</div>
+                ${node.updated ? `<div class="k">Updated</div><div class="v">${formatGerritDate(node.updated)}</div>` : ''}
+                ${(node.project || node.branch) ? `<div class="k">Repo</div><div class="v"><code>${esc(node.project || '?')}</code> &middot; <code>${esc(node.branch || '?')}</code></div>` : ''}
+                ${tags ? `<div class="k">Tags</div><div class="v ptags">${tags}</div>` : ''}
             </div>
         </div>
-        ${node.is_backport ? `<div class="field">
-            <div class="fl">Type</div>
-            <div class="fv">
-                <span class="stale-tag" style="background:#1f6f6f;color:#fff">BACKPORT</span>
-                <span style="color:var(--text-muted);font-size:11px;margin-left:6px">only needs 1 reviewer +1 to be Ready</span>
-            </div>
-        </div>` : ''}
-        <div class="field">
-            <div class="fl">Subject</div>
-            <div class="fv">${esc(node.subject)}</div>
-        </div>
-        <div class="field">
-            <div class="fl">Author</div>
-            <div class="fv">${esc(node.author)}</div>
-        </div>
-        ${(node.project || node.branch) ? `<div class="field">
-            <div class="fl">Repo &middot; Branch</div>
-            <div class="fv">
-                <code style="font-size:12px">${esc(node.project || '?')}</code>
-                <span style="color:var(--text-muted)"> &middot; </span>
-                <code style="font-size:12px">${esc(node.branch || '?')}</code>
-            </div>
-        </div>` : ''}
-        ${node.updated ? `<div class="field">
-            <div class="fl">Updated</div>
-            <div class="fv">${formatGerritDate(node.updated)}</div>
-        </div>` : ''}
-        ${node.topic ? `<div class="field">
-            <div class="fl">Topic</div>
-            <div class="fv">${ref.size && inSelection({ topic: node.topic }, ref) ? tag(node.topic, true) : esc(node.topic)}</div>
-        </div>` : ''}
-        ${(node.hashtags && node.hashtags.length > 0) ? `<div class="field">
-            <div class="fl">Hashtags</div>
-            <div class="fv">${node.hashtags.map(h => tag(h, ref.size && inSelection({ hashtags: [h] }, ref))).join('')}</div>
-        </div>` : ''}
         ${renderReviewPanel(node)}
-        ${staleIncoming.length > 0 ? `
-        <div class="field">
-            <div class="fl">Stale dependency</div>
-            <div class="fv" style="color:#d29922">
-                Based on ps${staleIncoming[0].parent_patchset} of #${staleIncoming[0].from},
-                now at ps${staleIncoming[0].parent_latest}
-            </div>
-        </div>` : ''}
-
         ${conflictSection(node)}
-
-        ${above.length > 0 ? `
-        <h2>Dependents (${above.length})</h2>
-        <div class="chain">
-            ${above.slice().reverse().map(a => chainItem(a.node, a.edge, node.id)).join('')}
-        </div>` : '<h2>Tip (no dependents)</h2>'}
-
-        ${below.length > 0 ? `
-        <h2>Dependencies (${below.length})</h2>
-        <div class="chain">
-            ${below.map(b => chainItem(b.node, b.edge, node.id, true)).join('')}
-        </div>` : ''}
     `;
 }
 
@@ -2835,8 +2765,7 @@ function showNodeInfo(id) {
 // asked-for) hashtags/topics, `color` gives it a color of its own.
 function tagChip(text, on, color) {
     const c = on ? 'var(--accent)' : color;
-    return '<span style="background:var(--bg-inset);padding:1px 6px;border-radius:3px;font-size:12px;margin-right:4px'
-        + (c ? `;color:${c};box-shadow:inset 0 0 0 1px ${c}` : '') + '">' + esc(text) + '</span>';
+    return '<span class="ptag"' + (c ? ` style="color:${c};box-shadow:inset 0 0 0 1px ${c}"` : '') + '>' + esc(text) + '</span>';
 }
 
 // A change's hashtags as chips, the queue's (master-next) in the color
@@ -2875,7 +2804,7 @@ function conflictSection(node) {
         : base.cn ? `${link(base.cn)} (${esc(base.status)})`
         : `a commit that is not on ${branch} and that no change owns`;
     const baseNote = !base ? ''
-        : `<div class="fv" style="color:var(--text-muted);font-size:12px">${bottom === node.id ? 'It' : link(bottom) + ' at the bottom'} sits on ${baseText}: only the changes from there up were tried, so a conflict may be with what that base adds.</div>`;
+        : `<div style="color:var(--text-muted);font-size:12px;margin-top:4px">${bottom === node.id ? 'It' : link(bottom) + ' at the bottom'} sits on ${baseText}: only the changes from there up were tried, so a conflict may be with what that base adds.</div>`;
     let onBranch;
     if (res.status === 'clean') {
         onBranch = `<span style="color:#3fb950;font-weight:600">Applies</span>`
@@ -2896,44 +2825,45 @@ function conflictSection(node) {
     } else {
         onBranch = `Not checked: ${esc(res.reason || res.status)}`;
     }
-    // its own conflicts, then those of the changes below it; the
-    // partners are all in flight, so no status badge
+    // its own conflicts, then those of the changes below it
     const stack = new Set([node.id, ...below]);
     const rows = [], through = [];
     for (const via of [node.id, ...below]) {
         for (const p of G.conflicts.pairs) {
             const other = p.a === via ? p.b : (p.b === via ? p.a : null);
             if (other === null || stack.has(other) || !nodeMap[other]) continue;
-            const tags = hashtagChips(nodeMap[other]);
-            (via === node.id ? rows : through).push(chainItem(nodeMap[other], null, node.id, false, false)
-                + (tags ? `<div class="ctags">${tags}</div>` : '')
-                + `<div class="cfiles">${via !== node.id ? `${link(via)}: ` : ''}${files(p.files)}</div>`);
+            (via === node.id ? rows : through).push(changeItem(nodeMap[other],
+                (via !== node.id ? `${link(via)}: ` : '') + files(p.files)));
         }
     }
     let others;
     if (rows.length) {
-        others = `<div class="chain">${rows.join('')}</div>`;
+        others = rows.join('');
     } else if (res.status === 'clean') {
-        others = `<div class="fv">None</div>`;
+        others = `<div class="pnone">None</div>`;
     } else {
-        others = `<div class="fv" style="color:var(--text-muted);font-size:12px">Not tried: it does not land on ${branch}.</div>`;
+        others = `<div class="pnone">Not tried: it does not land on ${branch}.</div>`;
     }
+    const n = rows.length + through.length;
+    const nr = nextResult(node.id);
+    const summary = res.status !== 'clean' ? `<span style="color:${C.conflict}">\u2717 Does not land on ${branch}</span>`
+        : n ? `<span style="color:${C.conflict}">\u2717 ${n} conflict${n > 1 ? 's' : ''}</span>`
+        : nr && nr.status === 'conflict' ? `<span style="color:${C.conflict}">\u2717 On ${esc(G.conflicts.next.branch)}</span>`
+        : `<span style="color:#3fb950">\u2713 None</span>`;
     return `
-        <h2>Conflicts</h2>
-        <div class="field">
-            <div class="fl">On ${branch} at ${esc(G.conflicts.tip.substring(0, 10))}</div>
-            <div class="fv">${onBranch}</div>
-            ${baseNote}
+        <section class="psec">
+        <div class="psec-h"><span>Conflicts</span><span class="psum">${summary}</span></div>
+        <div class="psec-b">
+        <div class="pkv">
+            <div class="k">${branch}<small>${esc(G.conflicts.tip.substring(0, 10))}</small></div>
+            <div class="v">${onBranch}${baseNote}</div>
+            ${nextField(node, res, link, files)}
         </div>
-        ${nextField(node, res, link, files)}
-        <div class="field">
-            <div class="fl">With other in-flight changes${rows.length ? ` (${rows.length})` : ''}</div>
-            ${others}
+        <div class="psub">With other in-flight changes${rows.length ? ` (${rows.length})` : ''}</div>
+        ${others}
+        ${through.length ? `<div class="psub">Through the changes below it (${through.length})</div>${through.join('')}` : ''}
         </div>
-        ${through.length ? `<div class="field">
-            <div class="fl">Through the changes below it (${through.length})</div>
-            <div class="chain">${through.join('')}</div>
-        </div>` : ''}`;
+        </section>`;
 }
 
 // The Conflicts section's line for the queue (master-next).
@@ -2942,7 +2872,7 @@ function nextField(node, res, link, files) {
     if (!q) return '';
     const name = esc(q.branch);
     const head = q.skipped ? name
-        : `${name} at ${esc(q.tip.substring(0, 10))}, ${q.ahead} patch${q.ahead === 1 ? '' : 'es'} queued`;
+        : `${name}<small>${esc(q.tip.substring(0, 10))}, ${q.ahead} queued</small>`;
     const nr = nextResult(node.id);
     let text;
     if (q.skipped) {
@@ -2955,20 +2885,18 @@ function nextField(node, res, link, files) {
         text = `<span style="color:#3fb950;font-weight:600">Applies</span>`;
     } else if (nr.status === 'conflict') {
         const w = nr.with;
+        const inGraph = w && nodeMap[w.cn];
         const who = !w ? `a ${name} patch (none alone found)`
+            : inGraph ? `number ${w.position} in the queue`
             : (w.cn ? link(w.cn) + ' ' : '') + `<span style="color:var(--text-muted)">${esc(w.subject)}</span>, number ${w.position} in the queue`;
-        text = `<span style="color:${getColors().conflict};font-weight:600">Conflicts with</span> ${who}: ${files(nr.files)}`;
-        const tags = w && nodeMap[w.cn] ? hashtagChips(nodeMap[w.cn]) : '';
-        if (tags) text += `<div class="ctags" style="margin-left:0">${tags}</div>`;
+        text = `<span style="color:${getColors().conflict};font-weight:600">Conflicts with</span> ${who}: ${files(nr.files)}`
+            + (inGraph ? changeItem(nodeMap[w.cn], '') : '');
     } else if (nr.status === 'blocked') {
         text = `Blocked: ${link(nr.by)} below it does not apply on ${name}`;
     } else {
         text = `Not checked: ${esc(nr.reason || nr.status)}`;
     }
-    return `<div class="field">
-            <div class="fl">On ${head}</div>
-            <div class="fv">${text}</div>
-        </div>`;
+    return `<div class="k">${head}</div><div class="v">${text}</div>`;
 }
 
 // The changes of selection `sel` nearest to `id` through edges either
@@ -3009,22 +2937,6 @@ function contextNodeInfo(node) {
         <div class="field"><div class="fl">Subject</div><div class="fv">${esc(node.subject)}</div></div>
         ${node.owner ? `<div class="field"><div class="fl">Owner</div><div class="fv">${esc(node.owner)}</div></div>` : ''}
         ${node.context_cut ? `<div class="field"><div class="fl">Ancestry</div><div class="fv" style="color:var(--text-muted)">continues further; not walked</div></div>` : ''}`;
-}
-
-function chainItem(node, edge, selectedId, isBelow, showStatus = true) {
-    const isAnc = node.id === currentAnchor;
-    const isMain = mainChain.has(node.id);
-    const cls = isAnc ? 'anchor' : (isMain ? 'main-chain' : '');
-    const stale = edge && edge.is_stale
-        ? `<span class="stale-tag">${edgePsLabel(edge)}</span>`
-        : (edge ? `<span style="color:#484f58;font-size:10px">ps${edge.parent_patchset}</span>` : '');
-
-    return `<div class="ci ${cls}" onclick="clickNode(${node.id})" title="${esc(node.subject)}">
-        <span class="snum">#${node.id}</span>
-        ${showStatus ? `<span class="sbadge sbadge-${node.status}" style="font-size:9px">${node.status.substring(0, 3)}</span>` : ''}
-        ${stale}
-        <span class="ssub">${esc(node.subject)}</span>
-    </div>`;
 }
 
 function showDefaultInfo() {

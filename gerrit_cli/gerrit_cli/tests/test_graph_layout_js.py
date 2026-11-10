@@ -614,12 +614,15 @@ class TestConflicts:
             assert view["edges"] == [] and view["border"] != 4
         assert "Conflicts" not in self._panel(self._payload(False), tmp_path, 101)
 
-    def test_panel_section_sits_above_dependents(self, tmp_path):
+    def test_panel_has_a_review_and_a_conflicts_card(self, tmp_path):
+        """No Dependents/Dependencies lists: the graph shows the stack."""
         info = self._panel(self._payload(), tmp_path, 101)
-        assert info.index("<h2>Conflicts</h2>") < info.index("<h2>Dependents")
+        assert info.index("<span>Review</span>") < info.index("<span>Conflicts</span>")
         assert "Applies" in info and "4a7bddaf15" in info
-        section = info[info.index("<h2>Conflicts"):info.index("<h2>Dependents")]
+        section = info[info.index("<span>Conflicts</span>"):]
         assert "clickNode(103)" in section and "<code>a.c</code>" in section
+        assert "\u2717 1 conflict</span>" in section
+        assert "Dependents" not in info and "Dependencies" not in info and "Tip (no" not in info
 
     def test_panel_lists_conflicts_through_the_changes_below(self, tmp_path):
         info = self._panel(self._payload(), tmp_path, 102)
@@ -627,7 +630,7 @@ class TestConflicts:
         assert "<code>x.c</code>" in info
         assert "clickNode(103)" in info
         assert "Through the changes below it (1)" in info
-        assert '<div class="cfiles"><a href="#" onclick="clickNode(101);return false">#101</a>: ' in info
+        assert '<div class="pitem-files"><a href="#" onclick="clickNode(101);return false">#101</a>: ' in info
 
     def test_its_own_conflicts_come_first(self, tmp_path):
         """102's own conflict (with 104) heads the list; 101's (with 103)
@@ -637,10 +640,10 @@ class TestConflicts:
         payload["conflicts"]["pairs"] = [{"a": 101, "b": 103, "files": ["a.c"]},
                                          {"a": 102, "b": 104, "files": ["b.c"]}]
         info = self._panel(payload, tmp_path, 102)
-        sec = info[info.index("With other in-flight changes (1)"):info.index("<h2>Tip")]
+        sec = info[info.index("With other in-flight changes (1)"):]
         assert sec.index("clickNode(104)") < sec.index("Through the changes below it (1)") < sec.index("clickNode(103)")
         assert "sbadge" not in sec
-        assert "sbadge-NEW" in info  # the dependency list keeps it
+        assert "\u2717 2 conflicts</span>" in info
 
     def test_a_change_whose_base_is_not_on_the_branch(self, tmp_path):
         """105 sits on an abandoned change: only its own diff was tried,
@@ -726,10 +729,10 @@ class TestConflicts:
     def test_panel_says_where_in_the_queue(self, tmp_path):
         payload = self._with_queue()
         info = self._panel(payload, tmp_path, 103)
-        assert "On master-next at 0c93230bde, 77 patches queued" in info
-        assert "Conflicts with</span> <a href=\"#\" onclick=\"clickNode(104)" in info
-        assert "number 3 in the queue" in info and "<code>b.c</code>" in info
-        assert info.index("On master-next") < info.index("<h2>Tip (no dependents)")
+        assert "master-next<small>0c93230bde, 77 queued</small>" in info
+        assert "Conflicts with</span> number 3 in the queue: <code>b.c</code>" in info
+        nxt = info[info.index("master-next<small>"):info.index("With other in-flight changes")]
+        assert 'class="pitem-main" onclick="clickNode(104)"' in nxt
         assert "Queued: this change is on master-next" in self._panel(payload, tmp_path, 104)
         # a queued patch outside the graph opens in Gerrit
         payload["conflicts"]["next"]["results"]["103"]["with"]["cn"] = 58097
@@ -746,21 +749,51 @@ class TestConflicts:
         by_id[104]["hashtags"] = ["218_review_priority"]
         info = self._panel(payload, tmp_path, 101)
         row = info[info.index("With other in-flight changes"):]
-        assert row.index("clickNode(103)") < row.index('<div class="ctags">') < row.index("<code>a.c</code>")
-        assert "color:#8957e5;box-shadow:inset 0 0 0 1px #8957e5\">master-next</span>" in row
+        assert row.index("clickNode(103)") < row.index(">master-next</span>") < row.index("<code>a.c</code>")
+        assert "style=\"color:#8957e5;box-shadow:inset 0 0 0 1px #8957e5\">master-next</span>" in row
         assert "&lt;b&gt;ec&lt;/b&gt;" in row and "<b>ec</b>" not in info
         # the queued patch master-next conflicts with
         info = self._panel(payload, tmp_path, 103)
-        nxt = info[info.index("On master-next"):info.index("With other in-flight changes")]
+        nxt = info[info.index("master-next<small>"):info.index("With other in-flight changes")]
         assert "number 3 in the queue" in nxt and ">218_review_priority</span>" in nxt
-        # no hashtags, no line for them
+        # no hashtags: only its state
         by_id[103]["hashtags"] = []
-        assert 'class="ctags"' not in self._panel(payload, tmp_path, 101)
+        info = self._panel(payload, tmp_path, 101)
+        row = info[info.index("With other in-flight changes"):]
+        assert 'CI pending</span></div>' in row and 'class="ptag"' not in row
+
+    def test_the_conflicting_changes_say_what_they_need(self, tmp_path):
+        """Ready, a CI or Code-Review block, reviews short of the total, or
+        CI still to finish: what the other side needs before it lands."""
+        ci = lambda j, m: {"verified_votes": [{"name": "Jenkins", "value": j}, {"name": "Maloo", "value": m}],
+                           "verified_pass": j > 0 and m > 0 or (j > 0 and m == 0),
+                           "verified_fail": j < 0 or m < 0}
+        cr = lambda *v: [{"name": f"R{i}", "value": x} for i, x in enumerate(v)]
+        cases = [
+            ({**ci(1, 1), "cr_votes": cr(1, 1)}, {}, "\u2713 Ready"),
+            ({**ci(1, -1), "cr_votes": cr(1, 1)}, {}, "\u2717 Maloo -1"),
+            ({**ci(-1, 0), "cr_votes": []}, {}, "\u2717 Jenkins -1"),
+            ({**ci(1, 1), "cr_votes": cr(1, 1), "cr_rejected": True}, {}, "\u2717 CR -2"),
+            ({**ci(1, 1), "cr_votes": cr(1, 1) + [{"name": "A", "value": -1}]}, {}, "\u2717 Owner -1"),
+            ({**ci(1, 1), "cr_votes": cr(1)}, {}, "Reviews +1 of +2"),
+            ({**ci(1, 1), "cr_votes": cr(1, -1)}, {}, "Reviews 0 of +2"),
+            ({**ci(1, 1), "cr_votes": cr(1)}, {"is_backport": True}, "\u2713 Ready"),
+            ({**ci(1, 0), "cr_votes": cr(1, 1)}, {}, "CI pending"),
+            ({**ci(1, 1), "cr_votes": cr(1, 1)}, {"is_wip": True}, "WIP</span>"),
+        ]
+        expr = "JSON.stringify(G.nodes.filter(n => n.id > 200).map(n => landingState(n)))"
+        payload = self._payload()
+        for i, (review, extra, _) in enumerate(cases):
+            payload["nodes"].append(_node(201 + i, review=review, **extra))
+            payload["edges"].append(_edge(10, 201 + i))
+        got = json.loads(_eval(payload, tmp_path, expr))
+        assert all(want in g for (_, _, want), g in zip(cases, got)), list(zip([c[2] for c in cases], got))
+        assert "#3fb950" in got[0] and "#f85149" in got[1] and "#388bfd" in got[5]
 
     def test_panel_without_conflicts_and_for_merged_changes(self, tmp_path):
         info = self._panel(self._payload(), tmp_path, 104)
-        section = info[info.index("<h2>Conflicts"):]
-        assert '<div class="fv">None</div>' in section
+        section = info[info.index("<span>Conflicts</span>"):]
+        assert '<div class="pnone">None</div>' in section and "\u2713 None</span>" in section
         assert "Conflicts" not in self._panel(self._payload(), tmp_path, 10)
 
 
@@ -1148,6 +1181,22 @@ class TestCodeReviewTotal:
                      "showNodeInfo(101), document.getElementById('info').innerHTML")
         assert "Ready" in info and "Total +2 of +2 needed" in info
         assert "a -1 lowers the total but does not block" in info and "VETO" not in info.upper()
+
+    def test_the_panel_shows_earlier_votes(self, tmp_path):
+        """Votes on older patch sets, unfolded: each reviewer's latest, a
+        retracted one (0) left out; no row without any."""
+        history = [{"name": "R1", "value": 1, "ps": 2}, {"name": "R2", "value": -1, "ps": 3},
+                   {"name": "R1", "value": 2, "ps": 4}, {"name": "R3", "value": 1, "ps": 1},
+                   {"name": "R3", "value": 0, "ps": 2}]
+        nodes = [_node(10, "MERGED", submitted="2026-01-01"),
+                 _node(101, review={"verified_votes": self.CI, "verified_pass": True, "cr_history": history}),
+                 _node(102, review={"verified_votes": self.CI, "verified_pass": True})]
+        expr = """JSON.stringify([101, 102].map(id => (showNodeInfo(id), document.getElementById('info').innerHTML)))"""
+        with_history, without = json.loads(_eval(_payload(101, nodes, [_edge(10, 101), _edge(10, 102)]), tmp_path, expr))
+        assert "Earlier votes" in with_history and "<details" not in with_history
+        assert "+2</span>" in with_history and "patch set 4" in with_history and "patch set 2" not in with_history
+        assert "R2" in with_history and "R3" not in with_history
+        assert "Earlier votes" not in without
 
     def test_the_panel_says_the_owner_holds_it(self, tmp_path):
         nodes = [_node(10, "MERGED", submitted="2026-01-01"),

@@ -198,22 +198,62 @@ body.light div.vis-network div.vis-navigation div.vis-button:hover {
 .panel .fv { color: var(--text); font-size: 14px; word-break: break-word; }
 .panel a { color: var(--accent); text-decoration: none; }
 .panel a:hover { text-decoration: underline; }
-.panel .chain { margin-top: 8px; font-size: 13px; }
-.panel .ci {
-    padding: 5px 8px; margin: 3px 0; background: var(--bg-inset);
-    border-radius: 4px; cursor: pointer; border-left: 3px solid var(--border);
-    display: flex; align-items: center; gap: 8px;
+.panel .phead { margin-bottom: 12px; }
+.panel .phead-id { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.panel .pnum { font-size: 17px; font-weight: 700; }
+.panel .pps { color: var(--text-muted); font-size: 13px; }
+.panel .psubj { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.35; margin: 6px 0 8px; }
+.panel .pacts { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.panel .pbanner {
+    background: var(--bg-inset); border-left: 3px solid var(--text-muted); border-radius: 4px;
+    padding: 6px 10px; margin-bottom: 8px; font-size: 12px; color: var(--text-muted);
 }
-.panel .ci:hover { background: var(--bg-hover); }
-.panel .ci.anchor { border-left-color: #f85149; }
-.panel .ci.main-chain { border-left-color: var(--accent); }
-.panel .ci .snum { color: var(--accent); font-weight: 600; white-space: nowrap; font-size: 13px; }
-.panel .ci .sbadge {
-    font-size: 10px; padding: 2px 5px; border-radius: 4px; white-space: nowrap;
+/* key/value grid of the header and the cards */
+.panel .pkv { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 7px 12px; align-items: baseline; }
+.panel .pkv > .k { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+.panel .pkv > .k small {
+    display: block; text-transform: none; letter-spacing: 0; font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 2px;
 }
-.panel .ci .ssub { color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.panel .cfiles { color: var(--text-muted); font-size: 11px; margin: 0 0 6px 11px; word-break: break-all; }
-.panel .ctags { margin: 2px 0 2px 11px; line-height: 20px; }
+.panel .pkv > .v { color: var(--text); font-size: 13px; word-break: break-word; }
+.panel .pkv code { font-size: 12px; }
+.panel .ptags { line-height: 22px; }
+.panel .sbadge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
+.panel .ptag {
+    background: var(--bg-inset); padding: 1px 6px; border-radius: 3px; font-size: 12px;
+    margin-right: 4px; white-space: nowrap;
+}
+.panel .pitem .ptag { background: var(--bg-surface); margin-right: 0; }
+/* a card per topic: Review, Conflicts */
+.panel .psec { border: 1px solid var(--border); border-radius: 6px; margin: 12px 0; overflow: hidden; }
+.panel .psec-h {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+    padding: 7px 10px; background: var(--bg-inset); border-bottom: 1px solid var(--border);
+    color: var(--text); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+}
+.panel .psec-h:only-child { border-bottom: none; }
+.panel .psec-h .psum { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 600; }
+.panel .psec-h .psum span { font-size: 13px !important; margin-right: 0 !important; }
+.panel .psec-b { padding: 10px; }
+.panel .psub {
+    color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+    margin: 12px 0 6px; padding-top: 10px; border-top: 1px dashed var(--border);
+}
+.panel .pnone { color: var(--text-muted); font-size: 13px; }
+/* another change in flight, edged in its state's color */
+.panel .pitem {
+    background: var(--bg-inset); border: 1px solid var(--border); border-left: 4px solid var(--border);
+    border-radius: 4px; padding: 6px 9px; margin: 6px 0;
+}
+.panel .pitem-main { cursor: pointer; }
+.panel .pitem-main:hover .pitem-subj { color: var(--accent); }
+.panel .pitem-top { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; line-height: 20px; }
+.panel .pitem-top .snum { color: var(--accent); font-weight: 700; font-size: 13px; }
+.panel .pitem-subj { color: var(--text); font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel .pitem-files {
+    color: var(--text-muted); font-size: 11px; margin-top: 5px; padding-top: 5px;
+    border-top: 1px solid var(--border); word-break: break-all;
+}
 
 .sbadge-NEW { background: #1f6feb; color: #fff; }
 .sbadge-MERGED { background: #238636; color: #fff; }
