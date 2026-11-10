@@ -1,12 +1,12 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "gerrit-dashboard"
 version = "0.1.8"
 description = "Gerrit attention dashboard for the Lustre CI"
-license = {text = "BSD-2-Clause"}
+license = "BSD-2-Clause"
 requires-python = ">=3.10"
 # Also requires the `gerrit_cli` Gerrit REST client from
 # github.com/lustre-tools/llm_code_and_review_tools, installed from a

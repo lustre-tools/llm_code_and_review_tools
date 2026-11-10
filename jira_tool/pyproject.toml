@@ -1,14 +1,14 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "jira-tool"
 version = "0.5.18"
 description = "LLM-agent-focused CLI tool for JIRA REST API"
-readme = "ARCHITECTURE.md"
+readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name = "LLM Code Tools Team"}
 ]

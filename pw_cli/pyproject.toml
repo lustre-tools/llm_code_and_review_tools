@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,7 @@ name = "pw-cli"
 version = "0.1.2"
 description = "Ask Patch Watcher for what tagging it on a Gerrit change asks, signed in with a Gerrit login"
 requires-python = ">=3.11"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name = "LLM Code Tools Team"}
 ]
