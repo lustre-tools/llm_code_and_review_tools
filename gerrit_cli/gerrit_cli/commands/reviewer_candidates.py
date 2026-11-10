@@ -33,6 +33,11 @@ _CHANGE_OPTIONS = ["CURRENT_REVISION", "CURRENT_COMMIT", "CURRENT_FILES",
 # With --load or --asked, how many times --limit to weigh before cutting.
 BALANCE_POOL = 3
 
+# Fewer people than this not already on the change, and the window is
+# widened to --widen-to months (test files and quiet code often have no
+# history in 12 months).
+WIDEN_BELOW = 3
+
 ORDER_RULES = {
     "score": "by score (git history: reviews x2, authorship x1), highest "
              "first",
@@ -288,7 +293,8 @@ def compact_data(data, on_change):
     examined paths are left out."""
     out = {key: data[key] for key in (
         "change_number", "subject", "owner", "commit_author", "order",
-        "order_rule", "eligible", "asked_by", "paths_without_history", "count", "total_candidates")
+        "order_rule", "eligible", "asked_by", "window_months",
+        "widened_from", "paths_without_history", "count", "total_candidates")
         if key in data}
     out["on_change"] = [{"name": name, "email": email or None, "role": role}
                         for name, email, role in on_change]
@@ -334,8 +340,16 @@ def cmd_reviewer_candidates(args):
         if not paths:
             raise ValueError("The change touches no files")
 
-        commits = git_history(repo, args.ref, paths, args.months)
+        months = args.months
+        commits = git_history(repo, args.ref, paths, months)
         candidates, excluded = rank_candidates(commits, exclude, on_change)
+        widen_to = getattr(args, "widen_to", 36) or 0
+        free = [c for c in candidates if not c.get("on_change")]
+        if len(free) < WIDEN_BELOW and widen_to > months:
+            data["widened_from"] = months
+            months = widen_to
+            commits = git_history(repo, args.ref, paths, months)
+            candidates, excluded = rank_candidates(commits, exclude, on_change)
         known = {f for c in commits for f in c["files"]}
         total = len(candidates)
         load = getattr(args, "load", False)
@@ -368,7 +382,7 @@ def cmd_reviewer_candidates(args):
         data.update({
             "repo": repo,
             "ref": args.ref,
-            "window_months": args.months,
+            "window_months": months,
             "commits_examined": len(commits),
             "paths": paths,
             "paths_without_history": [p for p in paths if p not in known

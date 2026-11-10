@@ -881,6 +881,11 @@ def add_reviewer_candidates_parser(subparsers):
                              "(default: HEAD)")
     parser.add_argument("--months", type=int, default=12,
                         help="Window in months (default: 12)")
+    parser.add_argument("--widen-to", type=int, default=36, metavar="MONTHS",
+                        help="When the window finds fewer than 3 people not "
+                             "on the change, read this many months instead "
+                             "and say so in widened_from (default: 36, 0 "
+                             "never widens)")
     parser.add_argument("--limit", "-n", type=int, default=10,
                         help="Candidates to list, 0 for all (default: 10)")
     parser.add_argument("--exclude", action="append", metavar="NAME_OR_EMAIL",

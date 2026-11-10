@@ -640,7 +640,9 @@ on it). Anonymous reads hide emails, so that match is by name.
 
 paths_without_history names files with no commit in the window (new
 files, or a repo that is not lustre-release): widen --months, or rank the
-directory with --path. Picking who to add is still yours: check
+directory with --path. When the window finds fewer than 3 people not on
+the change, it is widened to --widen-to months (36) by itself, and
+widened_from names the window it started from. Picking who to add is still yours: check
 MAINTAINERS and whether a candidate is active.
 
 --load and --asked weigh the listed candidates by the review they already

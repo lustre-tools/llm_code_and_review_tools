@@ -454,13 +454,14 @@ def get_tool_description() -> ToolDescription:
             Command(
                 name="reviewer-candidates",
                 description="Rank reviewer candidates for a change's files: Reviewed-by trailers and authored commits per file from local git history",
-                usage="gc reviewer-candidates [URL] [--path P ...] [--repo DIR] [--ref REF] [--months N] [--load] [--asked FILE] [--compact]",
+                usage="gc reviewer-candidates [URL] [--path P ...] [--repo DIR] [--ref REF] [--months N] [--widen-to N] [--load] [--asked FILE] [--compact]",
                 arguments=[
                     Argument(name="url", description="Gerrit change URL, number or Change-Id (optional with --path)"),
                     Argument(name="--path", description="File or directory instead of the change's files (repeatable)"),
                     Argument(name="--repo", description="lustre-release checkout to read history from", default="."),
                     Argument(name="--ref", description="History to read", default="HEAD"),
                     Argument(name="--months", description="Window in months", type="integer", default=12),
+                    Argument(name="--widen-to", description="Months to widen to when the window finds fewer than 3 people not on the change; widened_from then names the first window (0 never widens)", type="integer", default=36),
                     Argument(name="--limit", description="Candidates to list, 0 for all; with --load or --asked, cut after holds are weighed (held people last)", type="integer", default=10),
                     Argument(name="--exclude", description="Name or email to leave out (repeatable)"),
                     Argument(name="--brief", description="Files as bare paths", type="boolean", default=False),

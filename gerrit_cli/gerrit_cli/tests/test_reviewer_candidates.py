@@ -240,3 +240,22 @@ def test_limit_applies_after_holds_and_the_order_is_stated(
     assert data["eligible"] == [top["name"]]
     assert data["order"] == "balanced"
     assert "held people" in data["order_rule"]
+
+
+def test_too_few_people_widens_the_window_and_says_so(
+    monkeypatch, capsys, repo,
+):
+    """fb-df2ca5951165, fb-794498c5ba24, fb-388d68bf72d7: a file with no
+    history in 12 months ranked nobody, and the run had to think of
+    widening --months itself."""
+    _commit(repo, "lustre/tests/mmap_sanity.c", NEIL, "2025-03-01T00:00:00",
+            reviewers=[ANDREAS, JIAN])
+    code, data = _run(monkeypatch, capsys, repo, url=None,
+                      paths=["lustre/tests/mmap_sanity.c"], compact=True)
+    assert code == 0
+    assert data["widened_from"] == 12 and data["window_months"] == 36
+    names = {c["name"] for c in data["candidates"]}
+    assert names == {"Neil Brown", "Andreas Dilger", "Jian Yu"}
+    code, data = _run(monkeypatch, capsys, repo, url=None,
+                      paths=["lustre/tests/mmap_sanity.c"], widen_to=0)
+    assert "widened_from" not in data and data["candidates"] == []
