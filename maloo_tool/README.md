@@ -45,6 +45,14 @@ Maloo uses two distinct UUID types:
 
 Both can be found in the output of `session` and `failures`.
 
+The two kinds are easy to mix up. `session` and `failures` given a test set
+UUID show the session that holds the test set, and add `resolved_from`
+(`id_kind`, `test_set_id`, `session_id`) to say so. An id that is neither
+kind is `NOT_FOUND`. `subtests`, `logs`, `bugs`, `link-bug`, `reject-bug`
+and `raise-bug` given a session UUID fail with `INVALID_INPUT` (exit 4),
+and the message names `maloo session <id>`, which lists the session's test
+sets. `link-bug` and `raise-bug` check before they send anything.
+
 ## Quick Start
 
 ```bash
@@ -146,7 +154,7 @@ follow-up commands.)
 | Command | Description |
 |---------|-------------|
 | `maloo session <session-UUID>` | Session overview: suites, pass/fail totals (filter suites by `--status`) |
-| `maloo failures <session-UUID>` | Failed subtests with error messages for each failed suite. A failed `test_cleanup` carries a `note`: its status is Autotest's timeout, not the error. `--cleanup-error` downloads that suite's logs to a temporary directory and adds the error from the suite log as `cleanup_error` |
+| `maloo failures <session-UUID>` | Failed subtests with error messages for each failed suite, each with its `id` (the SubTest ID for `link-bug --type SubTest`). A failed `test_cleanup` carries a `note`: its status is Autotest's timeout, not the error. `--cleanup-error` downloads that suite's logs to a temporary directory and adds the error from the suite log as `cleanup_error` |
 | `maloo subtests <test_set-UUID>` | All subtests for a suite, each with its `id` (filter by `--status`); a failed `test_cleanup` carries the same `note` |
 
 ### Bugs and Retesting

@@ -89,6 +89,53 @@ def _fail(exc: Exception, command: str, pretty: bool) -> None:
     _error(err.code, err.message, command, pretty, exit_code=err.exit_code)
 
 
+def _session_for(
+    client: MalooClient, given_id: str, command: str, pretty: bool,
+) -> tuple[str, dict[str, Any], dict[str, Any] | None]:
+    """Find the test session for a session id or a test set id.
+
+    Agents often give a test set id where a session id goes.  Such an
+    id resolves to the session that holds the test set, and the third
+    item says so; it is None for a session id.  An id that is neither
+    is NOT_FOUND.
+    """
+    data = client.get_session(given_id)
+    if data:
+        return given_id, data, None
+    ts = client.get_test_set(given_id)
+    sid = ts.get("test_session_id") if ts else None
+    data = client.get_session(sid) if sid else None
+    if not data:
+        _error(
+            ErrorCode.NOT_FOUND,
+            f"{given_id} is neither a test session nor a test set",
+            command, pretty,
+        )
+    return sid, data, {
+        "id_kind": "test_set", "test_set_id": given_id, "session_id": sid,
+    }
+
+
+def _refuse_session_id(
+    client: MalooClient, given_id: str, wants: str, command: str,
+    pretty: bool,
+) -> None:
+    """Fail with INVALID_INPUT if GIVEN_ID is a test session id.
+
+    WANTS names the id kind the command takes, such as "test set".
+    """
+    if not client.get_session(given_id):
+        return
+    _error(
+        ErrorCode.INVALID_INPUT,
+        f"{given_id} is a test session id, not a {wants} id. "
+        f"`maloo session {given_id}` lists its test sets (suites[].id); "
+        f"`maloo failures {given_id}` lists the failed ones.",
+        command, pretty,
+        details={"id": given_id, "id_kind": "test_session"},
+    )
+
+
 class MalooGroup(JsonErrorGroup):
     """Click group whose global options work in any position.
 
@@ -137,15 +184,15 @@ def main(ctx: click.Context, envelope: bool, user: str | None) -> None:
 def session(session_url: str, status: str | None, pretty: bool) -> None:
     """Show test session overview.
 
-    SESSION_URL can be a full Maloo URL or a bare UUID.
+    SESSION_URL can be a full Maloo URL or a bare UUID.  A test set id
+    shows the session that holds the test set, and "resolved_from"
+    gives the test set id and the session id it resolved to.
 
     Use --status PASS/FAIL/... to show only suites with that status.
     """
-    sid = _extract_session_id(session_url)
+    given_id = _extract_session_id(session_url)
     client = _make_client()
-    data = client.get_session(sid)
-    if not data:
-        _error(ErrorCode.NOT_FOUND, f"Session {sid} not found", "session", pretty)
+    sid, data, resolved = _session_for(client, given_id, "session", pretty)
 
     # Get test sets for summary
     test_sets = client.get_test_sets(sid)
@@ -182,6 +229,8 @@ def session(session_url: str, status: str | None, pretty: bool) -> None:
         "total": data.get("test_sets_count", 0),
         "suites": suites,
     }
+    if resolved:
+        result["resolved_from"] = resolved
 
     next_actions = []
     failed = [s for s in suites if s["status"] == "FAIL"]
@@ -376,13 +425,14 @@ def failures(session_url: str, cleanup_error: bool, pretty: bool) -> None:
     puts the first FAIL line after "start cleanup" in the suite log, with
     the lines before it, in the row as cleanup_error.  If it cannot,
     cleanup_error is null and cleanup_error_warning says why.
-    """
-    sid = _extract_session_id(session_url)
-    client = _make_client()
 
-    data = client.get_session(sid)
-    if not data:
-        _error(ErrorCode.NOT_FOUND, f"Session {sid} not found", "failures", pretty)
+    A test set id shows the failures of the session that holds it, and
+    "resolved_from" says so, as in `maloo session`.
+    """
+    given_id = _extract_session_id(session_url)
+    client = _make_client()
+    sid, data, resolved = _session_for(client, given_id, "failures", pretty)
+    extra = {"resolved_from": resolved} if resolved else {}
 
     test_sets = client.get_test_sets(sid)
     set_names = client.resolve_test_set_names(test_sets)
@@ -391,7 +441,8 @@ def failures(session_url: str, cleanup_error: bool, pretty: bool) -> None:
 
     if not failed_sets:
         env = success_response(
-            {"session_id": sid, "message": "No failures found", "failed_suites": []},
+            {"session_id": sid, "message": "No failures found",
+             "failed_suites": [], **extra},
             TOOL_NAME, "failures",
         )
         _output(env, pretty)
@@ -413,6 +464,7 @@ def failures(session_url: str, cleanup_error: bool, pretty: bool) -> None:
                 st.get("sub_test_script_id", ""), f"order_{st.get('order', '?')}"
             )
             row = {
+                "id": st.get("id"),
                 "name": st_name,
                 "status": st["status"],
                 "error": st.get("error", ""),
@@ -440,6 +492,7 @@ def failures(session_url: str, cleanup_error: bool, pretty: bool) -> None:
         "test_group": data.get("test_group"),
         "test_name": data.get("test_name"),
         "failed_suites": failed_suites,
+        **extra,
     }
 
     suite_ids = [s["suite_id"] for s in failed_suites[:1]]
@@ -468,12 +521,14 @@ def subtests(test_set_id: str, status: str | None, show_all: bool, pretty: bool)
     By default shows only FAIL subtests. Use --all to see everything,
     or --status PASS/SKIP/CRASH to filter differently.
 
-    TEST_SET_ID is the UUID of the test set.
+    TEST_SET_ID is the UUID of the test set.  A test session id is
+    refused with INVALID_INPUT; `maloo session` lists its test sets.
     """
     client = _make_client()
 
     ts = client.get_test_set(test_set_id)
     if not ts:
+        _refuse_session_id(client, test_set_id, "test set", "subtests", pretty)
         _error(ErrorCode.NOT_FOUND, f"Test set {test_set_id} not found", "subtests", pretty)
 
     all_subtests = client.get_subtests(test_set_id=test_set_id)
@@ -721,13 +776,9 @@ def bugs(buggable_id: str, direct_only: bool, related: bool, pretty: bool) -> No
             "subtest": subtest,
         })
 
-    if not items and client.get_session(buggable_id):
-        _error(
-            ErrorCode.INVALID_INPUT,
-            f"{buggable_id} is a test session; bug links are on its test sets "
-            f"and subtests. `maloo failures {buggable_id}` lists the failed "
-            "test sets.",
-            "bugs", pretty,
+    if not items:
+        _refuse_session_id(
+            client, buggable_id, "test set or subtest", "bugs", pretty
         )
 
     result = {
@@ -782,8 +833,14 @@ def link_bug(
     Examples:
       maloo link-bug <test_set_id> LU-12345
       maloo link-bug <subtest_id> LU-12345 --type SubTest
+
+    A test session id is refused with INVALID_INPUT before anything is
+    sent.
     """
     client = _make_client()
+    _refuse_session_id(
+        client, buggable_id, "test set or subtest", "link-bug", pretty
+    )
     resp = client.create_bug_link(
         buggable_class=buggable_class,
         buggable_id=buggable_id,
@@ -934,6 +991,9 @@ def reject_bug(
 
     stored = stored_states()
     if not stored:
+        _refuse_session_id(
+            client, buggable_id, "test set or subtest", "reject-bug", pretty
+        )
         _error(
             ErrorCode.LINK_NOT_STORED,
             f"{buggable_id} carries no {jira_ticket} link. Check the id and "
@@ -1018,8 +1078,14 @@ def raise_bug(
     Examples:
       maloo raise-bug <test_set_id> --project LU --summary "sanity test_81a FAIL"
       maloo raise-bug <test_set_id>  # uses Maloo's default summary/description
+
+    A test session id is refused with INVALID_INPUT before anything is
+    sent.
     """
     client = _make_client()
+    _refuse_session_id(
+        client, buggable_id, "test set or subtest", "raise-bug", pretty
+    )
     try:
         result = client.raise_bug(
             buggable_id=buggable_id,
@@ -1824,7 +1890,8 @@ def logs(
     """Download and extract test logs for a test set (suite).
 
     TEST_SET_ID is the UUID of the test set. You can find it
-    from 'maloo failures' or 'maloo session' output.
+    from 'maloo failures' or 'maloo session' output.  If the download
+    fails for a test session id, the error says so (INVALID_INPUT).
 
     Extracts under $TMPDIR, in a directory named for the test set:
     every suite's archive holds the same console.*.log names, so a
@@ -1847,6 +1914,10 @@ def logs(
     try:
         data = client.download_logs(test_set_id)
     except Exception as exc:
+        try:
+            _refuse_session_id(client, test_set_id, "test set", "logs", pretty)
+        except Exception:
+            pass
         _error(ErrorCode.DOWNLOAD_FAILED, str(exc), "logs", pretty)
         return
 
