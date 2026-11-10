@@ -2751,8 +2751,7 @@ function showNodeInfo(id) {
                 : 'in the graph through its series'}.${focusOnly() ? ' Faded, and not counted.' : ''}</span>
         </div>`;
     }
-    const tag = (text, on) => '<span style="background:var(--bg-inset);padding:1px 6px;border-radius:3px;font-size:12px;margin-right:4px'
-        + (on ? ';color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)' : '') + '">' + esc(text) + '</span>';
+    const tag = tagChip;
 
     panel.innerHTML = `
         ${anchorBanner}
@@ -2832,6 +2831,23 @@ function showNodeInfo(id) {
     `;
 }
 
+// A hashtag or topic in the panel; `on` outlines one of the ticked (or
+// asked-for) hashtags/topics, `color` gives it a color of its own.
+function tagChip(text, on, color) {
+    const c = on ? 'var(--accent)' : color;
+    return '<span style="background:var(--bg-inset);padding:1px 6px;border-radius:3px;font-size:12px;margin-right:4px'
+        + (c ? `;color:${c};box-shadow:inset 0 0 0 1px ${c}` : '') + '">' + esc(text) + '</span>';
+}
+
+// A change's hashtags as chips, the queue's (master-next) in the color
+// of a queued change's border.
+function hashtagChips(node) {
+    const ref = focusOnly() ? tagSel : ASKED;
+    const queue = (G.conflicts && G.conflicts.next && G.conflicts.next.branch) || 'master-next';
+    return (node.hashtags || []).map(h => tagChip(h, ref.size && inSelection({ hashtags: [h] }, ref),
+        h === queue || h === 'master-next' ? getColors().STATUS.MERGED.border : '')).join('');
+}
+
 // Panel section of a --conflicts build: whether the change lands on
 // the branch after the changes below it, and which other in-flight
 // changes it collides with, itself or through a change below it.
@@ -2880,14 +2896,18 @@ function conflictSection(node) {
     } else {
         onBranch = `Not checked: ${esc(res.reason || res.status)}`;
     }
+    // its own conflicts, then those of the changes below it; the
+    // partners are all in flight, so no status badge
     const stack = new Set([node.id, ...below]);
-    const rows = [];
+    const rows = [], through = [];
     for (const via of [node.id, ...below]) {
         for (const p of G.conflicts.pairs) {
             const other = p.a === via ? p.b : (p.b === via ? p.a : null);
             if (other === null || stack.has(other) || !nodeMap[other]) continue;
-            rows.push(chainItem(nodeMap[other], null, node.id)
-                + `<div class="cfiles">${via !== node.id ? `through ${link(via)} below it: ` : ''}${files(p.files)}</div>`);
+            const tags = hashtagChips(nodeMap[other]);
+            (via === node.id ? rows : through).push(chainItem(nodeMap[other], null, node.id, false, false)
+                + (tags ? `<div class="ctags">${tags}</div>` : '')
+                + `<div class="cfiles">${via !== node.id ? `${link(via)}: ` : ''}${files(p.files)}</div>`);
         }
     }
     let others;
@@ -2909,7 +2929,11 @@ function conflictSection(node) {
         <div class="field">
             <div class="fl">With other in-flight changes${rows.length ? ` (${rows.length})` : ''}</div>
             ${others}
-        </div>`;
+        </div>
+        ${through.length ? `<div class="field">
+            <div class="fl">Through the changes below it (${through.length})</div>
+            <div class="chain">${through.join('')}</div>
+        </div>` : ''}`;
 }
 
 // The Conflicts section's line for the queue (master-next).
@@ -2934,6 +2958,8 @@ function nextField(node, res, link, files) {
         const who = !w ? `a ${name} patch (none alone found)`
             : (w.cn ? link(w.cn) + ' ' : '') + `<span style="color:var(--text-muted)">${esc(w.subject)}</span>, number ${w.position} in the queue`;
         text = `<span style="color:${getColors().conflict};font-weight:600">Conflicts with</span> ${who}: ${files(nr.files)}`;
+        const tags = w && nodeMap[w.cn] ? hashtagChips(nodeMap[w.cn]) : '';
+        if (tags) text += `<div class="ctags" style="margin-left:0">${tags}</div>`;
     } else if (nr.status === 'blocked') {
         text = `Blocked: ${link(nr.by)} below it does not apply on ${name}`;
     } else {
@@ -2985,7 +3011,7 @@ function contextNodeInfo(node) {
         ${node.context_cut ? `<div class="field"><div class="fl">Ancestry</div><div class="fv" style="color:var(--text-muted)">continues further; not walked</div></div>` : ''}`;
 }
 
-function chainItem(node, edge, selectedId, isBelow) {
+function chainItem(node, edge, selectedId, isBelow, showStatus = true) {
     const isAnc = node.id === currentAnchor;
     const isMain = mainChain.has(node.id);
     const cls = isAnc ? 'anchor' : (isMain ? 'main-chain' : '');
@@ -2995,7 +3021,7 @@ function chainItem(node, edge, selectedId, isBelow) {
 
     return `<div class="ci ${cls}" onclick="clickNode(${node.id})" title="${esc(node.subject)}">
         <span class="snum">#${node.id}</span>
-        <span class="sbadge sbadge-${node.status}" style="font-size:9px">${node.status.substring(0, 3)}</span>
+        ${showStatus ? `<span class="sbadge sbadge-${node.status}" style="font-size:9px">${node.status.substring(0, 3)}</span>` : ''}
         ${stale}
         <span class="ssub">${esc(node.subject)}</span>
     </div>`;

@@ -626,7 +626,21 @@ class TestConflicts:
         assert "Does not apply" in info and "after the 1 change below it" in info
         assert "<code>x.c</code>" in info
         assert "clickNode(103)" in info
-        assert "through <a href=\"#\" onclick=\"clickNode(101)" in info
+        assert "Through the changes below it (1)" in info
+        assert '<div class="cfiles"><a href="#" onclick="clickNode(101);return false">#101</a>: ' in info
+
+    def test_its_own_conflicts_come_first(self, tmp_path):
+        """102's own conflict (with 104) heads the list; 101's (with 103)
+        follows in a group of its own. No status badge: all are in flight."""
+        payload = self._payload()
+        payload["conflicts"]["results"]["102"] = {"status": "clean", "under": 101}
+        payload["conflicts"]["pairs"] = [{"a": 101, "b": 103, "files": ["a.c"]},
+                                         {"a": 102, "b": 104, "files": ["b.c"]}]
+        info = self._panel(payload, tmp_path, 102)
+        sec = info[info.index("With other in-flight changes (1)"):info.index("<h2>Tip")]
+        assert sec.index("clickNode(104)") < sec.index("Through the changes below it (1)") < sec.index("clickNode(103)")
+        assert "sbadge" not in sec
+        assert "sbadge-NEW" in info  # the dependency list keeps it
 
     def test_a_change_whose_base_is_not_on_the_branch(self, tmp_path):
         """105 sits on an abandoned change: only its own diff was tried,
@@ -722,6 +736,26 @@ class TestConflicts:
         info = self._panel(payload, tmp_path, 103)
         assert '<a href="https://gerrit.invalid/c/' in info and '/+/58097" target="_blank">' in info
         assert "Not tried: it does not land on master" in self._panel(payload, tmp_path, 102)
+
+    def test_the_conflicting_changes_show_their_hashtags(self, tmp_path):
+        """Which hashtags a conflicting change has, master-next (queued)
+        in the queued border color."""
+        payload = self._with_queue()
+        by_id = {n["id"]: n for n in payload["nodes"]}
+        by_id[103]["hashtags"] = ["master-next", "<b>ec</b>"]
+        by_id[104]["hashtags"] = ["218_review_priority"]
+        info = self._panel(payload, tmp_path, 101)
+        row = info[info.index("With other in-flight changes"):]
+        assert row.index("clickNode(103)") < row.index('<div class="ctags">') < row.index("<code>a.c</code>")
+        assert "color:#8957e5;box-shadow:inset 0 0 0 1px #8957e5\">master-next</span>" in row
+        assert "&lt;b&gt;ec&lt;/b&gt;" in row and "<b>ec</b>" not in info
+        # the queued patch master-next conflicts with
+        info = self._panel(payload, tmp_path, 103)
+        nxt = info[info.index("On master-next"):info.index("With other in-flight changes")]
+        assert "number 3 in the queue" in nxt and ">218_review_priority</span>" in nxt
+        # no hashtags, no line for them
+        by_id[103]["hashtags"] = []
+        assert 'class="ctags"' not in self._panel(payload, tmp_path, 101)
 
     def test_panel_without_conflicts_and_for_merged_changes(self, tmp_path):
         info = self._panel(self._payload(), tmp_path, 104)
