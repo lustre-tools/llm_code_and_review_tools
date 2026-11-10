@@ -763,23 +763,22 @@ class TestConflicts:
         assert 'CI pending</span></div>' in row and 'class="ptag"' not in row
 
     def test_the_conflicting_changes_say_what_they_need(self, tmp_path):
-        """Ready, a CI or Code-Review block, reviews short of the total, or
-        CI still to finish: what the other side needs before it lands."""
+        """Ready, a CI failure or a CR veto, +1s still missing, or CI
+        still to finish: what the other side needs before it lands."""
         ci = lambda j, m: {"verified_votes": [{"name": "Jenkins", "value": j}, {"name": "Maloo", "value": m}],
-                           "verified_pass": j > 0 and m > 0 or (j > 0 and m == 0),
+                           "verified_pass": j > 0 and m >= 0 and not (j < 0 or m < 0),
                            "verified_fail": j < 0 or m < 0}
-        cr = lambda *v: [{"name": f"R{i}", "value": x} for i, x in enumerate(v)]
+        cr = lambda *v: {"cr_votes": [{"name": f"R{i}", "value": x} for i, x in enumerate(v)],
+                         "cr_veto": any(x < 0 for x in v)}
         cases = [
-            ({**ci(1, 1), "cr_votes": cr(1, 1)}, {}, "\u2713 Ready"),
-            ({**ci(1, -1), "cr_votes": cr(1, 1)}, {}, "\u2717 Maloo -1"),
-            ({**ci(-1, 0), "cr_votes": []}, {}, "\u2717 Jenkins -1"),
-            ({**ci(1, 1), "cr_votes": cr(1, 1), "cr_rejected": True}, {}, "\u2717 CR -2"),
-            ({**ci(1, 1), "cr_votes": cr(1, 1) + [{"name": "A", "value": -1}]}, {}, "\u2717 Owner -1"),
-            ({**ci(1, 1), "cr_votes": cr(1)}, {}, "Reviews +1 of +2"),
-            ({**ci(1, 1), "cr_votes": cr(1, -1)}, {}, "Reviews 0 of +2"),
-            ({**ci(1, 1), "cr_votes": cr(1)}, {"is_backport": True}, "\u2713 Ready"),
-            ({**ci(1, 0), "cr_votes": cr(1, 1)}, {}, "CI pending"),
-            ({**ci(1, 1), "cr_votes": cr(1, 1)}, {"is_wip": True}, "WIP</span>"),
+            ({**ci(1, 1), **cr(1, 1)}, {}, "\u2713 Ready"),
+            ({**ci(1, -1), **cr(1, 1)}, {}, "\u2717 Maloo -1"),
+            ({**ci(-1, 0), **cr()}, {}, "\u2717 Jenkins -1"),
+            ({**ci(1, 1), **cr(1, 1, 1, -1)}, {}, "\u2717 CR veto"),
+            ({**ci(1, 1), **cr(1)}, {}, "Reviews 1 of 2 +1s"),
+            ({**ci(1, 1), **cr(1)}, {"is_backport": True}, "\u2713 Ready"),
+            ({**ci(1, 0), **cr(1, 1)}, {}, "CI pending"),
+            ({**ci(1, 1), **cr(1, 1)}, {"is_wip": True}, "WIP</span>"),
         ]
         expr = "JSON.stringify(G.nodes.filter(n => n.id > 200).map(n => landingState(n)))"
         payload = self._payload()
@@ -788,7 +787,7 @@ class TestConflicts:
             payload["edges"].append(_edge(10, 201 + i))
         got = json.loads(_eval(payload, tmp_path, expr))
         assert all(want in g for (_, _, want), g in zip(cases, got)), list(zip([c[2] for c in cases], got))
-        assert "#3fb950" in got[0] and "#f85149" in got[1] and "#388bfd" in got[5]
+        assert "#3fb950" in got[0] and "#f85149" in got[1] and "#a82828" in got[3] and "#388bfd" in got[4]
 
     def test_panel_without_conflicts_and_for_merged_changes(self, tmp_path):
         info = self._panel(self._payload(), tmp_path, 104)
@@ -923,7 +922,7 @@ class TestUnrelatedParents:
 
     def test_it_counts_nowhere_and_says_why_it_is_there(self, tmp_path):
         expr = """JSON.stringify([
-            health.ready + health.pending + health.block + health.maloo
+            health.ready + health.pending + health.veto + health.maloo
                 + health.jenkins + health.other,
             stBuildRecords().map(r => r.id).sort(),
             document.getElementById('legend').innerHTML.includes('Unrelated in-flight parent'),
@@ -1126,61 +1125,68 @@ class TestFocus:
         assert "<b>x</b>" not in out and "#&lt;b&gt;x&lt;/b&gt;" in out
 
 
-class TestCodeReviewTotal:
-    """Code-Review votes add up, a -1 is no veto: +2 in total from
-    everyone but the owner (+1 for a backport) with Jenkins and Maloo
-    +1 is ready. Only a -2 or the owner's own -1 (not ready) blocks."""
+class TestCodeReviewVeto:
+    """Any negative Code-Review vote is a veto, the owner's included;
+    otherwise Jenkins and Maloo +1 and two reviewer +1s (one for a
+    backport) is ready, the owner's own +1 not counted."""
 
     CI = [{"name": "Jenkins", "value": 1}, {"name": "Maloo", "value": 1}]
 
+    @staticmethod
+    def _review(votes, ci=None):
+        return {"verified_votes": ci or TestCodeReviewVeto.CI, "verified_pass": True,
+                "cr_votes": [{"name": n, "value": v} for n, v in votes],
+                "cr_veto": any(v < 0 for _, v in votes),
+                "cr_approved": any(v == 2 for _, v in votes)}
+
     def _verdicts(self, tmp_path, cases):
         nodes = [_node(10, "MERGED", submitted="2026-01-01")]
-        for i, (votes, backport, rejected) in enumerate(cases):
-            nodes.append(_node(101 + i, is_backport=backport, review={
-                "verified_votes": self.CI, "verified_pass": True,
-                "cr_votes": [{"name": n, "value": v} for n, v in votes],
-                "cr_rejected": rejected, "cr_rejected_by": "X" if rejected else ""}))
+        for i, (votes, backport) in enumerate(cases):
+            nodes.append(_node(101 + i, is_backport=backport, review=self._review(votes)))
         payload = _payload(101, nodes, [_edge(10, n["id"]) for n in nodes[1:]])
         expr = """JSON.stringify(G.nodes.filter(n => n.id > 100).map(n =>
-            [reviewHealth(n), nodeLabel(n).split('| CR: ')[1]]))"""
+            [reviewHealth(n), nodeLabel(n).split('| CR: ')[1], landingInfo(n).text]))"""
         return json.loads(_eval(payload, tmp_path, expr))
 
-    def test_the_votes_add_up(self, tmp_path):
+    def test_a_minus_one_is_a_veto(self, tmp_path):
         r = [("R1", 1), ("R2", 1), ("R3", 1)]
         cases = [
-            (r + [("R4", -1)], False, False),     # +2 total: ready
-            ([("R1", 1), ("R4", -1)], False, False),
-            ([("R1", 1), ("R2", 1), ("R4", -1)], True, False),   # backport, +1
-            ([("R1", 1), ("R4", -1)], True, False),
-            ([("R4", -1)], False, False),          # a lone -1: pending, not blocked
-            (r, False, True),                      # a -2 blocks
-            ([("R1", 1), ("A", 1)], False, False),  # the owner's +1 does not count
-            ([("G", 2)], False, False),
-            (r + [("A", -1)], False, False),       # the owner's -1 holds it
-            ([("A", -1)], True, False),
+            (r + [("R4", -1)], False),            # three +1s do not outweigh a -1
+            ([("A", -1)], False),                  # the owner's own -1 too
+            ([("R1", -2)], False),
+            (r[:2], False),                        # two +1s: ready
+            ([("R1", 1)], True),                   # a backport needs one
+            ([("R1", 1)], False),
+            ([("R1", 1), ("A", 1)], False),        # the owner's +1 does not count
+            ([("G", 2)], False),                   # a +2 is one person
         ]
         assert self._verdicts(tmp_path, cases) == [
-            ["good", "+2 = 3\u00d7(+1) 1\u00d7(-1)"],
-            ["pending", "0 = 1\u00d7(+1) 1\u00d7(-1)"],
-            ["good", "+1 = 2\u00d7(+1) 1\u00d7(-1)"],
-            ["pending", "0 = 1\u00d7(+1) 1\u00d7(-1)"],
-            ["pending", "-1 = 1\u00d7(-1)"],
-            ["bad_block", "\u2717 -2"],
-            ["pending", "+1 = 1\u00d7(+1)"],
-            ["good", "+2 = 1\u00d7(+2)"],
-            ["bad_block", "\u2717 owner -1"],
-            ["bad_block", "\u2717 owner -1"],
+            ["bad_veto", "\u2717 VETO", "\u2717 CR veto"],
+            ["bad_veto", "\u2717 VETO", "\u2717 CR veto"],
+            ["bad_veto", "\u2717 VETO", "\u2717 CR veto"],
+            ["good", "2\u00d7(+1)", "\u2713 Ready"],
+            ["good", "1\u00d7(+1)", "\u2713 Ready"],
+            ["pending", "1\u00d7(+1)", "Reviews 1 of 2 +1s"],
+            ["pending", "2\u00d7(+1)", "Reviews 1 of 2 +1s"],
+            ["pending", "\u2713 +2", "Reviews 1 of 2 +1s"],
         ]
 
-    def test_the_panel_says_so(self, tmp_path):
+    def test_the_panel_says_who_vetoed(self, tmp_path):
         nodes = [_node(10, "MERGED", submitted="2026-01-01"),
-                 _node(101, review={"verified_votes": self.CI, "verified_pass": True,
-                                    "cr_votes": [{"name": "R1", "value": 1}, {"name": "R2", "value": 1},
-                                                 {"name": "R3", "value": 1}, {"name": "R4", "value": -1}]})]
-        info = _eval(_payload(101, nodes, [_edge(10, 101)]), tmp_path,
-                     "showNodeInfo(101), document.getElementById('info').innerHTML")
-        assert "Ready" in info and "Total +2 of +2 needed" in info
-        assert "a -1 lowers the total but does not block" in info and "VETO" not in info.upper()
+                 _node(101, review=self._review([("R1", 1), ("R2", 1), ("R3", 1), ("R4", -1)])),
+                 _node(102, review=self._review([("R1", 1)]))]
+        expr = """JSON.stringify([101, 102].map(id => (showNodeInfo(id), document.getElementById('info').innerHTML)))"""
+        vetoed, short = json.loads(_eval(_payload(101, nodes, [_edge(10, 101), _edge(10, 102)]), tmp_path, expr))
+        assert "\u2717 CR veto</span>" in vetoed and "\u2717 Vetoed: -1 by R4" in vetoed
+        assert "reviewer +1" not in vetoed and "Total" not in vetoed
+        assert "1 of 2 reviewer +1s" in short and "Reviews 1 of 2 +1s</span>" in short
+
+    def test_the_chips_and_legend_say_veto(self, tmp_path):
+        nodes = [_node(10, "MERGED", submitted="2026-01-01"),
+                 _node(101, review=self._review([("R1", 1), ("R4", -1)]))]
+        expr = "document.getElementById('stats').innerHTML + document.getElementById('legend').innerHTML"
+        out = _eval(_payload(101, nodes, [_edge(10, 101)]), tmp_path, expr)
+        assert "CR veto" in out and "CR Veto" in out and "blocked" not in out
 
     def test_the_panel_shows_earlier_votes(self, tmp_path):
         """Votes on older patch sets, unfolded: each reviewer's latest, a
@@ -1189,24 +1195,14 @@ class TestCodeReviewTotal:
                    {"name": "R1", "value": 2, "ps": 4}, {"name": "R3", "value": 1, "ps": 1},
                    {"name": "R3", "value": 0, "ps": 2}]
         nodes = [_node(10, "MERGED", submitted="2026-01-01"),
-                 _node(101, review={"verified_votes": self.CI, "verified_pass": True, "cr_history": history}),
-                 _node(102, review={"verified_votes": self.CI, "verified_pass": True})]
+                 _node(101, review={"verified_votes": TestCodeReviewVeto.CI, "verified_pass": True, "cr_history": history}),
+                 _node(102, review={"verified_votes": TestCodeReviewVeto.CI, "verified_pass": True})]
         expr = """JSON.stringify([101, 102].map(id => (showNodeInfo(id), document.getElementById('info').innerHTML)))"""
         with_history, without = json.loads(_eval(_payload(101, nodes, [_edge(10, 101), _edge(10, 102)]), tmp_path, expr))
         assert "Earlier votes" in with_history and "<details" not in with_history
         assert "+2</span>" in with_history and "patch set 4" in with_history and "patch set 2" not in with_history
         assert "R2" in with_history and "R3" not in with_history
         assert "Earlier votes" not in without
-
-    def test_the_panel_says_the_owner_holds_it(self, tmp_path):
-        nodes = [_node(10, "MERGED", submitted="2026-01-01"),
-                 _node(101, review={"verified_votes": self.CI, "verified_pass": True,
-                                    "cr_votes": [{"name": "R1", "value": 1}, {"name": "R2", "value": 1},
-                                                 {"name": "A", "value": -1}]})]
-        info = _eval(_payload(101, nodes, [_edge(10, 101)]), tmp_path,
-                     "showNodeInfo(101), document.getElementById('info').innerHTML")
-        assert "\u2717 Owner -1</span>" in info and "the reviews do not count" in info
-        assert "Total" not in info
 
 
 class TestPickInTheUrl:

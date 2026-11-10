@@ -19,7 +19,7 @@ const ST_COL = {
 const ST_HEALTH = {
     good:        ['#3fb950', 'ready'],
     pending:     ['#388bfd', 'pending'],
-    bad_block:   ['#a82828', 'CR blocked'],
+    bad_veto:    ['#a82828', 'CR veto'],
     bad_maloo:   ['#f85149', 'Maloo -1'],
     bad_jenkins: ['#e8a020', 'Jenkins -1'],
     bad_other:   ['#d63384', 'other -1'],

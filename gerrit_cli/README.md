@@ -333,16 +333,12 @@ includes:
   as a release tag) it is based on. Those ancestors are looked up
   when the graph is built, appear only here, and count nowhere.
 - **Review health coloring** for active changes: green (Jenkins and
-  Maloo +1 and a Code-Review total of +2, +1 for a backport), dark red
-  (CR -2 or the owner's -1), bright red (Maloo -1), orange (Jenkins -1),
-  pink (other -1), blue (pending). Merged = purple, abandoned = grey.
-  Code-Review votes add up and a -1 is no veto: three +1s and a -1 make
-  +2. The owner's +1 does not count. A change is blocked only by a -2
-  or by its owner's own -1, which says it is not ready: the reviews do
-  not count then.
+  Maloo +1 and two CR +1s from people other than the owner, one for a
+  backport), dark red (CR veto: any -1 or -2, the owner's included),
+  bright red (Maloo -1), orange (Jenkins -1), pink (other -1), blue
+  (pending). Merged = purple, abandoned = grey.
 - **Review status line** on each node: verified voters (`J:✓ M:✗`) and
-  the Code-Review total with the votes it adds up from
-  (`CR: +2 = 3×(+1) 1×(-1) | 💬4`).
+  code-review summary (`CR: 3×(+1) | 💬4`).
 - **WIP detection**: changes marked work-in-progress render with a 🚧
   prefix and a dashed border so they stand out from finished patches.
 - **Stale edges** are drawn in orange with dashed lines. Two kinds:
@@ -385,7 +381,7 @@ includes:
 - **Side panel**: click a node to see its details — status, subject,
   author, tags — and a Review card: what it needs to land, the
   verified voters with Jenkins/Maloo links, the code-review votes with
-  reviewer names (the owner's dimmed) and their total, and unresolved
+  reviewer names (the owner's dimmed) and how many +1s it has, and unresolved
   comments (with `--comments`).
 - **Search** (Ctrl/Cmd+F): fuzzy search across change number, subject,
   author, ticket; highlights matches and walks through them with
@@ -473,7 +469,7 @@ includes:
   master"; the node panel gets a Conflicts card: its own conflicts
   first, then those it inherits through the changes below it, each
   conflicting change with its hashtags and what it needs to land
-  (ready, a CI or review block, reviews short, CI pending).
+  (ready, a CI failure or CR veto, +1s missing, CI pending).
   The results are in the payload as `conflicts` (`tip`, `results` per
   change with `parent` / `base` for those two causes, `pairs`, and
   `next` for master-next, `with` naming the queued patch); a collision
