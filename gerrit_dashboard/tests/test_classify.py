@@ -507,30 +507,6 @@ class TestColorAndHeadlineFixes:
         assert r["top_prio"] == 1  # ranking unchanged, only the color escalates
 
 
-class TestReviewTotal:
-    """A -1 is no veto: with the review total met it is a note, not the
-    headline; a -2 still is."""
-
-    GREEN = dict(verified=[vote(JENKINS, 1), vote(MALOO, 1)],
-                 submit_records=[{"labels": [{"label": "Verified", "status": "OK"}]}])
-    TIM = {"_account_id": 931, "name": "Timothy Day", "email": "t@d.com"}
-    PLUS = [vote(ADILGER, 1), vote(OTHER, 1), vote({"_account_id": 777, "name": "C"}, 1)]
-
-    def test_ready_despite_a_minus_one(self):
-        c = mk_change(code_review=self.PLUS + [vote(self.TIM, -1)], **self.GREEN)
-        r = only(snap_for((c, {"mine"})), "mine", "landing")
-        assert r["top_reason"].startswith("all green") and r["tone"] == "ok"
-        note = [i for i in r["items"] if i["rule"] == "negative-later"]
-        assert len(note) == 1 and "Timothy Day voted -1" in note[0]["reason"]
-        assert r["review"]["total"] == 2 and r["review"]["pass"]
-
-    def test_a_minus_two_is_still_the_headline(self):
-        c = mk_change(code_review=self.PLUS + [vote(self.TIM, -2)], **self.GREEN)
-        r = only(snap_for((c, {"mine"})), "action")
-        assert "Timothy Day voted -2" in r["top_reason"] and r["top_prio"] == 1
-        assert r["review"]["blocked"] and not r["review"]["pass"]
-
-
 class TestBranchList:
     def test_branches_sorted_master_first(self):
         c1 = mk_change(number=1, branch="release-1", project="private/example-release")

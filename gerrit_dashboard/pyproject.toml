@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gerrit-dashboard"
-version = "0.1.8"
+version = "0.1.9"
 description = "Gerrit attention dashboard for the Lustre CI"
 license = "BSD-2-Clause"
 requires-python = ">=3.10"

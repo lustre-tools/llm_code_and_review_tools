@@ -55,9 +55,9 @@ class TestOthersPatches:
         c = mk_change(owner=OTHER, code_review=[vote(ADILGER, -2)], **GREEN)
         assert record(c, {"cc"})["blockers"][0]["label"] == "CR -2"
 
-    def test_human_minus_one_is_no_blocker_when_total_is_met(self):
+    def test_human_minus_one_blocks_whatever_else_there_is(self):
         c = mk_change(owner=OTHER, code_review=[vote(ADILGER, -1), vote(ME, 2)], **GREEN)
-        assert record(c, {"cc"})["blockers"] == []
+        assert [b["label"] for b in record(c, {"cc"})["blockers"]] == ["CR -1"]
 
 
 class TestOwnPatches:

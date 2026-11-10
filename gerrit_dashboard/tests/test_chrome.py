@@ -233,48 +233,27 @@ class TestFontFaces:
         assert "data:font/woff2;base64," in css and "/static/" not in css
 
 
-class TestReviewCell:
-    """The R slot shows the Code-Review total; blocked reads R ✗."""
-
-    @pytest.mark.parametrize("template", ["dashboard.html", "classic/dashboard.html"])
-    def test_total_and_block(self, tmp_path, template):
-        from flask import render_template
-        from conftest import ME, vote
-        voters = [{"_account_id": 600 + i, "name": f"R{i}"} for i in range(4)]
-        ok = mk_change(number=1, code_review=[vote(voters[0], 1), vote(voters[1], 1),
-                                              vote(voters[2], 1), vote(voters[3], -1)])
-        held = mk_change(number=2, code_review=[vote(voters[0], 1), vote(ME, -1)])
-        cfg = Config(); cfg.data_dir = tmp_path
-        snap = build_snapshot(mk_bundle([(ok, {"mine"}), (held, {"mine"})]), cfg)
-        app = create_app(cfg, start_refresher=False)
-        with app.test_request_context():
-            html = render_template(template, snapshot=snap, refreshing=False, error=None,
-                                   form_error="", static_mode=True, gerrit_url="https://x", user="alex")
-        assert ">R +2/2</span>" in html
-        assert ">R ✗</span>" in html and "not ready yet" in html
-
-
 class TestBoardFromOtherCode:
     def test_it_renders_instead_of_failing(self, tmp_path):
         """A board saved by an older version may lack what this one's
-        template reads (review.total, once): it is set aside, the page
+        template reads (a review's vote counts): it is set aside, the page
         renders, and the board refreshes when its refresher starts."""
         import json
 
         cfg = Config()
         cfg.data_dir = tmp_path
         store = user_store(tmp_path, "alex")
-        # A review vote: the template reads review.total for it.
+        # A review vote: the template reads review.plus1 for it.
         change = mk_change(code_review=[vote(ADILGER, 1)])
         snap = build_snapshot(mk_bundle([(change, {"mine"})]), cfg)
-        # What the code before saved: the same layout number, and rows
-        # whose review has no "total" yet.
+        # What other code saved: the same layout number, and rows whose
+        # review has no "plus1".
         snap["schema"] = 22
 
         def strip(x):
             if isinstance(x, dict):
                 if "threshold" in x:
-                    x.pop("total", None)
+                    x.pop("plus1", None)
                 for v in x.values():
                     strip(v)
             elif isinstance(x, list):
@@ -282,7 +261,7 @@ class TestBoardFromOtherCode:
                     strip(v)
 
         strip(snap)
-        assert '"total"' not in json.dumps(snap)
+        assert '"plus1"' not in json.dumps(snap)
         (store.data_dir / "snapshot.json").write_text(json.dumps(snap))
         app = create_app(cfg, start_refresher=False)
         app.config.update(TESTING=True)

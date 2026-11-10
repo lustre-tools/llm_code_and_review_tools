@@ -76,10 +76,8 @@ gerrit-dashboard snapshot --cached -o out.html       # re-render without fetchin
 
 Status slots per row: `B` build (jenkins vote + message), `J` janitor
 initial testing, `T` tests (the Maloo vote is the aggregate; per-session
-detail is in the expanded row), `R +n/m` the Code-Review total of the
-non-owner votes against the review threshold: votes add up and a -1 is no
-veto (three +1s and a -1 make +2); only a -2 or the owner's own -1 (not
-ready yet) blocks, shown as `R ✗`. Gerrit's attention set is deliberately ignored — it only
+detail is in the expanded row), `R n/m` non-owner +1/+2 count against the
+review threshold. Gerrit's attention set is deliberately ignored — it only
 works if everyone maintains it.
 
 Times on the page (the header's "updated", the footer, the board index)
@@ -88,7 +86,7 @@ are shown in the viewer's own timezone, with the age next to them
 
 Whatever stops a change landing is shown on every row, not only on your
 own patches: a red chip for a needed rebase, a bot's Code-Review -1, a
-Verified veto or a blocking review vote (build and test failures are the
+Verified veto or anyone's Code-Review -1 or -2 (build and test failures are the
 `B`/`T` slots). On a change you review, are CC'd on or watch, it reads
 "blocked on the owner: …", and a review request on such a change says
 what has to happen first.
@@ -111,7 +109,7 @@ what has to happen first.
 | `GD_NEXT_QUEUES` | `fs/lustre-release:master` | `project:branch` pairs whose `<branch>-next` staging branch marks a change as queued to land |
 | `GD_VERIFIED_OVERRIDE` | *(none)* | emails whose Verified +1 stands in for a missing test-bot vote |
 | `GD_BRANCH_COLORS` | *(none)* | `branch:token` tinting, e.g. `b2_15:tag,b2_16:run` (tokens: tag, run, ok, bad, warn, muted) |
-| `GD_REVIEW_THRESHOLD` | 2 | Code-Review total of non-owner votes a change needs |
+| `GD_REVIEW_THRESHOLD` | 2 | distinct non-owner +1s a change needs |
 | `GD_BACKPORT_REVIEW_THRESHOLD` | 1 | same, for backports (`Lustre-change:` trailer) |
 | `GD_ACTION_RECENT_DAYS` | 7 | P0/P1 older than this → "longstanding" |
 | `GD_NUDGE_DAYS` | 3 | CI-green + unreviewed age before "nudge reviewers" |

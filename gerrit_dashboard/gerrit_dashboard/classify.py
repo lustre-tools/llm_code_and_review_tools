@@ -41,7 +41,6 @@ def build_record(change: dict, bundle: dict, config: Config) -> dict:
                           config.backport_review_threshold)
     except Exception:
         rs = {"plus_one_count": 0, "plus_two_count": 0, "has_any_negative": False,
-              "total": 0, "blocked": False, "owner_hold": False,
               "pass": False, "threshold": config.review_threshold}
     try:
         backport = is_backport(change)
@@ -106,9 +105,6 @@ def build_record(change: dict, bundle: dict, config: Config) -> dict:
             "plus1": rs["plus_one_count"],
             "plus2": rs["plus_two_count"],
             "neg": rs["has_any_negative"],
-            "total": rs["total"],
-            "blocked": rs["blocked"],
-            "owner_hold": rs["owner_hold"],
             "pass": rs["pass"],
             "threshold": rs["threshold"],
             "my_vote": my_vote,
@@ -165,10 +161,10 @@ def _blockers(rec: dict) -> list[dict]:
     """Everything that stops the change landing, whoever owns it.
 
     Each entry is {kind, label, reason, when}: label is the short chip
-    text, reason the sentence for the detail line.  A -1 from a reviewer
-    only blocks while the review total is not met (a -2 or the owner's own
-    -1 always does); the janitor's -1 follows janitor_alert, so a
-    self-healed run does not count.
+    text, reason the sentence for the detail line.  Any negative
+    Code-Review vote from a person is a veto, the owner's included; the
+    janitor's -1 follows janitor_alert, so a self-healed run does not
+    count.
     """
     out = []
     if rec["signals"]["needs_rebase"]:
@@ -201,12 +197,11 @@ def _blockers(rec: dict) -> list[dict]:
             out.append({"kind": "verified", "label": f"Verified {v['value']:+d}",
                         "reason": f"Verified {v['value']:+d} by {v['name']}",
                         "when": v.get("date", "")})
-    if not rec["review"]["pass"]:
-        for v in rec["review"]["humans"]:
-            if v["value"] < 0 and (v["value"] <= -2 or v.get("account_id") == rec["owner_id"]):
-                out.append({"kind": "review", "label": f"CR {v['value']:+d}",
-                            "reason": f"{v['name']} voted {v['value']:+d}",
-                            "when": v.get("date", "")})
+    for v in rec["review"]["humans"]:
+        if v["value"] < 0:
+            out.append({"kind": "review", "label": f"CR {v['value']:+d}",
+                        "reason": f"{v['name']} voted {v['value']:+d}",
+                        "when": v.get("date", "")})
     return out
 
 
@@ -337,21 +332,13 @@ def classify_record(rec: dict, roles: set[str], config: Config) -> None:
                 else:
                     _add(rec, 0, "test-failed", "Maloo voted -1 — tests failed (details on the change)",
                          when=rec["test"]["when"])
-            # A human -1 outranks comment threads as the headline -- unless
-            # the review total is met anyway: a -1 is no veto (a -2 is, and
-            # then the review is not green).
-            review_green = rec["review"]["pass"]
+            # A human -1 outranks comment threads as the headline.
             for v in rec["review"]["humans"]:
-                if v["value"] >= 0 or v.get("account_id") == rec.get("my_id"):
-                    continue
-                if review_green:
-                    _add(rec, 4, "negative-later",
-                         f"{v['name']} voted {v['value']:+d} — the review total is met; "
-                         "address it if a respin is needed", when=v.get("date", ""))
-                else:
+                if v["value"] < 0 and v.get("account_id") != rec.get("my_id"):
                     _add(rec, 1, "negative-review", f"{v['name']} voted {v['value']:+d}",
                          when=v.get("date", ""))
             th = rec["threads"] or {}
+            review_green = rec["review"]["pass"]
             if th.get("my_turn"):
                 who = ""
                 for item in th.get("items", []):

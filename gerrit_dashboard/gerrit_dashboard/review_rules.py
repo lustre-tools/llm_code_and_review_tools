@@ -84,30 +84,24 @@ def review_state(change: dict, threshold: int = 2,
                  backport_threshold: int = 1) -> dict:
     """Code-Review gate state.
 
-    The votes of everyone but the owner add up, and the gate is met at a
-    total of two for a native patch, one for a backport by default: a -1
-    is no veto, three +1s and a -1 make +2.  Only a -2 blocks, or the
-    owner's own negative vote: the owner says the patch is not ready,
-    and the reviews do not count until it is lifted.  The owner's
-    positive votes do not count at all.
+    Distinct non-owner accounts must reach the threshold — two for a
+    native patch, one for a backport by default.  A +2 counts as meeting
+    it on its own (it is effectively several +1s).  Any negative fails
+    the gate, including the owner vetoing their own patch, whose
+    positive votes are otherwise not counted at all.
     """
     owner_id = (change.get("owner") or {}).get("_account_id")
     body = (change.get("labels") or {}).get(REVIEW_LABEL) or {}
     plus_one: set = set()
     plus_two: set = set()
     has_neg = False
-    minus_two = False
-    total = 0
     for e in body.get("all") or []:
+        if e.get("_account_id") == owner_id:
+            continue
         val = e.get("value")
         acc = e.get("_account_id")
         if not isinstance(val, int) or acc is None:
             continue
-        if val <= -2:
-            minus_two = True
-        if acc == owner_id:
-            continue
-        total += val
         if val == 1:
             plus_one.add(acc)
         elif val == 2:
@@ -115,16 +109,15 @@ def review_state(change: dict, threshold: int = 2,
         elif val < 0:
             has_neg = True
 
-    owner_hold = owner_self_review_score(change) < 0
-    blocked = minus_two or owner_hold
+    if owner_self_review_score(change) < 0:
+        has_neg = True
+
     needed = backport_threshold if is_backport(change) else threshold
+    effective = len(plus_one | plus_two)
     return {
         "plus_one_count": len(plus_one),
         "plus_two_count": len(plus_two),
-        "has_any_negative": has_neg or owner_hold,
-        "total": total,
-        "blocked": blocked,
-        "owner_hold": owner_hold,
-        "pass": total >= needed and not blocked,
+        "has_any_negative": has_neg,
+        "pass": effective >= needed and not has_neg,
         "threshold": needed,
     }

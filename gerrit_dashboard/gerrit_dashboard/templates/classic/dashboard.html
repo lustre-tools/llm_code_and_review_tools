@@ -368,10 +368,10 @@
     {%- elif r.test.state == 'FAIL' %}<span class="st bad" title="tests (Maloo): {{ r.test.enforced_fail }} enforced failing">T ✗{{ r.test.enforced_fail }}</span>
     {%- elif r.test.state == 'RUNNING' %}<span class="st run" title="tests (Maloo): running">T …</span>
     {%- else %}<span class="st none" title="tests (Maloo): no results">T –</span>{% endif %}
-    {%- set t = r.review.total %}
-    {%- if r.review.blocked %}<span class="st bad" title="reviews: {{ 'the owner\'s -1: not ready yet' if r.review.owner_hold else 'a -2 blocks' }}">R ✗</span>
-    {%- elif r.review.pass %}<span class="st ok" title="reviews: {{ '%+d' % t }} of +{{ r.review.threshold }} needed (votes add up; a -1 is no veto)">R {{ '%+d' % t }}/{{ r.review.threshold }}</span>
-    {%- elif r.review.plus1 or r.review.plus2 or r.review.neg %}<span class="st" title="reviews: {{ '%+d' % t }} of +{{ r.review.threshold }} needed{{ '; a -1 lowers the total' if r.review.neg }}">R {{ '%+d' % t }}/{{ r.review.threshold }}{{ '−' if r.review.neg }}</span>
+    {%- set n = r.review.plus1 + r.review.plus2 %}
+    {%- if r.review.neg %}<span class="st bad" title="reviews: negative vote standing">R {{ n }}/{{ r.review.threshold }}−</span>
+    {%- elif r.review.pass %}<span class="st ok" title="reviews: threshold met{{ ', has +2' if r.review.plus2 }}">R {{ n }}/{{ r.review.threshold }}{{ '+2' if r.review.plus2 }}</span>
+    {%- elif n %}<span class="st" title="reviews: below threshold">R {{ n }}/{{ r.review.threshold }}</span>
     {%- else %}<span class="st none" title="reviews: none yet">R 0/{{ r.review.threshold }}</span>{% endif %}
   </span>
 {%- endmacro %}
