@@ -120,10 +120,10 @@ def local(tmp_path):
 
 
 def _check(gerrit: Gerrit, local: Path, patches: list[Patch], owners=None,
-           lookup=None) -> dict:
+           lookup=None, focus=None) -> dict:
     return check_conflicts(Repo(local), str(gerrit.path), "master", patches,
                            gerrit.owner if owners is None else owners,
-                           lookup=lookup, workers=2)
+                           lookup=lookup, workers=2, focus=focus)
 
 
 def _status(result: dict) -> dict[int, str]:

@@ -294,9 +294,14 @@ def check_conflicts(
     change_lookup: Callable[[list[str]], dict[str, int]] | None = None,
     log: Callable[[str], None] | None = None,
     workers: int | None = None,
+    focus: set[int] | None = None,
 ) -> dict[str, Any]:
     """Trial-merge `patches` against the fetched tip of `branch` and
     against each other.
+
+    With `focus`, the changes in it form the target stack and every other
+    patch is a candidate: each candidate is tried against the target in
+    both merge orders ("focus_pairs") instead of the graph's pairs.
 
     `owners` maps known patch set commits to (change, status): a parent
     owned by one of `patches` is the change a patch stands on. `lookup`
@@ -332,7 +337,13 @@ def check_conflicts(
         _check_tip(repo, st, tip, workers)
         own = repo.changed_files({st.patches[cn].commit: st.base[cn] for cn in st.applied})
         own_by_cn = {cn: own.get(st.patches[cn].commit, set()) for cn in st.applied}
-        pairs, tried, errors = _check_pairs(repo, st, own_by_cn, workers)
+        pairs, tried, errors = [], 0, 0
+        focus_pairs: list[dict[str, Any]] = []
+        already: list[int] = []
+        if focus:
+            focus_pairs, already = _check_focus_pairs(repo, st, focus, workers)
+        else:
+            pairs, tried, errors = _check_pairs(repo, st, own_by_cn, workers)
         queue = (_check_next(repo, st, branch, tip, next_branch, next_tip, change_lookup, workers)
                  if next_branch and next_tip else None)
 
@@ -346,16 +357,19 @@ def check_conflicts(
     for res in st.results.values():
         summary[res["status"]] += 1
     say(", ".join(f"{n} {s}" for s, n in sorted(summary.items()))
-        + f"; {tried} pair(s) tried, {len(pairs)} conflicting"
-        + (f", {errors} failed" if errors else ""))
-    out = {
+        + (f"; {len(focus_pairs)} focus pair(s) tried" if focus else
+           f"; {tried} pair(s) tried, {len(pairs)} conflicting"
+           + (f", {errors} failed" if errors else "")))
+    out: dict[str, Any] = {
         "branch": branch,
         "tip": tip,
         "results": {str(cn): st.results[cn] for cn in sorted(st.results)},
-        "pairs": pairs,
-        "pairs_tried": tried,
-        "pair_errors": errors,
     }
+    if focus:
+        out["focus_pairs"] = focus_pairs
+        out["already_conflicting"] = already
+    else:
+        out.update({"pairs": pairs, "pairs_tried": tried, "pair_errors": errors})
     if queue is not None:
         counts = defaultdict(int)
         for res in queue.get("results", {}).values():
@@ -633,3 +647,53 @@ def _check_pairs(repo: Repo, st: _State, own: dict[int, set[str]],
         if files:
             pairs.append({"a": a, "b": b, "files": sorted(files)})
     return pairs, len(tried), errors
+
+
+def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
+                       workers: int) -> tuple[list[dict[str, Any]], list[int]]:
+    """Every candidate (a patch outside `focus`) against the focus stack
+    in both merge orders. Returns (pairs, candidates whose own stack does
+    not apply on the tip)."""
+    targets = [cn for cn in focus if cn in st.stack
+               and not any(cn in st.stack[o] for o in focus if o != cn)]
+    if not targets:
+        return [], []
+    target = max(targets)
+    tstack = set(st.stack[target])
+    candidates = sorted(cn for cn in st.patches if cn not in focus
+                        and cn not in tstack and target not in st.stack[cn])
+    already = [cn for cn in candidates
+               if st.results[cn]["status"] in ("conflict", "blocked")]
+    if target not in st.applied:
+        return [], already
+    # candidates on one stack share their lower changes' picks
+    memo: dict[int, _Pick] = {}
+
+    def land(start: str, zs: list[int], cache: dict[int, _Pick] | None) -> tuple[_Pick, int | None]:
+        cur = start
+        for z in zs:
+            pick = cache.get(z) if cache is not None else None
+            if pick is None:
+                pick = repo.pick(cur, st.patches[z].commit, st.base[z])
+                if cache is not None:
+                    cache[z] = pick
+            if not pick.ok:
+                return pick, z
+            cur = pick.commit
+        return _Pick("clean"), None
+
+    def one(c: int) -> dict[str, Any]:
+        cset = set(st.stack[c])
+        t_first, at = land(st.applied[target], [z for z in st.stack[c] if z not in tstack], memo)
+        c_first, _ = land(st.applied[c], [z for z in st.stack[target] if z not in cset], None)
+        files = sorted(set(t_first.files) | set(c_first.files))
+        return {
+            "target": target, "other": c,
+            "landing": {"target_first": t_first.status, "candidate_first": c_first.status,
+                        "files": files},
+            "via": at if at is not None and at != c else None,
+        }
+
+    todo = [c for c in candidates if c in st.applied]
+    with ThreadPoolExecutor(workers) as pool:
+        return list(pool.map(one, todo)), already
