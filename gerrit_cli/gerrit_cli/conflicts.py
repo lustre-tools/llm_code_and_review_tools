@@ -174,6 +174,12 @@ class Repo:
     def is_ancestor(self, commit: str, of: str) -> bool:
         return self._run("merge-base", "--is-ancestor", commit, of).returncode == 0
 
+    def count(self, range_: str) -> int:
+        return int(self._run("rev-list", "--count", range_).stdout.strip() or 0)
+
+    def merge_base(self, a: str, b: str) -> str:
+        return self._run("merge-base", a, b).stdout.strip()
+
     def missing(self, commits: list[str]) -> set[str]:
         r = self._run("cat-file", "--batch-check=%(objectname) %(objecttype)",
                       input="".join(c + "\n" for c in commits))
@@ -783,3 +789,35 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
     todo = [c for c in candidates if c in st.applied]
     with ThreadPoolExecutor(workers) as pool:
         return list(pool.map(one, todo)), already
+
+
+def base_info(repo: Repo, result: dict, patches: dict[int, Patch], focus_stack: list[int],
+              tip: str, tiers: dict[int, str]) -> dict:
+    """Whether the target stack sits on the branch and what a rebase
+    would move. The target is the top of focus_stack, `result` is the
+    check_conflicts result."""
+    bottom = patches[focus_stack[0]].commit
+    parents = repo.parents([bottom]).get(bottom) or []
+    base = parents[0] if parents else None
+    on_branch = base is not None and repo.is_ancestor(base, tip)
+    mb = repo.merge_base(base, tip) if base else ""
+    behind = repo.count(f"{mb}..{tip}") if mb else 0
+    below = [{"cn": cn, "tier": tiers.get(cn, "other")} for cn in focus_stack[:-1]]
+    moves = any(p["tier"] in ("frozen", "lands-first") for p in below)
+    return {"on_branch": on_branch, "behind": behind, "parents": below,
+            "rebase": "would move ready/queued parents" if moves else "possible"}
+
+
+def own_stack(result: dict, focus_stack: list[int], children: list[int]) -> dict:
+    """How the target's own parents and children fare against the branch."""
+    res = result["results"]
+
+    def entry(cn: int, with_parent: bool) -> dict:
+        r = res.get(str(cn), {})
+        e: dict[str, Any] = {"cn": cn, "status": r.get("status", "skipped")}
+        if with_parent and r.get("parent"):
+            e["parent"] = r["parent"]
+        return e
+
+    return {"parents": [entry(cn, True) for cn in focus_stack[:-1]],
+            "children": [entry(cn, False) for cn in children]}
