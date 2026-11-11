@@ -794,8 +794,8 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
 def base_info(repo: Repo, result: dict, patches: dict[int, Patch], focus_stack: list[int],
               tip: str, tiers: dict[int, str]) -> dict:
     """Whether the target stack sits on the branch and what a rebase
-    would move. The target is the top of focus_stack, `result` is the
-    check_conflicts result."""
+    would move. The target is the top of focus_stack. `result` (the
+    check_conflicts result) is currently unused."""
     bottom = patches[focus_stack[0]].commit
     parents = repo.parents([bottom]).get(bottom) or []
     base = parents[0] if parents else None

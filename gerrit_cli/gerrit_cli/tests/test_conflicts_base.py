@@ -43,8 +43,36 @@ def test_child_that_no_longer_applies_is_reported(gerrit, local):
     t = gerrit.change(1, base, {"b.c": _text({2: "T"})})
     ch = gerrit.change(2, t.commit, {"a.c": _text({5: "C"})})
     r = _check(gerrit, local, [t, ch], focus={1})
-    r["results"]["2"]["status"] = "conflict"
-    own = own_stack(r, [1], [2])
-    assert own["parents"] == []
-    assert own["children"] == [{"cn": 2, "status": "conflict"}]
-    assert own_stack(r, [3, 1], [])["parents"][0]["cn"] == 3
+    assert r["results"]["2"]["status"] == "conflict"
+    assert own_stack(r, [1], [2]) == {"parents": [],
+                                      "children": [{"cn": 2, "status": "conflict"}]}
+
+
+def test_child_that_still_applies_is_clean(gerrit, local):
+    t = gerrit.change(1, gerrit.master, {"b.c": _text({2: "T"})})
+    ch = gerrit.change(2, t.commit, {"a.c": _text({5: "C"})})
+    r = _check(gerrit, local, [t, ch], focus={1})
+    assert own_stack(r, [1], [2])["children"] == [{"cn": 2, "status": "clean"}]
+
+
+def test_parent_entry_carries_the_old_patchset_marker():
+    r = {"results": {"1": {"status": "conflict", "parent": {"cn": 9, "files": ["a.c"]}},
+                     "2": {"status": "clean"}}}
+    own = own_stack(r, [1, 2, 3], [])
+    assert own["parents"] == [
+        {"cn": 1, "status": "conflict", "parent": {"cn": 9, "files": ["a.c"]}},
+        {"cn": 2, "status": "clean"}]
+    assert own_stack(r, [1, 3], [])["parents"][0]["cn"] == 1
+    assert own_stack(r, [1], [3])["children"] == [{"cn": 3, "status": "skipped"}]
+
+
+def test_off_branch_bottom_parent_is_behind_via_merge_base(gerrit, local):
+    base = gerrit.master
+    p = gerrit.change(1, base, {"a.c": _text({2: "P"})})
+    gerrit.advance({"b.c": _text({1: "m1"})})
+    gerrit.advance({"b.c": _text({1: "m2"})})
+    t = gerrit.change(2, p.commit, {"a.c": _text({2: "P", 15: "T"})})
+    r = _check(gerrit, local, [p, t], focus={1, 2})
+    info = base_info(Repo(local), r, {2: t}, [2], r["tip"], {})
+    assert info["on_branch"] is False
+    assert info["behind"] == 2
