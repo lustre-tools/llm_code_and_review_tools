@@ -48,6 +48,11 @@ HOLD_UNANSWERED_REVIEWED = 20
 # freest reviewer of all, and put people who never review above those who do.
 SELDOM_COOLDOWN_DAYS = 14
 SELDOM_FACTOR = 0.5
+# No Code-Review vote on Gerrit in this many days: not asked at all (Andreas,
+# 2026-11-11: people who left were still added every fortnight).  Unless they
+# own changes created in the window: then a newcomer, who may be one of a
+# change's reviewers beside a senior one (the caller's rule).
+ACTIVE_DAYS = 90
 # A Reviewed-by on this share of the commits, and at least this many, is the
 # gatekeeper who lands them, not an expert in these files.
 GATEKEEPER_SHARE = 0.8
@@ -98,9 +103,33 @@ def account_load(client, account_id, days=LOAD_DAYS):
         f"-label:Code-Review=ANY,user={who}"))
     reviewed = _count(client, f"label:Code-Review=ANY,user={who} {age}")
     load = {"window_days": days, "waiting": waiting, "reviewed": reviewed}
+    if reviewed == 0:
+        load.update(activity(client, who))
     if LOAD_COUNT_CAP in (waiting, reviewed):
         load["capped_at"] = LOAD_COUNT_CAP
     return load
+
+
+def activity(client, who, days=ACTIVE_DAYS, now=None):
+    """{active_days, reviewed_active, owned_new} for someone with no vote in
+    the load window: their Code-Review votes over the longer window, and if
+    none, how many changes of theirs were created in it (not old ones
+    someone else refreshed)."""
+    out = {"active_days": days,
+           "reviewed_active": _count(
+               client, f"label:Code-Review=ANY,user={who} -age:{days}d")}
+    if out["reviewed_active"] == 0:
+        now = now or datetime.now(UTC)
+        owned = client.search_all(f"owner:{who} -age:{days}d",
+                                  max_results=LOAD_COUNT_CAP,
+                                  page_size=LOAD_COUNT_CAP,
+                                  options=["SKIP_DIFFSTAT"]) or []
+        def age(change):  # Gerrit writes "2026-11-01 12:34:56.000000000"
+            stamp = str(change.get("created") or "")[:19].replace(" ", "T")
+            return _days_since(stamp + "Z", now)
+        out["owned_new"] = sum(1 for change in owned
+                               if (a := age(change)) is not None and a <= days)
+    return out
 
 
 def add_gerrit_load(client, candidates, workers=LOAD_WORKERS):
@@ -201,6 +230,14 @@ def weigh(candidate, now=None):
         factors["queue"] = round((reviewed + 1) / (reviewed + 1 + waiting), 2)
         if reviewed == 0:
             seldom = f"no Code-Review vote on Gerrit in {load['window_days']} days"
+        if load.get("reviewed_active") == 0:
+            days = load.get("active_days", ACTIVE_DAYS)
+            if load.get("owned_new"):
+                candidate["newcomer"] = True
+            else:
+                candidate["inactive"] = True
+                holds.append(f"inactive: no Code-Review vote on Gerrit in "
+                             f"{days} days and no change of their own")
     asked = candidate.get("asked")
     if asked:
         pending = int(asked.get("pending") or 0)

@@ -10,6 +10,8 @@ import pytest
 from gerrit_cli.commands import reviewer_load
 from gerrit_cli.commands.reviewer_load import (
     AskedError,
+    account_load,
+    activity,
     add_gerrit_load,
     balance,
     read_asked,
@@ -271,8 +273,79 @@ def test_compact_keeps_only_what_the_choice_needs(
         assert set(entry) == {
             "name", "email", "account_id", "score", "reviewed",
             "last_reviewed", "on_change", "balanced", "asked", "answered",
-            "pending", "last_asked", "hold_at", "hold"}
+            "pending", "last_asked", "hold_at", "hold", "senior"}
     first = next(c for c in data["candidates"] if c["email"] == top["email"])
     assert (first["asked"], first["answered"], first["pending"]) == (3, 1, 1)
     assert all(set(e) == {"name", "email", "reason"} for e in data["excluded"])
     assert len(json.dumps(data)) < len(json.dumps(full))
+
+
+class ActivityClient:
+    """Counts by query, and the changes a person owns."""
+
+    def __init__(self, votes_30, votes_90, owned):
+        self.votes = {"30d": votes_30, "90d": votes_90}
+        self.owned = owned
+        self.queries = []
+
+    def search_all(self, query, max_results=500, page_size=100, options=None):
+        self.queries.append(query)
+        if query.startswith("owner:"):
+            return self.owned
+        if query.startswith("reviewer:"):
+            return [{}] * 2
+        return [{}] * self.votes["90d" if "-age:90d" in query else "30d"]
+
+
+def _activity(votes_90, owned):
+    client = ActivityClient(0, votes_90, owned)
+    return account_load(client, 42), client
+
+
+def test_no_vote_in_90_days_and_no_own_change_is_inactive_and_held():
+    # Andreas, 2026-11-11: people who had left were still added every 14
+    # days, weighted down but never dropped.
+    load, _ = _activity(0, [])
+    assert load["reviewed_active"] == 0 and load["owned_new"] == 0
+    gone = {"name": "Gone", "score": 400, "load": load}
+    here = {"name": "Here", "score": 1,
+            "load": {"window_days": 30, "waiting": 0, "reviewed": 5}}
+    ordered = balance([gone, here], now=NOW)
+    assert [c["name"] for c in ordered] == ["Here", "Gone"]
+    assert gone["inactive"] is True
+    assert any(h.startswith("inactive: no Code-Review vote on Gerrit in 90 days")
+               for h in gone["hold"])
+
+
+def test_a_vote_in_90_days_is_active_however_quiet_the_month():
+    load, client = _activity(1, [{"created": "2020-01-01 00:00:00.000000000"}])
+    assert load["reviewed_active"] == 1 and "owned_new" not in load
+    assert not any(q.startswith("owner:") for q in client.queries)
+    person = {"name": "Slow", "score": 9, "load": load}
+    balance([person], now=NOW)
+    assert "inactive" not in person and "newcomer" not in person
+
+
+def test_someone_who_only_uploads_new_changes_is_a_newcomer_not_held():
+    now = datetime.now(UTC)
+    recent = now.strftime("%Y-%m-%d %H:%M:%S.000000000")
+    # An old change of theirs that someone refreshed does not count.
+    load, client = _activity(0, [{"created": recent},
+                                 {"created": "2019-05-05 10:00:00.000000000"}])
+    assert load["owned_new"] == 1
+    owner = next(q for q in client.queries if q.startswith("owner:"))
+    assert owner == "owner:42 -age:90d"
+    person = {"name": "New", "score": 3, "load": load}
+    balance([person], now=now)
+    assert person["newcomer"] is True and person["hold"] is None
+    assert "inactive" not in person
+
+
+def test_activity_counts_only_changes_created_in_the_window():
+    now = datetime(2026, 11, 11, tzinfo=UTC)
+    client = ActivityClient(0, 0, [
+        {"created": "2026-11-01 00:00:00.000000000"},
+        {"created": "2026-08-01 00:00:00.000000000"},
+        {"created": ""}])
+    assert activity(client, 7, now=now) == {
+        "active_days": 90, "reviewed_active": 0, "owned_new": 1}

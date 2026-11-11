@@ -14,8 +14,8 @@ import pytest
 
 from gerrit_cli import cli
 from gerrit_cli.commands.reviewer_candidates import (
-    Identities, cmd_reviewer_candidates, git_history, normalize_name,
-    rank_candidates,
+    Identities, cmd_reviewer_candidates, git_history, mark_senior,
+    normalize_name, rank_candidates, review_counts,
 )
 
 
@@ -263,3 +263,25 @@ def test_too_few_people_widens_the_window_and_says_so(
     code, data = _run(monkeypatch, capsys, repo, url=None,
                       paths=["lustre/tests/mmap_sanity.c"], widen_to=0)
     assert "widened_from" not in data and data["candidates"] == []
+
+
+def test_senior_counts_reviews_tree_wide_under_any_alias(repo):
+    # Andreas, 2026-11-11: a senior developer has a Reviewed-by on 20+
+    # landed commits in 12 months, anywhere in the tree.
+    ids, counts = review_counts(str(repo), "HEAD")
+    people = [{"name": "Andreas Dilger",
+               "email": "adilger@thelustrecollective.com"},
+              {"name": "Jian Yu", "email": "yujian@whamcloud.com"},
+              {"name": "Someone", "email": "x@y",
+               "aliases": {"emails": ["neilb@suse.de"]}},
+              {"name": "Stranger", "email": "s@z"}]
+    mark_senior(people, ids, counts, threshold=3)
+    assert [(p["reviews_12m"], p["senior"]) for p in people] == [
+        (3, True), (2, False), (2, False), (0, False)]
+
+
+def test_the_command_says_who_is_senior(monkeypatch, capsys, repo):
+    code, data = _run(monkeypatch, capsys, repo)
+    assert code == 0
+    assert all(isinstance(c["senior"], bool) and "reviews_12m" in c
+               for c in data["candidates"])

@@ -38,6 +38,12 @@ BALANCE_POOL = 3
 # history in 12 months).
 WIDEN_BELOW = 3
 
+# Senior: a Reviewed-by on this many landed commits anywhere in the tree over
+# SENIOR_MONTHS (Andreas, 2026-11-11).  A newcomer reviewing a change of
+# substance needs one beside them.
+SENIOR_REVIEWS = 20
+SENIOR_MONTHS = 12
+
 ORDER_RULES = {
     "score": "by score (git history: reviews x2, authorship x1), highest "
              "first",
@@ -49,7 +55,12 @@ ORDER_RULES = {
                 "holds each person. eligible lists the people shown with "
                 "no hold who are not already on the change, in order. "
                 "held_omitted names held people the limit left out, so "
-                "they are not added by hand",
+                "they are not added by hand. Inactive: no Code-Review vote on "
+                "Gerrit in 90 days and no change of their own created then; "
+                "held, never asked. Newcomer: no vote in 90 days but owns "
+                "new changes; at most one per change, beside a senior "
+                "reviewer on changes of substance. Senior: Reviewed-by on "
+                "20+ commits tree-wide in 12 months",
 }
 
 
@@ -125,6 +136,39 @@ def git_history(repo, ref, paths, months):
             "files": [line for line in rest.splitlines() if line.strip()],
         })
     return commits
+
+
+def review_counts(repo, ref, months=SENIOR_MONTHS):
+    """(Identities, Counter of root -> commits carrying their Reviewed-by)
+    over the whole tree's non-merge commits on ref in the window."""
+    cmd = ["git", "-C", repo, "log", "--no-merges",
+           f"--since={months} months ago", f"--format={_RS}%B", ref]
+    proc = subprocess.run(cmd, capture_output=True, text=True,
+                          errors="replace")
+    if proc.returncode != 0:
+        raise ValueError(f"git log failed in {repo}: {proc.stderr.strip()}")
+    ids, tally = Identities(), []
+    for body in proc.stdout.split(_RS)[1:]:
+        tally.append({ids.add(n, e) for n, e in _TRAILER.findall(body)})
+    counts = Counter()
+    for roots in tally:
+        counts.update({ids._find(r) for r in roots if r is not None})
+    return ids, counts
+
+
+def mark_senior(candidates, ids, counts, threshold=SENIOR_REVIEWS):
+    """Set senior and reviews_12m on each candidate, by any of their
+    names or emails."""
+    for entry in candidates:
+        aliases = entry.get("aliases") or {}
+        roots = {ids.lookup(n, "") for n in [entry.get("name")]
+                 + list(aliases.get("names") or [])}
+        roots |= {ids.lookup("", e) for e in [entry.get("email")]
+                  + list(aliases.get("emails") or [])}
+        total = max((counts[ids._find(r)] for r in roots if r is not None),
+                    default=0)
+        entry["reviews_12m"] = total
+        entry["senior"] = total >= threshold
 
 
 def _bot(name, email):
@@ -272,7 +316,10 @@ def compact_candidate(entry):
     well they know the files, their load and asks, and any hold."""
     out = {key: entry.get(key) for key in (
         "name", "email", "account_id", "score", "reviewed", "last_reviewed",
-        "on_change")}
+        "on_change", "senior")}
+    for flag in ("newcomer", "inactive"):
+        if entry.get(flag):
+            out[flag] = True
     if "balanced" in entry:
         out["balanced"] = entry["balanced"]
     if "load" in entry:
@@ -385,9 +432,12 @@ def cmd_reviewer_candidates(args):
                 # people silently, and runs went looking for them.
                 data["held_omitted"] = [
                     {"name": c.get("name"), "email": c.get("email"),
-                     "hold": c["hold"]}
+                     "hold": c["hold"],
+                     **({"inactive": True} if c.get("inactive") else {})}
                     for c in candidates[args.limit:] if c.get("hold")]
             candidates = candidates[:args.limit]
+        ids, counts = review_counts(repo, args.ref)
+        mark_senior(candidates, ids, counts)
         if args.brief:
             for entry in candidates + excluded:
                 entry["files"] = [f["path"] for f in entry["files"]]
