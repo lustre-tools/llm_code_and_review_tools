@@ -1,6 +1,6 @@
 """Conflict regions and their kind (conflict_hunks.py)."""
 
-from gerrit_cli.conflict_hunks import classify, conflict_regions
+from gerrit_cli.conflict_hunks import classify, conflict_regions, silent_collisions
 import subprocess
 
 from gerrit_cli.conflicts import Patch, Repo, change_ref, check_conflicts
@@ -139,3 +139,52 @@ def test_deleted_file_pair_carries_the_note(gerrit, local):
     r = check_conflicts(Repo(local), str(gerrit.path), "master", [t, Patch(2, 1, d)],
                         gerrit.owner, workers=2, focus={1}, hunks=True)
     assert _hunks(r, 2)["hunks"]["notes"] == {"a.c": "no text regions"}
+
+
+_SH = "lustre/tests/sanity.sh"
+
+
+def test_both_adding_test_312_is_a_duplicate():
+    one = "test_311() {\n}\n"
+    t = one + "test_312() {\n}\n"
+    got = silent_collisions({_SH: (t, t, one + "test_312() {\n}\n" + "test_312() {\n}\n")})
+    assert got == [{"check": "duplicate-test", "file": _SH, "what": "test_312"}]
+
+
+def test_a_test_both_already_had_is_not_reported():
+    t = "test_5() {\n}\nrun_test 5 \"x\"\n"
+    assert silent_collisions({_SH: (t, t, t)}) == []
+
+
+def test_two_fail_locs_with_one_value():
+    h = "include/obd_support.h"
+    t = "#define OBD_FAIL_A 0x1439\n#define OBD_FAIL_B 0x143A\n"
+    c = "#define OBD_FAIL_A 0x1439\n#define OBD_FAIL_C 0x143a\n"
+    m = t + "#define OBD_FAIL_C 0x143a\n"
+    assert silent_collisions({h: (t, c, m)}) == [
+        {"check": "duplicate-value", "file": h, "what": "0x143a"}]
+
+
+def test_unmatched_paths_run_nothing():
+    t = "test_312() {\n}\n"
+    assert silent_collisions({"lustre/foo.c": (t, t, t + t)}) == []
+
+
+def test_clean_merge_with_duplicate_test_is_reported_by_the_engine(gerrit, local):
+    gerrit.advance({"lustre/tests/x.sh": "a\n" + "\n" * 30 + "z\n"})
+    top = "a\ntest_312() {\n}\n" + "\n" * 30 + "z\n"
+    bot = "a\n" + "\n" * 30 + "z\ntest_312() {\n}\n"
+    t = gerrit.change(1, gerrit.master, {"lustre/tests/x.sh": top})
+    c = gerrit.change(2, gerrit.master, {"lustre/tests/x.sh": bot})
+    r = _check(gerrit, local, [t, c], focus={1})
+    pair = next(p for p in r["focus_pairs"] if p["other"] == 2)
+    assert pair["landing"]["target_first"] == "clean"
+    assert pair["silent"] == [{"check": "duplicate-test", "file": "lustre/tests/x.sh",
+                               "what": "test_312"}]
+
+
+def test_pairs_without_collisions_carry_an_empty_silent_list(gerrit, local):
+    t = gerrit.change(1, gerrit.master, {"a.c": _text({2: "T"})})
+    c = gerrit.change(2, gerrit.master, {"a.c": _text({15: "C"})})
+    r = _check(gerrit, local, [t, c], focus={1})
+    assert r["focus_pairs"][0]["silent"] == []

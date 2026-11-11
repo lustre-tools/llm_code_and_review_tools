@@ -8,7 +8,10 @@ inside the scratch object directory (`Repo.merge_tree_diff3`).
 from __future__ import annotations
 
 import difflib
-from typing import Any
+import re
+from collections import Counter
+from fnmatch import fnmatch
+from typing import Any, Callable
 
 from gerrit_cli.conflicts import Repo
 
@@ -96,3 +99,37 @@ def conflict_regions(repo: Repo, onto: str, commit: str, parent: str,
                 "truncated": truncated,
             })
     return result
+
+
+def _test_keys(text: str) -> list[str]:
+    return ([f"test_{m}" for m in re.findall(r"^test_(\w+)\(\)", text, re.M)]
+            + [f"run_test {m}" for m in re.findall(r"^\s*run_test\s+(\w+)", text, re.M)])
+
+
+def _fail_values(text: str) -> list[str]:
+    return [m.lower() for m in
+            re.findall(r"#define\s+OBD_FAIL_\w+\s+(0x[0-9a-fA-F]+)", text)]
+
+
+# (path glob, text -> keys that must stay unique). fnmatch's `*` crosses `/`.
+SILENT_CHECKS: list[tuple[str, Callable[[str], list[str]]]] = [
+    ("lustre/tests/*.sh", _test_keys),
+    ("*/obd_support.h", _fail_values),
+]
+
+
+def silent_collisions(texts: dict[str, tuple[str, str, str]]) -> list[dict]:
+    """Keys the merged text holds more often than either side alone:
+    both sides added the same one, though the merge had no conflict.
+    `texts` maps path to (target-only, candidate-only, merged)."""
+    out: list[dict] = []
+    for path, (target, cand, merged) in sorted(texts.items()):
+        for glob, keys in SILENT_CHECKS:
+            if not fnmatch(path, glob):
+                continue
+            t, c, m = Counter(keys(target)), Counter(keys(cand)), Counter(keys(merged))
+            for key in sorted(m):
+                if m[key] > t[key] and m[key] > c[key]:
+                    out.append({"check": "duplicate-value" if key.startswith("0x")
+                                else "duplicate-test", "file": path, "what": key})
+    return out

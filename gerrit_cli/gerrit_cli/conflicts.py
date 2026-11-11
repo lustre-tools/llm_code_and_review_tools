@@ -682,7 +682,7 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
     in both merge orders. Returns (pairs, candidates whose own stack does
     not apply on the tip). With `hunks`, each pair carries the conflict
     regions of every order that conflicts."""
-    from gerrit_cli.conflict_hunks import conflict_regions
+    from gerrit_cli.conflict_hunks import conflict_regions, silent_collisions
 
     targets = [cn for cn in focus if cn in st.stack
                and not any(cn in st.stack[o] for o in focus if o != cn)]
@@ -713,7 +713,7 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
             if not pick.ok:
                 return pick, z
             cur = pick.commit
-        return _Pick("clean"), None
+        return _Pick("clean", commit=cur), None
 
     def regions(into: dict[str, list], pick: _Pick, onto: str, z: int,
                 carried: list[int], order: str) -> None:
@@ -730,6 +730,19 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
                                  list(pick.files), added)
         for path, regs in found.items():
             into.setdefault(path, []).extend(dict(r, order=order) for r in regs)
+
+    def silent(c: int, merged: _Pick) -> list[dict]:
+        if merged.status != "clean":
+            return []
+        commits = {st.patches[z].commit: st.base[z] for z in st.stack[target] + st.stack[c]}
+        own = repo.changed_files(commits)
+        both = set().union(*(own.get(st.patches[z].commit, set()) for z in st.stack[target])) \
+            & set().union(*(own.get(st.patches[z].commit, set()) for z in st.stack[c]))
+        texts = {path: (repo.blob(st.applied[target], path) or "",
+                        repo.blob(st.applied[c], path) or "",
+                        repo.blob(merged.commit, path) or "")
+                 for path in sorted(both)}
+        return silent_collisions(texts)
 
     def one(c: int) -> dict[str, Any]:
         cset = set(st.stack[c])
@@ -748,6 +761,7 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
                             "files": sorted(set(t_up.files) | set(c_up.files))},
             "via": at if at is not None and at != c else None,
         }
+        pair["silent"] = silent(c, t_first)
         if hunks:
             landing: dict[str, list] = {}
             uploaded: dict[str, list] = {}
