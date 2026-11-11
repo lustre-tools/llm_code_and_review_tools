@@ -116,7 +116,7 @@ class Repo:
         self._trees: dict[str, str] = {}
 
     def _run(self, *args: str, scratch: bool = False, input: str | None = None,
-             timeout: int = 600) -> subprocess.CompletedProcess[str]:
+             timeout: int = 600, binary: bool = False) -> subprocess.CompletedProcess[Any]:
         env = None
         if scratch:
             env = dict(os.environ, GIT_OBJECT_DIRECTORY=self._scratch or "",
@@ -124,7 +124,7 @@ class Repo:
         try:
             return subprocess.run(
                 ["git", "-C", str(self.path), *args], capture_output=True,
-                text=True, input=input, timeout=timeout, env=env,
+                text=not binary, input=input, timeout=timeout, env=env,
             )
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(args, _TIMED_OUT, "", f"timed out after {timeout} s")
@@ -273,15 +273,16 @@ class Repo:
         return lines[0]
 
     def blob(self, tree: str, path: str) -> str | None:
-        r = self._run("cat-file", "-p", f"{tree}:{path}", scratch=True)
-        return r.stdout if r.returncode == 0 else None
+        r = self._run("cat-file", "-p", f"{tree}:{path}", scratch=True, binary=True)
+        return r.stdout.decode(errors="replace") if r.returncode == 0 else None
 
     def own_added(self, commit: str, parent: str, paths: list[str]) -> dict[str, set[str]]:
         """The `+` lines of commit's own diff against parent, per path."""
         out: dict[str, set[str]] = {}
         for path in paths:
-            r = self._run("diff", "--no-color", "-U0", parent, commit, "--", path, scratch=True)
-            out[path] = {ln[1:] for ln in r.stdout.splitlines()
+            r = self._run("diff", "--no-color", "-U0", parent, commit, "--", path,
+                          scratch=True, binary=True)
+            out[path] = {ln[1:] for ln in r.stdout.decode(errors="replace").splitlines()
                          if ln.startswith("+") and not ln.startswith("+++")}
         return out
 
@@ -759,6 +760,10 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
             regions(uploaded, t_up, st.patches[c].commit, target, [c], "target_on_theirs")
             regions(uploaded, c_up, st.patches[target].commit, c, [target], "theirs_on_target")
             pair["hunks"] = {"landing": landing, "as_uploaded": uploaded}
+            textless = {p for sect in (landing, uploaded) for p in sect} \
+                - {p for sect in (landing, uploaded) for p, regs in sect.items() if regs}
+            if textless:
+                pair["hunks"]["notes"] = {p: "no text regions" for p in sorted(textless)}
         return pair
 
     todo = [c for c in candidates if c in st.applied]

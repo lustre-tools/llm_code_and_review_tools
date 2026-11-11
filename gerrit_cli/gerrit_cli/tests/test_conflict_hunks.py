@@ -1,8 +1,10 @@
 """Conflict regions and their kind (conflict_hunks.py)."""
 
 from gerrit_cli.conflict_hunks import classify, conflict_regions
-from gerrit_cli.conflicts import Repo, check_conflicts
-from gerrit_cli.tests.test_graph_conflicts import _check, _git, _text, gerrit, local  # noqa: F401
+import subprocess
+
+from gerrit_cli.conflicts import Patch, Repo, change_ref, check_conflicts
+from gerrit_cli.tests.test_graph_conflicts import _ENV, _check, _git, _text, gerrit, local  # noqa: F401
 
 
 def test_both_append_after_the_same_line_is_insert_insert():
@@ -90,3 +92,50 @@ def test_branch_moved_under_the_candidate_is_context(gerrit, local):
                         gerrit.owner, workers=2, focus={1}, hunks=True)
     kinds = {x["order"]: x["kind"] for x in _hunks(r, 2)["hunks"]["as_uploaded"]["a.c"]}
     assert kinds == {"target_on_theirs": "context"}
+
+
+def _raw_change(gerrit, cn, parent, content: bytes):
+    blob = subprocess.run(["git", "-C", str(gerrit.path), "hash-object", "-w", "--stdin"],
+                          input=content, capture_output=True, check=True).stdout.decode().strip()
+    env = dict(_ENV, GIT_INDEX_FILE=str(gerrit.index))
+    _git(gerrit.path, "read-tree", parent, env=env)
+    _git(gerrit.path, "update-index", "--add", "--cacheinfo", f"100644,{blob},a.c", env=env)
+    tree = _git(gerrit.path, "write-tree", env=env)
+    sha = _git(gerrit.path, "commit-tree", tree, "-p", parent, "-m",
+               f"change {cn}\n\nChange-Id: I{cn:040x}")
+    _git(gerrit.path, "update-ref", change_ref(cn, 1), sha)
+    gerrit.owner[sha] = (cn, "NEW")
+    return Patch(cn, 1, sha)
+
+
+def test_binary_conflict_is_noted_not_raised(gerrit, local):
+    t = _raw_change(gerrit, 1, gerrit.master, b"\x00\xff\xfe T\n")
+    c = _raw_change(gerrit, 2, gerrit.master, b"\x00\xff\xfe C\n")
+    r = check_conflicts(Repo(local), str(gerrit.path), "master", [t, c],
+                        gerrit.owner, workers=2, focus={1}, hunks=True)
+    h = _hunks(r, 2)["hunks"]
+    assert h["landing"]["a.c"] == [] and h["notes"] == {"a.c": "no text regions"}
+
+
+def test_non_utf8_text_conflict_still_has_regions(gerrit, local):
+    base = _text({}).encode()
+    t = _raw_change(gerrit, 1, gerrit.master, base.replace(b"line 5", b"T\xe9"))
+    c = _raw_change(gerrit, 2, gerrit.master, base.replace(b"line 5", b"C\xe9"))
+    r = check_conflicts(Repo(local), str(gerrit.path), "master", [t, c],
+                        gerrit.owner, workers=2, focus={1}, hunks=True)
+    h = _hunks(r, 2)["hunks"]
+    assert h["landing"]["a.c"] and "notes" not in h
+
+
+def test_deleted_file_pair_carries_the_note(gerrit, local):
+    t = gerrit.change(1, gerrit.master, {"a.c": _text({5: "T"})})
+    listing = _git(gerrit.path, "ls-tree", gerrit.master).splitlines()
+    tree = _git(gerrit.path, "mktree",
+                input="\n".join(x for x in listing if not x.endswith("\ta.c")) + "\n")
+    d = _git(gerrit.path, "commit-tree", tree, "-p", gerrit.master, "-m",
+             "del\n\nChange-Id: I" + "2".zfill(40))
+    _git(gerrit.path, "update-ref", change_ref(2, 1), d)
+    gerrit.owner[d] = (2, "NEW")
+    r = check_conflicts(Repo(local), str(gerrit.path), "master", [t, Patch(2, 1, d)],
+                        gerrit.owner, workers=2, focus={1}, hunks=True)
+    assert _hunks(r, 2)["hunks"]["notes"] == {"a.c": "no text regions"}
