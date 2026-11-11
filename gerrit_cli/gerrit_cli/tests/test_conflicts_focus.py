@@ -80,3 +80,22 @@ def test_a_focus_stack_pairs_candidates_against_its_top(gerrit, local):
     assert [(p["target"], p["other"]) for p in r["focus_pairs"]] == [(2, 3)]
     assert _pair(r, 3)["landing"] == {"target_first": "conflict",
                                       "candidate_first": "conflict", "files": ["a.c"]}
+
+
+def test_stale_base_candidate_conflicts_only_as_uploaded(gerrit, local):
+    old = gerrit.master
+    gerrit.advance({"a.c": _text({6: "M"})})
+    c = gerrit.change(2, old, {"a.c": _text({4: "C"})})
+    t = gerrit.change(1, gerrit.master, {"a.c": _text({6: "M", 7: "T"})})
+    p = _pair(_check(gerrit, local, [t, c], focus={1}), 2)
+    assert p["landing"]["target_first"] == "clean"
+    assert p["as_uploaded"]["target_on_theirs"] == "conflict"
+    assert p["as_uploaded"]["files"] == ["a.c"]
+
+
+def test_as_uploaded_is_clean_when_both_models_are_clean(gerrit, local):
+    t = gerrit.change(1, gerrit.master, {"a.c": _text({2: "T"})})
+    c = gerrit.change(2, gerrit.master, {"a.c": _text({15: "C"})})
+    p = _pair(_check(gerrit, local, [t, c], focus={1}), 2)
+    assert p["as_uploaded"] == {"target_on_theirs": "clean",
+                                "theirs_on_target": "clean", "files": []}

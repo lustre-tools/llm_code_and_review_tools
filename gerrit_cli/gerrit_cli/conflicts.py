@@ -690,10 +690,14 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
         t_first, at = land(st.applied[target], [z for z in st.stack[c] if z not in tstack], memo)
         c_first, _ = land(st.applied[c], [z for z in st.stack[target] if z not in cset], None)
         files = sorted(set(t_first.files) | set(c_first.files))
+        t_up = repo.pick(st.patches[c].commit, st.patches[target].commit, st.base[target])
+        c_up = repo.pick(st.patches[target].commit, st.patches[c].commit, st.base[c])
         return {
             "target": target, "other": c,
             "landing": {"target_first": t_first.status, "candidate_first": c_first.status,
                         "files": files},
+            "as_uploaded": {"target_on_theirs": t_up.status, "theirs_on_target": c_up.status,
+                            "files": sorted(set(t_up.files) | set(c_up.files))},
             "via": at if at is not None and at != c else None,
         }
 
