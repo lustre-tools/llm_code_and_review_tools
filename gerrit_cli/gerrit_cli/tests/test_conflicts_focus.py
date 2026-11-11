@@ -1,6 +1,8 @@
 """Focus mode of check_conflicts: one target stack against candidates."""
 
-from gerrit_cli.conflicts import Patch
+import pytest
+
+from gerrit_cli.conflicts import ConflictCheckError, Patch
 from gerrit_cli.tests.test_graph_conflicts import _check, _text, gerrit, local  # noqa: F401
 
 
@@ -61,3 +63,20 @@ def test_an_unfetchable_candidate_is_an_error_not_a_crash(gerrit, local):
     r = _check(gerrit, local, [t, c, bad], focus={1})
     assert r["results"]["3"]["status"] == "error"
     assert [p["other"] for p in r["focus_pairs"]] == [2]
+
+
+def test_focus_with_two_independent_tops_is_an_error(gerrit, local):
+    a = gerrit.change(1, gerrit.master, {"a.c": _text({2: "A"})})
+    b = gerrit.change(5, gerrit.master, {"a.c": _text({15: "B"})})
+    with pytest.raises(ConflictCheckError, match="tops 1, 5"):
+        _check(gerrit, local, [a, b], focus={1, 5})
+
+
+def test_a_focus_stack_pairs_candidates_against_its_top(gerrit, local):
+    t1 = gerrit.change(1, gerrit.master, {"a.c": _text({5: "T"})})
+    t2 = gerrit.change(2, t1.commit, {"a.c": _text({5: "T", 15: "T2"})})
+    c = gerrit.change(3, gerrit.master, {"a.c": _text({5: "C"})})
+    r = _check(gerrit, local, [t1, t2, c], focus={1, 2})
+    assert [(p["target"], p["other"]) for p in r["focus_pairs"]] == [(2, 3)]
+    assert _pair(r, 3)["landing"] == {"target_first": "conflict",
+                                      "candidate_first": "conflict", "files": ["a.c"]}

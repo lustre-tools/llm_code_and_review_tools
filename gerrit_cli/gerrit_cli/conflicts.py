@@ -658,7 +658,10 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
                and not any(cn in st.stack[o] for o in focus if o != cn)]
     if not targets:
         return [], []
-    target = max(targets)
+    if len(targets) > 1:
+        raise ConflictCheckError(
+            "focus is not one stack: tops " + ", ".join(map(str, sorted(targets))))
+    target = targets[0]
     tstack = set(st.stack[target])
     candidates = sorted(cn for cn in st.patches if cn not in focus
                         and cn not in tstack and target not in st.stack[cn])
