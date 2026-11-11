@@ -149,6 +149,7 @@ from .commands import reviewer_candidates as _cmd_reviewer_candidates
 from .commands import meta as _cmd_meta
 from .commands import reintegration as _cmd_reintegration
 from .commands import upload as _cmd_upload
+from .commands import conflicts as _cmd_conflicts
 from .commands.check import cmd_check
 
 # ---------------------------------------------------------------------------
@@ -212,6 +213,8 @@ cmd_examples = _cmd_meta.cmd_examples
 cmd_describe = _cmd_meta.cmd_describe
 
 cmd_upload = _cmd_upload.cmd_upload
+
+cmd_conflicts = _cmd_conflicts.cmd_conflicts
 
 cmd_continue_reintegration = _cmd_reintegration.cmd_continue_reintegration
 cmd_skip_reintegration = _cmd_reintegration.cmd_skip_reintegration
@@ -425,6 +428,7 @@ def build_handlers():
         'done': cmd_done,
         'ack': cmd_ack,
         'graph': cmd_graph,
+        'conflicts': cmd_conflicts,
         'describe': cmd_describe,
     }
 

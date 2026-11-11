@@ -500,6 +500,37 @@ def get_tool_description() -> ToolDescription:
                 next_actions=["reviewers", "add-reviewer"],
             ),
             Command(
+                name="conflicts",
+                description="Trial-merge a change (or a local commit standing in for it) against the open changes on its branch that touch its files and are likely to land soon; says per collision which side should move",
+                usage="gc conflicts <CHANGE> [--repo PATH] [--commit SHA] [--hunks] [--max-age DAYS] [--with CN ...] [--all]",
+                arguments=[
+                    Argument(name="change", description="Gerrit change URL, number or Change-Id", required=True),
+                    Argument(name="--repo", description="Local clone of the change's project", default="."),
+                    Argument(name="--commit", description="Local commit to test as the change instead of its uploaded patchset"),
+                    Argument(name="--hunks", description="Include conflict-marker regions and their kind", type="boolean", default=False),
+                    Argument(name="--max-age", description="Days without an update after which same-effort and other changes are ignored", type="integer", default=30),
+                    Argument(name="--with", description="Change to check whatever the filters say (repeatable)", type="integer"),
+                    Argument(name="--all", description="Also trial-merge the 'other' tier", type="boolean", default=False),
+                ],
+                examples=["gc conflicts 12345 --repo ~/lustre-release",
+                          "gc conflicts 12345 --repo ~/lustre-release --commit HEAD --hunks"],
+                output_fields=[
+                    "change", "patchset", "commit", "tested_commit", "subject",
+                    "owner", "me", "readiness", "tier_of_target",
+                    "release_hashtags", "project", "branch", "tip", "status",
+                    "base.on_branch", "base.behind", "base.parents[]",
+                    "base.rebase", "on_branch", "on_next", "own_stack",
+                    "conflicts[].cn", "conflicts[].tier", "conflicts[].readiness",
+                    "conflicts[].fix_side", "conflicts[].files",
+                    "conflicts[].landing", "conflicts[].as_uploaded",
+                    "conflicts[].via", "conflicts[].silent", "conflicts[].hunks",
+                    "as_uploaded_only[]", "silent_only[]", "already_conflicting",
+                    "not_tried.other", "clean", "skipped[].reason", "errors[]",
+                    "counts",
+                ],
+                next_actions=["info", "related", "rebase"],
+            ),
+            Command(
                 name="add-reviewer",
                 description=("Add one or more reviewers (fuzzy name matching). All names are "
                              "matched before anyone is added. Each entry of 'added' is Gerrit's "

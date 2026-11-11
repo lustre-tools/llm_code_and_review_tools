@@ -1,4 +1,6 @@
-"""Trial merges of a graph's in-flight changes (`gc graph --conflicts REPO`).
+"""Trial merges of in-flight changes: a graph's (`gc graph --conflicts
+REPO`), or one change against the changes likely to land around it
+(`gc conflicts`, which passes `focus`).
 
 A change lands the way Gerrit's cherry-pick submit lands it: its own diff
 (parent commit -> commit) picked onto the branch after the in-flight
@@ -46,6 +48,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 _OID_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _CHANGE_ID_RE = re.compile(r"^Change-Id:\s*(I[0-9a-f]{40})\s*$", re.M)
@@ -53,6 +56,7 @@ _CHANGE_ID_RE = re.compile(r"^Change-Id:\s*(I[0-9a-f]{40})\s*$", re.M)
 _MIN_GIT = (2, 40)
 _TIMED_OUT = -1
 _FETCH_BATCH = 50
+_LOOKUP_BATCH = 30
 # The throwaway commits get fixed ids and need no user.name/email.
 _COMMIT_ENV = {
     "GIT_AUTHOR_NAME": "gc graph", "GIT_AUTHOR_EMAIL": "gc-graph@invalid",
@@ -75,11 +79,14 @@ class Patch:
     cn: int
     ps: int
     commit: str
+    # the commit its own diff starts from when that is not its parent: a
+    # local change whose stack has commits without a change of their own
+    base: str = ""
 
 
 @dataclass(frozen=True)
 class _Pick:
-    status: str  # "clean" | "empty" | "conflict" | "error"
+    status: str  # "clean" | "empty" | "conflict" | "error" | "skipped"
     commit: str = ""
     files: tuple[str, ...] = ()
     detail: str = ""
@@ -92,6 +99,45 @@ class _Pick:
 
 def change_ref(cn: int, ps: int) -> str:
     return f"refs/changes/{cn % 100:02d}/{cn}/{ps}"
+
+
+def changes_by_commit(get: Callable[[str], Any], shas: list[str], batch: int = _LOOKUP_BATCH,
+                      options: str = "") -> list[dict[str, Any]]:
+    """The changes (all revisions) that have one of `shas` as a patch set.
+    `get` is a REST client's get; `options` extra `&o=` parameters."""
+    out = []
+    for i in range(0, len(shas), batch):
+        query = " OR ".join(f"commit:{h}" for h in shas[i:i + batch])
+        out.extend(get(f"/changes/?q={quote(query, safe=':+ ')}&o=ALL_REVISIONS{options}&n=500")
+                   or [])
+    return out
+
+
+def commit_lookup(get: Callable[[str], Any], batch: int = _LOOKUP_BATCH
+                  ) -> Callable[[list[str]], dict[str, tuple[int, str]]]:
+    """check_conflicts' `lookup`: (change, status) owning each commit."""
+    def lookup(shas: list[str]) -> dict[str, tuple[int, str]]:
+        found = {}
+        for change in changes_by_commit(get, shas, batch):
+            for h in change.get("revisions") or {}:
+                if h in shas:
+                    found[h] = (change.get("_number", 0), change.get("status", ""))
+        return found
+    return lookup
+
+
+def change_id_lookup(get: Callable[[str], Any], project: str, branch: str,
+                     batch: int = _LOOKUP_BATCH) -> Callable[[list[str]], dict[str, int]]:
+    """check_conflicts' `change_lookup`: Change-Id -> change number."""
+    def change_lookup(change_ids: list[str]) -> dict[str, int]:
+        found = {}
+        for i in range(0, len(change_ids), batch):
+            ids = " OR ".join(f"change:{c}" for c in change_ids[i:i + batch])
+            query = f"({ids}) project:{project} branch:{branch}"
+            for change in get(f"/changes/?q={quote(query, safe=':+ ()')}&n=500") or []:
+                found[change.get("change_id", "")] = change.get("_number", 0)
+        return found
+    return change_lookup
 
 
 class Repo:
@@ -170,6 +216,11 @@ class Repo:
                 ids = _CHANGE_ID_RE.findall(parts[2])
                 out[parts[0]] = (parts[1], ids[-1] if ids else "")
         return out
+
+    def rev_parse(self, rev: str) -> str | None:
+        """The commit `rev` names, None when there is none."""
+        r = self._run("rev-parse", "--verify", "--quiet", "--end-of-options", f"{rev}^{{commit}}")
+        return (r.stdout.strip() or None) if r.returncode == 0 else None
 
     def is_ancestor(self, commit: str, of: str) -> bool:
         return self._run("merge-base", "--is-ancestor", commit, of).returncode == 0
@@ -328,13 +379,17 @@ def check_conflicts(
     workers: int | None = None,
     focus: set[int] | None = None,
     hunks: bool = False,
+    pair_with: set[int] | None = None,
 ) -> dict[str, Any]:
     """Trial-merge `patches` against the fetched tip of `branch` and
     against each other.
 
     With `focus`, the changes in it form the target stack and every other
     patch is a candidate: each candidate is tried against the target in
-    both merge orders ("focus_pairs") instead of the graph's pairs.
+    both merge orders ("focus_pairs") instead of the graph's pairs;
+    `pair_with` limits that to the candidates in it (the other patches
+    are there for the stacks they hold up). A target that does not apply
+    on the tip is still tried as uploaded, its landing orders "skipped".
 
     `owners` maps known patch set commits to (change, status): a parent
     owned by one of `patches` is the change a patch stands on. `lookup`
@@ -374,7 +429,8 @@ def check_conflicts(
         focus_pairs: list[dict[str, Any]] = []
         already: list[int] = []
         if focus:
-            focus_pairs, already = _check_focus_pairs(repo, st, focus, workers, hunks)
+            focus_pairs, already = _check_focus_pairs(repo, st, focus, workers, hunks,
+                                                      pair_with)
         else:
             pairs, tried, errors = _check_pairs(repo, st, own_by_cn, workers)
         queue = (_check_next(repo, st, branch, tip, next_branch, next_tip, change_lookup, workers)
@@ -422,7 +478,7 @@ def _link(repo: Repo, st: _State, missing: set[str],
         if p.commit in missing:
             st.results[cn] = {"status": "error", "reason": "commit could not be fetched"}
             continue
-        ps = parents.get(p.commit, [])
+        ps = [p.base] if p.base else parents.get(p.commit, [])
         if len(ps) != 1:
             st.results[cn] = {"status": "skipped",
                               "reason": "merge commit" if ps else "root commit"}
@@ -682,8 +738,9 @@ def _check_pairs(repo: Repo, st: _State, own: dict[int, set[str]],
     return pairs, len(tried), errors
 
 
-def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
-                       workers: int, hunks: bool = False) -> tuple[list[dict[str, Any]], list[int]]:
+def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
+                       hunks: bool = False, pair_with: set[int] | None = None,
+                       ) -> tuple[list[dict[str, Any]], list[int]]:
     """Every candidate (a patch outside `focus`) against the focus stack
     in both merge orders. Returns (pairs, candidates whose own stack does
     not apply on the tip). With `hunks`, each pair carries the conflict
@@ -700,11 +757,13 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
     target = targets[0]
     tstack = set(st.stack[target])
     candidates = sorted(cn for cn in st.patches if cn not in focus
-                        and cn not in tstack and target not in st.stack[cn])
+                        and cn not in tstack and target not in st.stack[cn]
+                        and (pair_with is None or cn in pair_with))
     already = [cn for cn in candidates
                if st.results[cn]["status"] in ("conflict", "blocked")]
-    if target not in st.applied:
+    if target not in st.base:
         return [], already
+    landed = target in st.applied
     # candidates on one stack share their lower changes' picks
     memo: dict[int, _Pick] = {}
 
@@ -754,8 +813,12 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
         cset = set(st.stack[c])
         tz = [z for z in st.stack[c] if z not in tstack]
         cz = [z for z in st.stack[target] if z not in cset]
-        t_first, at = land(st.applied[target], tz, memo)
-        c_first, cat = land(st.applied[c], cz, None)
+        if landed:
+            t_first, at = land(st.applied[target], tz, memo)
+            c_first, cat = land(st.applied[c], cz, None)
+        else:
+            t_first = c_first = _Pick("skipped")
+            at = cat = None
         files = sorted(set(t_first.files) | set(c_first.files))
         t_up = repo.pick(st.patches[c].commit, st.patches[target].commit, st.base[target])
         c_up = repo.pick(st.patches[target].commit, st.patches[c].commit, st.base[c])
@@ -786,7 +849,7 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
                 pair["hunks"]["notes"] = {p: "no text regions" for p in sorted(textless)}
         return pair
 
-    todo = [c for c in candidates if c in st.applied]
+    todo = [c for c in candidates if c in (st.applied if landed else st.base)]
     with ThreadPoolExecutor(workers) as pool:
         return list(pool.map(one, todo)), already
 
@@ -796,8 +859,8 @@ def base_info(repo: Repo, result: dict, patches: dict[int, Patch], focus_stack: 
     """Whether the target stack sits on the branch and what a rebase
     would move. The target is the top of focus_stack. `result` (the
     check_conflicts result) is currently unused."""
-    bottom = patches[focus_stack[0]].commit
-    parents = repo.parents([bottom]).get(bottom) or []
+    bottom = patches[focus_stack[0]]
+    parents = [bottom.base] if bottom.base else repo.parents([bottom.commit]).get(bottom.commit)
     base = parents[0] if parents else None
     on_branch = base is not None and repo.is_ancestor(base, tip)
     mb = repo.merge_base(base, tip) if base else ""

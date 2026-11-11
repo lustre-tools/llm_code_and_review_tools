@@ -501,6 +501,70 @@ includes:
 - **Double-click or middle-click** a node to open the change in Gerrit.
   Middle-click opens in a background tab.
 
+## Conflicts With Other Changes
+
+`gc conflicts` asks, for one change: which open changes that will
+plausibly land soon does it collide with, on which files and hunks, and
+which side should move? It trial-merges, so it does not rely on Gerrit's
+mergeable flag or `conflicts:` search.
+
+```bash
+gc conflicts 12345 --repo ~/lustre-release            # the uploaded patchset
+gc conflicts 12345 --repo ~/lustre-release --commit HEAD --hunks
+                                                      # a local rearrangement
+gc conflicts 12345 --with 23456 --all                 # force one in, try every tier
+```
+
+- **Candidates**: open changes on the same project and branch whose
+  files overlap the change's stack (Gerrit `file:` queries), minus its
+  own parents and children. Skipped, with the reason, are those that
+  need a new patchset anyway: a Code-Review -1/-2 from a human other
+  than the owner, a Jenkins -1, or an in-flight change below them with
+  either. A change queued in `<branch>-next` is never skipped.
+- **Tiers**: `frozen` (queued in `<branch>-next`, when it is not
+  stale), `lands-first` (ready, or a `*_review_blocker` /
+  `*_review_priority` hashtag), `same-effort` (shares a hashtag or the
+  topic; `pw_*`, `fortestonly`, `forbuildonly` and the release hashtags
+  do not count) and `other`. `same-effort` and `other` must have been
+  updated within `--max-age` days (default 30). `other` is only listed
+  (`not_tried`) unless `--all`. `--with CN` checks a change whatever the
+  filters say.
+- **Two models, both orders**: `landing` picks each side's stack onto
+  the branch tip in turn (what cherry-pick submit does);
+  `as_uploaded` picks each change's own diff onto the other's uploaded
+  commit (what the other owner, or CI on a stale base, sees). A pair is
+  in `conflicts` when any of the four conflicts; `via` names the
+  candidate's ancestor the conflict is at. Duplicate test definitions or
+  fail_loc values that merge cleanly are reported in `silent_only`.
+  `--hunks` adds the conflict regions with their kind (`insert-insert`,
+  `edit-edit`, `adjacent`, `context`).
+- **Who moves** (`fix_side`, independent of who runs it):
+
+  | target \\ candidate | frozen | lands-first | same-effort | other |
+  |---|---|---|---|---|
+  | frozen | coordinate | candidate | candidate | candidate |
+  | lands-first | target | coordinate | candidate | candidate |
+  | pending | target | target | coordinate | candidate |
+
+  Within `lands-first` a release blocker outranks priority, which
+  outranks plain ready. `owner` against `me` (`GERRIT_USER`) tells
+  whose move it is.
+- **The change itself**: `on_branch` and `on_next` (against
+  `<branch>-next`, naming the queued change it collides with); `base`
+  (on the branch or not, commits behind, in-flight parents with their
+  tier, and whether a rebase would move ready or queued parents);
+  `own_stack` (parents and children: with `--commit`, whether each child
+  still applies on the rearranged change). When the change does not
+  apply on the tip, `status` is `needs-rebase`, `conflicts` is `null`,
+  and `as_uploaded_only` has every pair tried as uploaded.
+- `--commit SHA`: the local commit and the local commits below it down
+  to the branch; each commit's last Change-Id names its change, and a
+  commit without an open change belongs to the change above it. The
+  stack must contain the change, as its top change.
+- `--repo` (default `.`) must be a clone whose remote fetches the
+  change's project; only objects are fetched into it (see *Sharing a
+  clone* above). Needs git 2.40 or newer.
+
 ## Commands
 
 ### Comments & Review
@@ -544,6 +608,7 @@ series-comments <URL>            # Get comments for all patches in series
 series-info <URL>                # Info for all patches (patchsets, reviews, CI)
 related <URL>                    # Relation chain (series) for a change
 graph <URL>                      # Interactive DAG visualizer (see above)
+conflicts <URL> --repo DIR       # Collisions with changes landing soon (see above)
 info <URL>                       # Show change info (reviewers, CI, merge conflict)
 diff <URL> [A [B]]               # What changed between two patchsets
                                  # (default: newest against the one before)

@@ -1385,6 +1385,75 @@ def add_graph_parser(subparsers):
     return parser
 
 
+def add_conflicts_parser(subparsers):
+    """Add the 'conflicts' subcommand parser."""
+    parser = subparsers.add_parser(
+        "conflicts",
+        help="Which open changes a change collides with, and which side should move",
+        description="Trial-merge one change (or a local commit standing in "
+                    "for it) against the open changes on its branch that "
+                    "touch its files and are likely to land soon: queued in "
+                    "<branch>-next, ready or release priority, or sharing a "
+                    "hashtag or topic with it. Both merge orders, both as "
+                    "landed on the branch tip and as uploaded; also "
+                    "duplicate tests and fail_loc values that merge "
+                    "cleanly. 'gc explain conflicts' describes the output.",
+    )
+    parser.add_argument(
+        "change",
+        help="Gerrit change URL, number or Change-Id",
+    )
+    parser.add_argument(
+        "--repo",
+        default=".",
+        metavar="PATH",
+        help="Local clone of the change's project (default: the current "
+             "directory). Only fetched objects are added to it.",
+    )
+    parser.add_argument(
+        "--commit",
+        default=None,
+        metavar="SHA",
+        help="Test this local commit (and the local commits below it) "
+             "as the change instead of its uploaded patchset",
+    )
+    parser.add_argument(
+        "--hunks",
+        action="store_true",
+        help="Include each conflict's marker regions and their kind "
+             "(insert-insert, edit-edit, adjacent, context)",
+    )
+    parser.add_argument(
+        "--max-age",
+        type=int,
+        default=30,
+        metavar="DAYS",
+        help="Ignore changes not updated for this many days, unless "
+             "queued, ready or release priority (default: 30)",
+    )
+    parser.add_argument(
+        "--with",
+        dest="with_",
+        type=int,
+        action="append",
+        metavar="CN",
+        help="Check against this change whatever the filters say "
+             "(repeatable)",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Also trial-merge the 'other' tier (changes with nothing "
+             "pushing them to land soon)",
+    )
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
 def add_describe_parser(subparsers):
     """Add the 'describe' subcommand parser."""
     parser = subparsers.add_parser(
@@ -1872,6 +1941,7 @@ def setup_parsers(subparsers, handlers):
 
     # Visualization
     add_graph_parser(subparsers).set_defaults(func=handlers['graph'])
+    add_conflicts_parser(subparsers).set_defaults(func=handlers['conflicts'])
 
     # Self-description (LLM discoverability)
     add_describe_parser(subparsers).set_defaults(func=handlers['describe'])

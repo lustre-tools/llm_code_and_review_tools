@@ -1092,7 +1092,7 @@ that conflicts or has nothing to do.
                 "description": "Rebase the change on the server",
             },
         ],
-        "related": ["related", "checkout", "upload"],
+        "related": ["related", "checkout", "upload", "conflicts"],
     },
     "set-topic": {
         "summary": "Set a change's topic",
@@ -1181,7 +1181,73 @@ linear chain, this shows the whole topology.
                 "description": "Graph a ticket's changes into a file",
             },
         ],
-        "related": ["series-status", "related", "set-topic", "hashtag"],
+        "related": ["series-status", "related", "set-topic", "hashtag", "conflicts"],
+    },
+    "conflicts": {
+        "summary": "Which open changes a change collides with, and who moves",
+        "description": """
+Trial-merge one change against the open changes on its branch that touch
+its files and are likely to land soon. --repo is a local clone of the
+project (default: the current directory); only fetched objects are added
+to it. --commit SHA tests a local commit, and the local commits below it,
+instead of the uploaded patchset: verify a rearrangement before uploading.
+
+Candidates are skipped (listed in skipped, with the reason) when they need
+a new patchset anyway: a Code-Review -1/-2 from a human other than the
+owner, a Jenkins -1, or an in-flight change below them with either. The
+rest are tiered:
+  frozen       queued in <branch>-next (only when -next is not stale)
+  lands-first  ready (Jenkins +1, Maloo +1, 2 non-owner CR +1, 1 for a
+               backport) or a *_review_blocker/*_review_priority hashtag
+  same-effort  shares a hashtag (not pw_*, fortestonly, forbuildonly or a
+               release one) or the topic with the change
+  other        the rest; listed in not_tried unless --all
+same-effort and other are limited to --max-age days (default 30); --with
+CN checks a change whatever the filters say.
+
+Each checked pair is tried in both orders as it would land (landing:
+target_first, candidate_first; each change's stack picked onto the branch
+tip) and as uploaded (as_uploaded: target_on_theirs, theirs_on_target;
+each own diff picked onto the other's uploaded commit). A pair is in
+conflicts if any of the four conflicts; via names the candidate's
+ancestor the conflict is at. Pairs that merge cleanly but define the same
+test or fail_loc value twice are in silent_only. --hunks adds the
+conflict-marker regions with their kind: insert-insert, edit-edit,
+adjacent, context.
+
+fix_side says which change should move, whoever runs the command:
+  target \\ candidate  frozen      lands-first  same-effort  other
+  frozen              coordinate  candidate    candidate    candidate
+  lands-first         target      coordinate   candidate    candidate
+  pending             target      target       coordinate   candidate
+Within lands-first a release blocker outranks priority, which outranks
+plain ready. Compare the change's owner with me to see whose move it is.
+
+When the change does not apply on the branch tip, status is
+"needs-rebase", conflicts is null and as_uploaded_only has every pair
+tried as uploaded. base says whether rebasing is an option (rebase:
+"would move ready/queued parents" when a parent is frozen or
+lands-first); on_branch and on_next are the change against the branch
+and <branch>-next; own_stack how its parents and children fare;
+already_conflicting the candidates that do not apply on the tip by
+themselves. Gerrit's mergeable flag and conflicts: search are not used.
+Read-only towards Gerrit; needs git 2.40 or newer.
+""",
+        "examples": [
+            {
+                "command": "gc conflicts 12345 --repo ~/lustre-release",
+                "description": "Collisions of the uploaded patchset",
+            },
+            {
+                "command": "gc conflicts 12345 --repo ~/lustre-release --commit HEAD --hunks",
+                "description": "Check a local rearrangement, with conflict regions",
+            },
+            {
+                "command": "gc conflicts 12345 --with 23456 --all",
+                "description": "Also check one given change and the 'other' tier",
+            },
+        ],
+        "related": ["graph", "rebase", "related", "info"],
     },
     "describe": {
         "summary": "Machine-readable description of the commands",
