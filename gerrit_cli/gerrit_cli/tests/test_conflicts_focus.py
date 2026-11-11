@@ -138,3 +138,14 @@ def test_pair_with_limits_the_candidates(gerrit, local):
     r = check_conflicts(Repo(local), str(gerrit.path), "master", [t, c, d], gerrit.owner,
                         workers=2, focus={1}, pair_with={3})
     assert [p["other"] for p in r["focus_pairs"]] == [3]
+
+
+def test_hunks_for_a_set_of_candidates(gerrit, local):
+    from gerrit_cli.conflicts import Repo, check_conflicts
+    t = gerrit.change(1, gerrit.master, {"a.c": _text({5: "T"})})
+    c = gerrit.change(2, gerrit.master, {"a.c": _text({5: "C"})})
+    d = gerrit.change(3, gerrit.master, {"a.c": _text({5: "D"})})
+    r = check_conflicts(Repo(local), str(gerrit.path), "master", [t, c, d], gerrit.owner,
+                        workers=2, focus={1}, hunks={3})
+    assert "hunks" not in _pair(r, 2)
+    assert _pair(r, 3)["hunks"]["landing"]["a.c"]

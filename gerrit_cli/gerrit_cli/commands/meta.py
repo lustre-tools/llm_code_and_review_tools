@@ -1213,7 +1213,9 @@ conflicts if any of the four conflicts; via names the candidate's
 ancestor the conflict is at. Pairs that merge cleanly but define the same
 test or fail_loc value twice are in silent_only. --hunks adds the
 conflict-marker regions with their kind: insert-insert, edit-edit,
-adjacent, context.
+adjacent, context; --hunks-for CN (repeatable) only for the pairs with
+those changes. --hunks is large on a busy file: run without it first,
+then --hunks-for the collisions you will act on.
 
 fix_side says which change should move, whoever runs the command:
   target \\ candidate  frozen      lands-first  same-effort  other
@@ -1239,8 +1241,12 @@ Read-only towards Gerrit; needs git 2.40 or newer.
                 "description": "Collisions of the uploaded patchset",
             },
             {
-                "command": "gc conflicts 12345 --repo ~/lustre-release --commit HEAD --hunks",
-                "description": "Check a local rearrangement, with conflict regions",
+                "command": "gc conflicts 12345 --repo ~/lustre-release --hunks-for 23456",
+                "description": "Conflict regions of the collision with 23456 only",
+            },
+            {
+                "command": "gc conflicts 12345 --repo ~/lustre-release --commit HEAD",
+                "description": "Check a local rearrangement before uploading",
             },
             {
                 "command": "gc conflicts 12345 --with 23456 --all",

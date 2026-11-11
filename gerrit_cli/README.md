@@ -510,7 +510,9 @@ mergeable flag or `conflicts:` search.
 
 ```bash
 gc conflicts 12345 --repo ~/lustre-release            # the uploaded patchset
-gc conflicts 12345 --repo ~/lustre-release --commit HEAD --hunks
+gc conflicts 12345 --repo ~/lustre-release --hunks-for 23456
+                                                      # conflict regions of one pair
+gc conflicts 12345 --repo ~/lustre-release --commit HEAD
                                                       # a local rearrangement
 gc conflicts 12345 --with 23456 --all                 # force one in, try every tier
 ```
@@ -537,7 +539,10 @@ gc conflicts 12345 --with 23456 --all                 # force one in, try every 
   candidate's ancestor the conflict is at. Duplicate test definitions or
   fail_loc values that merge cleanly are reported in `silent_only`.
   `--hunks` adds the conflict regions with their kind (`insert-insert`,
-  `edit-edit`, `adjacent`, `context`).
+  `edit-edit`, `adjacent`, `context`); `--hunks-for CN` (repeatable)
+  adds them only for the pairs with those changes. On a busy file
+  `--hunks` gives megabytes: run without it first, then `--hunks-for`
+  the collisions you will act on.
 - **Who moves** (`fix_side`, independent of who runs it):
 
   | target \\ candidate | frozen | lands-first | same-effort | other |

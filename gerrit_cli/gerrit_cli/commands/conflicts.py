@@ -192,9 +192,11 @@ def _local_stack(client: Any, repo: Repo, change: dict[str, Any], commit: str, t
 
 
 def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, max_age: int,
-                  with_: list[int], all_: bool, hunks: bool, now: datetime) -> dict[str, Any]:
+                  with_: list[int], all_: bool, hunks: bool | set[int], now: datetime,
+                  ) -> dict[str, Any]:
     """Check one change, or a local commit standing in for it, against
-    the open changes that touch its files."""
+    the open changes that touch its files. `hunks`: True for every
+    pair's conflict regions, a set of change numbers for those pairs."""
     _base, cn = GerritCommentsClient.parse_gerrit_url(change)
     target = client.rest.get(f"/changes/{cn}?{_OPTIONS[1:]}")
     project, branch = target["project"], target["branch"]
@@ -426,7 +428,8 @@ def cmd_conflicts(args: Any) -> None:
     try:
         result = run_conflicts(
             _client(), args.repo, args.change, args.commit, args.max_age,
-            args.with_ or [], args.all, args.hunks,
+            args.with_ or [], args.all,
+            True if args.hunks else set(getattr(args, "hunks_for", None) or []),
             datetime.now(timezone.utc).replace(tzinfo=None))
         output_success(result, command, pretty)
     except Exception as e:

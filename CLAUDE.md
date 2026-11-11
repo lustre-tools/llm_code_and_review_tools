@@ -132,7 +132,7 @@ owner sets this variable; agents must not set, unset, or override it.
   `gc diff <url> [A [B]]` (between patchsets; default the newest
   against the one before)
 - **Conflicts:** `gc conflicts <url> --repo <clone> [--commit SHA]
-  [--hunks]` trial-merges a change (or a local commit standing in for
+  [--hunks-for CN]` trial-merges a change (or a local commit standing in for
   it) against the open changes likely to land soon, both orders, as
   landed and as uploaded, and says per collision which side should
   move (`fix_side`)

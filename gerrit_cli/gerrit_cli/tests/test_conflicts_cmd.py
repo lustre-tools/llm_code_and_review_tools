@@ -504,3 +504,35 @@ def test_with_names_a_change_of_the_own_stack(setup):
     _target(gerrit, client.rest, {5: "T"})
     out = run(client, local, with_=[100])
     assert out["skipped"] == [{"cn": 100, "reason": "own stack"}]
+
+
+def test_hunks_for_extracts_only_the_named_candidates_hunks(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    for n in (200, 300):
+        p = gerrit.change(n, gerrit.master, {"a.c": _text({5: f"R{n}"})})
+        rest.add(n, [p], ["a.c"], labels=READY)
+    out = run(client, local, hunks={300})
+    by_cn = {c["cn"]: c for c in out["conflicts"]}
+    assert set(by_cn) == {200, 300}
+    assert "hunks" not in by_cn[200]
+    assert by_cn[300]["hunks"]["landing"]["a.c"]
+
+
+def test_hunks_for_implies_hunks_on_the_command_line(setup, capsys, monkeypatch):
+    from gerrit_cli.cli import build_parser
+    from gerrit_cli.commands import conflicts as mod
+
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    for n in (200, 300):
+        p = gerrit.change(n, gerrit.master, {"a.c": _text({5: f"R{n}"})})
+        rest.add(n, [p], ["a.c"], labels=READY)
+    monkeypatch.setattr(mod, "_client", lambda: client)
+    args = build_parser().parse_args(["conflicts", "100", "--repo", str(local),
+                                      "--hunks-for", "200"])
+    args.func(args)
+    by_cn = {c["cn"]: c for c in json.loads(capsys.readouterr().out)["conflicts"]}
+    assert "hunks" in by_cn[200] and "hunks" not in by_cn[300]

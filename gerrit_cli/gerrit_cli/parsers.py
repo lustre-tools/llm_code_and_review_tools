@@ -1421,7 +1421,17 @@ def add_conflicts_parser(subparsers):
         "--hunks",
         action="store_true",
         help="Include each conflict's marker regions and their kind "
-             "(insert-insert, edit-edit, adjacent, context)",
+             "(insert-insert, edit-edit, adjacent, context). Large on a "
+             "busy file; prefer --hunks-for",
+    )
+    parser.add_argument(
+        "--hunks-for",
+        dest="hunks_for",
+        type=int,
+        action="append",
+        metavar="CN",
+        help="Conflict regions only for the pairs with this change "
+             "(repeatable; implies --hunks for those)",
     )
     parser.add_argument(
         "--max-age",

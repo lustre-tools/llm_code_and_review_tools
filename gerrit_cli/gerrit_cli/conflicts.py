@@ -378,7 +378,7 @@ def check_conflicts(
     log: Callable[[str], None] | None = None,
     workers: int | None = None,
     focus: set[int] | None = None,
-    hunks: bool = False,
+    hunks: bool | set[int] = False,
     pair_with: set[int] | None = None,
 ) -> dict[str, Any]:
     """Trial-merge `patches` against the fetched tip of `branch` and
@@ -739,12 +739,13 @@ def _check_pairs(repo: Repo, st: _State, own: dict[int, set[str]],
 
 
 def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
-                       hunks: bool = False, pair_with: set[int] | None = None,
+                       hunks: bool | set[int] = False, pair_with: set[int] | None = None,
                        ) -> tuple[list[dict[str, Any]], list[int]]:
     """Every candidate (a patch outside `focus`) against the focus stack
     in both merge orders. Returns (pairs, candidates whose own stack does
     not apply on the tip). With `hunks`, each pair carries the conflict
-    regions of every order that conflicts."""
+    regions of every order that conflicts; a set of candidates limits
+    that to their pairs."""
     from gerrit_cli.conflict_hunks import conflict_regions, silent_collisions
 
     targets = [cn for cn in focus if cn in st.stack
@@ -831,7 +832,7 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
             "via": at if at is not None and at != c else None,
         }
         pair["silent"] = silent(c, t_first)
-        if hunks:
+        if hunks is True or (isinstance(hunks, set) and c in hunks):
             landing: dict[str, list] = {}
             uploaded: dict[str, list] = {}
             if at is not None:

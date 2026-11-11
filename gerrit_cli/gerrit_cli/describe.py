@@ -502,18 +502,20 @@ def get_tool_description() -> ToolDescription:
             Command(
                 name="conflicts",
                 description="Trial-merge a change (or a local commit standing in for it) against the open changes on its branch that touch its files and are likely to land soon; says per collision which side should move",
-                usage="gc conflicts <CHANGE> [--repo PATH] [--commit SHA] [--hunks] [--max-age DAYS] [--with CN ...] [--all]",
+                usage="gc conflicts <CHANGE> [--repo PATH] [--commit SHA] [--hunks | --hunks-for CN ...] [--max-age DAYS] [--with CN ...] [--all]",
                 arguments=[
                     Argument(name="change", description="Gerrit change URL, number or Change-Id", required=True),
                     Argument(name="--repo", description="Local clone of the change's project", default="."),
                     Argument(name="--commit", description="Local commit to test as the change instead of its uploaded patchset"),
-                    Argument(name="--hunks", description="Include conflict-marker regions and their kind", type="boolean", default=False),
+                    Argument(name="--hunks", description="Include conflict-marker regions and their kind for every pair (large on a busy file)", type="boolean", default=False),
+                    Argument(name="--hunks-for", description="Conflict-marker regions only for the pairs with this change (repeatable)", type="integer"),
                     Argument(name="--max-age", description="Days without an update after which same-effort and other changes are ignored", type="integer", default=30),
                     Argument(name="--with", description="Change to check whatever the filters say (repeatable)", type="integer"),
                     Argument(name="--all", description="Also trial-merge the 'other' tier", type="boolean", default=False),
                 ],
                 examples=["gc conflicts 12345 --repo ~/lustre-release",
-                          "gc conflicts 12345 --repo ~/lustre-release --commit HEAD --hunks"],
+                          "gc conflicts 12345 --repo ~/lustre-release --hunks-for 23456",
+                          "gc conflicts 12345 --repo ~/lustre-release --commit HEAD"],
                 output_fields=[
                     "change", "patchset", "commit", "tested_commit", "subject",
                     "owner", "me", "readiness", "tier_of_target",
