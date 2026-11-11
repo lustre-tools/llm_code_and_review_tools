@@ -45,8 +45,11 @@ ORDER_RULES = {
                 "each, by balanced (sqrt(score) x queue x asks x answers), "
                 "highest first. Hold: pending asks >= max(6, 7 days of "
                 "their Code-Review rate), a gatekeeper, or asked often and "
-                "never answering. eligible lists the people shown with no "
-                "hold who are not already on the change, in order",
+                "never answering; hold_at is the pending count that "
+                "holds each person. eligible lists the people shown with "
+                "no hold who are not already on the change, in order. "
+                "held_omitted names held people the limit left out, so "
+                "they are not added by hand",
 }
 
 
@@ -280,6 +283,7 @@ def compact_candidate(entry):
         asked = entry["asked"] or {}
         for key in ("asked", "answered", "pending", "last_asked"):
             out[key] = asked.get(key)
+        out["hold_at"] = entry.get("hold_at")
     if "hold" in entry:
         out["hold"] = entry["hold"]
     if entry.get("reason"):
@@ -294,7 +298,8 @@ def compact_data(data, on_change):
     out = {key: data[key] for key in (
         "change_number", "subject", "owner", "commit_author", "order",
         "order_rule", "eligible", "asked_by", "window_months",
-        "widened_from", "paths_without_history", "count", "total_candidates")
+        "widened_from", "paths_without_history", "count", "total_candidates",
+        "held_omitted")
         if key in data}
     out["on_change"] = [{"name": name, "email": email or None, "role": role}
                         for name, email, role in on_change]
@@ -375,6 +380,13 @@ def cmd_reviewer_candidates(args):
                 data["asked_by"] = asked.get("by")
                 data["asked_generated_at"] = asked.get("generated_at")
         if args.limit > 0:
+            if balancing:
+                # fb-704a1fad3491, fb-3affa57c47a6: the cut dropped held
+                # people silently, and runs went looking for them.
+                data["held_omitted"] = [
+                    {"name": c.get("name"), "email": c.get("email"),
+                     "hold": c["hold"]}
+                    for c in candidates[args.limit:] if c.get("hold")]
             candidates = candidates[:args.limit]
         if args.brief:
             for entry in candidates + excluded:

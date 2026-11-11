@@ -240,6 +240,10 @@ def test_limit_applies_after_holds_and_the_order_is_stated(
     assert data["eligible"] == [top["name"]]
     assert data["order"] == "balanced"
     assert "held people" in data["order_rule"]
+    # fb-704a1fad3491, fb-3affa57c47a6: the held person the limit cut
+    # is named, not dropped silently.
+    assert [h["name"] for h in data["held_omitted"]] == ["Andreas Dilger"]
+    assert data["held_omitted"][0]["hold"] == ["10 asks already waiting on them"]
 
 
 def test_too_few_people_widens_the_window_and_says_so(

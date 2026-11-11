@@ -164,6 +164,9 @@ def test_someone_who_reviews_a_lot_carries_more_asks_unheld():
     assert prolific["hold"] is None
     assert prolific["factors"]["asks"] == round(1 / (1 + 19.5 / 35.5), 2)
     assert sparse["hold"] == ["13 asks already waiting on them"]
+    # fb-b8acde1d1a59: the threshold is shown, so a null hold at 31
+    # pending is explained (83 = a week of 355 votes in 30 days).
+    assert (prolific["hold_at"], sparse["hold_at"]) == (83, 6)
     # A week of a prolific reviewer's votes does hold them.
     flooded = dict(prolific, asked=dict(asks, pending=90))
     balance([flooded])
@@ -268,7 +271,7 @@ def test_compact_keeps_only_what_the_choice_needs(
         assert set(entry) == {
             "name", "email", "account_id", "score", "reviewed",
             "last_reviewed", "on_change", "balanced", "asked", "answered",
-            "pending", "last_asked", "hold"}
+            "pending", "last_asked", "hold_at", "hold"}
     first = next(c for c in data["candidates"] if c["email"] == top["email"])
     assert (first["asked"], first["answered"], first["pending"]) == (3, 1, 1)
     assert all(set(e) == {"name", "email", "reason"} for e in data["excluded"])

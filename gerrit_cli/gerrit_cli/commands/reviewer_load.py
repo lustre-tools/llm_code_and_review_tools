@@ -211,6 +211,7 @@ def weigh(candidate, now=None):
         capacity = max(CAPACITY_MIN, rate * CAPACITY_DAYS)
         factors["asks"] = round(1 / (1 + (pending + recent / 2) / capacity), 2)
         factors["answers"] = round(min(1.0, 2 * (answered + 1) / (total + 2)), 2)
+        candidate["hold_at"] = math.ceil(max(HOLD_PENDING, rate * HOLD_PENDING_DAYS))
         if pending >= max(HOLD_PENDING, rate * HOLD_PENDING_DAYS):
             holds.append(f"{pending} asks already waiting on them")
         if (total >= HOLD_UNANSWERED_ASKS and answered == 0
