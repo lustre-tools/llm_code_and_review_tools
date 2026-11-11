@@ -261,7 +261,7 @@ class Repo:
         return _Pick("clean", commit=new)
 
     def __enter__(self) -> "Repo":
-        self._scratch = tempfile.mkdtemp(prefix="gc-graph-conflicts-")
+        self._scratch = tempfile.mkdtemp(prefix="gc-conflicts-")
         return self
 
     def __exit__(self, *exc: object) -> None:

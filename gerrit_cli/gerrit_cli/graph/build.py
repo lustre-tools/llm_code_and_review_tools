@@ -23,7 +23,7 @@ from typing import Any, Callable
 from urllib.parse import quote
 
 from ..client import GerritCommentsClient
-from .conflicts import ConflictCheckError, Patch, Repo, check_conflicts
+from ..conflicts import ConflictCheckError, Patch, Repo, check_conflicts
 from .edges import _break_cycles, _collect_revisions
 from .nodes import _make_node, _update_node_meta, subject_ticket
 from .summary import add_timeline, series_summary
