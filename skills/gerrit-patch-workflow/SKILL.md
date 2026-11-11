@@ -1,6 +1,6 @@
 ---
 name: gerrit-patch-workflow
-description: This skill should be used for work on Gerrit changes with the gerrit/gc CLI - "what comments are on this patch", "reply to the review feedback", "address the reviewer comments", "mark that thread done", "shepherd this patch series", "what is the status of my patches", "post a review on this change", "add a reviewer", "check the CI status of my patches", "upload the new patchset", "push this commit to Gerrit", "push this as a private patch", "upload a private change", "rebase and repush the series", "is there already a patch for this", "find the follow-up to this change". Covers comment triage, staged replies, uploading patchsets, multi-patch series sessions, finding related changes, and Lustre commit-message rules.
+description: This skill should be used for work on Gerrit changes with the gerrit/gc CLI - "what comments are on this patch", "reply to the review feedback", "address the reviewer comments", "mark that thread done", "shepherd this patch series", "what is the status of my patches", "post a review on this change", "add a reviewer", "check the CI status of my patches", "upload the new patchset", "push this commit to Gerrit", "push this as a private patch", "upload a private change", "rebase and repush the series", "is there already a patch for this", "find the follow-up to this change", "does this conflict with", "deconflict this patch", "will this land cleanly", "can we avoid the rebase". Covers comment triage, staged replies, uploading patchsets, multi-patch series sessions, finding related changes, deconflicting against other open changes, and Lustre commit-message rules.
 version: 0.1.0
 ---
 
@@ -208,6 +208,138 @@ gc search 'project:fs/lustre-release hashtag:pt_ecro after:2026-08-22'
   config) and `footer:"Fixes=..."` misses Lustre's `Fixes: sha ("...")`
   trailer -- use `message:` for both. `comment:<number>` matches far too
   much to be useful there.
+
+## Deconflicting
+
+"Does this conflict with", "will this land cleanly", "can we avoid the
+rebase": `gc conflicts` trial-merges one change against the open changes on
+its branch that are likely to land soon, in both landing orders and as
+uploaded. `gc explain conflicts` defines every field; this section is
+about what to do with them.
+
+```bash
+gc conflicts 69392 --repo /abs/path/to/checkout --hunks
+gc conflicts 69392 --repo /abs/path/to/checkout --commit HEAD --hunks   # a local rearrangement
+gc conflicts 69392 --with 65219 --all    # one given change; the 'other' tier too
+```
+
+**When.** Before uploading a patchset in a busy area; when `gc graph`
+shows a conflict edge or a bot posts a cannot-cherry-pick or master-next
+conflict; after a neighbour lands or is picked; before accepting a review
+suggestion that edits lines another in-flight change rewrites (decline or
+defer it, and say why).
+
+**Report first, edit only on the user's choice.** Deconflicting is one
+option, not the goal, and not at any cost. The first output is a report,
+and no file is touched before the user picks. Per collision: the change,
+its owner, `fix_side`, the files and hunk kinds, then the options with
+their cost:
+
+- rearrange (how big a change);
+- rearrange, but uglier;
+- defer the edit to whichever change lands second;
+- restack or rebase onto the other change (what it moves, which votes it
+  drops);
+- wait for the other change to land;
+- leave it to the other owner;
+- do nothing (the other change is far from landing).
+
+"This cannot be deconflicted" is a complete answer. Recommend one option.
+The exception is an explicit "go ahead and deconflict it": then apply a
+clean `rearranged`, but still stop at anything uglier.
+
+Read the rest of the result before recommending: `status: needs-rebase`
+(then `conflicts` is null and `as_uploaded_only` holds the pairs);
+`skipped` (candidates that need a new patchset anyway, not worth planning
+around); `silent_only` (a clean merge that still defines a test or fail_loc
+value twice); `already_conflicting` (conflict without your change, not
+yours); `on_next` (a conflict in the queue; `stale` means ignore it).
+
+**Who moves.** `fix_side` is the default answer, from readiness, queue
+and release priority; compare `owner` with `me`.
+
+- The frozen (in -next), ready or higher-priority change does not move,
+  whoever owns it. Never change a ready or picked change's hash to make
+  room.
+- `target` on a change the user owns: theirs to fix.
+- `candidate`: the other owner's move. Name them and say what they would
+  change; never edit their change.
+- `coordinate`: propose an order and who goes first.
+- When the user owns the target they may still choose to move their own
+  change although `fix_side` says `candidate` or `coordinate`, for example
+  both are release blockers and their own rearrangement is the cheapest.
+  Offer that as an option with its cost, never as your silent choice.
+- When the user is only reviewing, report only. Reworking someone else's
+  change, even with access, needs its owner's OK once it alters the design.
+
+**Rebase or rearrange.** Read `base.rebase`. If it says rebasing would
+move frozen or ready parents, or the base is too old to move, rebasing is
+out: rearrange, defer or wait. Otherwise rebasing onto the candidate is an
+option, but a rebase drops votes, so it needs the user's OK.
+
+**Techniques** (from real cases):
+
+- Insert away from shared append points: the middle of a list, bitfield,
+  enum or test file, not the end. Never edit the last element's
+  terminator (`last:1;` to `last:1,`); every appender edits it too.
+- Keep at least one unchanged line, a blank one will do, between your edit
+  and theirs (64086 PS47).
+- Don't rewrite a shared condition; put the effect in a separate
+  statement (69392 PS6), then audit every reader and writer of the state
+  it changes, in the target and the candidates.
+- Number spaces: take a free gap (an OBD_FAIL value, 64441), pick test
+  numbers no open change uses, leave gaps when adding several.
+- Move a new test into a gap or another script (64142, 67602); move
+  helpers up away from where others append (64616).
+- Drop your hunk when another in-flight change makes the same edit and
+  record the follow-up. Then check tests that exist only on master or
+  -next: dropping a hunk on 64441 silently broke a test.
+- Keep a contested line as is, even with a style nit, and say why
+  (69111 PS14).
+- Keep churn out of lines others rewrite: defer a cleanup or shared helper
+  until the other lands (69517 PS8, 66481 PS24, 69825).
+- Redesign so the contested code is not needed (70461 PS4, 66882 PS42).
+  That is a design change; it needs the owner's OK.
+- Code that anticipates another change can look wrong until it lands
+  (64620 PS20 read as a regression). Say so in the commit message or
+  change-log.
+
+**Verdict, one per collision, in the report:**
+
+- `rearranged`: clean. Show the diff and the re-verify result.
+- `needs uglifying`: the only rearrangement that removes the collision
+  makes the code worse. Do not apply it. Say "this cannot be deconflicted
+  without uglifying the code", show the ugly variant and the clean
+  alternatives (defer, restack, wait, rebase), and state the landing
+  pressure you can see: release blocker or priority hashtags on either
+  change, master-next. Only the user can say whether the pressure is
+  worth it (it was for a release crunch: 69392 PS6, 68361). If accepted,
+  it is a temporary workaround: record the revert or follow-up (when,
+  which change) where the user keeps notes.
+- `defer`: leave the edit to whichever change lands second; say which
+  order is expected.
+- `not possible`: the reason (the same lines must change both ways, a real
+  dependency that needs a restack, a rebase blocked by frozen parents) and
+  the alternative (restack, wait, ask the other owner).
+
+Signs of "works but stupid": code placed where no reader would look;
+intent hidden by flag-twiddling; logic or flags that exist only to dodge
+the conflict; a moved hunk that changes ordering or locking; a diff bigger
+than the conflict it avoids; a reviewer would ask "why is this here?". Any
+of these is `needs uglifying`, never a silent `rearranged`. An
+`edit-edit` hunk on one condition or declaration is the usual case: both
+changes need that very line, so any fix is a workaround, and is presented
+as such with its alternatives.
+
+**Verify.** `gc conflicts <cn> --commit HEAD` shows no `fix_side: target`
+conflict (both orders, both models, no silent hits), except for those
+given another verdict. Then build. When both sides touch one function or
+change a signature or a struct, build the combination (target on
+candidate) too: a clean merge can still fail to build (65921). Run the
+tests the changed code is covered by, on the change's own base and, if it
+is queued, on -next. Show the uncommitted diff first; commit and upload
+only when the user asks. A content change gets a short change-log
+("Deconflicted with #A, #B: ...; no functional change").
 
 ## Deleting comments and change messages
 
