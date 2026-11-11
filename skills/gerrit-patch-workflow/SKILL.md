@@ -218,9 +218,19 @@ uploaded. `gc explain conflicts` defines every field; this section is
 about what to do with them.
 
 ```bash
-gc conflicts 69392 --repo /abs/path/to/checkout --hunks
-gc conflicts 69392 --repo /abs/path/to/checkout --commit HEAD --hunks   # a local rearrangement
+gc conflicts 69392 --repo /abs/path/to/checkout            # summary first
+gc conflicts 69392 --repo /abs/path/to/checkout --hunks-for 65219 --hunks-for 69517
+gc conflicts 69392 --repo /abs/path/to/checkout --commit HEAD   # a local rearrangement
 gc conflicts 69392 --with 65219 --all    # one given change; the 'other' tier too
+```
+
+`--hunks` for every collision can run to megabytes on a busy file: do not
+use it first. Read the summary, then rerun with `--hunks-for <cn>` for
+the collisions you will act on. A one-line overview:
+
+```bash
+gc conflicts 69392 --repo . | jq -r '.conflicts[] |
+    [.cn, .tier, .readiness, .fix_side, (.files|join(","))] | @tsv'
 ```
 
 **When.** Before uploading a patchset in a busy area; when `gc graph`
@@ -255,13 +265,24 @@ around); `silent_only` (a clean merge that still defines a test or fail_loc
 value twice); `already_conflicting` (conflict without your change, not
 yours); `on_next` (a conflict in the queue; `stale` means ignore it).
 
-**Who moves.** `fix_side` is the default answer, from readiness, queue
-and release priority; compare `owner` with `me`.
+Landing and as-uploaded results differ in weight. A `landing` conflict
+is what happens when the changes land, so it is what matters. A conflict
+only in `as_uploaded` is what the other owner or CI sees on a stale
+base: lower weight, mention it, act on it only when the user is about to
+rebase or the other change is next to land. `via` names the candidate's
+ancestor the conflict sits in: the fix belongs to that change, not the
+candidate.
 
-- The frozen (in -next), ready or higher-priority change does not move,
-  whoever owns it. Never change a ready or picked change's hash to make
-  room.
-- `target` on a change the user owns: theirs to fix.
+**Who moves.** `fix_side` is the default answer. It encodes this order
+of who goes first: in -next (frozen), release blocker, release priority,
+ready, the rest. The one earlier in the order does not move, whoever
+owns it; a lower-ranked change, ready or not, makes room for a
+release blocker. Never change a picked change's hash to make room.
+
+- `owner` against `me` says whose change it is, not what the user wants:
+  they may be working on a change they do not own (taking one over).
+  Decide from what they asked, and ask when unclear.
+- `target` on the change being worked on: that change's move.
 - `candidate`: the other owner's move. Name them and say what they would
   change; never edit their change.
 - `coordinate`: propose an order and who goes first.
@@ -269,7 +290,8 @@ and release priority; compare `owner` with `me`.
   change although `fix_side` says `candidate` or `coordinate`, for example
   both are release blockers and their own rearrangement is the cheapest.
   Offer that as an option with its cost, never as your silent choice.
-- When the user is only reviewing, report only. Reworking someone else's
+- When the user is only reviewing, or did not ask for a change, report
+  only. Reworking someone else's
   change, even with access, needs its owner's OK once it alters the design.
 
 **Rebase or rearrange.** Read `base.rebase`. If it says rebasing would
@@ -331,7 +353,8 @@ of these is `needs uglifying`, never a silent `rearranged`. An
 changes need that very line, so any fix is a workaround, and is presented
 as such with its alternatives.
 
-**Verify.** `gc conflicts <cn> --commit HEAD` shows no `fix_side: target`
+**Verify**, only after the user has picked an option and the edit is
+made. `gc conflicts <cn> --commit HEAD` shows no `fix_side: target`
 conflict (both orders, both models, no silent hits), except for those
 given another verdict. Then build. When both sides touch one function or
 change a signature or a struct, build the combination (target on
