@@ -83,6 +83,7 @@ class _Pick:
     commit: str = ""
     files: tuple[str, ...] = ()
     detail: str = ""
+    onto: str = ""  # conflicts only: the commit the pick was tried on
 
     @property
     def ok(self) -> bool:
@@ -248,7 +249,8 @@ class Repo:
         # prints the result tree first
         tree = lines[0] if lines and _OID_RE.match(lines[0]) else ""
         if r.returncode == 1 and tree:
-            return _Pick("conflict", files=tuple(dict.fromkeys(x for x in lines[1:] if x)))
+            return _Pick("conflict", onto=onto,
+                         files=tuple(dict.fromkeys(x for x in lines[1:] if x)))
         if r.returncode != 0 or not tree:
             return _Pick("error", detail=r.stderr.strip() or f"exit {r.returncode}")
         if tree == self.tree_of(onto):
@@ -259,6 +261,29 @@ class Repo:
         new = c.stdout.strip()
         self._trees[new] = tree
         return _Pick("clean", commit=new)
+
+    def merge_tree_diff3(self, onto: str, commit: str, parent: str) -> str | None:
+        """The tree of the trial merge, conflicted files written with
+        diff3 markers (the base section is what classifies a region)."""
+        r = self._run("-c", "merge.conflictStyle=diff3", "merge-tree", "--write-tree",
+                      "--no-messages", f"--merge-base={parent}", onto, commit, scratch=True)
+        lines = r.stdout.splitlines()
+        if r.returncode not in (0, 1) or not lines or not _OID_RE.match(lines[0]):
+            return None
+        return lines[0]
+
+    def blob(self, tree: str, path: str) -> str | None:
+        r = self._run("cat-file", "-p", f"{tree}:{path}", scratch=True)
+        return r.stdout if r.returncode == 0 else None
+
+    def own_added(self, commit: str, parent: str, paths: list[str]) -> dict[str, set[str]]:
+        """The `+` lines of commit's own diff against parent, per path."""
+        out: dict[str, set[str]] = {}
+        for path in paths:
+            r = self._run("diff", "--no-color", "-U0", parent, commit, "--", path, scratch=True)
+            out[path] = {ln[1:] for ln in r.stdout.splitlines()
+                         if ln.startswith("+") and not ln.startswith("+++")}
+        return out
 
     def __enter__(self) -> "Repo":
         self._scratch = tempfile.mkdtemp(prefix="gc-conflicts-")
@@ -295,6 +320,7 @@ def check_conflicts(
     log: Callable[[str], None] | None = None,
     workers: int | None = None,
     focus: set[int] | None = None,
+    hunks: bool = False,
 ) -> dict[str, Any]:
     """Trial-merge `patches` against the fetched tip of `branch` and
     against each other.
@@ -341,7 +367,7 @@ def check_conflicts(
         focus_pairs: list[dict[str, Any]] = []
         already: list[int] = []
         if focus:
-            focus_pairs, already = _check_focus_pairs(repo, st, focus, workers)
+            focus_pairs, already = _check_focus_pairs(repo, st, focus, workers, hunks)
         else:
             pairs, tried, errors = _check_pairs(repo, st, own_by_cn, workers)
         queue = (_check_next(repo, st, branch, tip, next_branch, next_tip, change_lookup, workers)
@@ -650,10 +676,13 @@ def _check_pairs(repo: Repo, st: _State, own: dict[int, set[str]],
 
 
 def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
-                       workers: int) -> tuple[list[dict[str, Any]], list[int]]:
+                       workers: int, hunks: bool = False) -> tuple[list[dict[str, Any]], list[int]]:
     """Every candidate (a patch outside `focus`) against the focus stack
     in both merge orders. Returns (pairs, candidates whose own stack does
-    not apply on the tip)."""
+    not apply on the tip). With `hunks`, each pair carries the conflict
+    regions of every order that conflicts."""
+    from gerrit_cli.conflict_hunks import conflict_regions
+
     targets = [cn for cn in focus if cn in st.stack
                and not any(cn in st.stack[o] for o in focus if o != cn)]
     if not targets:
@@ -685,14 +714,32 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
             cur = pick.commit
         return _Pick("clean"), None
 
+    def regions(into: dict[str, list], pick: _Pick, onto: str, z: int,
+                carried: list[int], order: str) -> None:
+        """Regions of `pick` conflicting at change `z`; `carried` are the
+        changes `onto` holds on top of the branch tip."""
+        if pick.status != "conflict":
+            return
+        added: dict[str, set[str]] = {}
+        for y in carried:
+            for path, lines in repo.own_added(st.patches[y].commit, st.base[y],
+                                              list(pick.files)).items():
+                added.setdefault(path, set()).update(lines)
+        found = conflict_regions(repo, onto, st.patches[z].commit, st.base[z],
+                                 list(pick.files), added)
+        for path, regs in found.items():
+            into.setdefault(path, []).extend(dict(r, order=order) for r in regs)
+
     def one(c: int) -> dict[str, Any]:
         cset = set(st.stack[c])
-        t_first, at = land(st.applied[target], [z for z in st.stack[c] if z not in tstack], memo)
-        c_first, _ = land(st.applied[c], [z for z in st.stack[target] if z not in cset], None)
+        tz = [z for z in st.stack[c] if z not in tstack]
+        cz = [z for z in st.stack[target] if z not in cset]
+        t_first, at = land(st.applied[target], tz, memo)
+        c_first, cat = land(st.applied[c], cz, None)
         files = sorted(set(t_first.files) | set(c_first.files))
         t_up = repo.pick(st.patches[c].commit, st.patches[target].commit, st.base[target])
         c_up = repo.pick(st.patches[target].commit, st.patches[c].commit, st.base[c])
-        return {
+        pair: dict[str, Any] = {
             "target": target, "other": c,
             "landing": {"target_first": t_first.status, "candidate_first": c_first.status,
                         "files": files},
@@ -700,6 +747,19 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int],
                             "files": sorted(set(t_up.files) | set(c_up.files))},
             "via": at if at is not None and at != c else None,
         }
+        if hunks:
+            landing: dict[str, list] = {}
+            uploaded: dict[str, list] = {}
+            if at is not None:
+                regions(landing, t_first, t_first.onto, at,
+                        st.stack[target] + tz[:tz.index(at)], "target_first")
+            if cat is not None:
+                regions(landing, c_first, c_first.onto, cat,
+                        st.stack[c] + cz[:cz.index(cat)], "candidate_first")
+            regions(uploaded, t_up, st.patches[c].commit, target, [c], "target_on_theirs")
+            regions(uploaded, c_up, st.patches[target].commit, c, [target], "theirs_on_target")
+            pair["hunks"] = {"landing": landing, "as_uploaded": uploaded}
+        return pair
 
     todo = [c for c in candidates if c in st.applied]
     with ThreadPoolExecutor(workers) as pool:
