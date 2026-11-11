@@ -226,11 +226,13 @@ gc conflicts 69392 --with 65219 --all    # one given change; the 'other' tier to
 
 `--hunks` for every collision can run to megabytes on a busy file: do not
 use it first. Read the summary, then rerun with `--hunks-for <cn>` for
-the collisions you will act on. A one-line overview:
+the collisions you will act on. A one-line overview, the status first,
+then per collision the landing and as-uploaded results of both orders:
 
 ```bash
-gc conflicts 69392 --repo . | jq -r '(.conflicts // .as_uploaded_only // [])[] |
-    [.cn, .tier, .readiness, .fix_side, (.files|join(","))] | @tsv'
+gc conflicts 69392 --repo . | jq -r '.status, ((.conflicts // .as_uploaded_only)[] |
+    [.cn, .tier, .readiness, .fix_side, ((.landing // {}) | [.[]] | join("/")),
+     (.as_uploaded | [.[]] | join("/")), (.files | join(","))] | @tsv)'
 ```
 
 **When.** Before uploading a patchset in a busy area; when `gc graph`
@@ -242,8 +244,8 @@ defer it, and say why).
 **Report first, edit only on the user's choice.** Deconflicting is one
 option, not the goal, and not at any cost. The first output is a report,
 and no file is touched before the user picks. Per collision: the change,
-its owner, `fix_side`, the files and hunk kinds (where you fetched them), then the options with
-their cost:
+its owner, `fix_side`, the files and hunk kinds (where you fetched them),
+then the options with their cost:
 
 - rearrange (how big a change);
 - rearrange, but uglier;
@@ -261,7 +263,8 @@ clean `rearranged`, but still stop at anything uglier.
 Read the rest of the result before recommending: the change's own
 `own_stack`, `on_branch` and `base.parents` (a conflicting parent in its
 own stack can be the real blocker); `status: needs-rebase`
-(then `conflicts` is null and `as_uploaded_only` holds the pairs);
+(then `conflicts` is null, `as_uploaded_only` holds the pairs that
+conflict as uploaded and `clean` the rest);
 `skipped` (candidates that need a new patchset anyway, not worth planning
 around); `silent_only` (a clean merge that still defines a test or fail_loc
 value twice); `already_conflicting` (conflict without your change, not
@@ -275,10 +278,15 @@ rebase or the other change is next to land. `via` names the candidate's
 ancestor the conflict sits in (null when it is in the candidate
 itself): the fix belongs to that change, not the candidate.
 
-When the change is `needs-rebase`, every pair may be as-uploaded only (dozens
-of stale-base collisions). Summarise them by tier, readiness and release
-hashtags, name only the blockers, priority and frozen ones, and fetch no
-hunks unless the user asks.
+When the change is `needs-rebase`, only the as-uploaded model runs.
+`as_uploaded_only` holds the pairs that conflict on files both changes
+change; conflicts on files only one side changes come from the branch
+moving between the two bases and are listed in the pair's `base_drift`,
+not counted. A stale change still collects many such pairs: summarise
+them by tier, readiness and release hashtags, name only the blockers,
+priority and frozen ones, and fetch no hunks unless the user asks. A
+conflict on a shared file can still be drift elsewhere in that file; the
+hunk kind `context` says so.
 
 **Who moves.** `fix_side` is the default answer. It encodes this order
 of who goes first: in -next (frozen), release blocker, release priority,
@@ -362,15 +370,18 @@ changes need that very line, so any fix is a workaround, and is presented
 as such with its alternatives.
 
 **Verify**, only after the user has picked an option and the edit is
-made. `gc conflicts <cn> --commit HEAD` shows no `fix_side: target`
-conflict (both orders, both models, no silent hits), except for those
-given another verdict. Then build. When both sides touch one function or
-change a signature or a struct, build the combination (target on
-candidate) too: a clean merge can still fail to build (65921). Run the
-tests the changed code is covered by, on the change's own base and, if it
-is queued, on -next. Show the uncommitted diff first; commit and upload
-only when the user asks. A content change gets a short change-log
-("Deconflicted with #A, #B: ...; no functional change").
+made. `gc conflicts <cn> --commit HEAD` shows no remaining collision
+with the changes you deconflicted against, whatever their `fix_side`:
+none of them in `conflicts`, `as_uploaded_only` or `silent_only` (both
+models, both orders); use `--with <cn>` for any that the filters no
+longer select. Collisions given another verdict may remain. Then build.
+When both sides touch one function or change a signature or a struct,
+build the combination (target on candidate) too: a clean merge can still
+fail to build (65921). Run the tests the changed code is covered by, on
+the change's own base and, if it is queued, on -next. Show the
+uncommitted diff first; commit and upload only when the user asks. A
+content change gets a short change-log ("Deconflicted with #A, #B: ...;
+no functional change").
 
 ## Deleting comments and change messages
 
