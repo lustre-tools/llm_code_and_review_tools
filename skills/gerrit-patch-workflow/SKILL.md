@@ -229,7 +229,7 @@ use it first. Read the summary, then rerun with `--hunks-for <cn>` for
 the collisions you will act on. A one-line overview:
 
 ```bash
-gc conflicts 69392 --repo . | jq -r '.conflicts[] |
+gc conflicts 69392 --repo . | jq -r '(.conflicts // .as_uploaded_only // [])[] |
     [.cn, .tier, .readiness, .fix_side, (.files|join(","))] | @tsv'
 ```
 
@@ -242,7 +242,7 @@ defer it, and say why).
 **Report first, edit only on the user's choice.** Deconflicting is one
 option, not the goal, and not at any cost. The first output is a report,
 and no file is touched before the user picks. Per collision: the change,
-its owner, `fix_side`, the files and hunk kinds, then the options with
+its owner, `fix_side`, the files and hunk kinds (where you fetched them), then the options with
 their cost:
 
 - rearrange (how big a change);
@@ -258,7 +258,9 @@ their cost:
 The exception is an explicit "go ahead and deconflict it": then apply a
 clean `rearranged`, but still stop at anything uglier.
 
-Read the rest of the result before recommending: `status: needs-rebase`
+Read the rest of the result before recommending: the change's own
+`own_stack`, `on_branch` and `base.parents` (a conflicting parent in its
+own stack can be the real blocker); `status: needs-rebase`
 (then `conflicts` is null and `as_uploaded_only` holds the pairs);
 `skipped` (candidates that need a new patchset anyway, not worth planning
 around); `silent_only` (a clean merge that still defines a test or fail_loc
@@ -270,12 +272,18 @@ is what happens when the changes land, so it is what matters. A conflict
 only in `as_uploaded` is what the other owner or CI sees on a stale
 base: lower weight, mention it, act on it only when the user is about to
 rebase or the other change is next to land. `via` names the candidate's
-ancestor the conflict sits in: the fix belongs to that change, not the
-candidate.
+ancestor the conflict sits in (null when it is in the candidate
+itself): the fix belongs to that change, not the candidate.
+
+When the change is `needs-rebase`, every pair may be as-uploaded only (dozens
+of stale-base collisions). Summarise them by tier, readiness and release
+hashtags, name only the blockers, priority and frozen ones, and fetch no
+hunks unless the user asks.
 
 **Who moves.** `fix_side` is the default answer. It encodes this order
 of who goes first: in -next (frozen), release blocker, release priority,
-ready, the rest. The one earlier in the order does not move, whoever
+ready, the rest (blocker over priority over plain ready applies between
+lands-first changes). The one earlier in the order does not move, whoever
 owns it; a lower-ranked change, ready or not, makes room for a
 release blocker. Never change a picked change's hash to make room.
 
@@ -291,8 +299,8 @@ release blocker. Never change a picked change's hash to make room.
   both are release blockers and their own rearrangement is the cheapest.
   Offer that as an option with its cost, never as your silent choice.
 - When the user is only reviewing, or did not ask for a change, report
-  only. Reworking someone else's
-  change, even with access, needs its owner's OK once it alters the design.
+  only. Reworking someone else's change, even with access, needs its
+  owner's OK once it alters the design.
 
 **Rebase or rearrange.** Read `base.rebase`. If it says rebasing would
 move frozen or ready parents, or the base is too old to move, rebasing is
