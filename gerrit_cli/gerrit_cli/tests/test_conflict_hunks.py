@@ -19,6 +19,10 @@ def test_neighbouring_lines_are_adjacent():
     assert classify(["l5", "l6"], ["L5", "l6"], ["l5", "L6"], {"L5"}) == "adjacent"
 
 
+def test_a_pure_deletion_on_our_side_is_adjacent_not_context():
+    assert classify(["A", "B"], ["A"], ["A2", "B"], set()) == "adjacent"
+
+
 def test_branch_moved_under_a_stale_side_is_context():
     assert classify(["l5", "l6"], ["M5", "l6"], ["l5", "L6"], set()) == "context"
 
@@ -188,3 +192,13 @@ def test_pairs_without_collisions_carry_an_empty_silent_list(gerrit, local):
     c = gerrit.change(2, gerrit.master, {"a.c": _text({15: "C"})})
     r = _check(gerrit, local, [t, c], focus={1})
     assert r["focus_pairs"][0]["silent"] == []
+
+
+def test_own_added_survives_a_git_timeout(local, monkeypatch):
+    repo = Repo(local)
+
+    def slow(*a, **k):
+        raise subprocess.TimeoutExpired(a[0], 1)
+
+    monkeypatch.setattr(subprocess, "run", slow)
+    assert repo.own_added("a" * 40, "b" * 40, ["x.c"]) == {"x.c": set()}

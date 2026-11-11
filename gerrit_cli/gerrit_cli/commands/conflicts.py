@@ -199,6 +199,9 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     pair's conflict regions, a set of change numbers for those pairs."""
     _base, cn = GerritCommentsClient.parse_gerrit_url(change)
     target = client.rest.get(f"/changes/{cn}?{_OPTIONS[1:]}")
+    if target.get("status") != "NEW":
+        raise ConflictRepoError(f"change {cn} is {target.get('status')}; only an open "
+                                "change can be checked")
     project, branch = target["project"], target["branch"]
     repo = Repo(repo_path)
     remote = repo.resolve_remote(project)
@@ -356,6 +359,7 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
                 -release_rank(every[e["cn"]].get("hashtags") or []), e["cn"])
 
     conflicts: list[dict[str, Any]] = []
+    uploaded_only: list[dict[str, Any]] = []
     silent_only: list[dict[str, Any]] = []
     clean: list[int] = []
     errors = [{"cn": n, "reason": res.get(str(n), {}).get("reason", "")}
@@ -364,10 +368,10 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
                 for n in kept if res.get(str(n), {}).get("status") == "skipped"]
     skipped.sort(key=lambda s: s["cn"])
     entries = [(pair, entry(pair)) for pair in result["focus_pairs"]]
-    for pair, e in entries if landed else []:
-        statuses = [*e["landing"].values(), *e["as_uploaded"].values()]
+    for pair, e in entries:
+        statuses = [*e.get("landing", {}).values(), *e["as_uploaded"].values()]
         if "conflict" in statuses:
-            conflicts.append(e)
+            (conflicts if landed else uploaded_only).append(e)
         elif pair["silent"]:
             silent_only.append({k: e[k] for k in ("cn", "tier", "fix_side", "silent")})
         elif "error" in statuses:
@@ -375,7 +379,11 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
         else:
             clean.append(e["cn"])
     conflicts.sort(key=order)
+    uploaded_only.sort(key=order)
     silent_only.sort(key=order)
+    tried = {pair["other"] for pair in result["focus_pairs"]}
+    notes = [f"hunks-for {n}: not a tried candidate"
+             for n in sorted(hunks - tried)] if isinstance(hunks, set) else []
     tiers_of_parents = {n: _tier(d, queued_ids) for n, d in parents_detail.items()}
 
     out: dict[str, Any] = {
@@ -401,7 +409,7 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
         "conflicts": conflicts if landed else None,
     }
     if not landed:
-        out["as_uploaded_only"] = sorted((e for _pair, e in entries), key=order)
+        out["as_uploaded_only"] = uploaded_only
     out.update({
         "silent_only": silent_only,
         "already_conflicting": sorted(result["already_conflicting"]),
@@ -413,10 +421,11 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
             "candidates": len(found),
             "after_filters": len(kept) + len(not_tried),
             "tried": len(result["focus_pairs"]),
-            "conflicting": len(conflicts) + len(silent_only) if landed else
-            sum(1 for _pair, e in entries if "conflict" in e["as_uploaded"].values()),
+            "conflicting": len(conflicts) + len(silent_only) + len(uploaded_only),
         },
     })
+    if notes:
+        out["notes"] = notes
     return out
 
 

@@ -550,7 +550,67 @@ def test_a_stale_target_reports_base_drift_not_a_collision(setup):
     rest.add(200, [c], ["b.c"], labels=READY)
     out = run(client, local)
     assert out["status"] == "needs-rebase"
-    [p] = out["as_uploaded_only"]
-    assert p["cn"] == 200 and p["base_drift"] == ["a.c"]
-    assert p["as_uploaded"] == {"target_on_theirs": "clean", "theirs_on_target": "clean"}
+    assert out["as_uploaded_only"] == [] and out["clean"] == [200]
     assert out["counts"]["conflicting"] == 0
+
+
+def test_needs_rebase_lists_clean_pairs_in_clean(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    base = gerrit.master
+    gerrit.advance({"a.c": _text({5: "master"})})
+    t = gerrit.change(100, base, {"a.c": _text({5: "T"})})
+    rest.add(100, [t], ["a.c"])
+    hit = gerrit.change(200, gerrit.master, {"a.c": _text({5: "master", 6: "R"})})
+    rest.add(200, [hit], ["a.c"], labels=READY)
+    far = gerrit.change(300, base, {"a.c": _text({15: "F"})})
+    rest.add(300, [far], ["a.c"], labels=READY)
+    out = run(client, local)
+    assert out["status"] == "needs-rebase"
+    assert [e["cn"] for e in out["as_uploaded_only"]] == [200]
+    assert out["clean"] == [300]
+    assert out["counts"]["conflicting"] == 1
+
+
+def test_needs_rebase_surfaces_as_uploaded_errors(setup, monkeypatch):
+    from gerrit_cli import conflicts as engine
+
+    gerrit, local, client = setup
+    rest = client.rest
+    base = gerrit.master
+    gerrit.advance({"a.c": _text({5: "master"})})
+    t = gerrit.change(100, base, {"a.c": _text({5: "T"})})
+    rest.add(100, [t], ["a.c"])
+    r = gerrit.change(200, base, {"a.c": _text({15: "R"})})
+    rest.add(200, [r], ["a.c"], labels=READY)
+    real = engine.Repo.pick
+
+    def pick(self, onto, commit, parent):
+        if onto == r.commit:
+            return engine._Pick("error", detail="boom")
+        return real(self, onto, commit, parent)
+
+    monkeypatch.setattr(engine.Repo, "pick", pick)
+    out = run(client, local)
+    assert out["errors"] == [{"cn": 200, "reason": "trial merge failed"}]
+    assert out["clean"] == [] and out["as_uploaded_only"] == []
+
+
+def test_a_merged_change_is_invalid_input(setup):
+    gerrit, local, client = setup
+    _target(gerrit, client.rest, {5: "T"}, status="MERGED")
+    with pytest.raises(ConflictRepoError, match="MERGED") as exc:
+        run(client, local)
+    assert error_code_for(exc.value) == ErrorCode.INVALID_INPUT
+
+
+def test_hunks_for_a_change_not_tried_is_noted(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    r = gerrit.change(200, gerrit.master, {"a.c": _text({5: "R"})})
+    rest.add(200, [r], ["a.c"], labels=READY)
+    out = run(client, local, hunks={200, 999})
+    assert out["notes"] == ["hunks-for 999: not a tried candidate"]
+    assert "hunks" in out["conflicts"][0]
+    assert "notes" not in run(client, local, hunks={200})

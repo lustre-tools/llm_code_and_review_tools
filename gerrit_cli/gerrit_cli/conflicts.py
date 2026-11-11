@@ -173,7 +173,9 @@ class Repo:
                 text=not binary, input=input, timeout=timeout, env=env,
             )
         except subprocess.TimeoutExpired:
-            return subprocess.CompletedProcess(args, _TIMED_OUT, "", f"timed out after {timeout} s")
+            empty: str | bytes = b"" if binary else ""
+            return subprocess.CompletedProcess(args, _TIMED_OUT, empty,
+                                               f"timed out after {timeout} s")
 
     def resolve_remote(self, project: str) -> str | None:
         """The remote that fetches Gerrit `project`, "origin" first."""
@@ -339,6 +341,9 @@ class Repo:
         for path in paths:
             r = self._run("diff", "--no-color", "-U0", parent, commit, "--", path,
                           scratch=True, binary=True)
+            if r.returncode != 0:
+                out[path] = set()
+                continue
             out[path] = {ln[1:] for ln in r.stdout.decode(errors="replace").splitlines()
                          if ln.startswith("+") and not ln.startswith("+++")}
         return out

@@ -39,7 +39,9 @@ def classify(base: list[str], ours: list[str], theirs: list[str],
     if _replaced(base, ours) & _replaced(base, theirs):
         return "edit-edit"
     in_base = set(base)
-    if all(line not in ours_own_added for line in ours if line not in in_base):
+    added = [line for line in ours if line not in in_base]
+    # a pure deletion says nothing about whose it is
+    if added and all(line not in ours_own_added for line in added):
         return "context"
     return "adjacent"
 

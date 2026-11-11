@@ -1217,7 +1217,8 @@ test or fail_loc value twice are in silent_only. --hunks adds the
 conflict-marker regions with their kind: insert-insert, edit-edit,
 adjacent, context; --hunks-for CN (repeatable) only for the pairs with
 those changes. --hunks is large on a busy file: run without it first,
-then --hunks-for the collisions you will act on.
+then --hunks-for the collisions you will act on (a change that was not
+tried is named in notes).
 
 fix_side says which change should move, whoever runs the command:
   target \\ candidate  frozen      lands-first  same-effort  other
@@ -1228,8 +1229,9 @@ Within lands-first a release blocker outranks priority, which outranks
 plain ready. Compare the change's owner with me to see whose move it is.
 
 When the change does not apply on the branch tip, status is
-"needs-rebase", conflicts is null and as_uploaded_only has every pair
-tried as uploaded. base says whether rebasing is an option (rebase:
+"needs-rebase", conflicts is null, as_uploaded_only has the pairs that
+conflict as uploaded, and clean those that do not. Only an open change
+can be checked. base says whether rebasing is an option (rebase:
 "would move ready/queued parents" when a parent is frozen or
 lands-first); on_branch and on_next are the change against the branch
 and <branch>-next; own_stack how its parents and children fare;

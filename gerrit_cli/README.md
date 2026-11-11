@@ -545,7 +545,8 @@ gc conflicts 12345 --with 23456 --all                 # force one in, try every 
   `edit-edit`, `adjacent`, `context`); `--hunks-for CN` (repeatable)
   adds them only for the pairs with those changes. On a busy file
   `--hunks` gives megabytes: run without it first, then `--hunks-for`
-  the collisions you will act on.
+  the collisions you will act on (a change that was not tried is named
+  in `notes`).
 - **Who moves** (`fix_side`, independent of who runs it):
 
   | target \\ candidate | frozen | lands-first | same-effort | other |
@@ -564,7 +565,8 @@ gc conflicts 12345 --with 23456 --all                 # force one in, try every 
   `own_stack` (parents and children: with `--commit`, whether each child
   still applies on the rearranged change). When the change does not
   apply on the tip, `status` is `needs-rebase`, `conflicts` is `null`,
-  and `as_uploaded_only` has every pair tried as uploaded.
+  `as_uploaded_only` has the pairs that conflict as uploaded and `clean`
+  those that do not. A merged or abandoned change is refused.
 - `--commit SHA`: the local commit and the local commits below it down
   to the branch; each commit's last Change-Id names its change, and a
   commit without an open change belongs to the change above it. The
