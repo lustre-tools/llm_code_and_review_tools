@@ -178,7 +178,8 @@ def _fetch(client: Any, q: str) -> list[dict[str, Any]]:
 
 
 def query_candidates(client: Any, project: str, branch: str,
-                     paths: list[str], max_age_days: int
+                     paths: list[str], max_age_days: int,
+                     queued_ids: set[str] | frozenset[str] = frozenset()
                      ) -> list[dict[str, Any]]:
     seen: dict[int, dict[str, Any]] = {}
     for i in range(0, len(paths), _PATHS_PER_QUERY):
@@ -186,6 +187,7 @@ def query_candidates(client: Any, project: str, branch: str,
         for age in (max_age_days, None):
             for ch in _fetch(client, _query(project, branch, batch, age)):
                 if age is None and readiness(ch) != "ready" \
+                        and ch.get("change_id") not in queued_ids \
                         and release_rank(ch.get("hashtags") or []) == 0:
                     continue
                 seen.setdefault(ch["_number"], ch)

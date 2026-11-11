@@ -190,3 +190,16 @@ def test_empty_paths_no_request():
     client = FakeClient(lambda u: [])
     assert query_candidates(client, "p", "b", [], 30) == []
     assert client.rest.urls == []
+
+
+def test_unaged_pass_keeps_queued_changes():
+    old = ch(number=9, cid="Iq", updated="2020-01-01 00:00:00.000000000")
+
+    def pages(url):
+        return [] if "-age:30d" in url else [old]
+
+    paths = ["lustre/a.c"]
+    kept = query_candidates(FakeClient(pages), "p", "b", paths, 30,
+                            queued_ids={"Iq"})
+    assert [c["_number"] for c in kept] == [9]
+    assert query_candidates(FakeClient(pages), "p", "b", paths, 30) == []
