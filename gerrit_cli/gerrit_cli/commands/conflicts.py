@@ -247,7 +247,8 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     found = {c["_number"]: c for c in query_candidates(
         client, project, branch, paths, max_age, frozenset(queued_ids)) if c["_number"] not in own}
     forced = set(with_ or []) - own
-    skipped: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = [{"cn": n, "reason": "own stack"}
+                                     for n in sorted(set(with_ or []) & own)]
     if forced - set(found):
         extra = _query(client, " OR ".join(f"change:{n}" for n in sorted(forced - set(found))))
         for c in extra:
@@ -285,7 +286,7 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     kept, not_tried = [], []
     for n in sorted(tiers):
         chain = below(n)
-        if n not in forced:
+        if n not in forced and tiers[n] != "frozen":
             reason = next(((a, r) for a in chain
                            if (r := classify(every[a], target, queued_ids, _NEVER_STALE, now)[1])),
                           None)
@@ -355,6 +356,9 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     clean: list[int] = []
     errors = [{"cn": n, "reason": res.get(str(n), {}).get("reason", "")}
               for n in kept if res.get(str(n), {}).get("status") == "error"]
+    skipped += [{"cn": n, "reason": res[str(n)].get("reason", "")}
+                for n in kept if res.get(str(n), {}).get("status") == "skipped"]
+    skipped.sort(key=lambda s: s["cn"])
     entries = [(pair, entry(pair)) for pair in result["focus_pairs"]]
     for pair, e in entries if landed else []:
         statuses = [*e["landing"].values(), *e["as_uploaded"].values()]

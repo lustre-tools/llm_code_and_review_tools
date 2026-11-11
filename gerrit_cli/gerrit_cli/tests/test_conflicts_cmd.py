@@ -10,7 +10,7 @@ import pytest
 
 from gerrit_cli.commands._helpers import error_code_for
 from gerrit_cli.commands.conflicts import run_conflicts
-from gerrit_cli.conflicts import ConflictRepoError
+from gerrit_cli.conflicts import ConflictRepoError, Patch
 from gerrit_cli.errors import ErrorCode
 from gerrit_cli.tests.test_graph_conflicts import (  # noqa: F401
     _ENV, _git, _queue, _text, change_id, gerrit, local,
@@ -466,3 +466,41 @@ def test_a_child_on_an_older_patchset_is_still_the_targets_child(setup, monkeypa
     assert sorted(out["own_stack"]["children"], key=lambda c: c["cn"]) == [
         {"cn": 105, "status": "clean"}, {"cn": 110, "status": "clean"}]
     assert out["counts"]["candidates"] == 0 and out["clean"] == []
+
+
+def test_a_queued_change_on_a_vetoed_parent_is_never_dropped(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    below = gerrit.change(400, gerrit.master, {"b.c": _text({2: "B"})})
+    rest.add(400, [below], ["b.c"], labels=VETO)
+    queued = gerrit.change(410, below.commit, {"a.c": _text({5: "Q"}), "b.c": _text({2: "B"})})
+    rest.add(410, [queued], ["a.c", "b.c"])
+    _queue(gerrit, [(410, {"a.c": _text({5: "Q"})})])
+    out = run(client, local)
+    assert out["skipped"] == []
+    [c] = out["conflicts"]
+    assert c["cn"] == 410 and c["tier"] == "frozen"
+
+
+def test_a_candidate_the_engine_skips_is_listed_in_skipped(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    side = gerrit.commit(gerrit.master, {"b.c": _text({3: "side"})}, "side")
+    tree = _git(gerrit.path, "rev-parse", f"{side}^{{tree}}")
+    merge = _git(gerrit.path, "commit-tree", tree, "-p", gerrit.master, "-p", side,
+                 "-m", f"change 200\n\nChange-Id: {change_id(200)}")
+    _git(gerrit.path, "update-ref", "refs/changes/00/200/1", merge)
+    rest.add(200, [Patch(200, 1, merge)], ["a.c"], labels=READY)
+    out = run(client, local)
+    assert out["skipped"] == [{"cn": 200, "reason": "merge commit"}]
+    assert out["conflicts"] == [] and out["clean"] == [] and out["errors"] == []
+    assert out["already_conflicting"] == []
+
+
+def test_with_names_a_change_of_the_own_stack(setup):
+    gerrit, local, client = setup
+    _target(gerrit, client.rest, {5: "T"})
+    out = run(client, local, with_=[100])
+    assert out["skipped"] == [{"cn": 100, "reason": "own stack"}]
