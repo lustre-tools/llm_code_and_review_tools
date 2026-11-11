@@ -62,7 +62,9 @@ def test_parent_entry_carries_the_old_patchset_marker():
     assert own["parents"] == [
         {"cn": 1, "status": "conflict", "parent": {"cn": 9, "files": ["a.c"]}},
         {"cn": 2, "status": "clean"}]
-    assert own_stack(r, [1, 3], [])["parents"][0]["cn"] == 1
+    assert own_stack(r, [1, 3], [])["parents"] == [
+        {"cn": 1, "status": "conflict", "parent": {"cn": 9, "files": ["a.c"]}}]
+    assert own_stack(r, [3, 1], [])["parents"] == [{"cn": 3, "status": "skipped"}]
     assert own_stack(r, [1], [3])["children"] == [{"cn": 3, "status": "skipped"}]
 
 
