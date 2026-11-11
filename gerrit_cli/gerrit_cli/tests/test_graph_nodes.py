@@ -174,6 +174,38 @@ def _payload_with_message(rev_hash, message):
     }
 
 
+class TestUpdateNodeMetaAuthorBackfill:
+    """A node made from a search result says "Unknown" until the bulk
+    fetch names someone: the current commit's author, else the owner."""
+
+    def _node(self, author="Unknown"):
+        return _make_node(cn=1, subject="S", status="NEW", latest=1,
+                          author=author, base_url="https://x")
+
+    def test_unknown_author_becomes_the_owner(self):
+        node = self._node()
+        _update_node_meta(node, {"owner": {"name": "Andreas Dilger"}})
+        assert node["author"] == "Andreas Dilger"
+
+    def test_the_commit_author_when_the_payload_has_it(self):
+        node = self._node()
+        _update_node_meta(node, {
+            "owner": {"name": "Andreas Dilger"}, "current_revision": "abc",
+            "revisions": {"abc": {"_number": 3, "commit": {"author": {"name": "Hiroshi Nishida"}}}},
+        })
+        assert node["author"] == "Hiroshi Nishida"
+
+    def test_a_known_author_stays(self):
+        node = self._node("Sebastien Buisson")
+        _update_node_meta(node, {"owner": {"name": "Marc Vef"}})
+        assert node["author"] == "Sebastien Buisson"
+
+    def test_nobody_named_leaves_it_unknown(self):
+        node = self._node()
+        _update_node_meta(node, {"owner": {"_account_id": 7}})
+        assert node["author"] == "Unknown"
+
+
 class TestUpdateNodeMetaBackportDetection:
     """The `is_backport` flag drives a different ready-to-land
     rule on the JS side (1 reviewer +1 instead of 2). Detection

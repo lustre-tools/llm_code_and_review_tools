@@ -138,6 +138,13 @@ def _update_node_meta(node: dict[str, Any], change: dict[str, Any]) -> None:
     if owner_name:
         node["owner"] = owner_name
     current_commit = change.get("current_revision", "")
+    # A node made from a search result has no author: searches without
+    # DETAILED_ACCOUNTS give the owner as a bare account id.
+    if node.get("author") in ("", "Unknown"):
+        commit = ((change.get("revisions") or {}).get(current_commit) or {}).get("commit") or {}
+        author = (commit.get("author") or {}).get("name") or owner_name
+        if author:
+            node["author"] = author
     if current_commit:
         node["current_commit"] = current_commit
         # /related's `_current_revision_number` can be stale (Gerrit
