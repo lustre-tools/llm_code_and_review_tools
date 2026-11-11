@@ -1208,8 +1208,10 @@ CN checks a change whatever the filters say.
 Each checked pair is tried in both orders as it would land (landing:
 target_first, candidate_first; each change's stack picked onto the branch
 tip) and as uploaded (as_uploaded: target_on_theirs, theirs_on_target;
-each own diff picked onto the other's uploaded commit). A pair is in
-conflicts if any of the four conflicts; via names the candidate's
+each own diff picked onto the other's uploaded commit). An as-uploaded
+conflict counts only on files both sides change; one on a file only one
+side changes is the branch moving between their bases, listed in
+base_drift instead. A pair is in conflicts if any of the four conflicts; via names the candidate's
 ancestor the conflict is at. Pairs that merge cleanly but define the same
 test or fail_loc value twice are in silent_only. --hunks adds the
 conflict-marker regions with their kind: insert-insert, edit-edit,

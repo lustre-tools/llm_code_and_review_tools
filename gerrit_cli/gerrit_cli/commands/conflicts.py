@@ -342,6 +342,8 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
                             for k in ("target_on_theirs", "theirs_on_target")}
         e["via"] = pair["via"]
         e["silent"] = pair["silent"]
+        if pair.get("base_drift"):
+            e["base_drift"] = pair["base_drift"]
         if "hunks" in pair:
             e["hunks"] = pair["hunks"] if landed else \
                 {k: v for k, v in pair["hunks"].items() if k != "landing"}

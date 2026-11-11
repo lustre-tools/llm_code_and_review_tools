@@ -45,7 +45,7 @@ import subprocess
 import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
@@ -767,6 +767,24 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
     landed = target in st.applied
     # candidates on one stack share their lower changes' picks
     memo: dict[int, _Pick] = {}
+    own_files: dict[int, set[str]] = {}
+
+    def own(zs: list[int]) -> set[str]:
+        todo = [z for z in zs if z not in own_files]
+        if todo:
+            found = repo.changed_files({st.patches[z].commit: st.base[z] for z in todo})
+            for z in todo:
+                own_files[z] = found.get(st.patches[z].commit, set())
+        return set().union(*(own_files[z] for z in zs))
+
+    def drift(pick: _Pick, both: set[str], dropped: set[str]) -> _Pick:
+        """An as-uploaded pick also conflicts wherever the branch moved
+        between the two bases; only a file both sides change is theirs."""
+        if pick.status != "conflict":
+            return pick
+        kept = tuple(f for f in pick.files if f in both)
+        dropped.update(f for f in pick.files if f not in both)
+        return replace(pick, files=kept) if kept else _Pick("clean")
 
     def land(start: str, zs: list[int], cache: dict[int, _Pick] | None) -> tuple[_Pick, int | None]:
         cur = start
@@ -821,8 +839,12 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
             t_first = c_first = _Pick("skipped")
             at = cat = None
         files = sorted(set(t_first.files) | set(c_first.files))
-        t_up = repo.pick(st.patches[c].commit, st.patches[target].commit, st.base[target])
-        c_up = repo.pick(st.patches[target].commit, st.patches[c].commit, st.base[c])
+        both = own(st.stack[target]) & own(tz)
+        dropped: set[str] = set()
+        t_up = drift(repo.pick(st.patches[c].commit, st.patches[target].commit,
+                               st.base[target]), both, dropped)
+        c_up = drift(repo.pick(st.patches[target].commit, st.patches[c].commit, st.base[c]),
+                     both, dropped)
         pair: dict[str, Any] = {
             "target": target, "other": c,
             "landing": {"target_first": t_first.status, "candidate_first": c_first.status,
@@ -831,6 +853,8 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
                             "files": sorted(set(t_up.files) | set(c_up.files))},
             "via": at if at is not None and at != c else None,
         }
+        if dropped:
+            pair["base_drift"] = sorted(dropped)
         pair["silent"] = silent(c, t_first)
         if hunks is True or (isinstance(hunks, set) and c in hunks):
             landing: dict[str, list] = {}

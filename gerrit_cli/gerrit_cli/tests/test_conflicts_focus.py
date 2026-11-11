@@ -149,3 +149,32 @@ def test_hunks_for_a_set_of_candidates(gerrit, local):
                         workers=2, focus={1}, hunks={3})
     assert "hunks" not in _pair(r, 2)
     assert _pair(r, 3)["hunks"]["landing"]["a.c"]
+
+
+def test_as_uploaded_conflict_on_a_file_only_one_side_changes_is_base_drift(gerrit, local):
+    old = gerrit.master
+    gerrit.advance({"a.c": _text({6: "M"})})
+    c = gerrit.change(2, old, {"b.c": _text({4: "C"})})
+    t = gerrit.change(1, gerrit.master, {"a.c": _text({6: "M", 7: "T"})})
+    p = _pair(_check(gerrit, local, [t, c], focus={1}), 2)
+    assert p["as_uploaded"] == {"target_on_theirs": "clean",
+                                "theirs_on_target": "clean", "files": []}
+    assert p["base_drift"] == ["a.c"]
+    assert p["landing"]["target_first"] == "clean"
+
+
+def test_base_drift_is_left_out_of_as_uploaded_hunks(gerrit, local):
+    from gerrit_cli.conflicts import Repo, check_conflicts
+    old = gerrit.master
+    gerrit.advance({"a.c": _text({6: "M"})})
+    c = gerrit.change(2, old, {"b.c": _text({4: "C"})})
+    t = gerrit.change(1, gerrit.master, {"a.c": _text({6: "M", 7: "T"})})
+    r = check_conflicts(Repo(local), str(gerrit.path), "master", [t, c], gerrit.owner,
+                        workers=2, focus={1}, hunks=True)
+    assert _pair(r, 2)["hunks"]["as_uploaded"] == {}
+
+
+def test_a_pair_without_drift_has_no_base_drift_key(gerrit, local):
+    t = gerrit.change(1, gerrit.master, {"a.c": _text({5: "T"})})
+    c = gerrit.change(2, gerrit.master, {"a.c": _text({5: "C"})})
+    assert "base_drift" not in _pair(_check(gerrit, local, [t, c], focus={1}), 2)

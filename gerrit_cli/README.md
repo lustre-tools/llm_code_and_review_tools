@@ -534,8 +534,11 @@ gc conflicts 12345 --with 23456 --all                 # force one in, try every 
 - **Two models, both orders**: `landing` picks each side's stack onto
   the branch tip in turn (what cherry-pick submit does);
   `as_uploaded` picks each change's own diff onto the other's uploaded
-  commit (what the other owner, or CI on a stale base, sees). A pair is
-  in `conflicts` when any of the four conflicts; `via` names the
+  commit (what the other owner, or CI on a stale base, sees). An
+  as-uploaded conflict counts only on files both sides' own diffs
+  change; one on a file only one side changes comes from the branch
+  moving between their bases and is listed in `base_drift` instead.
+  A pair is in `conflicts` when any of the four conflicts; `via` names the
   candidate's ancestor the conflict is at. Duplicate test definitions or
   fail_loc values that merge cleanly are reported in `silent_only`.
   `--hunks` adds the conflict regions with their kind (`insert-insert`,

@@ -525,7 +525,7 @@ def get_tool_description() -> ToolDescription:
                     "conflicts[].cn", "conflicts[].tier", "conflicts[].readiness",
                     "conflicts[].fix_side", "conflicts[].files",
                     "conflicts[].landing", "conflicts[].as_uploaded",
-                    "conflicts[].via", "conflicts[].silent", "conflicts[].hunks",
+                    "conflicts[].via", "conflicts[].silent", "conflicts[].base_drift", "conflicts[].hunks",
                     "as_uploaded_only[]", "silent_only[]", "already_conflicting",
                     "not_tried.other", "clean", "skipped[].reason", "errors[]",
                     "counts",

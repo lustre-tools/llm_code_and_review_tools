@@ -536,3 +536,21 @@ def test_hunks_for_implies_hunks_on_the_command_line(setup, capsys, monkeypatch)
     args.func(args)
     by_cn = {c["cn"]: c for c in json.loads(capsys.readouterr().out)["conflicts"]}
     assert "hunks" in by_cn[200] and "hunks" not in by_cn[300]
+
+
+def test_a_stale_target_reports_base_drift_not_a_collision(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    base = gerrit.master
+    gerrit.advance({"a.c": _text({5: "master"})})
+    t = gerrit.change(100, base, {"a.c": _text({5: "T"}), "b.c": _text({2: "T"})})
+    rest.add(100, [t], ["a.c", "b.c"])
+    c = gerrit.change(200, gerrit.master, {"a.c": _text({5: "master"}),
+                                           "b.c": _text({15: "C"})})
+    rest.add(200, [c], ["b.c"], labels=READY)
+    out = run(client, local)
+    assert out["status"] == "needs-rebase"
+    [p] = out["as_uploaded_only"]
+    assert p["cn"] == 200 and p["base_drift"] == ["a.c"]
+    assert p["as_uploaded"] == {"target_on_theirs": "clean", "theirs_on_target": "clean"}
+    assert out["counts"]["conflicting"] == 0
