@@ -393,6 +393,40 @@ NO_COLOR=1                                        # disable colored output
 | Janitor | No auth required; optional `JANITOR_URL` (default `https://testing.whamcloud.com/gerrit-janitor`) |
 | Lustre Crash | No auth required |
 
+## Telemetry
+
+jira, gerrit, maloo, jenkins and lreview send an anonymous check-in
+once a week to <https://llm-tools.mulberrytree.cc>, so we can tell
+which tools and commands are used, how often they fail, and whether
+people or AI agents run them. It carries:
+
+| | |
+|---|---|
+| a random install ID | minted once, not derived from anything about the host |
+| host facts | OS and version, architecture, WSL or not, Python |
+| per tool used that week | its version, each command's run count split ok/fail, and how many runs came from a terminal (`human`), an AI coding agent (`agent`) or neither (`script`) |
+
+Never sent: arguments, change numbers, issue keys, URLs, server or
+user names, hostnames, paths, environment values or error messages.
+A command is counted under its registered name; a mistyped one is just
+a failed `invalid`. The server keeps a keyed hash of the source
+address, never the address. The other tools send nothing.
+
+```bash
+llm-tools-telemetry show     # the exact JSON a check-in would send
+llm-tools-telemetry status   # on/off, install ID, last send
+llm-tools-telemetry off      # opt out
+```
+
+Off switches, in precedence order: `LLM_TOOLS_TELEMETRY=0` in the
+environment (one command or CI job); `[telemetry]` `enabled = false` in
+`/etc/llm-tools.conf` (every user on the host, and a user cannot undo
+it); `llm-tools-telemetry off` (you). A host whose runs each start from
+an empty home can make them one install by setting `install_id` (a
+uuid4) and `state_dir` under `[telemetry]` in `/etc/llm-tools.conf`,
+as with ltvm's `/etc/ltvm.conf`. The client is
+`llm_tool_common/telemetry.py`.
+
 ## Output Format
 
 All tools output raw JSON by default (no envelope). Use `--envelope`

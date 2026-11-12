@@ -38,6 +38,7 @@ from llm_tool_common.config import (
     argv_option_value,
     hoist_args,
 )
+from llm_tool_common import telemetry
 from llm_tool_common.update_check import maybe_check_for_updates
 
 from .envelope import error_response_from_dict, format_json
@@ -518,8 +519,15 @@ def _list_global_options(subparsers: argparse._SubParsersAction) -> None:
 
 def main():
     """Main entry point."""
+    with telemetry.session("gerrit") as run:
+        _main(run)
+
+
+def _main(run):
     parser = build_parser()
     args = parser.parse_args()
+    # The bare command shows the session status (or help).
+    run.command = args.command or "status"
     maybe_check_for_updates()
 
     global FULL_ENVELOPE

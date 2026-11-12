@@ -11,18 +11,42 @@ from typing import Any, NoReturn
 import click
 from click.exceptions import NoArgsIsHelpError
 
+from . import telemetry
 from .decorators import error_from_exception
 from .envelope import error_response_from_dict, format_json
 from .errors import ErrorCode, ExitCode
 
 
-class JsonUsageErrorGroup(click.Group):
+class TelemetryGroup(click.Group):
+    """Count each run of the tool in telemetry (see telemetry.py).
+
+    main() wraps the whole run, so the exit status is known; the
+    subcommand's registered name is only known once invoke() has
+    resolved it, so invoke() hands it over on the way out.  A subclass
+    sets ``tool_name`` to its label in telemetry.TOOLS.
+    """
+
+    tool_name = "cli"
+
+    def main(self, *args: Any, **kwargs: Any) -> Any:
+        with telemetry.session(self.tool_name) as run:
+            self._telemetry_run = run
+            return super().main(*args, **kwargs)
+
+    def invoke(self, ctx: click.Context) -> Any:
+        try:
+            return super().invoke(ctx)
+        finally:
+            run = getattr(self, "_telemetry_run", None)
+            if run is not None:
+                run.command = ctx.invoked_subcommand
+
+
+class JsonUsageErrorGroup(TelemetryGroup):
     """Report click usage errors as JSON INVALID_INPUT with exit 4.
 
     A subclass sets ``tool_name`` for the envelope's meta.
     """
-
-    tool_name = "cli"
 
     def make_context(
         self,

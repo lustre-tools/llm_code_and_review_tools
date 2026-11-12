@@ -21,6 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from llm_tool_common import telemetry
 from llm_tool_common.update_check import maybe_check_for_updates
 
 from . import __version__
@@ -1494,9 +1495,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> None:
-    args = build_parser().parse_args(argv)
-    maybe_check_for_updates()
-    sys.exit(args.func(args))
+    with telemetry.session("lreview") as run:
+        args = build_parser().parse_args(argv)
+        run.command = args.command
+        maybe_check_for_updates()
+        sys.exit(args.func(args))
 
 
 if __name__ == "__main__":

@@ -63,7 +63,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Console scripts our packages install (used for ~/.local/bin symlinks
 # when installing into a venv, and for cleanup on uninstall)
-TOOL_BINS="jira gerrit gerrit-cli gc maloo jenkins janitor lustre-crash lreview pw-cli release-priority"
+TOOL_BINS="jira gerrit gerrit-cli gc maloo jenkins janitor lustre-crash lreview pw-cli release-priority llm-tools-telemetry"
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
