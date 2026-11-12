@@ -445,17 +445,6 @@ def add_review_series_parser(subparsers):
     return parser
 
 
-def add_interactive_parser(subparsers):
-    """Add the 'interactive' subcommand parser."""
-    parser = subparsers.add_parser(
-        "interactive", aliases=["i"],
-        help="Interactive mode for reviewing comments",
-        description="Review and reply to comments interactively",
-    )
-    parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
-    return parser
-
-
 def add_series_status_parser(subparsers):
     """Add the 'series-status' subcommand parser."""
     parser = subparsers.add_parser(
@@ -1757,45 +1746,6 @@ def add_related_parser(subparsers):
     return parser
 
 
-def add_sashiko_review_parser(subparsers):
-    """Add the 'sashiko-review' subcommand parser."""
-    parser = subparsers.add_parser(
-        "sashiko-review",
-        aliases=["sr"],
-        help="Submit a change to Sashiko for automated AI code review",
-    )
-    parser.add_argument(
-        "change",
-        help="Gerrit change number or URL",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show findings without posting to Gerrit",
-    )
-    parser.add_argument(
-        "--vote",
-        action="store_true",
-        help="Include a Code-Review vote based on severity",
-    )
-    parser.add_argument(
-        "--repo",
-        help="Path to local git repository (auto-detected if not set)",
-    )
-    parser.add_argument(
-        "--sashiko-url",
-        default="http://127.0.0.1:8080",
-        help="Sashiko server URL (default: http://127.0.0.1:8080)",
-    )
-    parser.add_argument(
-        "--timeout",
-        type=int,
-        default=60,
-        help="Max minutes to wait for review (default: 60)",
-    )
-    return parser
-
-
 def setup_parsers(subparsers, handlers):
     """Set up all subparsers and bind them to command handlers.
 
@@ -1825,8 +1775,6 @@ def setup_parsers(subparsers, handlers):
         func=handlers['series_status'])
 
     # Interactive mode
-    add_interactive_parser(subparsers).set_defaults(
-        func=handlers['interactive'])
 
     # Session workflow commands
     add_work_on_patch_parser(subparsers).set_defaults(
@@ -1904,9 +1852,6 @@ def setup_parsers(subparsers, handlers):
     add_ack_parser(subparsers).set_defaults(func=handlers['ack'])
 
     # Sashiko automated review
-    if 'sashiko_review' in handlers:
-        add_sashiko_review_parser(subparsers).set_defaults(
-            func=handlers['sashiko_review'])
 
     # Visualization
     add_graph_parser(subparsers).set_defaults(func=handlers['graph'])

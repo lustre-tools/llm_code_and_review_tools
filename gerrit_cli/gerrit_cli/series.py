@@ -93,14 +93,6 @@ class PatchSeries:
     def __len__(self) -> int:
         return len(self.patches)
 
-    def get_change_numbers(self) -> list[int]:
-        """Return list of change numbers in order (base to tip)."""
-        return [p.change_number for p in self.patches]
-
-    def get_urls(self) -> list[str]:
-        """Return list of URLs in order (base to tip)."""
-        return [p.url for p in self.patches]
-
     def format_summary(self) -> str:
         """Format a human-readable summary of the series."""
         lines = [
@@ -525,19 +517,6 @@ class SeriesFinder:
             if info['change'] == change_number:
                 return commit_id
         return None
-
-    def _find_tip(self, changes_map: dict[str, dict[str, Any]]) -> Optional[str]:
-        """Find the tip commit (the one with no children in the set)."""
-        # Build set of all parents
-        all_parents = {info['parent'] for info in changes_map.values() if info['parent']}
-
-        # Tip is a commit that is not a parent of any other commit in the set
-        for commit_id in changes_map:
-            if commit_id not in all_parents:
-                return commit_id
-
-        # Fallback: return any commit if we can't find a clear tip
-        return next(iter(changes_map), None)
 
     def _walk_chain_backwards(
         self,

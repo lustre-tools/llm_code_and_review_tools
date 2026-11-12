@@ -6,8 +6,13 @@ triage Maloo test results, review patch series, and manage changes.
 ## Installation
 
 ```bash
-cd gerrit_cli && ./install.sh
-# or: pip install -e .
+./install.sh            # from the repository root: installs every tool
+# or, for this tool alone: cd gerrit_cli && pip install -e .
+```
+
+For bash tab completion, add to `~/.bashrc`:
+```bash
+source /path/to/llm_code_and_review_tools/gerrit_cli/scripts/gerrit-completion.bash
 ```
 
 Configure via environment variables or `~/.config/gerrit-cli/.env`:
@@ -604,12 +609,6 @@ delete-message <URL> <ID> --reason R    # Gerrit admins: same for a change
                                  #   message; ids change after any deletion
 ```
 
-### Interactive Mode
-```bash
-interactive <URL>                # Interactive mode for reviewing comments
-i <URL>                          # Shorthand for interactive
-```
-
 ### Staging Management
 ```bash
 staged list                      # List all staged operations
@@ -632,11 +631,6 @@ upload [CHANGE] --base master-next  # HEAD rebased onto master-next, still for m
 ```bash
 continue-reintegration           # Continue after resolving conflicts
 skip-reintegration               # Skip conflicting change
-```
-
-### AI Review
-```bash
-sashiko-review <URL>             # Submit for automated AI review (alias: sr)
 ```
 
 ### Self-Documentation

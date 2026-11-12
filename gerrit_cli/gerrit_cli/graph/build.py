@@ -1157,6 +1157,7 @@ def _group_cross_edges(
     # Current patchsets first so the live derivation of a (parent,
     # child) pair wins the first-seen dedupe over an old-patchset one.
     items = list(group_rev_parents.items())
+
     def _is_current(item: tuple[str, str]) -> bool:
         info = group_ctps.get(item[0])
         node = group_nodes.get(info[0]) if info else None
@@ -1362,6 +1363,7 @@ def _build_merged_trunk(ctx: BuildContext) -> list[int]:
     merged = [
         n for n in ctx.nodes.values() if n.get("status") == "MERGED"
     ]
+
     def key(n):
         ts = n.get("submitted") or n.get("updated") or ""
         # Empty timestamp → sort last (treat as "newest unknown").
@@ -1587,10 +1589,6 @@ def _redirect_inflight_to_recent_merged(
         cn: _trunk_timestamp(ctx.nodes[cn])
         for cn in merged_trunk if cn in ctx.nodes
     }
-    anchor_node = ctx.nodes.get(ctx.change_number)
-    anchor_submitted = (
-        _trunk_timestamp(anchor_node) if anchor_node else ""
-    )
 
     def is_redirect_candidate(e: dict) -> tuple[bool, int | None]:
         child = ctx.nodes.get(e["to"])
@@ -1785,12 +1783,6 @@ def _hook_orphan_main_chains(
     """
     if not merged_trunk:
         return 0
-
-    trunk_dates = [
-        _trunk_timestamp(ctx.nodes[cn]) for cn in merged_trunk
-        if cn in ctx.nodes and _trunk_timestamp(ctx.nodes[cn])
-    ]
-    trunk_max = max(trunk_dates) if trunk_dates else ""
 
     trunk_set = set(merged_trunk)
     # A node is "already connected" if it has an incoming edge from

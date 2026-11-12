@@ -6,17 +6,16 @@ from unittest.mock import MagicMock, Mock, call, patch
 
 import pytest
 
-from gerrit_cli.rebase import (
-    RebaseManager,
-    RebaseSession,
+from gerrit_cli.patch_workflow import (
     abort_patch,
     end_session,
     finish_patch,
     rebase_status,
     work_on_patch,
 )
+from gerrit_cli.rebase_manager import RebaseManager
 from gerrit_cli.series import PatchInfo
-from gerrit_cli.session import SessionManager
+from gerrit_cli.session import RebaseSession, SessionManager
 
 
 class TestRebaseSession:

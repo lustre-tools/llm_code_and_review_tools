@@ -33,13 +33,8 @@ class ErrorCode(BaseErrorCode):
     INVALID_URL = "INVALID_URL"
     THREAD_INDEX_OUT_OF_RANGE = "THREAD_INDEX_OUT_OF_RANGE"
 
-    # Session errors
-    NO_ACTIVE_SESSION = "NO_ACTIVE_SESSION"
-    SESSION_ERROR = "SESSION_ERROR"
-
     # Git errors
     GIT_ERROR = "GIT_ERROR"
-    REBASE_ERROR = "REBASE_ERROR"
 
     # Upload refusals and failures
     CHANGE_ID_MISMATCH = "CHANGE_ID_MISMATCH"

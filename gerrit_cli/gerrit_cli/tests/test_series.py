@@ -104,25 +104,6 @@ class TestPatchSeries:
         )
         assert len(series) == 3
 
-    def test_get_change_numbers(self):
-        series = PatchSeries(
-            patches=[
-                PatchInfo(100, "s1", "c1", "p1", "NEW", "u1"),
-                PatchInfo(101, "s2", "c2", "p2", "NEW", "u2"),
-                PatchInfo(102, "s3", "c3", "p3", "NEW", "u3"),
-            ]
-        )
-        assert series.get_change_numbers() == [100, 101, 102]
-
-    def test_get_urls(self):
-        series = PatchSeries(
-            patches=[
-                PatchInfo(1, "s1", "c1", "p1", "NEW", "http://a"),
-                PatchInfo(2, "s2", "c2", "p2", "NEW", "http://b"),
-            ]
-        )
-        assert series.get_urls() == ["http://a", "http://b"]
-
     def test_format_summary(self):
         series = PatchSeries(
             patches=[
@@ -207,18 +188,6 @@ class TestSeriesFinder:
         # NEW and ABANDONED
         result = finder._build_commit_map(related, ["NEW", "ABANDONED"])
         assert len(result) == 3
-
-    def test_find_tip(self):
-        finder = SeriesFinder(client=Mock())
-
-        changes_map = {
-            "commit1": {"change": 100, "parent": "base", "commit": "commit1"},
-            "commit2": {"change": 101, "parent": "commit1", "commit": "commit2"},
-            "commit3": {"change": 102, "parent": "commit2", "commit": "commit3"},
-        }
-
-        tip = finder._find_tip(changes_map)
-        assert tip == "commit3"  # No other commit has this as parent
 
     def test_find_commit_for_change(self):
         finder = SeriesFinder(client=Mock())

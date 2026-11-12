@@ -343,14 +343,6 @@ class GerritCommentsClient:
             "o=ALL_REVISIONS&o=CURRENT_REVISION&o=CURRENT_COMMIT&o=DETAILED_ACCOUNTS"
         )
 
-    def get_revision_files(
-        self, change_number: int, revision_id: str
-    ) -> dict[str, Any]:
-        """The files a revision has, by path."""
-        return self.rest.get(
-            f"/changes/{change_number}/revisions/{revision_id}/files"
-        )
-
     def get_change(
         self, change_number: int, options: list[str] | None = None
     ) -> dict[str, Any]:
@@ -594,38 +586,6 @@ class GerritCommentsClient:
             change_number=change_number,
             revision_id=revision_id,
             comments=comments,
-        )
-
-    def mark_comment_done(
-        self,
-        change_number: int,
-        revision_id: str,
-        file_path: str,
-        comment_id: str,
-        line: Optional[int] = None,
-        message: str = "Done",
-    ) -> dict[str, Any]:
-        """Mark a comment as done with an optional message.
-
-        Args:
-            change_number: The change number
-            revision_id: The revision SHA or "current"
-            file_path: Path to the file containing the comment
-            comment_id: ID of the comment to mark done
-            line: Line number (should match original comment)
-            message: Message to include (default: "Done")
-
-        Returns:
-            Response from the API
-        """
-        return self.reply_to_comment(
-            change_number=change_number,
-            revision_id=revision_id,
-            file_path=file_path,
-            comment_id=comment_id,
-            message=message,
-            line=line,
-            mark_resolved=True,
         )
 
     def format_change_url(self, project: str, change_number: int) -> str:

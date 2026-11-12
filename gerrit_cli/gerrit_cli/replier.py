@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 from .client import GerritCommentsClient
 from .mode import MODE_DRAFTS, MODE_ENV_VAR, is_drafts_mode
-from .models import Author, Comment, CommentThread, ExtractedComments, ReplyResult
+from .models import Author, Comment, CommentThread, ReplyResult
 from .staging import StagingManager
 
 
@@ -141,29 +141,6 @@ class CommentReplier:
             mark_resolved=True,
         )
 
-    def acknowledge(
-        self,
-        change_number: int,
-        comment: Comment,
-        message: str = "Acknowledged",
-    ) -> ReplyResult:
-        """Acknowledge a comment and mark it as resolved.
-
-        Args:
-            change_number: The change number
-            comment: The Comment object to acknowledge
-            message: Optional message (default: "Acknowledged")
-
-        Returns:
-            ReplyResult with success status
-        """
-        return self.reply_to_comment(
-            change_number=change_number,
-            comment=comment,
-            message=message,
-            mark_resolved=True,
-        )
-
     def reply_to_thread(
         self,
         change_number: int,
@@ -191,29 +168,6 @@ class CommentReplier:
             comment=last_comment,
             message=message,
             mark_resolved=mark_resolved,
-        )
-
-    def mark_thread_done(
-        self,
-        change_number: int,
-        thread: CommentThread,
-        message: str = "Done",
-    ) -> ReplyResult:
-        """Mark a thread as done.
-
-        Args:
-            change_number: The change number
-            thread: The CommentThread to mark done
-            message: Optional message (default: "Done")
-
-        Returns:
-            ReplyResult with success status
-        """
-        return self.reply_to_thread(
-            change_number=change_number,
-            thread=thread,
-            message=message,
-            mark_resolved=True,
         )
 
     def batch_reply(
@@ -278,41 +232,6 @@ class CommentReplier:
             )
             for reply_spec in replies
         ]
-
-    def reply_from_extracted(
-        self,
-        extracted: ExtractedComments,
-        thread_index: int,
-        message: str,
-        mark_resolved: bool = False,
-    ) -> ReplyResult:
-        """Reply to a thread from extracted comments by index.
-
-        Args:
-            extracted: ExtractedComments object
-            thread_index: Index of the thread to reply to
-            message: Reply message
-            mark_resolved: Whether to mark as resolved
-
-        Returns:
-            ReplyResult with success status
-        """
-        if thread_index < 0 or thread_index >= len(extracted.threads):
-            return ReplyResult(
-                success=False,
-                comment_id="",
-                message=message,
-                marked_resolved=False,
-                error=f"Invalid thread index: {thread_index}",
-            )
-
-        thread = extracted.threads[thread_index]
-        return self.reply_to_thread(
-            change_number=extracted.change_info.change_number,
-            thread=thread,
-            message=message,
-            mark_resolved=mark_resolved,
-        )
 
     def push_staged(
         self,

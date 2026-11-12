@@ -191,22 +191,6 @@ class ReintegrationManager:
 
         return True
 
-    def cherry_pick_descendant(
-        self,
-        change_number: int,
-        commit_hash: str,
-    ) -> tuple[bool, str]:
-        """Cherry-pick a descendant commit.
-
-        Args:
-            change_number: The change number being cherry-picked
-            commit_hash: The commit hash to cherry-pick
-
-        Returns:
-            Tuple of (success, message_or_error)
-        """
-        return git_utils.cherry_pick(commit_hash)
-
     def format_conflict_message(
         self,
         change_number: int,
@@ -281,4 +265,3 @@ Or to skip this change:
         lines.append("")
         lines.append("Continuing with normal review workflow...")
         return "\n".join(lines)
-

@@ -125,7 +125,7 @@ class TestParserHandlerContracts:
             # Parse the command with minimal args
             try:
                 # Most commands need at least a URL or number
-                if 'series' in cmd_name or 'review' in cmd_name or 'interactive' in cmd_name:
+                if 'series' in cmd_name or 'review' in cmd_name:
                     test_args = [cmd_name, 'https://example.com/12345']
                 elif cmd_name in ('stage',):
                     test_args = [cmd_name, '0']
@@ -171,7 +171,7 @@ class TestCLIEntryPoint:
     def test_status_command_no_session(self):
         """Test status command when no session exists."""
         from gerrit_cli.cli import main
-        from gerrit_cli.rebase import RebaseManager
+        from gerrit_cli.rebase_manager import RebaseManager
 
         with patch('sys.argv', ['gerrit-cli', 'status']), \
              patch.object(RebaseManager, 'has_active_session', return_value=False), \
@@ -274,16 +274,6 @@ class TestGitOperationsReal:
         assert len(commit) == 40
         assert all(c in '0123456789abcdef' for c in commit)
 
-    def test_commit_exists(self, git_repo):
-        """Test commit existence check."""
-        from gerrit_cli.git_utils import commit_exists, get_current_commit
-
-        head = get_current_commit()
-
-        assert commit_exists(head) is True
-        # Use a ref that clearly doesn't exist - not a valid hex hash
-        assert commit_exists('refs/heads/nonexistent-branch-12345') is False
-
     def test_checkout(self, git_repo):
         """Test checkout."""
         import subprocess
@@ -357,4 +347,3 @@ class TestStagedParserHandlerContract:
         # This was the bug - handler expected change_number but parser had url
         assert hasattr(args, 'change_number')
         assert args.change_number == 12345
-

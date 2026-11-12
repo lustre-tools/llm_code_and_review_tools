@@ -1,8 +1,7 @@
 """Patch workflow orchestration — module-level convenience functions.
 
-Extracted from rebase.py as part of the module split. These functions
-create a RebaseManager internally and delegate to it, providing a
-simple functional API for patch series operations.
+These functions create a RebaseManager internally and delegate to it,
+providing a simple functional API for patch series operations.
 """
 
 from typing import Optional

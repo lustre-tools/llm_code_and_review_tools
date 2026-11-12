@@ -42,36 +42,6 @@ class TestGitRunner:
             call_kwargs = mock_run.call_args[1]
             assert call_kwargs['cwd'] == "/some/path"
 
-    def test_run_quiet_success(self):
-        """Test run_quiet returns success and output."""
-        from gerrit_cli.git_utils import GitRunner
-
-        runner = GitRunner()
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(
-                stdout="branch-name\n",
-                returncode=0
-            )
-            success, output = runner.run_quiet(["branch", "--show-current"])
-
-            assert success is True
-            assert output == "branch-name"
-
-    def test_run_quiet_failure(self):
-        """Test run_quiet returns failure and error message."""
-        from gerrit_cli.git_utils import GitRunner
-
-        runner = GitRunner()
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = subprocess.CalledProcessError(
-                1, ["git", "branch"],
-                stderr="fatal: not a git repository"
-            )
-            success, output = runner.run_quiet(["branch"])
-
-            assert success is False
-            assert "not a git repository" in output
-
 
 class TestCheckGitRepo:
     """Test check_git_repo function."""
@@ -170,34 +140,6 @@ class TestGetCurrentCommit:
             assert commit is None
 
 
-class TestCommitExists:
-    """Test commit_exists function."""
-
-    def test_exists(self):
-        """Test when commit exists."""
-        from gerrit_cli.git_utils import commit_exists
-
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            assert commit_exists("abc123") is True
-
-    def test_not_exists(self):
-        """Test when commit does not exist."""
-        from gerrit_cli.git_utils import commit_exists
-
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=1)
-            assert commit_exists("nonexistent") is False
-
-    def test_exception(self):
-        """Test when exception occurs."""
-        from gerrit_cli.git_utils import commit_exists
-
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = subprocess.CalledProcessError(1, "git")
-            assert commit_exists("abc123") is False
-
-
 class TestHasUnmergedFiles:
     """Test has_unmerged_files function."""
 
@@ -230,43 +172,6 @@ class TestHasUnmergedFiles:
         with patch('subprocess.run') as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(1, "git")
             assert has_unmerged_files() is False
-
-
-class TestGetChangeIdFromCommit:
-    """Test get_change_id_from_commit function."""
-
-    def test_found(self):
-        """Test when Change-Id is found."""
-        from gerrit_cli.git_utils import get_change_id_from_commit
-
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(
-                stdout="Some commit message\n\nChange-Id: I1234567890abcdef\n",
-                returncode=0
-            )
-            result = get_change_id_from_commit("abc123")
-            assert result == "I1234567890abcdef"
-
-    def test_not_found(self):
-        """Test when Change-Id is not found."""
-        from gerrit_cli.git_utils import get_change_id_from_commit
-
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(
-                stdout="Some commit message without change id\n",
-                returncode=0
-            )
-            result = get_change_id_from_commit("abc123")
-            assert result is None
-
-    def test_exception(self):
-        """Test when exception occurs."""
-        from gerrit_cli.git_utils import get_change_id_from_commit
-
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = subprocess.CalledProcessError(1, "git")
-            result = get_change_id_from_commit("abc123")
-            assert result is None
 
 
 class TestIsWorkingTreeClean:
@@ -401,56 +306,6 @@ class TestCherryPick:
             assert "could not apply" in error
 
 
-class TestCherryPickAbort:
-    """Test cherry_pick_abort function."""
-
-    def test_success(self):
-        """Test successful abort."""
-        from gerrit_cli.git_utils import cherry_pick_abort
-
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            success, message = cherry_pick_abort()
-            assert success is True
-            assert "aborted" in message.lower()
-
-    def test_failure(self):
-        """Test abort failure."""
-        from gerrit_cli.git_utils import cherry_pick_abort
-
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = subprocess.CalledProcessError(
-                1, "git", stderr="error: no cherry-pick in progress"
-            )
-            success, error = cherry_pick_abort()
-            assert success is False
-
-
-class TestCherryPickContinue:
-    """Test cherry_pick_continue function."""
-
-    def test_success(self):
-        """Test successful continue."""
-        from gerrit_cli.git_utils import cherry_pick_continue
-
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            success, message = cherry_pick_continue()
-            assert success is True
-            assert "continued" in message.lower()
-
-    def test_failure(self):
-        """Test continue failure."""
-        from gerrit_cli.git_utils import cherry_pick_continue
-
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = subprocess.CalledProcessError(
-                1, "git", stderr="error: no cherry-pick in progress"
-            )
-            success, error = cherry_pick_continue()
-            assert success is False
-
-
 class TestIsAncestor:
     """Test is_ancestor function."""
 
@@ -477,43 +332,3 @@ class TestIsAncestor:
         with patch('subprocess.run') as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(1, "git")
             assert is_ancestor("abc123", "def456") is False
-
-
-class TestGetCommitLog:
-    """Test get_commit_log function."""
-
-    def test_with_commits(self):
-        """Test with commits in range."""
-        from gerrit_cli.git_utils import get_commit_log
-
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(
-                stdout="abc123 First commit\ndef456 Second commit\n",
-                returncode=0
-            )
-            result = get_commit_log("base123")
-            assert len(result) == 2
-            assert "abc123" in result[0]
-            assert "def456" in result[1]
-
-    def test_no_commits(self):
-        """Test with no commits in range."""
-        from gerrit_cli.git_utils import get_commit_log
-
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(
-                stdout="",
-                returncode=0
-            )
-            result = get_commit_log("base123")
-            assert result == []
-
-    def test_exception(self):
-        """Test when exception occurs."""
-        from gerrit_cli.git_utils import get_commit_log
-
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = subprocess.CalledProcessError(1, "git")
-            result = get_commit_log("base123")
-            assert result == []
-

@@ -3,7 +3,7 @@
 import sys
 
 from ..errors import ExitCode
-from ..rebase import get_session_info
+from ..patch_workflow import get_session_info
 from ._helpers import (
     _cli,
     error_code_for,

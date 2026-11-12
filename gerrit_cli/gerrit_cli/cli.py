@@ -90,9 +90,7 @@ _preselect_credential_set()
 # ---------------------------------------------------------------------------
 from .client import GerritCommentsClient  # noqa: F401
 from .extractor import extract_comments  # noqa: F401
-from .interactive import run_interactive  # noqa: F401
-from .rebase import (  # noqa: F401
-    RebaseManager,
+from .patch_workflow import (  # noqa: F401
     abort_patch,
     end_session,
     finish_patch,
@@ -102,6 +100,7 @@ from .rebase import (  # noqa: F401
     rebase_status,
     work_on_patch,
 )
+from .rebase_manager import RebaseManager  # noqa: F401
 from .replier import CommentReplier  # noqa: F401
 from .reviewer import (  # noqa: F401
     CodeReviewer,
@@ -181,7 +180,6 @@ cmd_review = _cmd_review.cmd_review
 cmd_series = _cmd_review.cmd_series
 cmd_series_comments = _cmd_review.cmd_series_comments
 cmd_series_status = _cmd_review.cmd_series_status
-cmd_interactive = _cmd_review.cmd_interactive
 
 cmd_maloo = _cmd_ci.cmd_maloo
 cmd_info = _cmd_ci.cmd_info
@@ -315,38 +313,6 @@ def cmd_graph(args):
         sys.exit(output_error(error_code_for(e), str(e), "graph", pretty))
 
 
-def cmd_sashiko_review(args):
-    """Submit a Gerrit change for Sashiko automated AI code review."""
-    from .sashiko_bridge import do_review
-    from .client import GerritCommentsClient
-
-    pretty = getattr(args, "pretty", False)
-    try:
-        _, change_number = GerritCommentsClient.parse_gerrit_url(args.change)
-        result = do_review(
-            change_number=change_number,
-            sashiko_url=args.sashiko_url,
-            repo_path=args.repo,
-            dry_run=args.dry_run,
-            vote=args.vote,
-            max_minutes=args.timeout,
-        )
-    except ValueError as e:
-        sys.exit(output_error(
-            ErrorCode.INVALID_INPUT, str(e), "sashiko-review", pretty))
-    except Exception as e:
-        sys.exit(output_error(
-            error_code_for(e), str(e), "sashiko-review", pretty))
-
-    if not result.get("success"):
-        # a failed post carries "error": None
-        sys.exit(output_error(
-            ErrorCode.API_ERROR, result.get("error") or "Review failed",
-            "sashiko-review", pretty,
-        ))
-    output_success(result, "sashiko-review", pretty)
-
-
 # Module-level flag for --envelope; read by _helpers.output_result().
 FULL_ENVELOPE = False
 
@@ -415,7 +381,6 @@ def build_handlers():
         'series_comments': cmd_series_comments,
         'series': cmd_series,
         'series_status': cmd_series_status,
-        'interactive': cmd_interactive,
         'work_on_patch': cmd_work_on_patch,
         'next_patch': cmd_next_patch,
         'finish_patch': cmd_finish_patch,
@@ -460,7 +425,6 @@ def build_handlers():
         'ack': cmd_ack,
         'graph': cmd_graph,
         'describe': cmd_describe,
-        'sashiko_review': cmd_sashiko_review,
     }
 
 
@@ -563,7 +527,7 @@ def main():
 
     if not args.command:
         # If there's an active session, show status by default
-        from .rebase import RebaseManager as _RM
+        from .rebase_manager import RebaseManager as _RM
         manager = _RM()
         if manager.has_active_session():
             cmd_status(args)

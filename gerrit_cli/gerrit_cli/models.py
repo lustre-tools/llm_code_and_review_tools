@@ -93,28 +93,6 @@ class Comment:
             result["range"] = self.range
         return result
 
-    def get_gerrit_url(
-        self,
-        base_url: str,
-        project: str,
-        change_number: int,
-    ) -> str:
-        """Generate a Gerrit URL that links to this comment's file and line.
-
-        Args:
-            base_url: Gerrit server URL (e.g., "https://review.whamcloud.com")
-            project: Project path (e.g., "fs/lustre-release")
-            change_number: The change number
-
-        Returns:
-            URL linking to the file at the specific line in the patchset
-        """
-        # Format: https://review.whamcloud.com/c/PROJECT/+/CHANGE/PATCHSET/FILE#LINE
-        url = f"{base_url}/c/{project}/+/{change_number}/{self.patch_set}/{self.file_path}"
-        if self.line:
-            url += f"#{self.line}"
-        return url
-
     @classmethod
     def from_gerrit(cls, file_path: str, data: dict) -> "Comment":
         """Create Comment from Gerrit API response."""

@@ -35,7 +35,6 @@ from .review import (
     cmd_series,
     cmd_series_comments,
     cmd_series_status,
-    cmd_interactive,
 )
 from .ci import (
     cmd_maloo,
@@ -94,7 +93,6 @@ __all__ = [
     "cmd_series",
     "cmd_series_comments",
     "cmd_series_status",
-    "cmd_interactive",
     "cmd_maloo",
     "cmd_info",
     "cmd_series_info",

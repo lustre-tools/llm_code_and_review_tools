@@ -12,7 +12,6 @@ from gerrit_cli.cli import (
     filter_threads_by_fields,
     generate_review_prompt,
 )
-from gerrit_cli.client import GerritConfigError
 from gerrit_cli.models import Author, CodeContext, Comment, CommentThread
 
 
@@ -419,7 +418,7 @@ class TestCLIImports:
 
     def test_rebase_manager_has_check_git_repo(self):
         """Test that RebaseManager has the check_git_repo method."""
-        from gerrit_cli.rebase import RebaseManager
+        from gerrit_cli.rebase_manager import RebaseManager
         manager = RebaseManager()
         assert hasattr(manager, 'check_git_repo')
         assert callable(manager.check_git_repo)
@@ -1026,7 +1025,7 @@ class TestMainFunction:
         from gerrit_cli.cli import main
         with patch('gerrit_cli.cli._JsonErrorParser') as MockParser, \
              patch('gerrit_cli.parsers.setup_parsers'), \
-             patch('gerrit_cli.rebase.RebaseManager') as MockManager, \
+             patch('gerrit_cli.rebase_manager.RebaseManager') as MockManager, \
              patch('gerrit_cli.cli.cmd_status') as mock_status:
             mock_args = MagicMock()
             mock_args.command = None
@@ -1043,7 +1042,7 @@ class TestMainFunction:
         from gerrit_cli.cli import main
         with patch('gerrit_cli.cli._JsonErrorParser') as MockParser, \
              patch('gerrit_cli.parsers.setup_parsers'), \
-             patch('gerrit_cli.rebase.RebaseManager') as MockManager, \
+             patch('gerrit_cli.rebase_manager.RebaseManager') as MockManager, \
              pytest.raises(SystemExit) as exc_info:
             mock_args = MagicMock()
             mock_args.command = None
@@ -1395,49 +1394,6 @@ class TestCmdSeriesStatus:
 
             with pytest.raises(SystemExit) as exc_info:
                 cmd_series_status(args)
-            assert exc_info.value.code == 1
-
-
-class TestCmdInteractive:
-    """Tests for cmd_interactive function."""
-
-    def test_interactive_default_mode(self):
-        """Test interactive runs interactive session."""
-        from gerrit_cli.cli import cmd_interactive
-        args = argparse.Namespace(
-            url="https://example.com/12345",
-        )
-
-        with patch('gerrit_cli.cli.run_interactive') as mock_run:
-            cmd_interactive(args)
-            mock_run.assert_called_once_with("https://example.com/12345")
-
-    def test_interactive_keyboard_interrupt(self):
-        """Test interactive handles keyboard interrupt."""
-        from gerrit_cli.cli import cmd_interactive
-        args = argparse.Namespace(
-            url="https://example.com/12345",
-        )
-
-        with patch('gerrit_cli.cli.run_interactive') as mock_run:
-            mock_run.side_effect = KeyboardInterrupt()
-
-            with pytest.raises(SystemExit) as exc_info:
-                cmd_interactive(args)
-            assert exc_info.value.code == 0
-
-    def test_interactive_error(self):
-        """Test interactive error handling."""
-        from gerrit_cli.cli import cmd_interactive
-        args = argparse.Namespace(
-            url="https://example.com/12345",
-        )
-
-        with patch('gerrit_cli.cli.run_interactive') as mock_run:
-            mock_run.side_effect = Exception("TUI error")
-
-            with pytest.raises(SystemExit) as exc_info:
-                cmd_interactive(args)
             assert exc_info.value.code == 1
 
 
@@ -2351,77 +2307,6 @@ class TestCmdAck:
             assert exc_info.value.code == 1
 
 
-class TestCmdSashikoReview:
-    """Tests for cmd_sashiko_review's result handling."""
-
-    @staticmethod
-    def _args():
-        return argparse.Namespace(
-            change="12345", sashiko_url="http://127.0.0.1:8080",
-            repo="/repo", dry_run=False, vote=False, timeout=1,
-            pretty=False,
-        )
-
-    def test_failed_review_is_a_json_error_and_nonzero_exit(self, capsys):
-        from gerrit_cli.cli import cmd_sashiko_review
-
-        with patch('gerrit_cli.sashiko_bridge.do_review',
-                   return_value={"success": False,
-                                 "error": "Review timed out"}), \
-             pytest.raises(SystemExit) as exc_info:
-            cmd_sashiko_review(self._args())
-
-        assert exc_info.value.code == 1
-        out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-        assert out["code"] == "API_ERROR"
-        assert out["message"] == "Review timed out"
-
-    def test_failed_post_without_message_still_says_something(self, capsys):
-        from gerrit_cli.cli import cmd_sashiko_review
-
-        with patch('gerrit_cli.sashiko_bridge.do_review',
-                   return_value={"success": False, "error": None}), \
-             pytest.raises(SystemExit) as exc_info:
-            cmd_sashiko_review(self._args())
-
-        assert exc_info.value.code == 1
-        out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-        assert out["message"] == "Review failed"
-
-    @pytest.mark.parametrize("failure, exit_code, code", [
-        (ValueError("Cannot find Lustre git repository. Use --repo"),
-         4, "INVALID_INPUT"),
-        (GerritConfigError("Missing configuration: GERRIT_URL"),
-         2, "CONFIG_ERROR"),
-        (requests.ConnectionError("Gerrit refused the connection"),
-         5, "CONNECTION_ERROR"),
-        (RuntimeError("git fetch failed"), 1, "API_ERROR"),
-    ])
-    def test_a_raised_failure_is_a_classified_json_error(
-            self, failure, exit_code, code, capsys):
-        from gerrit_cli.cli import cmd_sashiko_review
-
-        with patch('gerrit_cli.sashiko_bridge.do_review',
-                   side_effect=failure), \
-             pytest.raises(SystemExit) as exc_info:
-            cmd_sashiko_review(self._args())
-
-        assert exc_info.value.code == exit_code
-        out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-        assert out["code"] == code
-        assert str(failure) in out["message"]
-
-    def test_successful_review_prints_result(self, capsys):
-        from gerrit_cli.cli import cmd_sashiko_review
-
-        with patch('gerrit_cli.sashiko_bridge.do_review',
-                   return_value={"success": True, "findings": []}):
-            cmd_sashiko_review(self._args())
-
-        out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-        assert out["findings"] == []
-
-
 class TestCmdGraphErrors:
     """cmd_graph reports a failure as JSON instead of crashing."""
 
@@ -2669,20 +2554,6 @@ class TestBatchReplyExitStatus:
             tmp_path, [{"thread_index": 99, "message": "b"}], [], capsys)
         assert code == 4
         post.assert_not_called()
-
-
-class TestSashikoBridgeErrors:
-    """The bridge says what kind of failure it hit."""
-
-    def test_sashiko_down_keeps_the_connection_error(self):
-        from gerrit_cli.sashiko_bridge import submit_to_sashiko
-
-        with patch('gerrit_cli.sashiko_bridge.requests.post',
-                   side_effect=requests.ConnectionError("refused")), \
-             pytest.raises(RuntimeError) as err:
-            submit_to_sashiko("http://127.0.0.1:9", "a" * 40)
-
-        assert isinstance(err.value.__cause__, requests.ConnectionError)
 
 
 class TestReplyByCommentId:

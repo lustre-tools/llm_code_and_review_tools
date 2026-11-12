@@ -440,30 +440,6 @@ class TestGerritCommentsClientWithMocks:
         assert comments["test.py"][0]["message"] == "Acknowledged"
         assert comments["test.py"][0]["unresolved"] is False
 
-    @patch.dict(os.environ, {"GERRIT_CLI_MODE": "full"})
-    @patch("gerrit_cli.client.GerritRestAPI")
-    @patch("gerrit_cli.client.HTTPBasicAuth")
-    def test_mark_comment_done(self, mock_auth, mock_api):
-        """Test marking a comment as done."""
-        mock_rest = MagicMock()
-        mock_rest.post.return_value = {}
-        mock_api.return_value = mock_rest
-
-        client = GerritCommentsClient()
-        client.mark_comment_done(
-            change_number=123,
-            revision_id="abc123",
-            file_path="test.py",
-            comment_id="comment456",
-            line=42,
-        )
-
-        mock_rest.post.assert_called_once()
-        call_args = mock_rest.post.call_args
-        comments = call_args[1]["json"]["comments"]
-        assert comments["test.py"][0]["message"] == "Done"
-        assert comments["test.py"][0]["unresolved"] is False
-
 
 class TestSshFallbackIdentity:
     """A REST-to-SSH fallback acts as the account the client was given."""

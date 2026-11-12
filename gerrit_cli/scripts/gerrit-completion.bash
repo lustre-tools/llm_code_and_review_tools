@@ -10,7 +10,7 @@ _gerrit_completions() {
     _init_completion || return
 
     local global_opts="--envelope --help --user --version -U -h"
-    local commands="abandon abort ack add-reviewer batch check checkout co comments continue-reintegration delete-comment delete-message describe diff done examples explain extract find-user finish-patch graph hashtag i info interactive label maloo message next-patch publish-drafts push rebase related remove-reviewer reply restore review review-series reviewer-candidates reviewers s sashiko-review search series-comments series-info series-status set-topic skip-reintegration sr stage staged status upload vote watch work-on-patch"
+    local commands="abandon abort ack add-reviewer batch check checkout co comments continue-reintegration delete-comment delete-message describe diff done examples explain extract find-user finish-patch graph hashtag info label maloo message next-patch publish-drafts push rebase related remove-reviewer reply restore review review-series reviewer-candidates reviewers s search series-comments series-info series-status set-topic skip-reintegration stage staged status upload vote watch work-on-patch"
 
     # The command is the first word that is not a global option.
     local cmd="" i=1
@@ -61,7 +61,6 @@ _gerrit_completions() {
         finish-patch) opts="--envelope --help --stay --user -U -h" ;;
         graph) opts="--branch --comments --conflicts --cross-project --envelope --help --include-hashtag --include-topic --name --no-open --output --pretty --skip-ci-details --skip-hashtag --skip-topic --ticket --user -U -h -o -p" ;;
         hashtag) opts="--add --envelope --help --pretty --remove --user -U -a -h -p -r" ;;
-        i|interactive) opts="--envelope --help --user -U -h" ;;
         info) opts="--envelope --help --pretty --show-bots --user -U -h -p" ;;
         label|vote) opts="--envelope --help --message --no-thread --pretty --user -U -h -m -p" ;;
         maloo) opts="--envelope --help --patchset --pretty --user -U -h -p -r" ;;
@@ -79,7 +78,6 @@ _gerrit_completions() {
         reviewer-candidates) opts="--asked --brief --compact --envelope --exclude --help --limit --load --months --path --pretty --ref --repo --table --user --widen-to -C -U -h -n -p" ;;
         reviewers) opts="--envelope --help --pretty --user -U -h -p" ;;
         s|search) opts="--all --envelope --help --limit --max --pretty --start --user -S -U -a -h -n -p" ;;
-        sashiko-review|sr) opts="--dry-run --envelope --help --repo --sashiko-url --timeout --user --vote -U -h" ;;
         series-comments) opts="--all --context-lines --envelope --fields --help --include-ci --include-lint --include-system --no-context --pretty --summary --user -U -a -c -h -p -s" ;;
         series-info) opts="--envelope --help --pretty --show-bots --user -U -h -p" ;;
         series-status) opts="--envelope --help --pretty --user -U -h -p" ;;

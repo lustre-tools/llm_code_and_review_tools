@@ -800,23 +800,6 @@ details carry posted, skipped_indices and the per-reply results.
         ],
         "related": ["reply", "stage", "push"],
     },
-    "interactive": {
-        "summary": "Interactive mode for reviewing comments",
-        "description": """
-Review and reply to comments in an interactive terminal interface.
-""",
-        "examples": [
-            {
-                "command": "gc interactive URL",
-                "description": "Start interactive review mode",
-            },
-            {
-                "command": "gc i URL",
-                "description": "Short alias for interactive",
-            },
-        ],
-        "related": ["comments", "review-series"],
-    },
     "continue-reintegration": {
         "summary": "Continue reintegration after resolving conflicts",
         "description": """
@@ -1200,22 +1183,6 @@ linear chain, this shows the whole topology.
         ],
         "related": ["series-status", "related", "set-topic", "hashtag"],
     },
-    "sashiko-review": {
-        "summary": "Review a change with a Sashiko server",
-        "description": """
-Send a change to a running Sashiko instance for automated review, wait
-for it (--timeout minutes), and post its findings as inline comments.
---dry-run shows the findings without posting; --vote adds a Code-Review
-vote from their severity. 'sr' is an alias.
-""",
-        "examples": [
-            {
-                "command": "gc sashiko-review --dry-run 64591",
-                "description": "Review and show findings only",
-            },
-        ],
-        "related": ["review"],
-    },
     "describe": {
         "summary": "Machine-readable description of the commands",
         "description": """
@@ -1267,11 +1234,9 @@ accepted. 'gc <command> --help' lists every argument.
 # Aliases for command lookup
 COMMAND_ALIASES = {
     "extract": "comments",
-    "i": "interactive",
     "co": "checkout",
     "s": "search",
     "label": "vote",
-    "sr": "sashiko-review",
 }
 
 

@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gerrit-cli"
-version = "0.2.91"
+version = "0.2.92"
 description = "Gerrit CLI for code review, comment management, and patch workflows"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [
-    {name = "Claude", email = "claude@anthropic.com"}
+    {name = "LLM Code Tools Team"}
 ]
 keywords = ["gerrit", "code-review", "cli", "agent", "claude"]
 classifiers = [
@@ -24,9 +24,6 @@ classifiers = [
 dependencies = [
     "pygerrit2>=2.0.15",
     "requests>=2.25.0",
-    "flask>=3.0.2",
-    "flask-caching>=2.1.0",
-    "python-dotenv>=0.19.0",
     "llm-tool-common",
 ]
 
@@ -37,7 +34,6 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0",
     "types-requests>=2.28.0",
-    "types-Flask>=1.1.0",
 ]
 
 [project.scripts]
@@ -46,8 +42,8 @@ gc = "gerrit_cli.cli:main"
 gerrit-cli = "gerrit_cli.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/anthropics/claude-code"
-Documentation = "https://github.com/anthropics/claude-code"
+Homepage = "https://github.com/lustre-tools/llm_code_and_review_tools"
+Documentation = "https://github.com/lustre-tools/llm_code_and_review_tools/tree/main/gerrit_cli"
 
 [tool.setuptools.packages.find]
 include = ["gerrit_cli*"]
@@ -71,7 +67,7 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = [

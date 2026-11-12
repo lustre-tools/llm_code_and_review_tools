@@ -209,23 +209,6 @@ class FileChange:
 
 
 @dataclass
-class ReviewComment:
-    """A comment to post as part of a review."""
-    path: str
-    line: int
-    message: str
-    unresolved: bool = True
-
-    def to_gerrit_format(self) -> dict:
-        """Convert to Gerrit API format."""
-        return {
-            "line": self.line,
-            "message": self.message,
-            "unresolved": self.unresolved,
-        }
-
-
-@dataclass
 class ReviewData:
     """Complete data for reviewing a Gerrit change."""
     change_info: ChangeInfo
@@ -240,43 +223,6 @@ class ReviewData:
             "commit_message": self.commit_message,
             "parent_commit": self.parent_commit,
         }
-
-    def format_for_review(self) -> str:
-        """Format all changes for human/AI review."""
-        lines = [
-            "=" * 70,
-            f"CHANGE: {self.change_info.subject}",
-            "=" * 70,
-            f"Project: {self.change_info.project}",
-            f"Branch: {self.change_info.branch}",
-            f"Author: {self.change_info.owner.name}",
-            f"Status: {self.change_info.status}",
-            f"URL: {self.change_info.url}",
-            "",
-            "COMMIT MESSAGE:",
-            "-" * 40,
-            self.commit_message,
-            "",
-            f"FILES CHANGED ({len(self.files)}):",
-            "-" * 40,
-        ]
-
-        for f in self.files:
-            status_map = {'A': 'added', 'D': 'deleted', 'M': 'modified', 'R': 'renamed'}
-            status = status_map.get(f.status, f.status)
-            lines.append(f"  {f.path} ({status}, +{f.lines_added}/-{f.lines_deleted})")
-
-        lines.append("")
-        lines.append("=" * 70)
-        lines.append("DIFFS:")
-        lines.append("=" * 70)
-
-        for f in self.files:
-            lines.append("")
-            lines.append(f"### {f.path} ###")
-            lines.append(f.format_diff())
-
-        return "\n".join(lines)
 
 
 @dataclass
@@ -640,39 +586,6 @@ class CodeReviewer:
                 vote=vote,
                 error=str(e),
             )
-
-    def post_comment(
-        self,
-        change_number: int,
-        path: str,
-        line: int,
-        message: str,
-        unresolved: bool = True,
-        revision: str = "current",
-    ) -> ReviewResult:
-        """Post a single comment on a specific line.
-
-        Args:
-            change_number: The change number
-            path: File path
-            line: Line number
-            message: Comment message
-            unresolved: Whether to mark as unresolved
-            revision: Revision to comment on
-
-        Returns:
-            ReviewResult
-        """
-        return self.post_review(
-            change_number=change_number,
-            comments=[{
-                "path": path,
-                "line": line,
-                "message": message,
-                "unresolved": unresolved,
-            }],
-            revision=revision,
-        )
 
     def post_patchset_comment(
         self,

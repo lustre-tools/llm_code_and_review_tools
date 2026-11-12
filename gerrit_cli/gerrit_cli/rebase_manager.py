@@ -1,8 +1,7 @@
 """RebaseManager — git rebase operations for working on patches.
 
-Extracted from rebase.py as part of the module split. Contains the
-RebaseManager class which orchestrates git checkout, cherry-pick,
-reintegration, and push operations for patch series workflows.
+Orchestrates git checkout, cherry-pick, reintegration, and push
+operations for patch series workflows.
 """
 
 import subprocess
@@ -1156,13 +1155,6 @@ class RebaseManager:
                 p['commit'] = new_commits[patch['change_number']]
             updated.append(p)
         return updated
-
-    def _get_patch_commit(self, patches: list[dict], change_number: int) -> Optional[str]:
-        """Get commit hash for a patch from the list."""
-        for patch in patches:
-            if patch['change_number'] == change_number:
-                return patch.get('commit')
-        return None
 
     def abort_rebase(self) -> tuple[bool, str]:
         """Abort the current rebase session.

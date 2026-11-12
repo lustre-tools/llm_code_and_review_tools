@@ -1,4 +1,4 @@
-"""Review and series commands: review, series, series-comments, series-status, interactive."""
+"""Review and series commands: review, series, series-comments, series-status."""
 
 import contextlib
 import sys
@@ -300,19 +300,6 @@ def cmd_series(args):
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
     except Exception as e:
         sys.exit(output_error(error_code_for(e), f"Error finding series: {e}", command, pretty))
-
-
-def cmd_interactive(args):
-    """Run interactive mode for reviewing series comments."""
-    cli = _cli()
-    try:
-        cli.run_interactive(args.url)
-    except KeyboardInterrupt:
-        print("\n\nInterrupted by user")
-        sys.exit(0)
-    except Exception as e:
-        print(f"Error in interactive mode: {e}", file=sys.stderr)
-        sys.exit(exit_code_for(error_code_for(e)))
 
 
 def cmd_series_status(args):

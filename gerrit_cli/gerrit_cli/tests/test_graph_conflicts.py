@@ -6,6 +6,7 @@ everything by fetching, as it would from Gerrit.
 """
 
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -16,6 +17,7 @@ import pytest
 
 from gerrit_cli.graph.build import _check_conflicts, build_graph
 from gerrit_cli.graph.conflicts import (
+    _MIN_GIT,
     ConflictCheckError,
     Patch,
     Repo,
@@ -90,6 +92,18 @@ def _queue(gerrit: "Gerrit", picks: list[tuple[int | None, dict[str, str]]]) -> 
     return out
 
 
+def _git_version() -> tuple[int, ...]:
+    out = subprocess.run(["git", "version"], text=True, capture_output=True).stdout
+    return tuple(int(x) for x in re.findall(r"\d+", out)[:2])
+
+
+# Trial merges use merge-tree --merge-base (git 2.40). Apple's git is older,
+# so on a stock Mac these tests skip rather than fail.
+_OLD_GIT = _git_version() < _MIN_GIT
+_OLD_GIT_REASON = f"needs git {'.'.join(map(str, _MIN_GIT))} or newer for merge-tree --merge-base"
+_needs_new_git = pytest.mark.skipif(_OLD_GIT, reason=_OLD_GIT_REASON)
+
+
 @pytest.fixture
 def gerrit(tmp_path):
     return Gerrit(tmp_path)
@@ -97,6 +111,8 @@ def gerrit(tmp_path):
 
 @pytest.fixture
 def local(tmp_path):
+    if _OLD_GIT:
+        pytest.skip(_OLD_GIT_REASON)
     path = tmp_path / "local"
     path.mkdir()
     _git(path, "init", "-q")
@@ -468,6 +484,7 @@ class TestRepository:
         with pytest.raises(ConflictCheckError, match="no such directory"):
             Repo(tmp_path / "nope")
 
+    @_needs_new_git
     def test_not_a_repository(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
         with pytest.raises(ConflictCheckError, match="not a git repository"):

@@ -126,43 +126,6 @@ class TestFileChange:
 class TestReviewData:
     """Tests for ReviewData dataclass."""
 
-    def test_format_for_review(self):
-        """Test formatting review data."""
-        change_info = ChangeInfo(
-            change_id="test~123",
-            change_number=123,
-            project="test/project",
-            branch="master",
-            subject="Test change",
-            status="NEW",
-            current_revision="abc123",
-            owner=Author(name="Owner"),
-            url="https://example.com/123",
-        )
-        files = [
-            FileChange(
-                path="file.py",
-                status="M",
-                old_path=None,
-                lines_added=5,
-                lines_deleted=2,
-                size_delta=30,
-            )
-        ]
-        review_data = ReviewData(
-            change_info=change_info,
-            files=files,
-            commit_message="Test commit\n\nAdd feature X",
-            parent_commit="parent123",
-        )
-
-        formatted = review_data.format_for_review()
-        assert "Test change" in formatted
-        assert "test/project" in formatted
-        assert "Owner" in formatted
-        assert "file.py" in formatted
-        assert "modified" in formatted
-
     def test_to_dict(self):
         """Test converting ReviewData to dict."""
         change_info = ChangeInfo(
@@ -460,24 +423,6 @@ class TestCodeReviewer:
 
         assert result.success is False
         assert "API error" in result.error
-
-    @patch("gerrit_cli.reviewer.GerritCommentsClient")
-    def test_post_comment(self, mock_client_class):
-        """Test posting a single comment."""
-        mock_client = MagicMock()
-        mock_client.rest.post.return_value = {}
-        mock_client_class.return_value = mock_client
-
-        reviewer = CodeReviewer()
-        result = reviewer.post_comment(
-            change_number=123,
-            path="test.py",
-            line=42,
-            message="Consider using const",
-        )
-
-        assert result.success is True
-        assert result.comments_posted == 1
 
 
 class TestNormalizeReviewComments:

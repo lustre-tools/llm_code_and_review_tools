@@ -4,10 +4,8 @@ from unittest.mock import MagicMock, patch
 
 from gerrit_cli.models import (
     Author,
-    ChangeInfo,
     Comment,
     CommentThread,
-    ExtractedComments,
 )
 from gerrit_cli.replier import CommentReplier, mark_done, reply_to_comment
 
@@ -144,33 +142,6 @@ class TestCommentReplier:
         )
 
         assert result.message == "Fixed in patchset 5"
-
-    @patch("gerrit_cli.replier.GerritCommentsClient")
-    def test_acknowledge(self, mock_client_class):
-        """Test acknowledging a comment."""
-        mock_client = MagicMock()
-        mock_client.get_change_detail.return_value = {
-            "current_revision": "abc123"
-        }
-        mock_client_class.return_value = mock_client
-
-        comment = Comment(
-            id="comment1",
-            patch_set=1,
-            file_path="test.py",
-            line=10,
-            message="Consider refactoring",
-            author=Author(name="Reviewer"),
-            unresolved=True,
-            updated="2025-01-01",
-        )
-
-        replier = CommentReplier()
-        result = replier.acknowledge(change_number=123, comment=comment)
-
-        assert result.success is True
-        assert result.message == "Acknowledged"
-        assert result.marked_resolved is True
 
     @patch("gerrit_cli.replier.GerritCommentsClient")
     def test_reply_to_thread_uses_last_comment(self, mock_client_class):
@@ -476,89 +447,6 @@ class TestCommentReplier:
         assert result.success is False
         assert ("400 Client Error: Bad Request: file x not found in "
                 "revision 51164,9") in result.error
-
-    @patch("gerrit_cli.replier.GerritCommentsClient")
-    def test_reply_from_extracted(self, mock_client_class):
-        """Test replying from extracted comments by index."""
-        mock_client = MagicMock()
-        mock_client.get_change_detail.return_value = {
-            "current_revision": "abc123"
-        }
-        mock_client_class.return_value = mock_client
-
-        change_info = ChangeInfo(
-            change_id="test~123",
-            change_number=123,
-            project="test",
-            branch="master",
-            subject="Test",
-            status="NEW",
-            current_revision="abc123",
-            owner=Author(name="Owner"),
-            url="https://example.com/123",
-        )
-        thread = CommentThread(
-            root_comment=Comment(
-                id="c1",
-                patch_set=1,
-                file_path="test.py",
-                line=10,
-                message="Fix",
-                author=Author(name="R"),
-                unresolved=True,
-                updated="2025-01-01",
-            )
-        )
-        extracted = ExtractedComments(
-            change_info=change_info,
-            threads=[thread],
-            unresolved_count=1,
-            total_count=1,
-        )
-
-        replier = CommentReplier()
-        result = replier.reply_from_extracted(
-            extracted=extracted,
-            thread_index=0,
-            message="Done",
-            mark_resolved=True,
-        )
-
-        assert result.success is True
-
-    @patch("gerrit_cli.replier.GerritCommentsClient")
-    def test_reply_from_extracted_invalid_index(self, mock_client_class):
-        """Test replying with invalid thread index."""
-        mock_client = MagicMock()
-        mock_client_class.return_value = mock_client
-
-        change_info = ChangeInfo(
-            change_id="test~123",
-            change_number=123,
-            project="test",
-            branch="master",
-            subject="Test",
-            status="NEW",
-            current_revision="abc123",
-            owner=Author(name="Owner"),
-            url="https://example.com/123",
-        )
-        extracted = ExtractedComments(
-            change_info=change_info,
-            threads=[],
-            unresolved_count=0,
-            total_count=0,
-        )
-
-        replier = CommentReplier()
-        result = replier.reply_from_extracted(
-            extracted=extracted,
-            thread_index=5,
-            message="Done",
-        )
-
-        assert result.success is False
-        assert "Invalid thread index" in result.error
 
 
 class TestConvenienceFunctions:
