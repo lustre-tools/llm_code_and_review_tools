@@ -1509,19 +1509,65 @@ def _author_and_message(repo: str, sha: str) -> tuple[str, str, str]:
     )
 
 
+def _reparent_and_push(
+    client: Any, repo: str, url: str, ref: str, pushed: str,
+    parent: tuple[str, int, int],
+) -> None:
+    """Push ``pushed`` again with its parent replaced, as a new patchset.
+
+    The fallback when Gerrit refuses the REST rebase: the account may
+    push a patchset to a change it does not own, but not rebase it
+    (fb-203dede35c39, 403 on a change another account owns).  The edit
+    of the parent changed only its author and message, so the tree of
+    ``pushed`` is still right on top of it.  ``parent`` is the parent's
+    new sha, change number and patchset; that patchset is fetched so
+    the commit can be made locally.
+    """
+    final, number, patchset = parent
+    parent_ref = f"refs/changes/{number % 100:02d}/{number}/{patchset}"
+    with _Askpass(client.username, client.password) as askpass:
+        _git(repo, [*_GIT_AUTH_ARGS, "fetch", "--no-tags", url, parent_ref],
+             env=askpass.env())
+        fields = _text(_git(repo, [
+            "log", "-1", "--format=%an%x00%ae%x00%ad%x00%cn%x00%ce%x00%T",
+            "--date=raw", pushed,
+        ]).stdout).strip().split("\x00")
+        message = _git(repo, ["cat-file", "commit", pushed]).stdout
+        message = message.split(b"\n\n", 1)[1] if b"\n\n" in message else b""
+        env = dict(os.environ, GIT_AUTHOR_NAME=fields[0],
+                   GIT_AUTHOR_EMAIL=fields[1], GIT_AUTHOR_DATE=fields[2],
+                   GIT_COMMITTER_NAME=fields[3], GIT_COMMITTER_EMAIL=fields[4])
+        new = _text(_git(repo, ["commit-tree", fields[5], "-p", final],
+                         env=env, stdin=message).stdout).strip()
+        # Gerrit never advertises refs/for/, so "+" changes nothing there;
+        # a plain remote that kept the first push would call it behind.
+        result = _git(repo, [*_GIT_AUTH_ARGS, "push", "--porcelain", url,
+                             f"+{new}:{ref}"], env=askpass.env(), check=False)
+    status = _porcelain_status(_text(result.stdout))
+    if result.returncode != 0 or status is None or status[0] == "!":
+        raise UploadError(
+            ErrorCode.GIT_ERROR,
+            f"push of {new[:12]} onto {final[:12]} failed: "
+            f"{_text(result.stderr).strip()}",
+        )
+
+
 def _edit_authors_back(
     client: Any, repo: str, plan: list[dict[str, Any]],
     originals: dict[str, tuple[str, str, str]], warnings: list[str],
+    repush: Any = None,
 ) -> list[dict[str, Any]]:
     """Give each change pushed as the account its author and message back.
 
     Bottom up: a change whose parent moved is first rebased onto the
     parent's new patchset, then (if it is one of ``originals``, keyed by
     pushed sha) its author and message are set in a change edit, which
-    is published with notify NONE.  Stops at the first failure with a
-    warning naming what is left.  Returns what was done.
+    is published with notify NONE.  When Gerrit refuses the rebase,
+    ``repush(pushed, (final, number, patchset))`` pushes the commit onto
+    the parent's new patchset instead.  Stops at the first failure with
+    a warning naming what is left.  Returns what was done.
     """
-    moved: dict[str, str] = {}
+    moved: dict[str, tuple[str, int, int]] = {}
     done: list[dict[str, Any]] = []
     for entry in plan:
         number = entry.get("change_number")
@@ -1546,7 +1592,13 @@ def _edit_authors_back(
         try:
             rebased = parent in moved
             if rebased:
-                client.rebase_change_onto(number, moved[parent])
+                try:
+                    client.rebase_change_onto(number, moved[parent][0])
+                except Exception as e:  # noqa: BLE001 -- fall back below
+                    if repush is None:
+                        raise
+                    step = f"rebase ({e}) and the push onto the new parent"
+                    repush(pushed, moved[parent])
             if original is not None:
                 step = "edit"
                 client.set_edit_author(number, original[0], original[1])
@@ -1574,7 +1626,7 @@ def _edit_authors_back(
                 "Local HEAD was left at the pushed commits."
             )
             break
-        moved[pushed] = final
+        moved[pushed] = (final, number, patchset)
         entry["pushed_sha"] = pushed
         entry["sha"] = final
         entry["patchset"] = patchset
@@ -1909,7 +1961,11 @@ def upload(
 
     if author_edits:
         pushed_head = data["sha"]
-        done = _edit_authors_back(client, repo, plan, originals, warnings)
+        done = _edit_authors_back(
+            client, repo, plan, originals, warnings,
+            repush=lambda sha, parent: _reparent_and_push(
+                client, repo, url, ref, sha, parent),
+        )
         data["author_edit"] = done
         if done:
             data["author_edit_note"] = (

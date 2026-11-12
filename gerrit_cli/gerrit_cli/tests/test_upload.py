@@ -112,6 +112,7 @@ class FakeGerrit:
         self.calls: list[tuple] = []
         self.edits: dict[int, dict] = {}
         self.fail_publish = False
+        self.fail_rebase = False
 
     @property
     def authenticated(self):
@@ -223,6 +224,9 @@ class FakeGerrit:
     def rebase_change_onto(self, number, base):
         self._absorb()
         self.calls.append(("rebase", number, base))
+        if self.fail_rebase:
+            raise RuntimeError("403 Client Error: Forbidden for url: "
+                               f"/a/changes/{number}/rebase")
         self._recommit(number, parent=base)
 
     def set_edit_author(self, number, name, email):
@@ -1831,6 +1835,32 @@ def test_a_series_child_is_rebased_onto_its_edited_parent_first(gerrit, monkeypa
     assert git(bare, "rev-parse", f"{final}^") == parent_final
     assert _author_and_message(bare, final)[0] == PERSON
     assert [e["rebased"] for e in data["author_edit"]] == [False, True]
+    assert git(work, "rev-parse", "HEAD") == final
+
+
+def test_a_refused_rebase_pushes_the_child_onto_its_edited_parent(gerrit, monkeypatch):
+    """Gerrit refuses the account a rebase of a change another account
+    owns (fb-203dede35c39: 403 on 68619), but takes a pushed patchset."""
+    fake, bare, work = gerrit
+    monkeypatch.setenv("GERRIT_UPLOAD_AUTHOR", PERSON)
+    commit(work, "LU-2 osc: parent", cid=CID_B, committer=BOT, author=OPERATOR)
+    old = commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT,
+                 author=OPERATOR)
+    _, old_message = _author_and_message(work, old)
+    fake.fail_rebase = True
+
+    data = upload(fake, repo=str(work), series=True)
+
+    child = 51164
+    parent_final = fake.changes[max(fake.changes)]["current_revision"]
+    final = fake.changes[child]["current_revision"]
+    assert git(bare, "rev-parse", f"{final}^") == parent_final
+    assert _author_and_message(bare, final) == [PERSON, old_message]
+    assert git(bare, "rev-parse", f"{final}^{{tree}}") == git(
+        work, "rev-parse", f"{old}^{{tree}}")
+    assert [e["author"] for e in data["author_edit"]] == [PERSON, PERSON]
+    assert [e["rebased"] for e in data["author_edit"]] == [False, True]
+    assert data["warnings"] == []
     assert git(work, "rev-parse", "HEAD") == final
 
 
