@@ -1051,7 +1051,6 @@ STATS_OK = {"sessions_scanned": 30, "sessions_with_suite": 30}
 STATS_NONE = {"sessions_scanned": 40, "sessions_with_suite": 0}
 
 
-
 class TestTestHistory:
     HISTORY_DATA = [
         {

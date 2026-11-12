@@ -3,8 +3,7 @@
 All HTTP calls are mocked via unittest.mock patches on requests.Session.
 """
 
-import json
-from unittest.mock import MagicMock, Mock, patch, PropertyMock
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 import requests
@@ -463,16 +462,6 @@ class TestScriptResolution:
     def test_get_sub_test_script_not_found(self, client):
         client._get = MagicMock(return_value=[])
         result = client.get_sub_test_script("nonexistent")
-        assert result is None
-
-    def test_find_sub_test_script_id(self, client):
-        client._get = MagicMock(return_value=[{"id": "st1", "name": "test_39b"}])
-        result = client.find_sub_test_script_id("test_39b")
-        assert result == "st1"
-
-    def test_find_sub_test_script_id_not_found(self, client):
-        client._get = MagicMock(return_value=[])
-        result = client.find_sub_test_script_id("nonexistent")
         assert result is None
 
     def test_find_test_set_script_id(self, client):

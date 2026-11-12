@@ -628,13 +628,6 @@ class MalooClient:
 
     # -- Test history --
 
-    def find_sub_test_script_id(
-        self, name: str
-    ) -> str | None:
-        """Find a sub_test_script ID by name."""
-        rows = self._get("sub_test_scripts", {"name": name})
-        return rows[0]["id"] if rows else None
-
     def find_test_set_script_id(
         self, name: str
     ) -> str | None:

@@ -1,7 +1,5 @@
 """Unit tests for Maloo configuration loading."""
 
-import os
-from unittest.mock import patch
 
 import pytest
 

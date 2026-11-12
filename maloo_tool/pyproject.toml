@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "maloo-tool"
-version = "0.1.26"
+version = "0.1.27"
 description = "LLM-agent-focused CLI tool for Maloo test results API"
 requires-python = ">=3.11"
 license = "MIT"
@@ -14,12 +14,15 @@ authors = [
 dependencies = [
     "click>=8.0.0",
     "requests>=2.28.0",
-    "python-dotenv>=1.0.0",
     "llm-tool-common",
 ]
 
 [project.scripts]
 maloo = "maloo_tool.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/lustre-tools/llm_code_and_review_tools"
+Documentation = "https://github.com/lustre-tools/llm_code_and_review_tools/tree/main/maloo_tool"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -38,7 +41,7 @@ markers = [
 
 [tool.ruff]
 line-length = 120
-target-version = "py39"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "C4", "UP"]

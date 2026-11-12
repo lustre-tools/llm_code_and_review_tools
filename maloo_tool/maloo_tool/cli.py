@@ -497,7 +497,7 @@ def failures(session_url: str, cleanup_error: bool, pretty: bool) -> None:
 
     suite_ids = [s["suite_id"] for s in failed_suites[:1]]
     next_actions = [
-        f"maloo subtests <suite_id> -- get all subtests for a suite",
+        "maloo subtests <suite_id> -- get all subtests for a suite",
     ]
     for suite_id in suite_ids:
         next_actions.append(
