@@ -23,6 +23,9 @@ janitor = "janitor_tool.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
+# Only the tool itself: an open find also packaged tests/ and any
+# build/ left in the tree, which nested a copy per install.
+include = ["janitor_tool*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
