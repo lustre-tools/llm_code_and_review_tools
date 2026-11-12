@@ -37,16 +37,6 @@ except FileNotFoundError as e:
     _ENV_FILE_ERROR = str(e)
 
 
-def _load_env_file() -> None:
-    """Re-read this tool's .env files.
-
-    Kept as a named entry point after the loading itself moved to
-    `llm_tool_common`, so callers and tests have something to invoke; the
-    module-level call above is what runs on import.
-    """
-    load_env_files("jira-tool")
-
-
 @dataclass
 class JiraConfig:
     """JIRA tool configuration."""

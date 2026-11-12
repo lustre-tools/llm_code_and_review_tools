@@ -1778,26 +1778,6 @@ class JiraClient:
             params["accountId"] = owner
         return self._request("GET", "filter/search", params=params, context="filter search")
 
-    def get_my_filters(self, max_results: int = 100) -> list[dict[str, Any]]:
-        """Get all filters owned by the current user.
-
-        Paginates automatically to collect all results.
-        """
-        all_filters: list[dict[str, Any]] = []
-        start_at = 0
-
-        while True:
-            result = self.search_filters(max_results=max_results, start_at=start_at)
-            values = result.get("values", [])
-            all_filters.extend(values)
-
-            total = result.get("total", len(all_filters))
-            if len(all_filters) >= total or not values:
-                break
-            start_at += len(values)
-
-        return all_filters
-
     def create_filter(
         self,
         name: str,

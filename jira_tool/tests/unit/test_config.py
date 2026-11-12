@@ -7,12 +7,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from llm_tool_common.config import load_env_files
 
 from jira_tool.config import (
     AUTH_TYPE_BASIC,
     AUTH_TYPE_BEARER,
     JiraConfig,
-    _load_env_file,
     _resolve_instance,
     create_sample_config,
     load_config,
@@ -504,7 +504,7 @@ class TestCreateSampleConfig:
 
 
 class TestLoadEnvFile:
-    """Tests for _load_env_file function."""
+    """Tests for the shared .env loading, as jira configures it."""
 
     def test_loads_from_user_config_dir(self, tmp_path, monkeypatch):
         """Should load .env from ~/.config/jira-tool/.env."""
@@ -520,7 +520,7 @@ class TestLoadEnvFile:
 
         # Patch Path.home() to return our temp directory
         with patch.object(Path, "home", return_value=tmp_path):
-            _load_env_file()
+            load_env_files("jira-tool")
 
         assert os.environ.get("JIRA_SERVER") == "https://user-config.example.com"
         assert os.environ.get("JIRA_TOKEN") == "user-token"
@@ -547,7 +547,7 @@ class TestLoadEnvFile:
         fake_home = tmp_path / "fake_home"
         try:
             with patch.object(Path, "home", return_value=fake_home):
-                _load_env_file()
+                load_env_files("jira-tool")
 
             assert os.environ.get("JIRA_SERVER") == "https://cwd.example.com"
             assert os.environ.get("JIRA_TOKEN") == "cwd-token"
@@ -577,7 +577,7 @@ class TestLoadEnvFile:
 
         try:
             with patch.object(Path, "home", return_value=tmp_path):
-                _load_env_file()
+                load_env_files("jira-tool")
 
             # User config should win
             assert os.environ.get("JIRA_SERVER") == "https://user.example.com"
@@ -602,7 +602,7 @@ class TestLoadEnvFile:
         try:
             with patch.object(Path, "home", return_value=fake_home):
                 # Should not raise
-                _load_env_file()
+                load_env_files("jira-tool")
 
             # Env var should not be set
             assert os.environ.get("JIRA_SERVER") is None
@@ -626,7 +626,7 @@ class TestLoadEnvFile:
         fake_home = tmp_path / "fake_home"
         try:
             with patch.object(Path, "home", return_value=fake_home):
-                _load_env_file()
+                load_env_files("jira-tool")
 
             # Now load_config should pick up the env vars
             config = load_config(config_path=tmp_path / "nonexistent.json")

@@ -11,7 +11,6 @@ from ._helpers import (
     _normalize_comments,
     _normalize_issue,
     _trim_issue,
-    extract_field,
     extract_issue_key,
     get_client,
     handle_error,

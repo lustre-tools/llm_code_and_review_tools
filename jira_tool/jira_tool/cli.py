@@ -4,9 +4,8 @@ Commands are organized into modules under ``commands/``.  This file
 defines the top-level Click group (``main``) and registers every
 command module via :func:`commands.register_all`.
 
-For backward compatibility the helper / normalizer functions that
-tests and other code import from ``jira_tool.cli`` are re-exported
-here.
+The helper / normalizer functions the unit tests import from
+``jira_tool.cli`` are re-exported here.
 """
 
 from typing import Any
@@ -24,10 +23,9 @@ from llm_tool_common.update_check import maybe_check_for_updates
 from .envelope import error_response_from_dict, format_json
 from .errors import ErrorCode, ExitCode
 
-# ── Re-exports (backward compat) ────────────────────────────────────
-# Tests and external code do ``from jira_tool.cli import extract_field, ...``
+# ── Re-exports ──────────────────────────────────────────────────────
+# The unit tests import these helpers from ``jira_tool.cli``.
 from .commands._helpers import (  # noqa: F401 – re-exported
-    ISSUE_KEY_PATTERN,
     _normalize_attachment,
     _normalize_comment,
     _normalize_comments,
@@ -35,11 +33,6 @@ from .commands._helpers import (  # noqa: F401 – re-exported
     _parse_visibility,
     extract_field,
     extract_issue_key,
-    get_client,
-    handle_error,
-    output_field,
-    output_result,
-    pass_config,
 )
 
 

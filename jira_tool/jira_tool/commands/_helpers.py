@@ -5,19 +5,15 @@ These are re-exported from cli.py for backward compatibility.
 
 import os
 import re
-import sys
 from typing import Any
 from urllib.parse import urlparse
 
 import click
 
 from ..client import JiraClient, _adf_to_text
-from ..config import AUTH_TYPE_BASIC, DEFAULT_CONFIG_PATH, JiraConfig, load_config
-from ..envelope import error_response, error_response_from_dict, format_json, success_response
-from ..errors import ConfigError, ErrorCode, ExitCode, JiraToolError
-
-# Global options for all commands
-pass_config = click.make_pass_decorator(JiraConfig, ensure=True)
+from ..config import AUTH_TYPE_BASIC, JiraConfig, load_config
+from ..envelope import error_response, format_json
+from ..errors import ConfigError, JiraToolError
 
 
 def output_result(envelope: dict[str, Any], pretty: bool) -> None:
