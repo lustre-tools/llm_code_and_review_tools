@@ -5,7 +5,6 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
 
 from gerrit_cli.cli import (
     cmd_series,

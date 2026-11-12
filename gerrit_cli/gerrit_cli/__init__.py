@@ -38,7 +38,7 @@ Example usage:
     from gerrit_cli import CodeReviewer, get_review_data
 
     review_data = get_review_data("https://review.whamcloud.com/c/fs/lustre-release/+/62796")
-    print(review_data.format_for_review())
+    print(review_data.to_dict())
 
     # Post review comments
     reviewer = CodeReviewer()
