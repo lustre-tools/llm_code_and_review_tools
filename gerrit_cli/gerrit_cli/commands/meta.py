@@ -643,7 +643,19 @@ files, or a repo that is not lustre-release): widen --months, or rank the
 directory with --path. When the window finds fewer than 3 people not on
 the change, it is widened to --widen-to months (36) by itself, and
 widened_from names the window it started from. Picking who to add is still yours: check
-MAINTAINERS and whether a candidate is active.
+whether a candidate is active.
+
+maintainers lists who the tree's MAINTAINERS file (at --ref) names for the
+files, R: and M: lines of every section whose F: (or N:) patterns match,
+as get_maintainer.pl matches them (X: excludes): [{name, email, role,
+sections, files, rank, on_change}], plus excluded or hold (from
+held_omitted) when they apply; rank is their row among the listed
+candidates, null if not listed. maintainers_file names what was read
+(null, and maintainers [], when there is none or it cannot be read).
+The file is stale, so this is information only: it changes no score,
+order, eligible or hold, and adds no one. A listed candidate it names
+carries maintainer: [sections] (true in --compact, "maintainer" at the
+end of the status in --table, where maintainers is one text row each).
 
 --load and --asked weigh the listed candidates by the review they already
 carry, so the same few experts are not asked every time, and order them by

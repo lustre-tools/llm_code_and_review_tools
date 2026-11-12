@@ -144,7 +144,8 @@ owner sets this variable; agents must not set, unset, or override it.
   `gc remove-reviewer <url> <name>`, `gc find-user <name>`,
   `gc reviewer-candidates <url> --repo <lustre-release> --ref upstream/master`
   (ranks who reviewed, by Reviewed-by trailers, and wrote the change's
-  files over the last 12 months of local git history)
+  files over the last 12 months of local git history; who MAINTAINERS
+  names for the files is listed beside the ranking, not in it)
 
 **Configuration:** environment variables, or a `.env` file.
 Variables already set in the environment always win. Only one file

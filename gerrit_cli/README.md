@@ -569,6 +569,11 @@ other emails or spellings, and ranks them (`score` = 2 x reviewed +
 authored). The owner, the commit author and bots are left out (listed
 under `excluded`); people already on the change are kept and marked
 `on_change`. `review_share` near 1 marks whoever lands every commit.
+`maintainers` lists who the tree's `MAINTAINERS` (at `--ref`) names for
+the files, matched as `get_maintainer.pl` does, with their `rank` among
+the listed candidates (or null); a listed candidate it names carries
+`maintainer`. The file is stale, so this is information only: it changes
+no ranking, eligibility or hold, and is `[]` when there is no file.
 
 ```bash
 gc reviewer-candidates 69833 --repo ~/lustre-release --ref upstream/master

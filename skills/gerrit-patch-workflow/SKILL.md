@@ -268,7 +268,9 @@ upstream/master` (add `--table` for one text row per candidate in ranked order, 
 and who wrote the touched files over the last 12 months, leaves out the
 owner, the commit author and bots, and marks who is already on the change
 (`on_change`). Fetch the ref first so the history is current. The ranking
-is evidence, not the choice: weigh MAINTAINERS, recency (`last_reviewed`)
+is evidence, not the choice: weigh `maintainers` (who MAINTAINERS names for
+the files, beside the ranking: the file is stale, so it adds no one and
+skips no hold or cap), recency (`last_reviewed`)
 and the five-person cap; a `review_share` near 1 is the gatekeeper who
 lands everything, not a file expert. `paths_without_history` lists new
 files: rank their directory with `--path`.

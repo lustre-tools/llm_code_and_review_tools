@@ -317,7 +317,7 @@ def compact_candidate(entry):
     out = {key: entry.get(key) for key in (
         "name", "email", "account_id", "score", "reviewed", "last_reviewed",
         "on_change", "senior", "reviews_12m")}
-    for flag in ("newcomer", "inactive"):
+    for flag in ("newcomer", "inactive", "maintainer"):
         if entry.get(flag):
             out[flag] = True
     if "balanced" in entry:
@@ -346,18 +346,42 @@ def compact_data(data, on_change):
         "change_number", "subject", "owner", "commit_author", "order",
         "order_rule", "eligible", "asked_by", "window_months",
         "widened_from", "paths_without_history", "count", "total_candidates",
-        "held_omitted")
+        "held_omitted", "maintainers_file")
         if key in data}
     out["on_change"] = [{"name": name, "email": email or None, "role": role}
                         for name, email, role in on_change]
     out["candidates"] = [compact_candidate(c) for c in data["candidates"]]
     out["excluded"] = [{"name": e.get("name"), "email": e.get("email"),
                         "reason": e.get("reason")} for e in data["excluded"]]
+    out["maintainers"] = [{k: v for k, v in m.items() if k != "files"}
+                          for m in data.get("maintainers") or []]
     return out
 
 
 TABLE_COLUMNS = ("# name <email> status senior files_rev last_rev rev12m "
-                 "[bal waiting votes asked/answered/pending]")
+                 "[bal waiting votes asked/answered/pending]; status "
+                 "ends in maintainer for someone MAINTAINERS names")
+
+MAINTAINER_COLUMNS = ("name <email> R|M where [sections]: where is "
+                      "rank:N in rows, on_change:ROLE, excluded:REASON, "
+                      "hold:REASONS or not_listed; information only, "
+                      "MAINTAINERS is stale and changes no ranking")
+
+
+def maintainer_row(m):
+    """One short line for a person MAINTAINERS names for the files."""
+    if m.get("on_change"):
+        where = "on_change:" + str(m["on_change"])
+    elif m.get("excluded"):
+        where = "excluded:" + str(m["excluded"])
+    elif m.get("rank"):
+        where = f"rank:{m['rank']}"
+    elif m.get("hold"):
+        where = "hold:" + _hold_text(m["hold"])
+    else:
+        where = "not_listed"
+    return (f"{m.get('name')} <{m.get('email') or ''}> {m.get('role')} "
+            f"{where} [{'; '.join(m.get('sections') or [])}]")
 
 
 def _hold_text(hold):
@@ -374,7 +398,8 @@ def table_row(rank, entry):
         status = "hold:" + _hold_text(entry["hold"])
     else:
         status = "eligible"
-    marks = [m for m in ("newcomer", "inactive") if entry.get(m)]
+    marks = [m for m in ("newcomer", "inactive", "maintainer")
+             if entry.get(m)]
     if marks:
         status += " " + ",".join(marks)
     row = (f"{rank} {entry.get('name')} <{entry.get('email') or ''}> "
@@ -403,6 +428,9 @@ def table_data(data, on_change):
     del out["candidates"]
     out["excluded"] = [f"{e.get('name')} <{e.get('email') or ''}> "
                        f"{e.get('reason')}" for e in data["excluded"]]
+    out["maintainer_columns"] = MAINTAINER_COLUMNS
+    out["maintainers"] = [maintainer_row(m)
+                          for m in data.get("maintainers") or []]
     return out
 
 
@@ -509,6 +537,15 @@ def cmd_reviewer_candidates(args):
             "total_candidates": total,
             "excluded": excluded,
         })
+        # fb-019d54d2436c: the LFSCK maintainer get_maintainer.pl names
+        # first was not ranked.  MAINTAINERS is stale (Patrick,
+        # 2026-11-12): beside the ranking only, never in it.
+        from .maintainers import change_maintainers, mark_maintainers
+        source, maintainers = change_maintainers(repo, args.ref, paths)
+        data["maintainers_file"] = source
+        data["maintainers"] = mark_maintainers(
+            maintainers, candidates, excluded, on_change,
+            data.get("held_omitted") or [])
         if getattr(args, "table", False):
             data = table_data(data, on_change)
         elif getattr(args, "compact", False):

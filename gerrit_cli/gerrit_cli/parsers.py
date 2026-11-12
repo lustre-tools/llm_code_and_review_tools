@@ -865,6 +865,9 @@ def add_reviewer_candidates_parser(subparsers):
                     "identities, and rank (score = 2 x reviewed + authored). "
                     "Leaves out the owner, the commit author and bots; "
                     "marks people already on the change (on_change). "
+                    "Lists who the tree's MAINTAINERS names for the files "
+                    "under maintainers, beside the ranking (the file is "
+                    "stale; it ranks or adds no one). "
                     "'gc explain reviewer-candidates' describes each field.",
     )
     parser.add_argument("url", nargs="?", default=None,

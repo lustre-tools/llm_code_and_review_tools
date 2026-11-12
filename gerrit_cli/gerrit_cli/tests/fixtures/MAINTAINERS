@@ -1,0 +1,46 @@
+
+	List of maintainers (a cut-down copy of Lustre's, for tests)
+
+Descriptions of section entries:
+
+	R: Designated reviewer: FullName <address@domain>
+	F: Files and directories with wildcard patterns.
+
+Maintainers List (try to look for most precise areas first)
+
+		-----------------------------------
+
+Lustre Build System
+R:	Bea Builder <bea@example.com>
+S:	Supported
+F:	build/
+F:	*/autoconf/
+
+Lustre Client IO stack - CLIO
+R:	Neil Brown <neilb@suse.de>
+R:	Carl Clio <carl@example.com>
+S:	Supported
+F:	lustre/llite/file.c
+F:	lustre/llite/llite_mmap.c
+
+Lustre File System Check - LFSCK
+R:	Hongchao Zhang <hongchao@example.com>
+S:	Maintained
+F:	lustre/lfsck
+F:	lustre/osd-ldiskfs/osd_scrub.[ch]
+F:	lustre/tests/sanity-lfsck.sh
+
+Lustre Client llite
+M:	Andreas Dilger <adilger@whamcloud.com>
+S:	Supported
+F:	lustre/llite/
+X:	lustre/llite/namei.c
+
+Lustre Tests
+R:	Tess Tester <tess@example.com>
+S:	Supported
+N:	sanity.*\.sh$
+
+Lustre Orphan Area
+S:	Orphan
+F:	lustre/orphan/
