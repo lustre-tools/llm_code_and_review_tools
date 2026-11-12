@@ -264,7 +264,7 @@ reviewer has gone quiet, read those fields rather than parsing `info` and
 
 To find new reviewers, do not tally `git log` by hand:
 `gc reviewer-candidates <url> --repo <lustre-release checkout> --ref
-upstream/master` ranks who reviewed (Reviewed-by trailers, counted double)
+upstream/master` (add `--table` for one text row per candidate in ranked order, `--compact` for flat JSON) ranks who reviewed (Reviewed-by trailers, counted double)
 and who wrote the touched files over the last 12 months, leaves out the
 owner, the commit author and bots, and marks who is already on the change
 (`on_change`). Fetch the ref first so the history is current. The ranking

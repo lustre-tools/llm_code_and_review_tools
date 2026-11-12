@@ -273,7 +273,8 @@ def test_compact_keeps_only_what_the_choice_needs(
         assert set(entry) == {
             "name", "email", "account_id", "score", "reviewed",
             "last_reviewed", "on_change", "balanced", "asked", "answered",
-            "pending", "last_asked", "hold_at", "hold", "senior"}
+            "pending", "last_asked", "hold_at", "hold", "senior",
+            "reviews_12m"}
     first = next(c for c in data["candidates"] if c["email"] == top["email"])
     assert (first["asked"], first["answered"], first["pending"]) == (3, 1, 1)
     assert all(set(e) == {"name", "email", "reason"} for e in data["excluded"])
@@ -349,3 +350,25 @@ def test_activity_counts_only_changes_created_in_the_window():
         {"created": ""}])
     assert activity(client, 7, now=now) == {
         "active_days": 90, "reviewed_active": 0, "owned_new": 1}
+
+
+def test_table_is_one_short_row_per_candidate_in_ranked_order(
+    monkeypatch, capsys, repo, tmp_path,  # noqa: F811
+):
+    # fb-917223db3df1, fb-65e634ebfa6e, fb-99f81b55c8f6: even --compact
+    # was ~12 KB of objects for 20 people; a row each is readable.
+    code, full = _run(monkeypatch, capsys, repo)
+    asks = tmp_path / "asks.json"
+    asks.write_text(json.dumps({"by": "Patrickbot", "people": []}))
+    code, comp = _run(monkeypatch, capsys, repo, asked=str(asks), compact=True)
+    code, data = _run(monkeypatch, capsys, repo, asked=str(asks), table=True)
+    assert code == 0 and "candidates" not in data
+    assert "columns" in data and data["order"] == "balanced"
+    assert len(data["rows"]) == len(comp["candidates"])
+    for rank, (row, cand) in enumerate(zip(data["rows"], comp["candidates"]), 1):
+        assert row.startswith(f"{rank} {cand['name']} <{cand['email']}> ")
+        assert "\n" not in row and len(row) < 160
+    assert all(isinstance(e, str) for e in data["excluded"])
+    assert len(json.dumps(data)) < len(json.dumps(comp))
+    # Without the flag the output is the full one.
+    assert "rows" not in full and "files" in full["candidates"][0]

@@ -700,6 +700,10 @@ aliases, factors and the paths examined are left out.
                 "command": "gc reviewer-candidates 12345 --limit 15 --load --asked asks.json --compact",
                 "description": "The same, only the fields the choice needs",
             },
+            {
+                "command": "gc reviewer-candidates 12345 --limit 15 --load --asked asks.json --table",
+                "description": "One text row per candidate in ranked order; columns names the fields",
+            },
         ],
         "related": ["reviewers", "add-reviewer", "find-user"],
     },

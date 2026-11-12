@@ -316,7 +316,7 @@ def compact_candidate(entry):
     well they know the files, their load and asks, and any hold."""
     out = {key: entry.get(key) for key in (
         "name", "email", "account_id", "score", "reviewed", "last_reviewed",
-        "on_change", "senior")}
+        "on_change", "senior", "reviews_12m")}
     for flag in ("newcomer", "inactive"):
         if entry.get(flag):
             out[flag] = True
@@ -353,6 +353,56 @@ def compact_data(data, on_change):
     out["candidates"] = [compact_candidate(c) for c in data["candidates"]]
     out["excluded"] = [{"name": e.get("name"), "email": e.get("email"),
                         "reason": e.get("reason")} for e in data["excluded"]]
+    return out
+
+
+TABLE_COLUMNS = ("# name <email> status senior files_rev last_rev rev12m "
+                 "[bal waiting votes asked/answered/pending]")
+
+
+def _hold_text(hold):
+    if isinstance(hold, (list, tuple)):
+        return ",".join(str(h) for h in hold)
+    return str(hold)
+
+
+def table_row(rank, entry):
+    """One short line for a candidate, from fields already computed."""
+    if entry.get("on_change"):
+        status = "on_change:" + str(entry["on_change"])
+    elif entry.get("hold"):
+        status = "hold:" + _hold_text(entry["hold"])
+    else:
+        status = "eligible"
+    marks = [m for m in ("newcomer", "inactive") if entry.get(m)]
+    if marks:
+        status += " " + ",".join(marks)
+    row = (f"{rank} {entry.get('name')} <{entry.get('email') or ''}> "
+           f"{status} {'senior' if entry.get('senior') else '-'} "
+           f"{entry.get('reviewed')} {entry.get('last_reviewed') or '-'} "
+           f"{entry.get('reviews_12m')}")
+    if "balanced" in entry:
+        row += f" {entry['balanced']}"
+    if "load" in entry:
+        load = entry["load"] or {}
+        row += f" {load.get('waiting')} {load.get('reviewed')}"
+    if "asked" in entry:
+        a = entry["asked"] or {}
+        row += (f" {a.get('asked')}/{a.get('answered')}/{a.get('pending')}")
+    return row
+
+
+def table_data(data, on_change):
+    """The --table payload: the --compact header fields, then one text
+    row per candidate in ranked order (columns names them) and one per
+    excluded person; no per-candidate objects."""
+    out = compact_data(data, on_change)
+    out["columns"] = TABLE_COLUMNS
+    out["rows"] = [table_row(i, c)
+                   for i, c in enumerate(data["candidates"], 1)]
+    del out["candidates"]
+    out["excluded"] = [f"{e.get('name')} <{e.get('email') or ''}> "
+                       f"{e.get('reason')}" for e in data["excluded"]]
     return out
 
 
@@ -459,7 +509,9 @@ def cmd_reviewer_candidates(args):
             "total_candidates": total,
             "excluded": excluded,
         })
-        if getattr(args, "compact", False):
+        if getattr(args, "table", False):
+            data = table_data(data, on_change)
+        elif getattr(args, "compact", False):
             data = compact_data(data, on_change)
         output_success(data, command, pretty)
         sys.exit(ExitCode.SUCCESS)

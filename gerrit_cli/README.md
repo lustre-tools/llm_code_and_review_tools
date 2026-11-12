@@ -578,6 +578,9 @@ gc reviewer-candidates --path lustre/llite/file.c --months 24 --brief
 `--compact` keeps only what choosing needs: per candidate name, email,
 account, score, reviewed, balanced, load, asks and hold, plus who is on
 the change now (`on_change`). The default output is unchanged.
+`--table` is `--compact` with one text row per candidate in ranked order
+(`columns` names the fields: eligible or hold, senior, Reviewed-by on the
+files, last review, tree-wide `reviews_12m`, load and asks).
 
 ### Change Management
 ```bash

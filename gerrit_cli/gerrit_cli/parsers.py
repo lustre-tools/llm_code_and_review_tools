@@ -896,6 +896,12 @@ def add_reviewer_candidates_parser(subparsers):
                         help="Only what choosing needs: per candidate name, "
                              "email, account, score, reviewed, balanced, "
                              "load, asks and hold; plus who is on the change")
+    parser.add_argument("--table", action="store_true",
+                        help="Like --compact, but one text row per candidate "
+                             "in ranked order (rank, name, email, eligible/"
+                             "hold/on_change, senior, Reviewed-by on the "
+                             "files, last review, tree-wide reviews in 12 "
+                             "months, load and asks); see columns")
     parser.add_argument("--load", action="store_true",
                         help="Read each listed candidate's review load from "
                              "Gerrit and order by balanced (two queries a "

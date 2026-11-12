@@ -454,7 +454,7 @@ def get_tool_description() -> ToolDescription:
             Command(
                 name="reviewer-candidates",
                 description="Rank reviewer candidates for a change's files: Reviewed-by trailers and authored commits per file from local git history",
-                usage="gc reviewer-candidates [URL] [--path P ...] [--repo DIR] [--ref REF] [--months N] [--widen-to N] [--load] [--asked FILE] [--compact]",
+                usage="gc reviewer-candidates [URL] [--path P ...] [--repo DIR] [--ref REF] [--months N] [--widen-to N] [--load] [--asked FILE] [--compact] [--table]",
                 arguments=[
                     Argument(name="url", description="Gerrit change URL, number or Change-Id (optional with --path)"),
                     Argument(name="--path", description="File or directory instead of the change's files (repeatable)"),
@@ -466,6 +466,7 @@ def get_tool_description() -> ToolDescription:
                     Argument(name="--exclude", description="Name or email to leave out (repeatable)"),
                     Argument(name="--brief", description="Files as bare paths", type="boolean", default=False),
                     Argument(name="--compact", description="Per candidate only name, email, account_id, score, reviewed, last_reviewed, on_change, balanced, waiting, votes, asks, hold and senior (newcomer and inactive when true); plus the change's on_change list", type="boolean", default=False),
+                    Argument(name="--table", description="Like --compact but one text row per candidate in ranked order (see columns): rank, name, email, eligible/hold/on_change, senior, Reviewed-by on the files, last review, tree-wide reviews in 12 months, then balanced, load and asks when given", type="boolean", default=False),
                     Argument(name="--load", description="Weigh by each candidate's Gerrit review load", type="boolean", default=False),
                     Argument(name="--asked", description="JSON of the caller's earlier asks per person, to weigh and hold by"),
                 ],
