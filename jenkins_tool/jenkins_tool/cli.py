@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 import click
-import requests
 
 from llm_tool_common.click_group import JsonUsageErrorGroup
 from llm_tool_common.config import (

@@ -4,16 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jenkins-tool"
-version = "0.1.5"
+version = "0.1.6"
 description = "LLM-agent-focused CLI tool for Jenkins build server API"
 requires-python = ">=3.11"
 license = "MIT"
+readme = "README.md"
 authors = [
     {name = "LLM Code Tools Team"}
 ]
 dependencies = [
     "click>=8.0.0",
-    "python-dotenv>=0.19.0",
     "requests>=2.28.0",
     "llm-tool-common",
 ]
@@ -38,7 +38,7 @@ markers = [
 
 [tool.ruff]
 line-length = 120
-target-version = "py39"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "C4", "UP"]
