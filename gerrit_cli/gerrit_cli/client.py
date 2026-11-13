@@ -1,5 +1,6 @@
 """Gerrit REST API client for comment operations."""
 
+import base64
 import os
 import re
 from pathlib import Path
@@ -1090,6 +1091,25 @@ class GerritCommentsClient:
         return self.rest.get(
             f"/changes/{change_number}/revisions/{patchset_b}/files{base}"
         )
+
+    def get_text(self, endpoint: str) -> str:
+        """The text of an endpoint that answers with a file: /patch, /content.
+
+        Gerrit sends the file as a JSON string to a request that accepts
+        JSON, and pygerrit2 parses that string.  Gerrit sends base64 to
+        any other request.  Content-Type shows which body arrived:
+        pygerrit2 uses the same header to decide if it parses JSON.  Do
+        not guess from the body: source text can also decode as base64.
+
+        Raises:
+            ValueError: The body is not JSON and not base64.
+        """
+        body, response = self.rest.get(endpoint, return_response=True)
+        content_type = response.headers.get("Content-Type", "")
+        if content_type.split(";")[0] == "application/json":
+            return body
+        return base64.b64decode(body, validate=True).decode(
+            "utf-8", errors="replace")
 
     def _ssh_user(self, host: str) -> str:
         """Who a REST-to-SSH fallback logs in as.

@@ -218,8 +218,6 @@ class TestCodeReviewer:
                     "lines_deleted": 2,
                 },
             },
-            # Third: the whole change as a patch, unavailable here
-            Exception("no /patch"),
             # Third call: get diff
             {
                 "content": [
@@ -228,6 +226,8 @@ class TestCodeReviewer:
                 ],
             },
         ]
+        # The whole change as a patch, unavailable here
+        mock_client.get_text.side_effect = Exception("no /patch")
         mock_client_class.return_value = mock_client
         mock_client_class.parse_gerrit_url.return_value = ("https://example.com", 123)
 
@@ -529,8 +529,6 @@ class TestDiffParsing:
             },
             # Files list
             {"test.py": {"status": "M", "lines_inserted": 1, "lines_deleted": 1}},
-            # The whole change as a patch: unavailable here
-            Exception("no /patch"),
             # Diff
             {
                 "content": [
@@ -540,6 +538,8 @@ class TestDiffParsing:
                 ]
             },
         ]
+        # The whole change as a patch: unavailable here
+        mock_client.get_text.side_effect = Exception("no /patch")
         mock_client_class.return_value = mock_client
         mock_client_class.parse_gerrit_url.return_value = ("https://example.com", 123)
 
