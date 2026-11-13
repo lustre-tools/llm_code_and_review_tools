@@ -98,6 +98,28 @@ class TestRetry:
         c._get("test_sets")
         assert c.session.get.call_args.kwargs["timeout"] == (3.0, 90.0)
 
+    def test_one_attempt_is_not_retried(self, _no_sleep):
+        c = _client()
+        c.session.get.side_effect = requests.ReadTimeout("slow")
+        with pytest.raises(requests.ReadTimeout, match="after 1 attempts"):
+            c._get("sub_tests", attempts=1)
+        assert c.session.get.call_count == 1
+        _no_sleep.assert_not_called()
+
+    def test_shorter_read_timeout_is_passed(self):
+        c = MalooClient(MalooConfig(BASE, "u", "p", timeout=(3.0, 90.0)))
+        c.session = MagicMock(spec=requests.Session)
+        c.session.get.return_value = _resp([])
+        c._get("sub_tests", read_timeout=30.0)
+        assert c.session.get.call_args.kwargs["timeout"] == (3.0, 30.0)
+
+    def test_read_timeout_never_exceeds_the_configured_one(self):
+        c = MalooClient(MalooConfig(BASE, "u", "p", timeout=(3.0, 20.0)))
+        c.session = MagicMock(spec=requests.Session)
+        c.session.get.return_value = _resp([])
+        c._get("sub_tests", read_timeout=30.0)
+        assert c.session.get.call_args.kwargs["timeout"] == (3.0, 20.0)
+
 
 class TestTimeoutConfig:
     @pytest.fixture(autouse=True)

@@ -1278,20 +1278,170 @@ def sessions(
     _output(env, pretty)
 
 
+FAILURE_STATUSES = ("FAIL", "TIMEOUT", "CRASH")
+
+
+def _test_history_by_failures(
+    client: MalooClient,
+    test_name: str,
+    branch: str,
+    suite: str,
+    suite_script_id: str,
+    days: int,
+    limit: int,
+    from_date: str,
+    to_date: str,
+    pretty: bool,
+) -> None:
+    """test-history's default path: every failure of the range.
+
+    One filtered read of the failed runs for each script ID and status,
+    not a walk of sessions, and a best-effort count of the suite's runs.
+    No pass is counted, and no read goes out with no status: it costs
+    the server about 30 s a day for a heavy test.
+    """
+    job = None if branch == "all" else branch
+    where = "on any job" if job is None else f"on {branch}"
+    try:
+        script_ids = client.find_sub_test_script_ids(
+            test_name, suite_script_id)
+        if not script_ids:
+            _error(
+                ErrorCode.NOT_FOUND,
+                f"No test named {test_name} in suite {suite}",
+                "test-history", pretty,
+            )
+        total, entries, all_jobs_failures = client.get_failed_subtests(
+            script_ids=script_ids,
+            statuses=list(FAILURE_STATUSES),
+            from_date=from_date,
+            to_date=to_date,
+            job=job,
+            limit=max(limit, 0),
+        )
+        suite_count = client.count_suite_runs(
+            suite_script_id, from_date, to_date, days)
+    except Exception as exc:
+        _fail(exc, "test-history", pretty)
+        return
+
+    history = []
+    for e in entries:
+        row = e["subtest"]
+        sess = e["session"] or {}
+        submission = sess.get("submission") or ""
+        history.append({
+            "date": (submission or row.get("created_at") or "")[:10],
+            "status": row.get("status"),
+            "error": (row.get("error") or "")[:200],
+            "duration": row.get("duration"),
+            "test_host": sess.get("test_host") or "",
+            "session_id": row.get("test_session_id"),
+            "test_set_id": row.get("test_set_id"),
+            "review": e["review"],
+            "job": sess.get("trigger_job"),
+            "bugs": [
+                {
+                    "ticket": b.get("jira") or b.get("bug_upstream_id") or "",
+                    "state": _link_state(b),
+                }
+                for b in e["bug_links"]
+            ],
+        })
+
+    runs = suite_count["runs"] if suite_count else None
+    exact = suite_count["exact"] if suite_count else None
+    result: dict[str, Any] = {
+        "test_name": test_name,
+        "branch": branch,
+        "suite": suite,
+        "period": f"{from_date} to {to_date}",
+        "days": days,
+        "sessions_scanned": None,
+        "sessions_with_suite": None,
+        "occurrences": total,
+        "summary": {
+            "pass": None,
+            "fail": total,
+            "skip": None,
+            "fail_rate_pct": None,
+        },
+        "all_jobs": {
+            "failures": all_jobs_failures,
+            "suite_runs": runs,
+            "suite_runs_exact": exact,
+            "fail_rate_pct": (
+                round(100 * all_jobs_failures / runs, 2) if runs else None
+            ),
+        },
+        "history": history,
+        "note": "This list counts failures only, from the whole range. "
+                "Pass counts and pass entries need --all, which reads "
+                "only the newest --sessions sessions. all_jobs.suite_runs "
+                "counts runs of the suite, so it is too high for a test "
+                "that some configurations skip.",
+    }
+    warnings = []
+    if suite_count is None:
+        warnings.append(
+            "Maloo did not give the count of suite runs in time, so "
+            "all_jobs has no suite_runs and no rate. A second try can be "
+            "fast."
+        )
+    if total == 0:
+        if suite_count is None:
+            warnings.append(
+                f"No failure of {test_name} is recorded {where}; whether "
+                f"suite {suite} ran in the range is not known."
+            )
+        elif suite_count["seen"]:
+            warnings.append(
+                f"Suite {suite} ran in the range, but no failure of "
+                f"{test_name} is recorded {where}."
+            )
+        else:
+            warnings.append(
+                f"Suite {suite} did not run in the range "
+                f"{from_date} to {to_date}, so this is no data, not a "
+                f"clean record."
+            )
+    if warnings:
+        result["warning"] = " ".join(warnings)
+
+    next_actions = []
+    if history:
+        top = history[0]
+        next_actions.append(
+            f"maloo failures {top['session_id']}"
+            f" -- see all failures in the newest session"
+        )
+        next_actions.append(
+            f"maloo bugs {top['test_set_id']} -- check bug links"
+        )
+    env = success_response(
+        result, TOOL_NAME, "test-history", next_actions or None)
+    _output(env, pretty)
+
+
 @main.command(name="test-history")
 @click.argument("test_name")
 @click.option("--branch", type=str, default="lustre-master",
-              help="Branch to search (default: lustre-master)")
+              help="Name of a test job, not a Git branch (default: "
+                   "lustre-master; e.g. lustre-reviews, or a review job "
+                   "of another branch family); 'all' keeps every job "
+                   "(default path only)")
 @click.option("--suite", type=str, default=None,
-              help="Suite name to filter (e.g. sanity, replay-single)")
+              help="Suite name (e.g. sanity, replay-single); with it "
+                   "and without --all the default path is used")
 @click.option("--days", type=int, default=14,
               help="Number of days to look back (default: 14)")
 @click.option("--sessions", "max_sessions", type=int, default=30,
               help="Max sessions containing the suite to examine "
                    "(default: 30); up to 5x that many are scanned to "
-                   "find them")
+                   "find them; used by --all and by a run without --suite")
 @click.option("--all", "show_all", is_flag=True,
-              help="Show all history entries (default: failures only)")
+              help="Walk the newest sessions and include PASS entries "
+                   "and the pass/fail counts")
 @click.option("--limit", type=int, default=10,
               help="Max history entries to return (default: 10)")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON")
@@ -1305,28 +1455,74 @@ def test_history(
     limit: int,
     pretty: bool,
 ) -> None:
-    """Show pass/fail history for a specific test.
+    """Show the history of a specific test.
 
-    By default shows only failures in the history detail.
-    Use --all to include PASS entries too.  Each entry names the Gerrit
-    change and patchset its session tested under "review" (null for a
-    branch run).
+    With --suite and without --all (the default), the command lists
+    each failure (FAIL, TIMEOUT or CRASH) of the test over the whole
+    --days range, newest first, complete: it does not walk sessions,
+    so the window is the range, not the session limit.  Each entry
+    names its "job", the Gerrit change and patchset its session tested
+    under "review" (null for a branch run), and the bug links of the
+    subtest under "bugs".  "summary.fail" and "occurrences" count the
+    failures on the job in --branch before --limit.  The command counts
+    no pass: "pass", "skip", "fail_rate_pct", "sessions_scanned" and
+    "sessions_with_suite" are null.
+
+    "all_jobs" says how rare the failure is: "failures" on every job,
+    "suite_runs" (the runs of the suite in the range on every job) and
+    "fail_rate_pct", such as 2 failures in about 6000 runs of the
+    suite.  It reads at most 3 pages of the suite's test sets.  When
+    "suite_runs_exact" is false, the count is an estimate from the rows
+    read.  It is best effort: if Maloo is slow, those two values are
+    null and a "warning" says so.  A test that some configurations
+    skip has fewer runs than its suite, so the rate is too low.
+
+    --all gives the pass entries and the pass and fail counts of the
+    newest --sessions sessions of the job instead.  On a busy job those
+    sessions can be from one day, so --all cannot show weeks.  Without
+    --suite, or with an unknown suite, the command does the same walk.
+
+    Cost of the default path: 2 reads to find the suite and the test,
+    one for each script ID and status, one for each distinct session
+    of a failure when --branch names a job (--branch all skips these),
+    at most 3 for the suite count, and up to 3 for each entry printed
+    (session, review, bug links), so --limit bounds those.
+
+    --branch takes the name of a test job (lustre-reviews,
+    lustre-master, a review job of another branch family), not a Git
+    branch.  --branch all, with --suite and without --all, keeps every
+    job.
 
     \b
     TEST_NAME is the subtest name (e.g. test_39b).
 
     \b
     Examples:
-      maloo test-history test_39b
       maloo test-history test_39b --suite sanity --days 30
-      maloo test-history test_1b --branch lustre-reviews --suite replay-vbr
-      maloo test-history test_39b --sessions 50 --all
+      maloo test-history test_39b --suite sanity --branch lustre-reviews
+      maloo test-history test_39b --suite sanity --branch all --days 7
+      maloo test-history test_39b --suite sanity --all --sessions 50
+      maloo test-history test_1b --branch lustre-reviews
     """
     client = _make_client()
 
     today = datetime.now(timezone.utc).date()
     from_date = (today - timedelta(days=days)).strftime("%Y-%m-%d")
     to_date = today.strftime("%Y-%m-%d")
+
+    if suite and not show_all:
+        try:
+            suite_script_id = client.find_test_set_script_id(suite)
+        except Exception as exc:
+            _fail(exc, "test-history", pretty)
+            return
+        # An unknown suite falls through to the walk, as it always did.
+        if suite_script_id:
+            _test_history_by_failures(
+                client, test_name, branch, suite, suite_script_id,
+                days, limit, from_date, to_date, pretty,
+            )
+            return
 
     try:
         history, resolved_suite, stats = client.get_test_history(

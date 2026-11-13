@@ -2,6 +2,7 @@
 
 import html
 import json
+from datetime import datetime
 import os
 import re
 import tempfile
@@ -59,6 +60,10 @@ BUGGABLE_PAGES = {"TestSet": "test_sets", "SubTest": "sub_tests"}
 GERRIT_URL = os.environ.get("GERRIT_URL", "https://review.whamcloud.com").rstrip("/")
 
 GET_ATTEMPTS = 4
+# The suite run count of test-history is best effort: one attempt for
+# each read, a read limit shorter than the client's, and few pages.
+COUNT_READ_TIMEOUT = 30.0
+SUITE_COUNT_PAGES = 3
 RETRY_STATUSES = (502, 503, 504)
 RETRY_EXCEPTIONS = (
     requests.ConnectionError,
@@ -152,32 +157,41 @@ class MalooClient:
         self._script_names_dirty = False
 
     def _get(
-        self, endpoint: str, params: dict[str, Any] | None = None
+        self,
+        endpoint: str,
+        params: dict[str, Any] | None = None,
+        attempts: int = GET_ATTEMPTS,
+        read_timeout: float | None = None,
     ) -> list[dict[str, Any]]:
         """Make a GET request and return the data array.
 
         testing.whamcloud.com drops a small fraction of connections, and a
         command can make a thousand requests, so a dropped connection, a
         timeout or a 502/503/504 is retried, GET_ATTEMPTS in all.
+        A best-effort read gives ``attempts`` and a shorter
+        ``read_timeout`` instead.
         """
         url = f"{self.config.base_url}/api/{endpoint}"
-        for attempt in range(1, GET_ATTEMPTS + 1):
+        timeout = self.config.timeout
+        if read_timeout is not None:
+            timeout = (timeout[0], min(timeout[1], read_timeout))
+        for attempt in range(1, attempts + 1):
             try:
                 resp = self.session.get(
-                    url, params=params, timeout=self.config.timeout
+                    url, params=params, timeout=timeout
                 )
                 if (resp.status_code in RETRY_STATUSES
-                        and attempt < GET_ATTEMPTS):
+                        and attempt < attempts):
                     time.sleep(0.5 * 2 ** (attempt - 1))
                     continue
                 resp.raise_for_status()
                 body = resp.json()
                 break
             except RETRY_EXCEPTIONS as exc:
-                if attempt < GET_ATTEMPTS:
+                if attempt < attempts:
                     time.sleep(0.5 * 2 ** (attempt - 1))
                     continue
-                msg = f"{exc} (after {GET_ATTEMPTS} attempts)"
+                msg = f"{exc} (after {attempts} attempts)"
                 if isinstance(exc, requests.exceptions.ChunkedEncodingError):
                     raise requests.ConnectionError(msg) from exc
                 raise type(exc)(msg) from exc
@@ -634,6 +648,157 @@ class MalooClient:
         """Find a test_set_script ID by name."""
         rows = self._get("test_set_scripts", {"name": name})
         return rows[0]["id"] if rows else None
+
+    def find_sub_test_script_ids(
+        self, name: str, suite_script_id: str
+    ) -> list[str]:
+        """The sub_test_script IDs of a subtest name in one suite.
+
+        One name can have more than one ID, and the same name can
+        exist in other suites.  A script row carries the ID of its
+        suite in test_set_script_id, so the suite needs no further
+        read.  The server may match a name loosely, so rows of another
+        name are dropped.
+        """
+        rows = self._get_paginated("sub_test_scripts", {"name": name})
+        return [
+            r["id"] for r in rows
+            if "id" in r and r.get("name", name) == name
+            and r.get("test_set_script_id") == suite_script_id
+        ]
+
+    def count_suite_runs(
+        self,
+        suite_script_id: str,
+        from_date: str,
+        to_date: str,
+        days: int,
+    ) -> dict[str, Any] | None:
+        """How many runs a suite had in a range, on every job.
+
+        Best effort: one attempt and COUNT_READ_TIMEOUT for each read, at
+        most SUITE_COUNT_PAGES pages of test_sets.  The page size is
+        learned from the first page, so the end of a short list costs
+        one more read.  Rows come newest first and each has
+        ``submission``.  When a page is short or
+        empty, the pages reached the start of the range and the count is
+        exact.  Otherwise the count is an estimate: the rows read,
+        divided by the days between the newest and the oldest
+        submission among them (at least one hour), times ``days``.
+
+        Returns {"runs", "exact", "seen"} (``seen``: the first page had
+        a row), or None when a read fails or no row has a submission.
+        """
+        rows: list[dict[str, Any]] = []
+        page_size: int | None = None
+        reached_start = False
+        try:
+            for _ in range(SUITE_COUNT_PAGES):
+                page = self._get(
+                    "test_sets",
+                    {"test_set_script_id": suite_script_id,
+                     "from": from_date, "to": to_date,
+                     "offset": len(rows)},
+                    attempts=1, read_timeout=COUNT_READ_TIMEOUT,
+                )
+                rows.extend(page)
+                if page_size is None:
+                    page_size = len(page)
+                if not page or len(page) < page_size:
+                    reached_start = True
+                    break
+        except requests.RequestException:
+            return None
+        if not rows:
+            return {"runs": 0, "exact": True, "seen": False}
+        if reached_start:
+            return {"runs": len(rows), "exact": True, "seen": True}
+        stamps = []
+        for r in rows:
+            try:
+                stamps.append(datetime.fromisoformat(
+                    str(r["submission"]).replace("Z", "+00:00")))
+            except (KeyError, ValueError):
+                continue
+        if not stamps:
+            return None
+        span = (max(stamps) - min(stamps)).total_seconds() / 86400
+        span = max(span, 1 / 24)
+        return {
+            "runs": round(len(stamps) / span * days),
+            "exact": False,
+            "seen": True,
+        }
+
+    def get_failed_subtests(
+        self,
+        script_ids: list[str],
+        statuses: list[str],
+        from_date: str,
+        to_date: str,
+        job: str | None = None,
+        limit: int = 50,
+    ) -> tuple[int, list[dict[str, Any]], int]:
+        """Runs of one test that ended in the given statuses, newest first.
+
+        script_ids are the test's scripts in one suite, so the suite
+        needs no filter here.  One sub_tests read for each script ID
+        and status.  A read with no status costs the server about 30 s
+        a day for a heavy test and can pass the client's read timeout,
+        so a status is always sent.  _get_paginated reads every page: a
+        bare _get returns the first page only and would cut a long list
+        without a sign.
+
+        With ``job`` only runs whose session has that trigger_job
+        count; that reads each distinct session once.  Returns (total
+        before limit, the newest ``limit`` entries, the total on every
+        job).  An entry is {"subtest", "session", "review",
+        "bug_links"}.
+        """
+        rows: dict[str, dict[str, Any]] = {}
+        for script_id in script_ids:
+            for status in statuses:
+                for row in self._get_paginated("sub_tests", {
+                    "sub_test_script_id": script_id,
+                    "status": status,
+                    "from": from_date,
+                    "to": to_date,
+                }):
+                    rows.setdefault(row["id"], row)
+
+        sessions: dict[str, dict[str, Any] | None] = {}
+
+        def session_of(row: dict[str, Any]) -> dict[str, Any] | None:
+            sid = row.get("test_session_id")
+            if sid not in sessions:
+                sessions[sid] = self.get_session(sid) if sid else None
+            return sessions[sid]
+
+        kept = sorted(
+            rows.values(),
+            key=lambda r: r.get("created_at") or "",
+            reverse=True,
+        )
+        if job is not None:
+            kept = [
+                r for r in kept
+                if (s := session_of(r)) and s.get("trigger_job") == job
+            ]
+
+        reviews: dict[str, dict[str, Any] | None] = {}
+        entries = []
+        for row in kept[:limit]:
+            sid = row.get("test_session_id")
+            if sid not in reviews:
+                reviews[sid] = (
+                    self.get_session_review(sid) if sid else None)
+            entries.append({
+                "subtest": row,
+                "session": session_of(row),
+                "review": reviews[sid],
+                "bug_links": self.get_bug_links(row["id"]),
+            })
+        return len(kept), entries, len(rows)
 
     def _test_history_by_suite(
         self,

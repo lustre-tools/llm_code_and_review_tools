@@ -129,7 +129,14 @@ not be on this branch, or the bug may have come back.
 maloo test-history test_39b --suite sanity --days 30        # lustre-master
 maloo test-history test_39b --suite sanity --days 14 \
 	--branch lustre-reviews --limit 30                      # other patches
+maloo test-history test_39b --suite sanity --branch all     # every job
 ```
+
+With `--suite`, `test-history` lists each failure of the whole range, with
+its `job`, its `review` and its `bugs`. `all_jobs` says how rare the failure
+is, such as 2 failures in about 6000 runs of the suite. `--branch` takes the
+name of a test job, not a Git branch. The command counts no pass. Add `--all`
+for the passes of the newest sessions only.
 
 A failure on `lustre-master` (the default) is pre-existing. A failure on
 `lustre-reviews` comes from other changes' review testing: the same error

@@ -1651,3 +1651,297 @@ class TestReviewBugLink:
         web.get.side_effect = get
         with pytest.raises(PermissionError):
             client.review_bug_link("SubTest", SUBTEST, "LU-20523")
+
+
+# ---------------------------------------------------------------------------
+# test-history default path: failed runs of one test over a date range
+# ---------------------------------------------------------------------------
+
+class TestFindSubTestScriptIds:
+    def test_all_ids_of_a_name(self, client):
+        client._get = MagicMock(return_value=[
+            {"id": "sc1", "name": "test_9z", "test_set_script_id": "su1"},
+            {"id": "sc2", "name": "test_9z", "test_set_script_id": "su1"},
+        ])
+        assert client.find_sub_test_script_ids("test_9z", "su1") == [
+            "sc1", "sc2"]
+        endpoint, params = client._get.call_args[0]
+        assert endpoint == "sub_test_scripts"
+        assert params["name"] == "test_9z"
+
+    def test_other_names_are_dropped(self, client):
+        client._get = MagicMock(return_value=[
+            {"id": "sc1", "name": "test_9z", "test_set_script_id": "su1"},
+            {"id": "sc2", "name": "test_9zz", "test_set_script_id": "su1"},
+        ])
+        assert client.find_sub_test_script_ids("test_9z", "su1") == ["sc1"]
+
+    def test_only_scripts_of_the_suite(self, client):
+        client._get = MagicMock(return_value=[
+            {"id": "sc1", "name": "test_9z", "test_set_script_id": "su1"},
+            {"id": "sc2", "name": "test_9z", "test_set_script_id": "su2"},
+        ])
+        assert client.find_sub_test_script_ids("test_9z", "su1") == ["sc1"]
+
+    def test_name_only_in_other_suites(self, client):
+        client._get = MagicMock(return_value=[
+            {"id": "sc2", "name": "test_9z", "test_set_script_id": "su2"},
+        ])
+        assert client.find_sub_test_script_ids("test_9z", "su1") == []
+
+    def test_unknown_name(self, client):
+        client._get = MagicMock(return_value=[])
+        assert client.find_sub_test_script_ids("test_none", "su1") == []
+
+
+class TestGetFailedSubtests:
+    """Rows come from sub_tests; each is tied to a suite by its test set."""
+
+    SESSIONS = {"ts1": "s1", "ts2": "s2", "ts3": "s3", "ts4": "s4"}
+    JOBS = {"s1": "job-x", "s2": "job-y", "s3": "job-x", "s4": "job-x"}
+
+    def _row(self, rid, ts, created, status="FAIL", script="sc1"):
+        return {
+            "id": rid, "test_set_id": ts, "test_session_id":
+            self.SESSIONS[ts], "created_at": created, "status": status,
+            "sub_test_script_id": script, "error": f"err {rid}",
+        }
+
+    def _wire(self, client, rows_by_key):
+        """rows_by_key: (script, status) -> rows.  Records every request."""
+        calls = []
+
+        def fake_get(endpoint, params=None):
+            calls.append((endpoint, dict(params or {})))
+            if endpoint == "sub_tests":
+                if params.get("offset"):
+                    return []
+                return list(rows_by_key.get(
+                    (params["sub_test_script_id"], params["status"]), []))
+            raise AssertionError(f"unexpected {endpoint}")
+
+        client._get = MagicMock(side_effect=fake_get)
+        client.get_test_set = MagicMock()
+        client.get_session = MagicMock(side_effect=lambda i: {
+            "id": i, "trigger_job": self.JOBS[i],
+            "submission": f"2026-11-0{i[1]}T00:00:00.000Z",
+            "test_name": f"name-{i}",
+        })
+        client.get_session_review = MagicMock(return_value=None)
+        client.get_bug_links = MagicMock(return_value=[])
+        return calls
+
+    def _run(self, client, **kw):
+        args = dict(script_ids=["sc1"], statuses=["FAIL"],
+                    from_date="2026-10-14", to_date="2026-11-13")
+        args.update(kw)
+        return client.get_failed_subtests(**args)
+
+    def test_request_parameters(self, client):
+        calls = self._wire(client, {})
+        self._run(client, script_ids=["sc1", "sc2"],
+                  statuses=["FAIL", "CRASH"])
+        subs = [p for e, p in calls if e == "sub_tests"]
+        assert sorted((p["sub_test_script_id"], p["status"]) for p in subs) \
+            == [("sc1", "CRASH"), ("sc1", "FAIL"),
+                ("sc2", "CRASH"), ("sc2", "FAIL")]
+        for p in subs:
+            assert p["from"] == "2026-10-14"
+            assert p["to"] == "2026-11-13"
+
+    def test_every_request_has_a_status(self, client):
+        calls = self._wire(client, {})
+        self._run(client, statuses=["FAIL", "TIMEOUT", "CRASH"])
+        subs = [p for e, p in calls if e == "sub_tests"]
+        assert len(subs) == 3
+        assert all(p.get("status") for p in subs)
+
+    def test_reads_every_page(self, client):
+        rows = [self._row(f"r{i}", "ts1", f"2026-11-01T00:00:{i:02d}")
+                for i in range(5)]
+        calls = []
+
+        def fake_get(endpoint, params=None):
+            calls.append(dict(params))
+            return rows[params["offset"]:params["offset"] + 3]
+
+        client._get = MagicMock(side_effect=fake_get)
+        client.get_session = MagicMock(return_value={"trigger_job": "j"})
+        client.get_session_review = MagicMock(return_value=None)
+        client.get_bug_links = MagicMock(return_value=[])
+        total, entries, _all = self._run(client, limit=10)
+        assert total == 5
+        assert [c["offset"] for c in calls] == [0, 3]
+
+    def test_newest_first(self, client):
+        self._wire(client, {("sc1", "FAIL"): [
+            self._row("r1", "ts1", "2026-11-01T00:00:00Z"),
+            self._row("r3", "ts3", "2026-11-05T00:00:00Z"),
+            self._row("r2", "ts2", "2026-11-03T00:00:00Z"),
+        ]})
+        total, entries, _all = self._run(client)
+        assert total == 3
+        assert [e["subtest"]["id"] for e in entries] == ["r3", "r2", "r1"]
+
+    def test_no_test_set_read(self, client):
+        calls = self._wire(client, {("sc1", "FAIL"): [
+            self._row("r1", "ts1", "2026-11-01T00:00:00Z")]})
+        self._run(client)
+        assert {e for e, _ in calls} == {"sub_tests"}
+        client.get_test_set.assert_not_called()
+
+    def test_no_session_read_without_job_beyond_limit(self, client):
+        self._wire(client, {("sc1", "FAIL"): [
+            self._row("r1", "ts1", "2026-11-01T00:00:00Z"),
+            self._row("r2", "ts2", "2026-11-03T00:00:00Z"),
+            self._row("r4", "ts4", "2026-11-04T00:00:00Z"),
+        ]})
+        self._run(client, limit=1)
+        assert client.get_session.call_count == 1
+
+    def test_job_filter(self, client):
+        self._wire(client, {("sc1", "FAIL"): [
+            self._row("r1", "ts1", "2026-11-01T00:00:00Z"),
+            self._row("r2", "ts2", "2026-11-03T00:00:00Z"),
+        ]})
+        total, entries, _all = self._run(client, job="job-x")
+        assert total == 1
+        assert entries[0]["subtest"]["id"] == "r1"
+        assert entries[0]["session"]["trigger_job"] == "job-x"
+
+    def test_all_jobs_total_is_before_the_job_filter(self, client):
+        self._wire(client, {("sc1", "FAIL"): [
+            self._row("r1", "ts1", "2026-11-01T00:00:00Z"),
+            self._row("r2", "ts2", "2026-11-03T00:00:00Z"),
+        ]})
+        total, entries, all_jobs = self._run(client, job="job-x")
+        assert (total, all_jobs) == (1, 2)
+
+    def test_limit_keeps_total(self, client):
+        self._wire(client, {("sc1", "FAIL"): [
+            self._row("r1", "ts1", "2026-11-01T00:00:00Z"),
+            self._row("r2", "ts2", "2026-11-03T00:00:00Z"),
+            self._row("r4", "ts4", "2026-11-04T00:00:00Z"),
+        ]})
+        total, entries, _all = self._run(client, limit=2)
+        assert total == 3
+        assert [e["subtest"]["id"] for e in entries] == ["r4", "r2"]
+        # review and bug links are read for the shown rows only
+        assert client.get_session_review.call_count == 2
+        assert client.get_bug_links.call_count == 2
+
+    def test_caches_session(self, client):
+        self._wire(client, {
+            ("sc1", "FAIL"): [
+                self._row("r1", "ts1", "2026-11-01T00:00:00Z"),
+                self._row("r2", "ts1", "2026-11-02T00:00:00Z"),
+            ],
+            ("sc1", "CRASH"): [
+                self._row("r5", "ts1", "2026-11-03T00:00:00Z", "CRASH"),
+            ],
+        })
+        self._run(client, statuses=["FAIL", "CRASH"], job="job-x")
+        assert client.get_session.call_count == 1
+        assert client.get_session_review.call_count == 1
+
+    def test_same_row_from_two_scripts_counts_once(self, client):
+        row = self._row("r1", "ts1", "2026-11-01T00:00:00Z")
+        self._wire(client, {("sc1", "FAIL"): [row], ("sc2", "FAIL"): [row]})
+        total, entries, _all = self._run(client, script_ids=["sc1", "sc2"])
+        assert total == 1
+
+    def test_review_and_bugs(self, client):
+        self._wire(client, {("sc1", "FAIL"): [
+            self._row("r1", "ts1", "2026-11-01T00:00:00Z")]})
+        client.get_session_review.return_value = {"change": 7}
+        client.get_bug_links.return_value = [{"jira": "LU-12345"}]
+        _, [entry], _all = self._run(client)
+        assert entry["review"] == {"change": 7}
+        assert entry["bug_links"] == [{"jira": "LU-12345"}]
+        client.get_bug_links.assert_called_once_with("r1")
+
+    def test_no_failure(self, client):
+        self._wire(client, {})
+        assert self._run(client) == (0, [], 0)
+
+
+class TestCountSuiteRuns:
+    """The runs of a suite: test_sets, newest first, 3 pages at most."""
+
+    def _rows(self, n, newest="2026-11-13T12:00:00.000Z", step_s=60):
+        from datetime import datetime, timedelta
+        top = datetime.fromisoformat(newest.replace("Z", "+00:00"))
+        return [
+            {"id": f"t{i}", "submission":
+             (top - timedelta(seconds=i * step_s)).strftime(
+                 "%Y-%m-%dT%H:%M:%S.000Z")}
+            for i in range(n)
+        ]
+
+    def _pages(self, client, rows, page):
+        calls = []
+
+        def fake_get(endpoint, params=None, **kw):
+            calls.append((endpoint, dict(params), kw))
+            off = params["offset"]
+            return rows[off:off + page]
+
+        client._get = MagicMock(side_effect=fake_get)
+        return calls
+
+    def test_exact_after_an_empty_page(self, client):
+        # The page size is learned from the first page, so a page that
+        # holds every row is followed by one empty read.
+        calls = self._pages(client, self._rows(5), page=10)
+        out = client.count_suite_runs("su1", "2026-10-14", "2026-11-13", 30)
+        assert out == {"runs": 5, "exact": True, "seen": True}
+        assert len(calls) == 2
+        endpoint, params, kw = calls[0]
+        assert endpoint == "test_sets"
+        assert params == {"test_set_script_id": "su1", "from": "2026-10-14",
+                          "to": "2026-11-13", "offset": 0}
+        assert kw == {"attempts": 1, "read_timeout": 30.0}
+
+    def test_exact_with_two_pages(self, client):
+        calls = self._pages(client, self._rows(13), page=10)
+        out = client.count_suite_runs("su1", "a", "b", 30)
+        assert out == {"runs": 13, "exact": True, "seen": True}
+        assert [p["offset"] for _, p, _ in calls] == [0, 10]
+
+    def test_exact_when_the_next_page_is_empty(self, client):
+        calls = self._pages(client, self._rows(20), page=10)
+        out = client.count_suite_runs("su1", "a", "b", 30)
+        assert out == {"runs": 20, "exact": True, "seen": True}
+        assert [p["offset"] for _, p, _ in calls] == [0, 10, 20]
+
+    def test_no_row(self, client):
+        self._pages(client, [], page=10)
+        assert client.count_suite_runs("su1", "a", "b", 30) == {
+            "runs": 0, "exact": True, "seen": False}
+
+    def test_estimate_after_three_full_pages(self, client):
+        # 30 full rows, one every 2 hours: newest 2026-11-13T12:00,
+        # oldest 58 hours earlier: span 58/24 days.  30 / (58/24) * 14
+        # = 173.79, which rounds to 174.
+        rows = self._rows(31, step_s=7200)
+        calls = self._pages(client, rows, page=10)
+        out = client.count_suite_runs("su1", "a", "b", 14)
+        assert len(calls) == 3
+        assert out == {"runs": 174, "exact": False, "seen": True}
+
+    def test_estimate_span_is_at_least_an_hour(self, client):
+        rows = [{"id": f"t{i}", "submission": "2026-11-13T12:00:00.000Z"}
+                for i in range(30)]
+        self._pages(client, rows + rows[:1], page=10)
+        out = client.count_suite_runs("su1", "a", "b", 1)
+        assert out["runs"] == 30 * 24 and out["exact"] is False
+
+    def test_failed_read_is_none(self, client):
+        client._get = MagicMock(
+            side_effect=requests.exceptions.ReadTimeout("slow"))
+        assert client.count_suite_runs("su1", "a", "b", 30) is None
+
+    def test_never_asks_sub_tests(self, client):
+        calls = self._pages(client, self._rows(5), page=10)
+        client.count_suite_runs("su1", "a", "b", 30)
+        assert {e for e, _, _ in calls} == {"test_sets"}
