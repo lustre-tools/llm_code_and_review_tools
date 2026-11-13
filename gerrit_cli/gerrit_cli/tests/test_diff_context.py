@@ -2,16 +2,20 @@
 
 import argparse
 import json
+from functools import partial
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gerrit_cli.client import GerritCommentsClient
 from gerrit_cli.reviewer import (
     CodeReviewer,
     FileChange,
     content_to_hunks,
     patch_to_contents,
 )
+
+from .test_client import FILE_TEXT, file_answer
 
 
 def _ctx(start, n):
@@ -170,15 +174,18 @@ class TestPatchToContents:
         assert set(contents) == {"big.sh", "new.c", "gone.c"}
 
 
-def _review_client(patch_text, files):
+def _review_client(patch_text, files, encoding="json"):
     client = MagicMock()
     client.format_change_url.return_value = "https://example.com/123"
+    client.get_text.side_effect = partial(GerritCommentsClient.get_text, client)
 
-    def get(url):
+    def get(url, return_response=False):
         if url.endswith("/files"):
             return files
         if url.endswith("/patch"):
-            return patch_text
+            return file_answer(patch_text, encoding)
+        if url.endswith("/content"):
+            return file_answer(FILE_TEXT, encoding)
         if "/diff" in url:
             return {"content": WHOLE_FILE}
         return {"id": "x", "current_revision": "abc",
@@ -190,12 +197,13 @@ def _review_client(patch_text, files):
 
 class TestReviewFromPatch:
 
+    @pytest.mark.parametrize("encoding", ["json", "base64"])
     @patch("gerrit_cli.reviewer.GerritCommentsClient")
-    def test_one_request_for_every_file(self, mock_client_class):
+    def test_one_request_for_every_file(self, mock_client_class, encoding):
         files = {"big.sh": {"status": "M", "lines_inserted": 2,
                             "lines_deleted": 2},
                  "new.c": {"status": "A", "lines_inserted": 2}}
-        client = _review_client(PATCH, files)
+        client = _review_client(PATCH, files, encoding)
         mock_client_class.return_value = client
         mock_client_class.parse_gerrit_url.return_value = (client.url, 123)
 
@@ -205,6 +213,19 @@ class TestReviewFromPatch:
         assert not [u for u in urls if "/diff" in u]
         big = next(f for f in data.files if f.path == "big.sh")
         assert big.hunks == content_to_hunks(WHOLE_FILE, 3)
+
+    @pytest.mark.parametrize("encoding", ["json", "base64"])
+    @patch("gerrit_cli.reviewer.GerritCommentsClient")
+    def test_full_content_is_the_file_text(self, mock_client_class, encoding):
+        files = {"new.c": {"status": "A", "lines_inserted": 2}}
+        client = _review_client(PATCH, files, encoding)
+        mock_client_class.return_value = client
+        mock_client_class.parse_gerrit_url.return_value = (client.url, 123)
+
+        data = CodeReviewer().get_review_data(
+            "https://example.com/123", include_file_content=True)
+
+        assert data.files[0].new_content == FILE_TEXT
 
     @patch("gerrit_cli.reviewer.GerritCommentsClient")
     def test_file_whose_counts_disagree_is_fetched(self, mock_client_class):
@@ -247,9 +268,10 @@ class TestReviewCompactByDefault:
                                               "parents": []}}}},
             {"big.sh": {"status": "M", "lines_inserted": 2,
                         "lines_deleted": 2}},
-            Exception("no /patch: the per-file diff is used"),
             {"content": WHOLE_FILE},
         ]
+        client.get_text.side_effect = Exception(
+            "no /patch: the per-file diff is used")
         mock_client_class.return_value = client
         mock_client_class.parse_gerrit_url.return_value = (
             client.url, 123)

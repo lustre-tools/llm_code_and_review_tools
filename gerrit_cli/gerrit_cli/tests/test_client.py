@@ -1,5 +1,6 @@
 """Tests for the client module."""
 
+import base64
 import json
 import os
 from contextlib import contextmanager
@@ -9,6 +10,25 @@ import pytest
 
 from gerrit_cli.client import GerritCommentsClient, _load_env_file
 from gerrit_cli.mode import DraftModeError, get_mode
+
+# Plain text that also decodes as base64, without an error, to "04".
+FILE_TEXT = "MDS=mds1\nOSS=oss1\n"
+
+
+def file_answer(text, encoding):
+    """What rest.get(..., return_response=True) gives for a file endpoint.
+
+    Gerrit sends the file as a JSON string, which pygerrit2 parses, to
+    a request that accepts JSON.  It sends base64 to any other request.
+    """
+    if encoding == "json":
+        body, content_type = text, "application/json;charset=utf-8"
+    else:
+        body = base64.b64encode(text.encode()).decode()
+        content_type = "text/plain;charset=iso-8859-1"
+    response = MagicMock()
+    response.headers = {"Content-Type": content_type}
+    return body, response
 
 
 class TestGerritCommentsClient:
@@ -289,6 +309,30 @@ class TestGerritCommentsClientWithMocks:
 
         mock_rest.get.assert_called_with("/changes/123/comments")
         assert "test.py" in result
+
+    @pytest.mark.parametrize("encoding", ["json", "base64"])
+    @patch("gerrit_cli.client.GerritRestAPI")
+    @patch("gerrit_cli.client.HTTPBasicAuth")
+    def test_get_text_decodes_by_content_type(
+            self, mock_auth, mock_api, encoding):
+        mock_api.return_value.get.return_value = file_answer(
+            FILE_TEXT, encoding)
+
+        text = GerritCommentsClient().get_text("/changes/123/x/content")
+
+        assert text == FILE_TEXT
+        mock_api.return_value.get.assert_called_once_with(
+            "/changes/123/x/content", return_response=True)
+
+    @patch("gerrit_cli.client.GerritRestAPI")
+    @patch("gerrit_cli.client.HTTPBasicAuth")
+    def test_get_text_refuses_a_body_it_cannot_name(self, mock_auth, mock_api):
+        response = MagicMock()
+        response.headers = {"Content-Type": "text/plain"}
+        mock_api.return_value.get.return_value = (FILE_TEXT, response)
+
+        with pytest.raises(ValueError):
+            GerritCommentsClient().get_text("/changes/123/x/content")
 
     @patch.dict(os.environ, {"GERRIT_CLI_MODE": "drafts"})
     @patch("gerrit_cli.client.GerritRestAPI")

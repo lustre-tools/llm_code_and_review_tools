@@ -533,9 +533,8 @@ class CodeReviewer:
         if base is not None or context_lines is None or context_lines > PATCH_CONTEXT:
             return files
         try:
-            patch = self.client.rest.get(
-                f"/changes/{change_number}/revisions/{revision}/patch")
-            contents = patch_to_contents(patch) if isinstance(patch, str) else {}
+            contents = patch_to_contents(self.client.get_text(
+                f"/changes/{change_number}/revisions/{revision}/patch"))
         except Exception:
             return files
         rest = []
@@ -597,16 +596,9 @@ class CodeReviewer:
 
         encoded_path = quote(file_change.path, safe="")
         try:
-            # Content comes base64 encoded
-            import base64
-            content = self.client.rest.get(
-                f"/changes/{change_number}/revisions/{revision}/files/{encoded_path}/content"
-            )
-            if isinstance(content, str):
-                try:
-                    file_change.new_content = base64.b64decode(content).decode("utf-8")
-                except Exception:
-                    file_change.new_content = content
+            file_change.new_content = self.client.get_text(
+                f"/changes/{change_number}/revisions/{revision}"
+                f"/files/{encoded_path}/content")
         except Exception as e:
             print(f"Error getting content for {file_change.path}: {e}",
                   file=sys.stderr)
