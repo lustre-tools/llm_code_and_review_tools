@@ -1089,44 +1089,64 @@ def reject_bug(
 @click.argument("buggable_id")
 @click.option(
     "--project", default="LU",
-    help="JIRA project (default: LU)")
+    help="Jira project (default: LU)")
 @click.option(
     "--summary", default="",
-    help="Bug summary (default: auto-generated from test set name)")
+    help="Required. For a real test failure: '<suite> test_<n>: "
+         "<@@@@@@ FAIL message>'")
 @click.option(
-    "--description", default=None,
-    help="Bug description (default: Maloo's auto-generated template)")
+    "--description", default="",
+    help="Required. Triage details, added to Maloo's default "
+         "description (test set link, error, session details)")
 @click.option(
-    "--type", "buggable_type",
-    type=click.Choice(["TestSet", "SubTest"]),
-    default="TestSet",
-    help="Type of entity (default: TestSet)")
+    "--component", default="",
+    help="Jira component, for a project whose form lists components")
+@click.option(
+    "--version", "version", default="",
+    help="Affected version, for a project whose form lists versions")
+@_buggable_type_option
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON")
 def raise_bug(
     buggable_id: str,
     project: str,
     summary: str,
-    description: str | None,
-    buggable_type: str,
+    description: str,
+    component: str,
+    version: str,
+    buggable_type: str | None,
     pretty: bool,
 ) -> None:
-    """Raise a new JIRA bug via Maloo and auto-link to test failure.
+    """Raise a new Jira bug via Maloo and link it to the test failure.
 
-    Uses Maloo's "Raise bug" web feature to create a JIRA issue
-    and automatically associate it with the test set/subtest.
+    Uses Maloo's "Raise bug" web form, which creates the Jira issue and
+    links it to BUGGABLE_ID.  Give the failed subtest's id unless the
+    cause is outside the test (a previous test's leftovers, an
+    infrastructure fault); then give the test set's.  The type is
+    worked out from the id.
+
+    --summary is used as given.  --description goes in place of the
+    placeholder at the end of Maloo's default description, which
+    already has the test set link, the subtest's error and the session
+    details.
 
     \b
     Examples:
-      maloo raise-bug <test_set_id> --project LU --summary "sanity test_81a FAIL"
-      maloo raise-bug <test_set_id>  # uses Maloo's default summary/description
+      maloo raise-bug <subtest_id> \\
+          --summary 'sanity test_81a: wrong size 4096 != 8192' \\
+          --description 'Not the patch: fails on master since ...'
+      maloo raise-bug <subtest_id> --project <project> \\
+          --version <version> --component <component> \\
+          --summary ... --description ...
 
-    A test session id is refused with INVALID_INPUT before anything is
-    sent.
+    Every missing or bad value -- --summary, --description, --project,
+    and --version and --component for a project that needs them -- is
+    named in one INVALID_INPUT error, with the choices, before
+    anything is sent.
+    A test session id is refused the same way.
     """
     client = _make_client()
-    _refuse_session_id(
-        client, buggable_id, "test set or subtest", "raise-bug", pretty
-    )
+    buggable_type = _resolve_buggable(
+        client, buggable_id, buggable_type, "raise-bug", pretty)
     try:
         result = client.raise_bug(
             buggable_id=buggable_id,
@@ -1134,12 +1154,17 @@ def raise_bug(
             project=project,
             summary=summary,
             description=description,
+            component=component,
+            version=version,
         )
         result["buggable_id"] = buggable_id
         result["buggable_type"] = buggable_type
         result["project"] = project
         env = success_response(result, TOOL_NAME, "raise-bug")
         _output(env, pretty)
+    except ToolError as exc:
+        _error(exc.code, exc.message, "raise-bug", pretty,
+               details=exc.details or None, exit_code=exc.exit_code)
     except RuntimeError as exc:
         _error(ErrorCode.RAISE_BUG_FAILED, str(exc), "raise-bug", pretty)
     except Exception as exc:

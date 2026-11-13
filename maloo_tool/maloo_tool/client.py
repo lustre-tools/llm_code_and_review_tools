@@ -1527,7 +1527,9 @@ class MalooClient:
         buggable_type: str = "TestSet",
         project: str = "LU",
         summary: str = "",
-        description: str | None = None,
+        description: str = "",
+        component: str = "",
+        version: str = "",
     ) -> dict[str, str]:
         """Raise a new JIRA bug via Maloo's web form.
 
@@ -1539,9 +1541,19 @@ class MalooClient:
             buggable_id: Test set or subtest UUID.
             buggable_type: "TestSet" or "SubTest".
             project: JIRA project (LU, EX, DDN, etc.).
-            summary: Bug summary line.
-            description: Bug description (None = use Maloo's default
-                which includes test session details and links).
+            summary: Bug summary line, used as given.  Required.
+            description: Triage details.  Required.  They go in place
+                of the placeholder at the end of Maloo's default
+                description (test set link, the subtest's error,
+                session details), or after it if it has none.
+            component: Jira component.  Required for a project that
+                the form lists in JIRA_ATTRS; refused for any other.
+            version: Affected version.  Same rule as component.
+
+        Raises:
+            InvalidInputError: a required value is missing, or a value
+                is not one the form offers.  The error names every such
+                value at once, with the choices.  Nothing is submitted.
 
         Returns:
             Dict with 'ticket' (e.g. "LU-12345") and 'url' keys.
@@ -1558,29 +1570,11 @@ class MalooClient:
         resp = self._retried(web.get, form_url, timeout=30)
         resp.raise_for_status()
 
-        # Extract default description if none provided
-        if description is None:
-            m = re.search(
-                r'<textarea[^>]*name="description"[^>]*>(.*?)</textarea>',
-                resp.text,
-                re.DOTALL,
-            )
-            if m:
-                import html
-                description = html.unescape(m.group(1)).strip()
-            else:
-                description = ""
-
-        # Extract default summary prefix (e.g. "sanity: ")
-        if not summary:
-            m = re.search(
-                r'<textarea[^>]*name="summary"[^>]*>(.*?)</textarea>',
-                resp.text,
-                re.DOTALL,
-            )
-            if m:
-                import html
-                summary = html.unescape(m.group(1)).strip()
+        extra = _check_raise_bug_input(
+            resp.text, project, summary, description, component, version)
+        description = _raise_bug_description(resp.text, description)
+        before = _linked_tickets(
+            self.get_bug_links(buggable_id, buggable_type))
 
         # Step 2: Submit the form (method=GET with commit=Create issue)
         params = {
@@ -1589,41 +1583,11 @@ class MalooClient:
             "project": project,
             "summary": summary,
             "description": description,
+            **extra,
             "commit": "Create issue",
         }
         resp = web.get(form_url, params=params, timeout=30)
         resp.raise_for_status()
-
-        # Parse response for the created ticket
-        # Look for flash success message with ticket ID
-        m = re.search(
-            r'class="flash success"[^>]*>([^<]+)', resp.text
-        )
-        flash_msg = m.group(1).strip() if m else ""
-
-        # Try to find ticket ID (e.g. LU-12345) in the response
-        m = re.search(
-            r'(?:Created|created|Bug)\s+.*?([A-Z]+-\d+)', resp.text
-        )
-        ticket = m.group(1) if m else ""
-
-        # Also check if we got redirected to a page showing the ticket
-        if not ticket:
-            m = re.search(
-                r'([A-Z]+-\d+)', flash_msg
-            )
-            ticket = m.group(1) if m else ""
-
-        # Look for the JIRA URL in the response
-        m = re.search(
-            r'(https://jira\.whamcloud\.com/browse/[A-Z]+-\d+)',
-            resp.text,
-        )
-        jira_url = m.group(1) if m else ""
-
-        if not ticket and jira_url:
-            m = re.search(r'([A-Z]+-\d+)$', jira_url)
-            ticket = m.group(1) if m else ""
 
         # Check for error
         m = re.search(
@@ -1633,12 +1597,174 @@ class MalooClient:
             raise RuntimeError(
                 f"Raise bug failed: {m.group(1).strip()}"
             )
+        m = re.search(
+            r'class="flash success"[^>]*>([^<]+)', resp.text
+        )
+        flash_msg = m.group(1).strip() if m else ""
 
-        return {
+        # The submit lands on the test set page, which also shows
+        # unrelated tickets (such as the Jira link of the Gerrit change
+        # under test).  The new ticket is the bug link that was not
+        # there before the submit.
+        new = [
+            t for t in _linked_tickets(
+                self.get_bug_links(buggable_id, buggable_type))
+            if t not in before
+        ]
+        if not new:
+            raise RuntimeError(
+                "Raise bug failed: Maloo reported no error, but no new "
+                f"bug link is on {buggable_id}. Check `maloo bugs "
+                f"{buggable_id}` and Jira project {project} before you "
+                "try again."
+            )
+        ticket = new[0]
+        m = re.search(
+            rf'href="(https://[^"]+/browse/{re.escape(ticket)})"', resp.text
+        )
+        result = {
             "ticket": ticket,
-            "url": jira_url or (
-                f"https://jira.whamcloud.com/browse/{ticket}"
-                if ticket else ""
-            ),
+            "url": m.group(1) if m else "",
             "flash": flash_msg,
         }
+        if len(new) > 1:
+            result["new_links"] = new
+        return result
+
+
+def _linked_tickets(links: list[dict[str, Any]]) -> list[str]:
+    """Return the ticket keys of bug links, in order, without repeats."""
+    keys = (link.get("jira") or link.get("bug_upstream_id") for link in links)
+    return list(dict.fromkeys(k.upper() for k in keys if k))
+
+
+def _raise_bug_form_projects(form_html: str) -> list[str]:
+    """Return the project choices of the Maloo raise-bug form."""
+    m = re.search(
+        r'<select[^>]*name="project"[^>]*>(.*?)</select>', form_html, re.S
+    )
+    if not m:
+        return []
+    return [v for v in re.findall(r'<option value="([^"]*)"', m.group(1)) if v]
+
+
+def _raise_bug_form_attrs(form_html: str) -> dict[str, Any]:
+    """Return the JIRA_ATTRS object of the Maloo raise-bug form.
+
+    The form script fills the component and version lists from it for
+    each project that it names.  An empty dict means none do.
+    """
+    marker = "const JIRA_ATTRS = "
+    i = form_html.find(marker)
+    if i < 0:
+        return {}
+    try:
+        attrs, _ = json.JSONDecoder().raw_decode(form_html, i + len(marker))
+    except ValueError:
+        return {}
+    return attrs if isinstance(attrs, dict) else {}
+
+
+_DESCRIPTION_PLACEHOLDER = re.compile(r"<<Please provide additional[^>]*>>")
+
+
+def _raise_bug_form_text(form_html: str, name: str) -> str:
+    """Return the default text of textarea NAME on the raise-bug form."""
+    m = re.search(
+        rf'<textarea[^>]*name="{name}"[^>]*>(.*?)</textarea>',
+        form_html, re.DOTALL,
+    )
+    return html.unescape(m.group(1)).strip() if m else ""
+
+
+def _raise_bug_description(form_html: str, details: str) -> str:
+    """Put DETAILS into Maloo's default description.
+
+    DETAILS replace the form's "<<Please provide additional
+    information ...>>" placeholder, or follow the default if it has
+    none.
+    """
+    default = _raise_bug_form_text(form_html, "description")
+    if not default:
+        return details
+    if _DESCRIPTION_PLACEHOLDER.search(default):
+        return _DESCRIPTION_PLACEHOLDER.sub(lambda _: details, default, 1)
+    return f"{default}\n\n{details}"
+
+
+def _check_raise_bug_input(
+    form_html: str, project: str, summary: str, description: str,
+    component: str, version: str,
+) -> dict[str, str]:
+    """Check the raise-bug values against the Maloo form.
+
+    Return the extra form fields to submit.  Raise one
+    InvalidInputError that names every missing or bad value, with the
+    choices, before anything is submitted.
+    """
+    problems: list[str] = []
+    details: dict[str, Any] = {}
+
+    if not summary.strip():
+        prefix = re.sub(
+            r"<<[^>]*>>", "",
+            _raise_bug_form_text(form_html, "summary")).strip()
+        # A subtest's form gives "<suite> test_<n>:", a test set's only
+        # "<suite>:".
+        if " test_" not in prefix:
+            prefix = f"{prefix.rstrip(':') or '<suite>'} test_<n>:"
+        example = f"{prefix} <@@@@@@ FAIL message>"
+        problems.append(f"--summary is required, e.g. '{example}'")
+    if not description.strip():
+        problems.append(
+            "--description is required: the triage details. They are "
+            "added to Maloo's default description, which already has "
+            "the test set link, the error and the session details")
+
+    projects = _raise_bug_form_projects(form_html)
+    attrs: dict[str, Any] = {}
+    if projects and project not in projects:
+        problems.append(
+            f"--project {project!r} is not offered. "
+            f"Choices: {', '.join(projects)}")
+        details["projects"] = projects
+    else:
+        attrs = _raise_bug_form_attrs(form_html).get(project) or {}
+
+    extra: dict[str, str] = {}
+    if attrs:
+        versions = sorted(attrs.get("versions") or {})
+        open_versions = sorted(
+            n for n, v in (attrs.get("versions") or {}).items()
+            if not v.get("released") and not v.get("archived")
+        )
+        components = sorted(attrs.get("components") or {})
+        details.update(open_versions=open_versions, versions=versions,
+                       components=components)
+        if version not in versions:
+            what = "is required" if not version else (
+                f"{version!r} is not a {project} version")
+            problems.append(
+                f"--version {what} for {project}. Unreleased versions: "
+                f"{', '.join(open_versions)}")
+        if component not in components:
+            what = "is required" if not component else (
+                f"{component!r} is not a {project} component")
+            problems.append(
+                f"--component {what} for {project}. Choices: "
+                f"{', '.join(components)}")
+        extra = {"component": component, "version": version}
+    elif "projects" not in details:
+        for name, value in (("--component", component),
+                            ("--version", version)):
+            if value:
+                problems.append(f"{name} is not taken by project {project}")
+
+    if problems:
+        raise InvalidInputError(
+            ErrorCode.INVALID_INPUT,
+            "raise-bug input is incomplete or wrong; nothing was sent. "
+            + " | ".join(problems),
+            details={"problems": problems, **details},
+        )
+    return extra

@@ -14,6 +14,7 @@ from maloo_tool.client import (
     get_patchset_revisions,
 )
 from maloo_tool.config import MalooConfig
+from maloo_tool.errors import InvalidInputError
 
 
 @pytest.fixture
@@ -1157,74 +1158,161 @@ class TestRequestTests:
 # raise_bug
 # ---------------------------------------------------------------------------
 
+SUBTEST_FORM = (
+    '<textarea name="summary">sanity test_1: &lt;&lt;add short description '
+    'here&gt;&gt;</textarea>'
+    '<textarea name="description">Run: https://x/test_sets/1\n'
+    'test_1 failed with the following error:\nboom &amp; bang\n\n'
+    '&lt;&lt;Please provide additional information about the failure '
+    'here&gt;&gt;\n</textarea>'
+)
+ATTRS_FORM = (
+    '<script>const JIRA_ATTRS = {"PROJ":{"versions":{'
+    '"2.0.0":{"released":false,"archived":false},'
+    '"1.0.0":{"released":true,"archived":false}},'
+    '"components":{"Core":{},"QA":{}}}};\n</script>'
+    '<select name="project" id="project"><option value="" label=" ">'
+    '</option><option value="PROJ">PROJ</option>'
+    '<option value="LU">LU</option></select>'
+) + SUBTEST_FORM
+GOOD = {"summary": "sanity test_1: boom", "description": "Triage notes."}
+ATTRS_GOOD = {**GOOD, "project": "PROJ", "version": "2.0.0",
+           "component": "Core"}
+
+
 class TestRaiseBug:
-    def _setup_raise_bug(self, client, form_html, result_html):
-        """Helper to set up raise_bug mocks."""
+    def _setup_raise_bug(self, client, form_html, result_html="",
+                         before=(), after=("LU-99999",)):
+        """Helper to set up raise_bug mocks.
+
+        BEFORE and AFTER are the tickets linked to the target before
+        and after the submit.
+        """
         client._web_login = MagicMock(return_value=MagicMock())
         web = client._web_login.return_value
         web.get.side_effect = [
             _mock_response(text=form_html),   # GET form
             _mock_response(text=result_html),  # GET submit
         ]
+        client.get_bug_links = MagicMock(side_effect=[
+            [{"jira": t} for t in before],
+            [{"jira": t} for t in after],
+        ])
         return web
 
+    def _params(self, web):
+        return web.get.call_args_list[1][1]["params"]
+
     def test_success_with_ticket(self, client):
-        form_html = (
-            '<textarea name="description">Session: https://...</textarea>'
-            '<textarea name="summary">sanity: </textarea>'
-        )
         result_html = (
-            '<div class="flash success">Created LU-99999</div>'
-            '<a href="https://jira.whamcloud.com/browse/LU-99999">LU-99999</a>'
-        )
-        self._setup_raise_bug(client, form_html, result_html)
-
-        result = client.raise_bug(buggable_id="ts1", project="LU")
+            '<a href="https://jira.whamcloud.com/browse/LU-99999">LU-99999</a>')
+        web = self._setup_raise_bug(client, SUBTEST_FORM, result_html)
+        result = client.raise_bug(buggable_id="st1", **GOOD)
         assert result["ticket"] == "LU-99999"
-        assert "LU-99999" in result["url"]
+        assert result["url"] == "https://jira.whamcloud.com/browse/LU-99999"
+        assert self._params(web)["summary"] == "sanity test_1: boom"
 
-    def test_uses_default_description(self, client):
-        """When no description provided, should use form default."""
-        form_html = (
-            '<textarea name="description">Default desc &amp; stuff</textarea>'
-            '<textarea name="summary">sanity: </textarea>'
+    def test_description_replaces_placeholder(self, client):
+        web = self._setup_raise_bug(client, SUBTEST_FORM)
+        client.raise_bug(buggable_id="st1", **GOOD)
+        desc = self._params(web)["description"]
+        assert desc.startswith("Run: https://x/test_sets/1")
+        assert "boom & bang" in desc
+        assert desc.endswith("Triage notes.")
+        assert "<<" not in desc
+
+    def test_description_appended_without_placeholder(self, client):
+        form = '<textarea name="description">Default</textarea>'
+        web = self._setup_raise_bug(client, form)
+        client.raise_bug(buggable_id="ts1", **GOOD)
+        assert self._params(web)["description"] == "Default\n\nTriage notes."
+
+    def test_description_alone_without_default(self, client):
+        web = self._setup_raise_bug(client, "<html>no textarea</html>")
+        client.raise_bug(buggable_id="ts1", **GOOD)
+        assert self._params(web)["description"] == "Triage notes."
+
+    def test_reports_new_link_not_other_tickets_on_page(self, client):
+        """The test set page also shows the Gerrit change's ticket."""
+        result_html = (
+            '<a href="https://jira.whamcloud.com/browse/LU-17902">'
+            'jira:LU-17902</a>'
+            '<a class="valid" href="https://jira.example.com/browse/'
+            'PROJ-7">PROJ-7</a>'
+            '<a href="https://jira.whamcloud.com/browse/LU-1">LU-1</a>'
         )
-        result_html = '<div class="flash success">Created LU-100</div>'
-        web = self._setup_raise_bug(client, form_html, result_html)
+        self._setup_raise_bug(
+            client, ATTRS_FORM, result_html,
+            before=["LU-1"], after=["LU-1", "PROJ-7"])
+        result = client.raise_bug(buggable_id="ts1", **ATTRS_GOOD)
+        assert result["ticket"] == "PROJ-7"
+        assert result["url"] == "https://jira.example.com/browse/PROJ-7"
 
-        client.raise_bug(buggable_id="ts1")
-        # Second GET should include the extracted description
-        second_call = web.get.call_args_list[1]
-        params = second_call[1]["params"]
-        assert "Default desc & stuff" in params["description"]
-
-    def test_custom_description_overrides(self, client):
-        form_html = '<textarea name="description">Default</textarea>'
-        result_html = '<div class="flash success">Created LU-101</div>'
-        web = self._setup_raise_bug(client, form_html, result_html)
-
-        client.raise_bug(buggable_id="ts1", description="My custom desc")
-        second_call = web.get.call_args_list[1]
-        params = second_call[1]["params"]
-        assert params["description"] == "My custom desc"
+    def test_no_new_link_raises(self, client):
+        self._setup_raise_bug(client, SUBTEST_FORM, before=["LU-1"],
+                              after=["LU-1"])
+        with pytest.raises(RuntimeError, match="no new bug link"):
+            client.raise_bug(buggable_id="st1", **GOOD)
 
     def test_error_flash_raises(self, client):
-        form_html = '<textarea name="description">x</textarea>'
         result_html = '<div class="flash error">JIRA connection failed</div>'
-        self._setup_raise_bug(client, form_html, result_html)
-
+        self._setup_raise_bug(client, SUBTEST_FORM, result_html)
         with pytest.raises(RuntimeError, match="JIRA connection failed"):
-            client.raise_bug(buggable_id="ts1")
+            client.raise_bug(buggable_id="st1", **GOOD)
 
-    def test_no_description_textarea(self, client):
-        """When form lacks description textarea, use empty string."""
-        form_html = '<html>no textarea</html>'
-        result_html = '<div class="flash success">Created LU-102</div>'
-        web = self._setup_raise_bug(client, form_html, result_html)
+    def test_attrs_project_sends_component_and_version(self, client):
+        web = self._setup_raise_bug(client, ATTRS_FORM)
+        client.raise_bug(buggable_id="st1", **ATTRS_GOOD)
+        params = self._params(web)
+        assert params["component"] == "Core"
+        assert params["version"] == "2.0.0"
 
-        client.raise_bug(buggable_id="ts1")
-        params = web.get.call_args_list[1][1]["params"]
-        assert params["description"] == ""
+    def test_every_missing_value_named_at_once(self, client):
+        """An agent must not fix one value only to hit the next."""
+        web = self._setup_raise_bug(client, ATTRS_FORM)
+        with pytest.raises(InvalidInputError) as exc:
+            client.raise_bug(buggable_id="st1", project="PROJ")
+        msg = exc.value.message
+        for opt in ("--summary", "--description", "--version", "--component"):
+            assert opt in msg
+        assert "sanity test_1: <@@@@@@ FAIL message>" in msg
+        assert "2.0.0" in msg and "Core" in msg
+        assert web.get.call_count == 1
+
+    @pytest.mark.parametrize("kwargs, match", [
+        ({"version": ""}, "--version is required"),
+        ({"component": ""}, "--component is required"),
+        ({"version": "9.9"}, "'9.9' is not a PROJ version"),
+        ({"component": "Bogus"}, "'Bogus' is not a PROJ component"),
+        ({"summary": " "}, "--summary is required"),
+    ])
+    def test_attrs_bad_value_refused_before_submit(self, client, kwargs, match):
+        web = self._setup_raise_bug(client, ATTRS_FORM)
+        with pytest.raises(InvalidInputError, match=match):
+            client.raise_bug(buggable_id="st1", **{**ATTRS_GOOD, **kwargs})
+        assert web.get.call_count == 1
+
+    def test_lu_sends_no_attrs_and_refuses_them(self, client):
+        web = self._setup_raise_bug(client, ATTRS_FORM)
+        client.raise_bug(buggable_id="st1", project="LU", **GOOD)
+        params = self._params(web)
+        assert "version" not in params and "component" not in params
+        self._setup_raise_bug(client, ATTRS_FORM)
+        with pytest.raises(InvalidInputError, match="not taken by project LU"):
+            client.raise_bug(buggable_id="st1", project="LU", version="x",
+                             **GOOD)
+
+    def test_test_set_summary_example(self, client):
+        form = '<textarea name="summary">sanity: &lt;&lt;x&gt;&gt;</textarea>'
+        self._setup_raise_bug(client, form)
+        with pytest.raises(InvalidInputError,
+                           match="'sanity test_<n>: <@@@@@@ FAIL message>'"):
+            client.raise_bug(buggable_id="ts1", description="d")
+
+    def test_unknown_project_refused(self, client):
+        self._setup_raise_bug(client, ATTRS_FORM)
+        with pytest.raises(InvalidInputError, match="Choices: PROJ, LU"):
+            client.raise_bug(buggable_id="st1", project="NOPE", **GOOD)
 
 
 # ---------------------------------------------------------------------------
