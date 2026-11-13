@@ -41,6 +41,13 @@ class CredentialSetError(Exception):
         self.available = available or []
 
 
+def user_state_dir() -> Path:
+    """~/.local/state/llm-tools (XDG_STATE_HOME honoured): machine state
+    the tools keep for one user -- caches, schedules, timing."""
+    base = os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state"
+    return Path(base) / "llm-tools"
+
+
 def env_file_variable(tool_name: str) -> str:
     """Name the variable that points a tool at an explicit .env file.
 

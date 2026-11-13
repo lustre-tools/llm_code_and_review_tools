@@ -427,6 +427,30 @@ uuid4) and `state_dir` under `[telemetry]` in `/etc/llm-tools.conf`,
 as with ltvm's `/etc/ltvm.conf`. The client is
 `llm_tool_common/telemetry.py`.
 
+## Timing
+
+Separate from telemetry, and off by default: each run of a tool can
+append one JSON line to a local file saying where its time went --
+wall time, time spent waiting on each HTTP request and child process,
+the tool's own time, request counts and bytes. Nothing is printed (an
+agent reading the output never sees it) and nothing is sent. The line
+keeps the command line so a slow run can be replayed; values of
+secret-looking options (`--token`, `--password`) are replaced.
+
+```bash
+llm-tools-timing on                  # record every run (or LLM_TOOLS_TIMING=1)
+LLM_TOOLS_TIMING=/path/runs.jsonl gc comments 12345   # one run, own file
+llm-tools-timing summary --since 1d  # per command: runs, wall p50/p90, wait vs self
+llm-tools-timing slowest -n 20       # the slowest runs and their command lines
+llm-tools-timing endpoints           # per HTTP endpoint: calls, latency, size
+llm-tools-timing off
+```
+
+`LLM_TOOLS_TIMING` wins over the setting: `0` off, `1` the default file
+(`~/.local/state/llm-tools/timing.jsonl`, rotated at 20 MB), anything
+else a file path. The client is `llm_tool_common/timing.py`, hooked in
+where telemetry is, so every tool that counts in telemetry can be timed.
+
 ## Output Format
 
 All tools output raw JSON by default (no envelope). Use `--envelope`

@@ -286,6 +286,16 @@ in a session is expected. Implementation:
 `llm_tool_common/src/llm_tool_common/update_check.py`, called first in
 each core tool's `main()`; `install.sh --update` does the pull.
 
+## Timing log
+
+`llm-tools-timing on` (or `LLM_TOOLS_TIMING=1|<file>` for one process)
+makes every tool run append a JSON line to
+`~/.local/state/llm-tools/timing.jsonl`: wall, wait (HTTP and child
+processes) and self time, and each request with its latency and size.
+Nothing goes to stdout/stderr. `llm-tools-timing summary|slowest|endpoints`
+reads it. Use it to tell server latency from the tool's own cost before
+changing a command. Implementation: `llm_tool_common/timing.py`.
+
 ## Versioning
 
 Each tool's `pyproject.toml` carries its own version. The tracked

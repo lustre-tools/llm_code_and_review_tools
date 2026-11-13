@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-tool-common"
-version = "0.1.10"
+version = "0.1.11"
 description = "Shared utilities for LLM-focused CLI tools"
 requires-python = ">=3.11"
 license = "MIT"
@@ -26,6 +26,7 @@ dependencies = [
 
 [project.scripts]
 llm-tools-telemetry = "llm_tool_common.telemetry:main"
+llm-tools-timing = "llm_tool_common.timing:main"
 
 [project.optional-dependencies]
 dev = [

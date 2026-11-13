@@ -67,6 +67,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from . import timing
+from .config import user_state_dir
+
 log = logging.getLogger(__name__)
 
 ENDPOINT_DEFAULT = "https://llm-tools.mulberrytree.cc/v1/checkin"
@@ -135,8 +138,7 @@ def _state_dir() -> Path:
     shared = _site_state_dir()
     if shared is not None:
         return shared
-    base = os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state"
-    return Path(base) / "llm-tools"
+    return user_state_dir()
 
 
 def _state_file() -> Path:
@@ -593,27 +595,31 @@ def _exit_ok(code: object) -> bool:
 def session(tool: str) -> Iterator[Run]:
     """Wrap a tool's main(): counts the run, and sends if a week is up.
 
+    It also times the run when local timing is on (timing.py), which
+    is independent of whether telemetry is.
+
     ``SystemExit`` carries the outcome (click's standalone mode and the
     argparse tools both end in sys.exit); any other exception is a
     failure.  Both propagate untouched.
     """
     run = Run(tool)
-    if tool not in TOOLS or not _active():
-        yield run
-        return
-    ok = False
-    try:
-        yield run
-        ok = True
-    except SystemExit as e:
-        ok = _exit_ok(e.code)
-        raise
-    finally:
+    with timing.recording(tool, run):
+        if tool not in TOOLS or not _active():
+            yield run
+            return
+        ok = False
         try:
-            record(tool, run.command, ok)
-            maybe_send()
-        except Exception as e:  # noqa: BLE001
-            log.debug("telemetry: %s", e)
+            yield run
+            ok = True
+        except SystemExit as e:
+            ok = _exit_ok(e.code)
+            raise
+        finally:
+            try:
+                record(tool, run.command, ok)
+                maybe_send()
+            except Exception as e:  # noqa: BLE001
+                log.debug("telemetry: %s", e)
 
 
 # ---------------------------------------------------------------------------

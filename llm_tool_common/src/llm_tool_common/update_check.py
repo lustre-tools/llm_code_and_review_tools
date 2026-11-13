@@ -63,6 +63,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .config import user_state_dir
+
 log = logging.getLogger(__name__)
 
 
@@ -103,10 +105,7 @@ _CONFIG_DIR = (
 )
 _CONFIG_FILE = _CONFIG_DIR / "config.json"
 
-_STATE_DIR = (
-    Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
-    / "llm-tools"
-)
+_STATE_DIR = user_state_dir()
 _STATE_FILE = _STATE_DIR / "update_cache.json"
 
 # llm_tool_common/src/llm_tool_common/update_check.py -> the checkout.
