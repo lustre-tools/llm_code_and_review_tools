@@ -5,6 +5,7 @@ from typing import Any
 
 import click
 
+from ..client import ISSUE_FIELDS
 from ..envelope import success_response
 from ..errors import ConfigError, ExitCode, JiraToolError
 from ._helpers import (
@@ -49,7 +50,7 @@ def register(main):
             client = get_client(ctx, issue_key=key)
 
             field_list = fields.split(",") if fields else None
-            raw_issue = client.get_issue(key, fields=field_list)
+            raw_issue = client.get_issue(key, fields=field_list or ISSUE_FIELDS)
 
             # Normalize output to agent-friendly format
             issue_data = _normalize_issue(raw_issue)

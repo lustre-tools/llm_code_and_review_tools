@@ -12,7 +12,7 @@ from typing import Any
 
 import click
 
-from llm_tool_common.click_group import JsonUsageErrorGroup
+from llm_tool_common.click_group import JsonUsageErrorGroup, TelemetryGroup
 from llm_tool_common.config import (
     CredentialSetError,
     apply_credential_set,
@@ -137,8 +137,9 @@ class JsonErrorGroup(JsonUsageErrorGroup):
     def invoke(self, ctx: click.Context) -> Any:
         try:
             # past JsonUsageErrorGroup.invoke: jira's subcommand errors
-            # keep their own shape and honour --pretty
-            return click.Group.invoke(self, ctx)
+            # keep their own shape and honour --pretty.  Not past
+            # TelemetryGroup's, which names the command for telemetry.
+            return TelemetryGroup.invoke(self, ctx)
         except click.UsageError as e:
             pretty = ctx.params.get("pretty", False)
             envelope = error_response_from_dict(

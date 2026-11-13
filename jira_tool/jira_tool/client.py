@@ -1,15 +1,20 @@
 """JIRA REST API client."""
 
+import hashlib
+import json
+import os
 import random
 import re
 import sys
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
 import requests
+from llm_tool_common.config import user_state_dir
 from urllib3.exceptions import ConnectTimeoutError
 
 from .adf import MentionResolver, adf_to_markdown, markdown_to_adf
@@ -90,6 +95,43 @@ def _jql_projects(jql: str) -> list[str]:
             if key and key not in keys:
                 keys.append(key)
     return keys
+
+
+# The fields an issue is shown with (commands/_helpers._normalize_issue
+# reads these and no others).  Asked for by name: the server's default
+# is all of them, which for a search costs about five times as long.
+EPIC_LINK_FIELD = "customfield_10092"
+ISSUE_FIELDS = [
+    "summary", "description", "status", "priority", "issuetype", "project",
+    "assignee", "reporter", "resolution", "created", "updated", "labels",
+    "components", "fixVersions", "versions", "parent", EPIC_LINK_FIELD,
+]
+
+
+def _api_roots_file() -> Path:
+    return user_state_dir() / "jira-api-root.json"
+
+
+def _load_api_roots() -> dict[str, str]:
+    try:
+        data = json.loads(_api_roots_file().read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_api_root(key: str, root: str) -> None:
+    """Remember a token's API root; a failure only costs a probe later."""
+    path = _api_roots_file()
+    data = _load_api_roots()
+    data[key] = root
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}")
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, path)
+    except OSError:
+        pass
 
 
 class JiraClient:
@@ -218,24 +260,39 @@ class JiraClient:
                 self.config.auth_type != AUTH_TYPE_BASIC):
             return server
 
-        try:
-            if not cloud_id:
+        if not cloud_id:
+            # The answer depends only on the server and the token, so it
+            # is kept: the probe cost every run an extra round trip.
+            key = self._api_root_key()
+            remembered = _load_api_roots().get(key)
+            if remembered:
+                self._api_root = remembered
+                return remembered
+            try:
                 probe = self._session.get(f"{server}/rest/api/3/myself",
                                           timeout=self.timeout)
                 if probe.status_code != 401:
+                    if probe.ok:
+                        _save_api_root(key, server)
                     return server
                 info = requests.get(f"{server}/_edge/tenant_info",
                                     timeout=self.timeout)
                 info.raise_for_status()
                 cloud_id = info.json()["cloudId"]
-        except (requests.exceptions.RequestException, ValueError,
-                KeyError) as e:
-            self._debug(f"cloud id lookup failed, using {server}: {e}")
-            return server
+            except (requests.exceptions.RequestException, ValueError,
+                    KeyError) as e:
+                self._debug(f"cloud id lookup failed, using {server}: {e}")
+                return server
+            _save_api_root(key, f"{self.CLOUD_GATEWAY}/{cloud_id}")
 
         self._api_root = f"{self.CLOUD_GATEWAY}/{cloud_id}"
         self._debug(f"scoped API token: using {self._api_root}")
         return self._api_root
+
+    def _api_root_key(self) -> str:
+        """Names a server and token without holding the token."""
+        raw = f"{self.config.server}\0{self.config.email}\0{self.config.token}"
+        return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
     def _build_url(self, endpoint: str) -> str:
         """Build full URL for API endpoint."""
@@ -680,18 +737,15 @@ class JiraClient:
         Returns:
             Search results with issues and pagination info
         """
+        # Without a list, Cloud v3 returns only issue IDs and Server v2
+        # every navigable field, comments and all -- several times the
+        # time to build and send for fields nobody reads.
+        fields = fields or ISSUE_FIELDS
         if self.config.is_cloud:
-            # Cloud v3 search/jql returns only issue IDs by default;
-            # request standard fields so callers get usable results.
-            _CLOUD_DEFAULT_FIELDS = [
-                "summary", "status", "priority", "issuetype", "project",
-                "assignee", "reporter", "resolution", "created", "updated",
-                "labels", "description", "components", "fixVersions",
-            ]
             body: dict[str, Any] = {
                 "jql": jql,
                 "maxResults": min(max_results, 1000),
-                "fields": fields if fields else _CLOUD_DEFAULT_FIELDS,
+                "fields": fields,
             }
             if next_page_token:
                 body["nextPageToken"] = next_page_token
@@ -706,9 +760,8 @@ class JiraClient:
                 "jql": jql,
                 "startAt": start_at,
                 "maxResults": min(max_results, 1000),
+                "fields": fields,
             }
-            if fields:
-                body["fields"] = fields
             return self._search_request("search", body, jql)
 
     def _search_request(

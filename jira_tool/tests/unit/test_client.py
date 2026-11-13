@@ -96,8 +96,9 @@ class TestCloudApiRoot:
 
     @staticmethod
     def _cloud(**kwargs):
+        kwargs.setdefault("token", "api-token")
         return JiraClient(JiraConfig(
-            server="https://myorg.atlassian.net", token="api-token",
+            server="https://myorg.atlassian.net",
             auth_type="basic", email="user@example.com", **kwargs))
 
     def test_configured_cloud_id_uses_gateway(self):
@@ -135,6 +136,26 @@ class TestCloudApiRoot:
             "https://myorg.atlassian.net/_edge/tenant_info")
         assert url == ("https://api.atlassian.com/ex/jira/abc-123"
                        "/rest/api/3/issue/X-2")
+
+    def test_verdict_is_remembered_across_clients(self):
+        info = Mock(status_code=200)
+        info.json.return_value = {"cloudId": "abc-123"}
+        with patch("jira_tool.client.requests.get", return_value=info):
+            first = self._cloud()
+            with patch.object(first._session, "get",
+                              return_value=Mock(status_code=401)):
+                first._build_url("issue/X-1")
+        second = self._cloud()
+        with patch.object(second._session, "get") as probe:
+            url = second._build_url("issue/X-1")
+        probe.assert_not_called()
+        assert url.startswith("https://api.atlassian.com/ex/jira/abc-123/")
+        # Another token is another answer.
+        third = self._cloud(token="other-token")
+        with patch.object(third._session, "get",
+                          return_value=Mock(status_code=200, ok=True)) as probe:
+            third._build_url("issue/X-1")
+        probe.assert_called_once()
 
     def test_failed_lookup_falls_back_to_site(self):
         client = self._cloud()

@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import click
 
-from ..client import JiraClient, _adf_to_text
+from ..client import EPIC_LINK_FIELD, JiraClient, _adf_to_text
 from ..config import AUTH_TYPE_BASIC, JiraConfig, load_config
 from ..envelope import error_response, format_json
 from ..errors import ConfigError, JiraToolError
@@ -302,8 +302,7 @@ def _normalize_issue(raw_issue: dict[str, Any]) -> dict[str, Any]:
     parent = fields.get("parent")
     parent_key = parent.get("key") if parent else None
 
-    # Extract epic link (customfield_10092)
-    epic_link = fields.get("customfield_10092")
+    epic_link = fields.get(EPIC_LINK_FIELD)
 
     # Extract subtask flag
     is_subtask = issue_type.get("subtask", False) if issue_type else False
