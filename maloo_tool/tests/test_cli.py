@@ -1142,7 +1142,7 @@ class TestTestHistory:
         runner.invoke(main, [
             "test-history", "test_1b",
             "--suite", "replay-vbr",
-            "--branch", "lustre-reviews",
+            "--branch", "lustre-reviews", "--all",
         ])
         call_args = mock_client.get_test_history.call_args
         assert call_args[1]["test_name"] == "test_1b"
@@ -1165,7 +1165,7 @@ class TestTestHistory:
         mock_client.get_test_history.return_value = ([], None, STATS_NONE)
         result = runner.invoke(main, [
             "--envelope", "test-history", "test_18e",
-            "--suite", "sanity-lfsck",
+            "--suite", "sanity-lfsck", "--all",
         ])
         env = _parse_output(result)
         assert env["data"]["sessions_with_suite"] == 0
@@ -1179,6 +1179,7 @@ class TestTestHistory:
             [], None, {"sessions_scanned": 30, "sessions_with_suite": 12})
         result = runner.invoke(main, [
             "--envelope", "test-history", "test_zzz", "--suite", "sanity",
+            "--all",
         ])
         env = _parse_output(result)
         assert env["data"]["sessions_with_suite"] == 12
@@ -2204,3 +2205,204 @@ class TestAbandon:
         result = runner.invoke(main, ["abandon", "134303"])
         assert result.exit_code == 1
         assert json.loads(result.output)["code"] == "ABANDON_FAILED"
+
+
+# -- test-history default path: every failure of the range --
+
+
+class TestTestHistoryFailures:
+    ENTRY = {
+        "subtest": {
+            "id": "sub-1", "test_set_id": TSID_1, "test_session_id": SID_1,
+            "created_at": "2026-11-12T10:00:00.000Z", "status": "FAIL",
+            "error": "full error text of the run", "duration": 12,
+        },
+        "session": {
+            "id": SID_1, "trigger_job": "lustre-reviews",
+            "submission": "2026-11-12T09:00:00.000Z",
+            "test_host": "host1", "test_name": "review-ldiskfs",
+        },
+        "review": {"change": 12345, "patchset": 2, "commit": "abc",
+                   "project": "fs/lustre-release", "branch": "master"},
+        "bug_links": [{"jira": "LU-12345", "valid": True, "id": "sub-1"}],
+    }
+
+    COUNT = {"runs": 6052, "exact": True, "seen": True}
+
+    def _setup(self, mock_client, total=1, entries=None, all_jobs=None,
+               count=COUNT):
+        mock_client.find_sub_test_script_ids.return_value = ["sc1"]
+        mock_client.find_test_set_script_id.return_value = "suite1"
+        mock_client.count_suite_runs.return_value = count
+        mock_client.get_failed_subtests.return_value = (
+            total, [self.ENTRY] if entries is None else entries,
+            total if all_jobs is None else all_jobs)
+
+    def _run(self, runner, *args):
+        return runner.invoke(main, [
+            "--envelope", "test-history", "test_39b", "--suite", "sanity",
+            *args])
+
+    def test_output_shape(self, runner, mock_client):
+        self._setup(mock_client)
+        env = _parse_output(self._run(runner, "--branch", "lustre-reviews"))
+        data = env["data"]
+        assert list(data) == [
+            "test_name", "branch", "suite", "period", "days",
+            "sessions_scanned", "sessions_with_suite", "occurrences",
+            "summary", "all_jobs", "history", "note"]
+        assert data["all_jobs"] == {
+            "failures": 1, "suite_runs": 6052, "suite_runs_exact": True,
+            "fail_rate_pct": 0.02}
+        assert data["branch"] == "lustre-reviews"
+        assert data["days"] == 14
+        assert data["occurrences"] == 1
+        assert data["summary"] == {
+            "pass": None, "fail": 1, "skip": None, "fail_rate_pct": None}
+        assert data["sessions_scanned"] is None
+        assert data["sessions_with_suite"] is None
+        assert "--all" in data["note"]
+        assert "skip" in data["note"]
+        assert "warning" not in data
+        [h] = data["history"]
+        assert list(h) == [
+            "date", "status", "error", "duration", "test_host",
+            "session_id", "test_set_id", "review", "job", "bugs"]
+        assert h["date"] == "2026-11-12"
+        assert h["error"] == "full error text of the run"
+        assert h["job"] == "lustre-reviews"
+        assert h["bugs"] == [{"ticket": "LU-12345", "state": "accepted"}]
+        assert h["review"]["change"] == 12345
+
+    def test_no_session_walk(self, runner, mock_client):
+        self._setup(mock_client)
+        _parse_output(self._run(runner))
+        mock_client.get_test_history.assert_not_called()
+        mock_client.get_sessions.assert_not_called()
+
+    def test_arguments_reach_the_client(self, runner, mock_client):
+        self._setup(mock_client)
+        _parse_output(self._run(
+            runner, "--days", "3", "--branch", "lustre-reviews",
+            "--limit", "7"))
+        mock_client.find_sub_test_script_ids.assert_called_once_with(
+            "test_39b", "suite1")
+        kw = mock_client.get_failed_subtests.call_args.kwargs
+        assert kw["script_ids"] == ["sc1"]
+        assert kw["statuses"] == ["FAIL", "TIMEOUT", "CRASH"]
+        assert kw["job"] == "lustre-reviews"
+        assert kw["limit"] == 7
+        assert kw["from_date"] < kw["to_date"]
+
+    def test_default_branch_is_the_filter(self, runner, mock_client):
+        self._setup(mock_client)
+        _parse_output(self._run(runner))
+        kw = mock_client.get_failed_subtests.call_args.kwargs
+        assert kw["job"] == "lustre-master"
+
+    def test_branch_all_keeps_every_job(self, runner, mock_client):
+        self._setup(mock_client)
+        env = _parse_output(self._run(runner, "--branch", "all"))
+        assert mock_client.get_failed_subtests.call_args.kwargs["job"] is None
+        assert env["data"]["branch"] == "all"
+
+    def test_review_null_and_no_bugs(self, runner, mock_client):
+        self._setup(mock_client, entries=[
+            {**self.ENTRY, "review": None, "bug_links": []}])
+        [h] = _parse_output(self._run(runner))["data"]["history"]
+        assert h["review"] is None
+        assert h["bugs"] == []
+
+    def test_occurrences_count_before_limit(self, runner, mock_client):
+        self._setup(mock_client, total=9)
+        data = _parse_output(self._run(runner))["data"]
+        assert data["occurrences"] == 9
+        assert data["summary"]["fail"] == 9
+        assert len(data["history"]) == 1
+
+    def test_all_still_walks(self, runner, mock_client):
+        mock_client.get_test_history.return_value = ([], None, STATS_OK)
+        _parse_output(self._run(runner, "--all"))
+        mock_client.get_test_history.assert_called_once()
+        mock_client.get_failed_subtests.assert_not_called()
+
+    def test_no_suite_still_walks(self, runner, mock_client):
+        mock_client.get_test_history.return_value = ([], None, STATS_OK)
+        _parse_output(runner.invoke(
+            main, ["--envelope", "test-history", "test_39b"]))
+        mock_client.get_test_history.assert_called_once()
+        mock_client.get_failed_subtests.assert_not_called()
+
+    def test_unknown_suite_walks_as_before(self, runner, mock_client):
+        mock_client.find_test_set_script_id.return_value = None
+        mock_client.get_test_history.return_value = ([], None, STATS_NONE)
+        env = _parse_output(self._run(runner))
+        mock_client.get_test_history.assert_called_once()
+        assert "no data" in env["data"]["warning"]
+
+    def test_all_jobs_failures_are_before_the_job_filter(
+            self, runner, mock_client):
+        self._setup(mock_client, total=1, all_jobs=2)
+        data = _parse_output(self._run(
+            runner, "--branch", "lustre-reviews"))["data"]
+        assert data["occurrences"] == 1
+        assert data["all_jobs"]["failures"] == 2
+        assert data["all_jobs"]["fail_rate_pct"] == 0.03
+
+    def test_estimated_suite_runs(self, runner, mock_client):
+        self._setup(mock_client, count={
+            "runs": 4500, "exact": False, "seen": True})
+        data = _parse_output(self._run(runner))["data"]
+        assert data["all_jobs"]["suite_runs"] == 4500
+        assert data["all_jobs"]["suite_runs_exact"] is False
+
+    def test_failed_count_keeps_the_failures(self, runner, mock_client):
+        self._setup(mock_client, count=None)
+        data = _parse_output(self._run(runner))["data"]
+        assert data["all_jobs"] == {
+            "failures": 1, "suite_runs": None, "suite_runs_exact": None,
+            "fail_rate_pct": None}
+        assert "did not give the count of suite runs" in data["warning"]
+        assert len(data["history"]) == 1
+
+    def test_count_is_read_once_in_the_default_path(
+            self, runner, mock_client):
+        self._setup(mock_client, total=0, entries=[])
+        _parse_output(self._run(runner))
+        mock_client.count_suite_runs.assert_called_once()
+        mock_client.suite_ran.assert_not_called()
+
+    def test_no_failure_suite_ran(self, runner, mock_client):
+        self._setup(mock_client, total=0, entries=[])
+        data = _parse_output(self._run(
+            runner, "--branch", "lustre-reviews"))["data"]
+        assert data["occurrences"] == 0
+        assert data["history"] == []
+        assert "ran in the range" in data["warning"]
+        assert "lustre-reviews" in data["warning"]
+        assert "--all" in data["note"]
+
+    def test_no_failure_suite_did_not_run(self, runner, mock_client):
+        self._setup(mock_client, total=0, entries=[], count={
+            "runs": 0, "exact": True, "seen": False})
+        data = _parse_output(self._run(runner))["data"]
+        assert "did not run" in data["warning"]
+        assert "no data" in data["warning"]
+        assert data["all_jobs"]["fail_rate_pct"] is None
+
+    def test_no_failure_and_no_count(self, runner, mock_client):
+        self._setup(mock_client, total=0, entries=[], count=None)
+        data = _parse_output(self._run(runner))["data"]
+        assert "not known" in data["warning"]
+        assert "did not give the count" in data["warning"]
+
+    def test_unknown_test_in_suite(self, runner, mock_client):
+        self._setup(mock_client)
+        mock_client.find_sub_test_script_ids.return_value = []
+        result = runner.invoke(main, [
+            "test-history", "test_39b", "--suite", "sanity"])
+        assert result.exit_code == 3
+        err = json.loads(result.stdout)
+        assert err["code"] == "NOT_FOUND"
+        assert "test_39b" in err["message"] and "sanity" in err["message"]
+        mock_client.get_failed_subtests.assert_not_called()

@@ -84,9 +84,16 @@ maloo sessions --host onyx-53vm1 --days 3
 # Most common failures on a branch
 maloo top-failures lustre-master --days 7 --limit 10
 
-# Pass/fail history for a specific test
+# Each failure of one test over the whole range, newest first, with its
+# job, change and bug links, and how rare it is among the suite's runs
+# (--branch takes a test job name, or "all")
 maloo test-history test_39b --suite sanity --days 30
-maloo test-history test_1b --branch lustre-reviews
+maloo test-history test_39b --suite sanity --branch lustre-reviews --days 7
+maloo test-history test_39b --suite sanity --branch all
+
+# Pass entries and pass/fail counts of the newest sessions only
+maloo test-history test_39b --suite sanity --all
+maloo test-history test_1b --branch lustre-reviews    # no --suite: same walk
 
 # Queue status
 maloo queue --branch lustre-master
@@ -174,7 +181,7 @@ follow-up commands.)
 | `maloo sessions` | List recent sessions (filter by `--branch`, `--host`, `--failed`) |
 | `maloo review <change>` | Test sessions for a Gerrit change number (current patchset by default; `--patch N`, `--all-patchsets`, or `--commit <sha>` to change scope) |
 | `maloo top-failures <branch>` | Most common failing tests on a branch |
-| `maloo test-history <test>` | Pass/fail history for a specific subtest |
+| `maloo test-history <test>` | With `--suite` (the default path), each failure (`FAIL`, `TIMEOUT`, `CRASH`) of the test over the whole `--days` range (default 14), newest first, with `job`, `review` (null for none) and `bugs` (`ticket`, `state`); `--branch` is a test job name (default `lustre-master`), `all` for every job; `--limit` cuts `history` after `occurrences` and `summary.fail` are counted. It counts no pass: `pass`, `skip`, `fail_rate_pct` and the session counts are null. `all_jobs` says how rare the failure is: `failures` on every job, `suite_runs` (runs of the suite in the range, on every job, read from at most 3 pages of test sets; an estimate when `suite_runs_exact` is false) and `fail_rate_pct`. This count is best effort: when Maloo is slow it is null and a `warning` says so. Cost: 2 reads to find the suite and the test, one for each script ID and status, with a job one for each distinct session of a failure, at most 3 for the suite count, and up to 3 for each entry shown. A test unknown in the suite is `NOT_FOUND` (exit 3). `--all`, or no `--suite`, walks the newest `--sessions` sessions instead and gives pass entries, pass counts and the rate, from a window that can be one day |
 | `maloo queue` | Test queue status; requires at least one filter: `--review`, `--build`, `--branch`, or `--status` |
 | `maloo prioritize <build>` | Prioritize a build's sessions in the test queue, as the queue page's Prioritize does: `--idx N` for one session ("This session"), otherwise the whole build ("Entire build"); `--branch` for a job other than `lustre-reviews`. **Access-controlled:** Maloo offers Prioritize only to accounts given that permission, and many accounts do not have it; where it does, in practice on sessions still Waiting. The page is read first and nothing is sent unless it offers Prioritize there, so without the permission every session gives `PRIORITIZE_NOT_OFFERED`. `QUEUE_ENTRY_NOT_FOUND` (exit 3) when the build or session is not queued. `--dry-run` shows the request without sending it |
 | `maloo abandon <build>` | Abandon a build's sessions in the test queue, as the queue page's Abandon does, with the same `--idx`, `--branch` and `--dry-run`. **Access-controlled:** Maloo offers Abandon only to accounts given that permission, and by the session's state. Nothing is sent unless the page offers Abandon there (`ABANDON_NOT_OFFERED`); there is no undo |
@@ -190,7 +197,11 @@ follow-up commands.)
 
 - `sessions` defaults to last 7 days and 20 results; use `--days` and `--limit` to adjust
 - `subtests` defaults to `--status FAIL`; use `--all` to see every subtest
-- `test-history` defaults to 14 days and failures only; use `--all` to include passes
+- `test-history` with `--suite` lists each failure over the whole
+  `--days` range (default 14) and counts no pass; use `--all` for pass
+  entries and the rate, which cover only the newest `--sessions`
+  sessions. `all_jobs.suite_runs` counts runs of the suite, so it is too
+  high for a test that some configurations skip
 - `top-failures` scans up to 50 sessions by default; adjust with `--sessions N`
 - `logs` extracts to `$TMPDIR/maloo_logs/<test_set_id>` by default, one
   directory per test set because every archive holds the same
