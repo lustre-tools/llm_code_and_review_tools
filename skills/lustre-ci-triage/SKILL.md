@@ -166,13 +166,34 @@ covered by an existing LU, pre-existing with no ticket (raise one), or
 unsettled. For an unsettled failure, say what would settle it: the logs,
 or a reproduction with and without the patch.
 
-When a known bug covers it, link it rather than retesting -- a linked
-failure stops blocking the landing:
+When a known bug covers the failure, link it instead of a retest. A
+linked failure stops blocking the landing.
+
+**Link the failed subtest, not the test set.**
+A ticket describes why a test failed. Thus the link goes on the subtest
+that failed. `maloo failures` gives the subtest `id` beside its name.
+Link the test set only when the cause is outside the test, and the
+subtest is a victim:
+
+- A previous subtest left bad state, and this subtest failed on it.
+  Signs: an earlier subtest in the same set failed first, or the error
+  names a file, mount or device that this subtest did not create.
+- An infrastructure fault hit the run: a node crash, a lost node, a
+  provisioning failure. Signs: several unrelated subtests fail at the
+  same time, or the console logs show the fault before the subtest
+  starts.
+
+Settle which case it is before you link. When you link a victim, link
+the ticket for the real cause, not a ticket for the subtest's message.
 
 ```bash
-maloo link-bug <test_set_id> LU-12345
-maloo link-bug <subtest_id> LU-12345 --type SubTest
+maloo link-bug <subtest_id> LU-12345      # the usual case
+maloo link-bug <test_set_id> LU-12345     # the cause is outside the test
 ```
+
+`link-bug`, `raise-bug` and `reject-bug` work out from the id whether it
+is a subtest or a test set. Do not give `--type`. A `--type` that does
+not match the id fails with `INVALID_INPUT`.
 
 `link-bug` reads the link back and reports the state Maloo stored. When
 the target already carries a pending link to that ticket -- one Maloo
@@ -180,16 +201,14 @@ auto-linked by signature -- Maloo's API leaves it pending, so `link-bug`
 accepts it the way the web UI's Accept does and reports
 `"previous_state": "pending"`. That accept is your judgment that the
 failure is the ticket's, so check the logs fit before running it, and
-give it the id the pending link is on: `maloo bugs` names that subtest,
-and it takes `--type SubTest`. `LINK_ACCEPT_FAILED` means the link is
-still pending. A rejected link is someone's decision and is left alone
+give it the id the pending link is on: `maloo bugs` names that
+subtest. `LINK_ACCEPT_FAILED` means the link is still pending. A rejected link is someone's decision and is left alone
 (`LINK_STATE_MISMATCH`); say so rather than reporting the failure
 covered. A `warning` with a null `state` means the read-back failed;
 check with `maloo bugs`.
 
 A link you made by mistake is taken back with `maloo reject-bug <id>
-LU-12345 [--type SubTest]` (`--reset` makes it pending instead). Maloo
-cannot delete a link; a rejected one no longer covers the failure. Use it
+LU-12345` (`--reset` makes it pending instead). Maloo cannot delete a link; a rejected one no longer covers the failure. Use it
 only on a link you made wrongly in this run. Another's link, or Maloo's
 own auto-link, is not yours to reject: say what you think is wrong with
 it instead.
@@ -212,19 +231,51 @@ stale copy is worth reporting as a tool defect: the API returns only the
 ticket, its cached summary and status, and the link state, so there is no
 field saying where a link came from and nothing for the CLI to fix.
 
-Raise a new ticket only once the evidence shows the failure is not the
-patch's -- the same failure on the branch or on other changes in
-`maloo test-history`, or a reproduction without the patch -- and
-`maloo bugs` and `jira search` on the test name and the message find
-nothing that covers it. `maloo raise-bug <test_set_id> --summary ...
---description ...` files it in LU and links it in one step; link it to
-any other failed session with the same cause with `link-bug`. One
-ticket per cause, not per subtest. The summary takes the usual form,
-`<suite> test_<n>: <what failed>`; the description gives the failure
-message, the Maloo links, and the evidence that it is not the patch's.
+Raise a new ticket only when two conditions are true:
 
-`link-bug` takes LU tickets only; any other project prefix is refused
-("project prefixes may only include LU"). Infrastructure failures --
+- The evidence shows that the failure is not the patch's. The evidence
+  is the same failure on the branch or on other changes in `maloo
+  test-history`, or a reproduction without the patch.
+- `maloo bugs` and `jira search` on the test name and the message find
+  no ticket that covers it.
+
+`maloo raise-bug` files the ticket and links it in one step. Give it the
+same id that you would give `link-bug`: the failed subtest in the usual
+case.
+
+```bash
+maloo raise-bug <subtest_id> \
+	--summary 'sanity test_81a: wrong size 4096 != 8192' \
+	--description '<triage details>'
+```
+
+You must give `--summary` and `--description`:
+
+- **`--summary`** goes into the ticket as you give it. For a real test
+  failure, it is `<suite> test_<n>: <FAIL message>`. The FAIL message is the text after
+  `@@@@@@ FAIL:` in the suite log. `maloo failures` gives the same text
+  as the subtest's `error`. For a victim, the summary names the real
+  cause, not the victim's message.
+- **`--description`** holds your triage details only. Maloo writes the
+  rest: the test set link, the subtest's error and the session details.
+  The tool puts your text at the end of that default description. Give
+  the evidence that the failure is not the patch's, such as
+  `test-history` results or a run without the patch. Add the log lines
+  that show the cause, and any related tickets.
+
+Use the Jira project that matches the branch under test. For some
+projects, the Maloo form also needs `--version` and `--component`. For
+`--version`, pick the unreleased version that matches the branch.
+
+`raise-bug` checks every value before it sends anything. A refusal names
+each missing or wrong value in one `INVALID_INPUT` error, with the
+choices for `--version` and `--component`. Fix all of them, then run it
+again. The result gives the new ticket as `ticket` and `url`.
+
+Link the ticket to any other failed subtest with the same cause with
+`link-bug`. Raise one ticket for each cause, not one for each subtest.
+
+Infrastructure failures --
 node-provisioning, `LJBChefError` -- are tracked in DCO tickets, which Maloo
 usually auto-links to the failed subtest itself (`maloo bugs` shows
 them). For those, skip the link and retest with the DCO ticket:
