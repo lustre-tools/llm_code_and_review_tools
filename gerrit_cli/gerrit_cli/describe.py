@@ -501,17 +501,20 @@ def get_tool_description() -> ToolDescription:
             ),
             Command(
                 name="add-reviewer",
-                description="Add a reviewer (supports fuzzy name matching)",
-                usage='gc add-reviewer <URL> "<NAME>"',
+                description=("Add one or more reviewers (fuzzy name matching). All names are "
+                             "matched before anyone is added. Each entry of 'added' is Gerrit's "
+                             "own answer -- added_reviewer, added_cc, already_on_change or "
+                             "error -- so no 'gc reviewers' is needed to confirm."),
+                usage='gc add-reviewer <URL> "<NAME>" ["<NAME>" ...]',
                 arguments=[
                     Argument(name="url", description="Gerrit change URL, number or Change-Id", required=True),
-                    Argument(name="name", description="Name, email, or username (fuzzy matching supported)", required=True),
+                    Argument(name="names", description="One or more names, emails, or usernames (fuzzy matching supported)", required=True),
                     Argument(name="--cc", description="Add as CC instead of reviewer", type="boolean", default=False),
                     Argument(name="--dry-run", description="Preview without adding", type="boolean", default=False),
                 ],
                 examples=[
                     'gc add-reviewer 12345 "John Smith"',
-                    "gc add-reviewer 12345 jsmith",
+                    "gc add-reviewer 12345 jsmith adilger@whamcloud.com",
                     'gc add-reviewer 12345 "john" --cc',
                 ],
                 next_actions=["reviewers"],
@@ -549,12 +552,13 @@ def get_tool_description() -> ToolDescription:
             Command(
                 name="find-user",
                 description="Search for Gerrit users by name, email, or username",
-                usage='gc find-user "<QUERY>"',
+                usage='gc find-user "<QUERY>" ["<QUERY>" ...]',
                 arguments=[
-                    Argument(name="query", description="Search query", required=True),
+                    Argument(name="queries", description="One or more search queries; several give {results: [...]}, one entry per query, in one call", required=True),
                     Argument(name="--limit", description="Max results", type="integer", default=10),
                 ],
-                examples=['gc find-user "farrell"', 'gc find-user "john" --limit 5'],
+                examples=['gc find-user "farrell"', 'gc find-user "john" --limit 5',
+                          'gc find-user "Jian Yu" adilger@whamcloud.com "Oleg Drokin"'],
                 output_fields=["users[].username", "users[].name", "users[].email", "users[].account_id", "users[].is_bot"],
                 next_actions=["add-reviewer"],
             ),

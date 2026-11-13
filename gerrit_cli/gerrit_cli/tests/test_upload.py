@@ -20,7 +20,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, unquote
 
 import pytest
 
@@ -193,6 +193,13 @@ class FakeGerrit:
 
     def get_self_account(self):
         return dict(self.account)
+
+    def get_branch_revision(self, project, branch):
+        found = subprocess.run(
+            ["git", "-C", str(self.bare), "rev-parse", "--verify", "-q",
+             f"refs/heads/{branch}^{{commit}}"],
+            capture_output=True, text=True)
+        return found.stdout.strip() or None
 
     def get_self_emails(self):
         return copy.deepcopy(self.emails)
@@ -1316,6 +1323,13 @@ class _Handler(BaseHTTPRequestHandler):
                 )
             elif re.fullmatch(r"/changes/\d+", path):
                 body = fake.get_change(int(path.rsplit("/", 1)[1]))
+            elif m := re.fullmatch(r"/projects/([^/]+)/branches/([^/]+)", path):
+                revision = fake.get_branch_revision(
+                    unquote(m.group(1)), unquote(m.group(2)))
+                if revision is None:
+                    return self._send(404)
+                body = {"ref": f"refs/heads/{unquote(m.group(2))}",
+                        "revision": revision}
             else:
                 return self._send(404)
         except RuntimeError:

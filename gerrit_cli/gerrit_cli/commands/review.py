@@ -6,6 +6,7 @@ import sys
 from ..envelope import error_response_from_dict
 from ..errors import ErrorCode, ExitCode
 from ..mode import result_fields
+from ..parallel import parallel_map
 from ..summary import truncate_review_data, truncate_series_comments
 from ._helpers import (
     _cli,
@@ -179,7 +180,6 @@ def cmd_series_comments(args):
             include_resolved=args.all,
             include_code_context=not args.no_context,
             context_lines=args.context_lines,
-            show_progress=False,  # No progress in JSON mode
             include_system=include_system,
             exclude_ci_bots=not include_ci,
             exclude_lint_bots=not getattr(args, 'include_lint', False),
@@ -244,17 +244,21 @@ def cmd_series(args):
             sys.exit(ExitCode.SUCCESS)
 
         # Fetch comment counts for each patch
-        patch_comments = {}
-        for patch in series.patches:
+        def open_threads(patch):
             try:
-                result = cli.extract_comments(
+                return len(cli.extract_comments(
                     url=patch.url,
                     include_resolved=False,
                     include_code_context=False,
-                )
-                patch_comments[patch.change_number] = len(result.threads)
+                    client=finder.client,
+                ).threads)
             except Exception:
-                patch_comments[patch.change_number] = -1  # Error fetching
+                return -1  # Error fetching
+
+        patch_comments = {
+            patch.change_number: count for patch, count in zip(
+                series.patches, parallel_map(open_threads, series.patches))
+        }
 
         # Build patches with comment counts
         patches_with_comments = [cn for cn, count in patch_comments.items() if count > 0]

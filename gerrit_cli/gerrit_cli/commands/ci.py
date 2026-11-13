@@ -295,6 +295,7 @@ def cmd_series_info(args):
     show_bots = getattr(args, 'show_bots', False)
 
     try:
+        from ..parallel import parallel_map
         from ..series import SeriesFinder
 
         base_url, change_number = cli.GerritCommentsClient.parse_gerrit_url(args.url)
@@ -311,27 +312,18 @@ def cmd_series_info(args):
             }, command, pretty)
             sys.exit(ExitCode.SUCCESS)
 
-        # Print progress to stderr
-        total = len(series.patches)
-        print(f"Fetching info for {total} patches...",
-              file=sys.stderr, flush=True)
-
         # Get info for each patch in the series
-        patches_info = []
-        for i, patch in enumerate(series.patches, 1):
-            print(f"\r  ({i}/{total}) {patch.change_number}...",
-                  end="", file=sys.stderr, flush=True)
+        def info_for(patch):
             try:
-                info = _info_for_change(client, patch.change_number, show_bots)
-                patches_info.append(info)
+                return _info_for_change(client, patch.change_number, show_bots)
             except Exception as e:
-                patches_info.append({
+                return {
                     "change_number": patch.change_number,
                     "subject": patch.subject,
                     "error": str(e),
-                })
+                }
 
-        print("", file=sys.stderr)  # newline after progress
+        patches_info = parallel_map(info_for, series.patches)
 
         data = {
             "series": series.to_dict(),

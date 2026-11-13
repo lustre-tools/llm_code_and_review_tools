@@ -462,21 +462,17 @@ def _transport_error(stderr: str, url: str, username: str) -> UploadError:
 
 
 def _branch_tip(
-    repo: str, url: str, branch: str, askpass: _Askpass
+    repo: str, url: str, client: Any, project: str, branch: str,
+    askpass: _Askpass,
 ) -> str:
-    """The server's tip of the target branch, fetched if not local."""
+    """The server's tip of the target branch, fetched if not local.
+
+    Asked of the REST API, not ``git ls-remote``: that lists every ref
+    the server has (refs/changes/* too) and took seconds.
+    """
     ref = f"refs/heads/{branch}"
-    result = _git(
-        repo, [*_GIT_AUTH_ARGS, "ls-remote", url, ref],
-        env=askpass.env(), check=False,
-    )
-    if result.returncode != 0:
-        raise _transport_error(_text(result.stderr), url, askpass.username)
-    tip = None
-    for line in _text(result.stdout).splitlines():
-        sha, _, name = line.partition("\t")
-        if name == ref:
-            tip = sha
+    tip = _rest(f"reading the tip of {branch}",
+                client.get_branch_revision, project, branch)
     if tip is None:
         raise UploadError(
             ErrorCode.NOT_FOUND,
@@ -1786,9 +1782,9 @@ def upload(
         )
 
     with _Askpass(client.username, client.password) as askpass:
-        tip = _branch_tip(repo, url, branch, askpass)
+        tip = _branch_tip(repo, url, client, project, branch, askpass)
         if base and base != branch:
-            base_tip = _branch_tip(repo, url, base, askpass)
+            base_tip = _branch_tip(repo, url, client, project, base, askpass)
             commits = _read_commits(
                 repo, [f"^{tip}", f"^{base_tip}", head.sha]
             )

@@ -910,14 +910,18 @@ def add_add_reviewer_parser(subparsers):
     """Add the 'add-reviewer' subcommand parser."""
     parser = subparsers.add_parser(
         "add-reviewer",
-        help="Add a reviewer to a change (supports fuzzy name matching)",
-        description="Add a reviewer to a Gerrit change. Supports fuzzy matching "
-                    "on names - just provide a partial name and it will find matches.",
+        help="Add reviewers to a change (supports fuzzy name matching)",
+        description="Add one or more reviewers to a Gerrit change. Supports "
+                    "fuzzy matching on names. Every name is matched before "
+                    "anyone is added, so an ambiguous one adds nobody. Each "
+                    "entry of 'added' is Gerrit's own answer (added_reviewer, "
+                    "added_cc, already_on_change or error): no need to run "
+                    "'reviewers' afterwards to check.",
     )
     parser.add_argument("url", help="Gerrit change URL, number or Change-Id")
     parser.add_argument(
-        "name",
-        help="Reviewer name, email, or username (fuzzy matching supported)",
+        "names", nargs="+", metavar="NAME",
+        help="Reviewer names, emails, or usernames (fuzzy matching supported)",
     )
     parser.add_argument(
         "--cc",
@@ -1126,8 +1130,9 @@ def add_find_user_parser(subparsers):
                     "Useful for finding the exact username before adding as reviewer.",
     )
     parser.add_argument(
-        "query",
-        help="Name, email, or username to search for",
+        "queries", nargs="+", metavar="QUERY",
+        help="Names, emails, or usernames to search for; with several, "
+             "the output is {results: [one entry per query]}",
     )
     parser.add_argument(
         "--limit", "-n",

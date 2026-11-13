@@ -18,16 +18,15 @@ know the code, and a hold marks someone not to ask now.
 
 import json
 import math
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
+from ..parallel import parallel_map
 from .reviewer_candidates import normalize_name
 
 # Gerrit-wide load is read over changes updated in this many days.
 LOAD_DAYS = 30
 # Gerrit's page cap here; a count that reaches it is at least this.
 LOAD_COUNT_CAP = 500
-LOAD_WORKERS = 4
 
 # How many of the caller's asks someone can carry: about three days of the
 # Code-Review votes they cast, and never less than CAPACITY_MIN.  People who
@@ -132,7 +131,7 @@ def activity(client, who, days=ACTIVE_DAYS, now=None):
     return out
 
 
-def add_gerrit_load(client, candidates, workers=LOAD_WORKERS):
+def add_gerrit_load(client, candidates):
     """Set account_id and load on each candidate; a failure leaves that
     candidate's load null with load_error, and the rest go on."""
     def one(candidate):
@@ -148,8 +147,7 @@ def add_gerrit_load(client, candidates, workers=LOAD_WORKERS):
             candidate["load"] = None
             candidate["load_error"] = str(e)[:200]
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        list(pool.map(one, candidates))
+    parallel_map(one, candidates)
 
 
 def read_asked(path):

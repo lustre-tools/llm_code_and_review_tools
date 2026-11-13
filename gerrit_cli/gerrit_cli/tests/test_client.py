@@ -290,42 +290,6 @@ class TestGerritCommentsClientWithMocks:
         mock_rest.get.assert_called_with("/changes/123/comments")
         assert "test.py" in result
 
-    @patch("gerrit_cli.client.GerritRestAPI")
-    @patch("gerrit_cli.client.HTTPBasicAuth")
-    def test_get_revision_for_patchset(self, mock_auth, mock_api):
-        """Test getting revision ID for patch set."""
-        mock_rest = MagicMock()
-        mock_rest.get.return_value = {
-            "revisions": {
-                "abc123": {"_number": 1},
-                "def456": {"_number": 2},
-                "ghi789": {"_number": 3},
-            }
-        }
-        mock_api.return_value = mock_rest
-
-        client = GerritCommentsClient()
-        result = client.get_revision_for_patchset(123, 2)
-
-        assert result == "def456"
-
-    @patch("gerrit_cli.client.GerritRestAPI")
-    @patch("gerrit_cli.client.HTTPBasicAuth")
-    def test_get_revision_for_patchset_not_found(self, mock_auth, mock_api):
-        """Test getting revision ID for nonexistent patch set."""
-        mock_rest = MagicMock()
-        mock_rest.get.return_value = {
-            "revisions": {
-                "abc123": {"_number": 1},
-            }
-        }
-        mock_api.return_value = mock_rest
-
-        client = GerritCommentsClient()
-        result = client.get_revision_for_patchset(123, 99)
-
-        assert result is None
-
     @patch.dict(os.environ, {"GERRIT_CLI_MODE": "drafts"})
     @patch("gerrit_cli.client.GerritRestAPI")
     @patch("gerrit_cli.client.HTTPBasicAuth")

@@ -399,7 +399,7 @@ def test_add_reviewer_takes_the_exact_username_among_fuzzy_matches(
     ], added)
     monkeypatch.setattr(cli, "GerritCommentsClient", AddClient)
     with pytest.raises(SystemExit) as done:
-        cmd_add_reviewer(SimpleNamespace(url="70550", name="lix", cc=False,
+        cmd_add_reviewer(SimpleNamespace(url="70550", names=["lix"], cc=False,
                                          dry_run=False, pretty=False))
     assert done.value.code == 0
     assert added == [(70550, "LiX", "REVIEWER")]
@@ -416,9 +416,69 @@ def test_add_reviewer_still_asks_when_nothing_matches_exactly(
     ], added)
     monkeypatch.setattr(cli, "GerritCommentsClient", AddClient)
     with pytest.raises(SystemExit) as done:
-        cmd_add_reviewer(SimpleNamespace(url="70550", name="Li", cc=False,
+        cmd_add_reviewer(SimpleNamespace(url="70550", names=["Li"], cc=False,
                                          dry_run=False, pretty=False))
     assert done.value.code != 0
     assert added == []
     out = json.loads(capsys.readouterr().out)
     assert out.get("data", out)["error"] == "multiple_matches"
+
+
+def test_add_reviewer_adds_several_and_reports_gerrits_answer(
+        monkeypatch, capsys):
+    from gerrit_cli.commands.reviewers import cmd_add_reviewer
+
+    people = {
+        "ann": {"_account_id": 1, "name": "Ann", "username": "ann"},
+        "bob": {"_account_id": 2, "name": "Bob", "username": "bob"},
+    }
+    added = []
+
+    class AddClient:
+        parse_gerrit_url = staticmethod(lambda url: (None, int(url)))
+
+        def suggest_accounts(self, name, limit=5):
+            return [people[name]]
+
+        def add_reviewer(self, change, reviewer, state="REVIEWER"):
+            added.append(reviewer)
+            # Gerrit answers an add of someone already there with nothing.
+            return ({"reviewers": [people["ann"]]} if reviewer == "ann"
+                    else {"input": reviewer})
+
+    monkeypatch.setattr(cli, "GerritCommentsClient", AddClient)
+    with pytest.raises(SystemExit) as done:
+        cmd_add_reviewer(SimpleNamespace(url="70550", names=["ann", "bob"],
+                                         cc=False, dry_run=False, pretty=False))
+    assert done.value.code == 0
+    assert sorted(added) == ["ann", "bob"]
+    out = json.loads(capsys.readouterr().out)
+    results = {a["username"]: a["result"] for a in out.get("data", out)["added"]}
+    assert results == {"ann": "added_reviewer", "bob": "already_on_change"}
+
+
+def test_add_reviewer_adds_nobody_when_one_name_is_ambiguous(
+        monkeypatch, capsys):
+    from gerrit_cli.commands.reviewers import cmd_add_reviewer
+
+    added = []
+
+    class AddClient:
+        parse_gerrit_url = staticmethod(lambda url: (None, int(url)))
+
+        def suggest_accounts(self, name, limit=5):
+            if name == "ann":
+                return [{"_account_id": 1, "name": "Ann", "username": "ann"}]
+            return [{"_account_id": 2, "name": "Li A", "username": "lia"},
+                    {"_account_id": 3, "name": "Li B", "username": "lib"}]
+
+        def add_reviewer(self, change, reviewer, state="REVIEWER"):
+            added.append(reviewer)
+            return {}
+
+    monkeypatch.setattr(cli, "GerritCommentsClient", AddClient)
+    with pytest.raises(SystemExit) as done:
+        cmd_add_reviewer(SimpleNamespace(url="70550", names=["ann", "Li"],
+                                         cc=False, dry_run=False, pretty=False))
+    assert done.value.code != 0
+    assert added == []

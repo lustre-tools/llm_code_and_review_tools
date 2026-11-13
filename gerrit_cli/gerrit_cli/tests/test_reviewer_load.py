@@ -68,7 +68,7 @@ def test_gerrit_load_counts_queue_and_votes_and_survives_one_failure():
         {(931, "waiting"): 81, (931, "reviewed"): 177})
     people = [{"name": "Timothy Day", "email": "t@x", "score": 40},
               {"name": "Ghost", "email": "g@x", "score": 9}]
-    add_gerrit_load(client, people, workers=1)
+    add_gerrit_load(client, people)
     assert people[0]["account_id"] == 931
     assert people[0]["load"] == {"window_days": 30, "waiting": 81,
                                  "reviewed": 177}
@@ -83,7 +83,7 @@ def test_counts_at_gerrits_cap_are_marked():
     client = LoadClient([{"_account_id": 117, "name": "A", "email": "a@x"}],
                         {(117, "waiting"): 900, (117, "reviewed"): 900})
     people = [{"name": "A", "email": "a@x", "score": 1}]
-    add_gerrit_load(client, people, workers=1)
+    add_gerrit_load(client, people)
     assert people[0]["load"]["capped_at"] == 500
 
 

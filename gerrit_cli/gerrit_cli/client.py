@@ -369,20 +369,44 @@ class GerritCommentsClient:
         """The account these credentials log in as."""
         return self.rest.get("/accounts/self")
 
+    def get_branch_revision(self, project: str, branch: str) -> str | None:
+        """The commit a branch points at on the server, or None if the
+        project has no such branch.
+
+        One REST call; ``git ls-remote`` takes seconds, because the
+        server advertises every ref (refs/changes/* runs to 185,000).
+        """
+        try:
+            info = self.rest.get(
+                f"/projects/{quote(project, safe='')}"
+                f"/branches/{quote(branch, safe='')}")
+        except Exception as e:
+            if getattr(getattr(e, "response", None), "status_code", None) == 404:
+                return None
+            raise
+        return info.get("revision") if isinstance(info, dict) else None
+
     def get_self_emails(self) -> list[dict[str, Any]]:
         """Email addresses registered to the logged-in account."""
         return self.rest.get("/accounts/self/emails")
 
-    def get_comments(self, change_number: int) -> dict[str, list[dict[str, Any]]]:
+    def get_comments(
+        self, change_number: int, context_padding: int | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
         """Get all published comments for a change.
 
         Args:
             change_number: The change number
+            context_padding: When set, each comment on a file line also
+                carries ``context_lines``: the lines it is on plus this
+                many either side, cut by the server (Gerrit 3.4+).
 
         Returns:
             Dict mapping file paths to lists of comments
         """
-        return self.rest.get(f"/changes/{change_number}/comments")
+        query = (f"?enable-context=true&context-padding={context_padding}"
+                 if context_padding is not None else "")
+        return self.rest.get(f"/changes/{change_number}/comments{query}")
 
     def get_messages(self, change_number: int) -> list[dict[str, Any]]:
         """Get all review messages (top-level comments) for a change.
@@ -397,54 +421,6 @@ class GerritCommentsClient:
             List of message dicts with keys: id, author, date, message, _revision_number
         """
         return self.rest.get(f"/changes/{change_number}/messages")
-
-    def get_file_diff(
-        self,
-        change_number: int,
-        revision_id: str,
-        file_path: str,
-        context: str = "ALL",
-    ) -> Optional[dict[str, Any]]:
-        """Get the diff for a specific file.
-
-        Args:
-            change_number: The change number
-            revision_id: The revision SHA or patch set number
-            file_path: Path to the file
-            context: Amount of context ("ALL" for full file)
-
-        Returns:
-            Dict with diff information or None on error
-        """
-        encoded_path = quote(file_path, safe="")
-        try:
-            return self.rest.get(
-                f"/changes/{change_number}/revisions/{revision_id}/files/{encoded_path}/diff?context={context}"
-            )
-        except Exception as e:
-            print(f"Error getting diff for {file_path}: {e}")
-            return None
-
-    def get_revision_for_patchset(
-        self, change_number: int, patch_set: int
-    ) -> Optional[str]:
-        """Get the revision ID for a specific patch set number.
-
-        Args:
-            change_number: The change number
-            patch_set: The patch set number
-
-        Returns:
-            Revision SHA or None if not found
-        """
-        change = self.get_change_detail(change_number)
-        revisions = change.get("revisions", {})
-
-        for rev_id, rev_data in revisions.items():
-            if rev_data.get("_number") == patch_set:
-                return rev_id
-
-        return None
 
     def post_review(
         self,

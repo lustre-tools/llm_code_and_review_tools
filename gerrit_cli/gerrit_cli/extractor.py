@@ -47,7 +47,6 @@ class CommentExtractor:
             client: Optional GerritCommentsClient. Creates default if not provided.
         """
         self.client = client or GerritCommentsClient()
-        self._file_content_cache: dict[str, list[str]] = {}
 
     def extract_from_url(
         self,
@@ -120,9 +119,6 @@ class CommentExtractor:
         Returns:
             ExtractedComments with all comment data
         """
-        # Clear cache for new extraction
-        self._file_content_cache = {}
-
         # Get change details
         change = self.client.get_change_detail(change_number)
 
@@ -134,8 +130,12 @@ class CommentExtractor:
 
         change_info = self._build_change_info(change, change_number, current_patchset)
 
-        # Get all inline comments
-        raw_comments = self.client.get_comments(change_number)
+        # Get all inline comments, with the code around each when
+        # asked: Gerrit cuts it, from the right side and patch set.
+        raw_comments = self.client.get_comments(
+            change_number,
+            context_padding=context_lines if include_code_context else None,
+        )
 
         # Get all review messages (top-level comments)
         raw_messages = self.client.get_messages(change_number)
@@ -176,12 +176,13 @@ class CommentExtractor:
 
         # Add code context if requested
         if include_code_context:
+            context = {
+                c["id"]: c["context_lines"]
+                for file_comments in raw_comments.values()
+                for c in file_comments if c.get("context_lines")
+            }
             for thread in threads:
-                self._add_code_context(
-                    thread.root_comment,
-                    change_number,
-                    context_lines,
-                )
+                _add_code_context(thread.root_comment, context)
 
         # Count totals
         total_count = sum(len(file_comments) for file_comments in raw_comments.values())
@@ -352,72 +353,23 @@ class CommentExtractor:
 
         return current.id if current.in_reply_to is None else current.in_reply_to
 
-    def _add_code_context(
-        self,
-        comment: Comment,
-        change_number: int,
-        context_lines: int,
-    ) -> None:
-        """Add code context to a comment."""
-        if comment.line is None:
-            # Patchset-level comment, no code context
-            return
 
-        # Skip virtual files
-        if comment.file_path.startswith("/"):
-            return
-
-        # Get file content for the relevant patchset
-        cache_key = f"{change_number}:{comment.patch_set}:{comment.file_path}"
-
-        if cache_key not in self._file_content_cache:
-            lines = self._get_file_lines(
-                change_number, comment.patch_set, comment.file_path
-            )
-            self._file_content_cache[cache_key] = lines
-
-        lines = self._file_content_cache[cache_key]
-
-        if not lines or comment.line > len(lines):
-            return
-
-        # Extract context around the target line
-        start = max(0, comment.line - context_lines - 1)
-        end = min(len(lines), comment.line + context_lines)
-
-        comment.code_context = CodeContext(
-            lines=lines[start:end],
-            start_line=start + 1,
-            end_line=end,
-            target_line=comment.line,
-        )
-
-    def _get_file_lines(
-        self, change_number: int, patch_set: int, file_path: str
-    ) -> list[str]:
-        """Get the lines of a file from a specific patch set."""
-        # Get the revision ID for this patch set
-        revision_id = self.client.get_revision_for_patchset(change_number, patch_set)
-        if not revision_id:
-            return []
-
-        # Get the diff to reconstruct the file
-        diff = self.client.get_file_diff(change_number, revision_id, file_path)
-        if not diff or "content" not in diff:
-            return []
-
-        # Reconstruct file from diff sections
-        lines = []
-        for section in diff["content"]:
-            if "ab" in section:
-                # Context lines (unchanged)
-                lines.extend(section["ab"])
-            elif "b" in section:
-                # Added lines (in new version)
-                lines.extend(section["b"])
-            # Skip 'a' sections (removed lines not in new version)
-
-        return lines
+def _add_code_context(
+    comment: Comment, context: dict[str, list[dict[str, Any]]]
+) -> None:
+    """Attach the code Gerrit sent with a comment (enable-context)."""
+    # Patchset-level comments and virtual files (/COMMIT_MSG) get none.
+    if comment.line is None or comment.file_path.startswith("/"):
+        return
+    lines = context.get(comment.id)
+    if not lines:
+        return
+    comment.code_context = CodeContext(
+        lines=[x.get("context_line", "") for x in lines],
+        start_line=lines[0]["line_number"],
+        end_line=lines[-1]["line_number"],
+        target_line=comment.line,
+    )
 
 
 def extract_comments(
@@ -428,6 +380,7 @@ def extract_comments(
     exclude_ci_bots: bool = True,
     exclude_lint_bots: bool = True,
     include_system: bool = False,
+    client: GerritCommentsClient | None = None,
 ) -> ExtractedComments:
     """Convenience function to extract comments from a Gerrit URL.
 
@@ -442,11 +395,13 @@ def extract_comments(
             (checkpatch, Janitor Bot, etc.). Default True.
         include_system: Whether to include system messages like
             "Uploaded patch set N", rebases, topic changes. Default False.
+        client: A client to reuse.  Each new one opens its own
+            connection, which costs a TLS handshake (~200ms).
 
     Returns:
         ExtractedComments with all comment data
     """
-    extractor = CommentExtractor()
+    extractor = CommentExtractor(client=client)
     return extractor.extract_from_url(
         url=url,
         include_resolved=include_resolved,

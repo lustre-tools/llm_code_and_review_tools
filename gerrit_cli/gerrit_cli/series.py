@@ -13,13 +13,13 @@ children from a single commit), only one path is followed. Use the Gerrit web
 UI's "Related Changes" view to see the full graph of related changes.
 """
 
-import sys
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .client import GerritCommentsClient
 from .extractor import CommentExtractor
 from .models import CommentThread, ReviewMessage
+from .parallel import parallel_map
 
 
 @dataclass
@@ -386,7 +386,6 @@ class SeriesFinder:
         context_lines: int = 3,
         exclude_ci_bots: bool = True,
         exclude_lint_bots: bool = True,
-        show_progress: bool = False,
         include_system: bool = False,
     ) -> SeriesComments:
         """
@@ -401,7 +400,6 @@ class SeriesFinder:
                 (Maloo, Jenkins, etc.). Default True.
             exclude_lint_bots: Whether to exclude messages from lint/style checkers
                 (checkpatch, Janitor Bot, etc.). Default True.
-            show_progress: If True, show progress indicator to stderr
             include_system: If True, include system messages
 
         Returns:
@@ -410,19 +408,9 @@ class SeriesFinder:
         # First find the series
         series = self.find_series(url)
 
-        # Create extractor with same client
-        extractor = CommentExtractor(client=self.client)
-
-        patches_with_comments = []
-        total = len(series.patches)
-
-        for i, patch in enumerate(series.patches, 1):
-            if show_progress:
-                print(
-                    f"\rFetching comments... ({i}/{total}) {patch.change_number}",
-                    end="", flush=True, file=sys.stderr
-                )
-            # Extract comments for this patch
+        def fetch(patch: PatchInfo) -> PatchComments | None:
+            # One extractor per patch: it keeps per-change state.
+            extractor = CommentExtractor(client=self.client)
             try:
                 extracted = extractor.extract_from_change(
                     change_number=patch.change_number,
@@ -433,33 +421,31 @@ class SeriesFinder:
                     exclude_lint_bots=exclude_lint_bots,
                     include_system=include_system,
                 )
-
-                # Include patches that have threads or review messages
-                if extracted.threads or extracted.review_messages:
-                    # Get max patchset from threads or review messages
-                    max_patchset = 0
-                    if extracted.threads:
-                        max_patchset = max(t.root_comment.patch_set for t in extracted.threads)
-                    if extracted.review_messages:
-                        msg_patchset = max((m.patch_set or 0) for m in extracted.review_messages)
-                        max_patchset = max(max_patchset, msg_patchset)
-
-                    patch_comments = PatchComments(
-                        change_number=patch.change_number,
-                        subject=patch.subject,
-                        url=patch.url,
-                        current_patchset=max_patchset,
-                        threads=extracted.threads,
-                        review_messages=extracted.review_messages,
-                    )
-                    patches_with_comments.append(patch_comments)
             except Exception:
                 # Skip patches that fail to extract (might be permission issues)
-                continue
+                return None
+            # Include patches that have threads or review messages
+            if not (extracted.threads or extracted.review_messages):
+                return None
+            # Get max patchset from threads or review messages
+            max_patchset = 0
+            if extracted.threads:
+                max_patchset = max(t.root_comment.patch_set for t in extracted.threads)
+            if extracted.review_messages:
+                msg_patchset = max((m.patch_set or 0) for m in extracted.review_messages)
+                max_patchset = max(max_patchset, msg_patchset)
+            return PatchComments(
+                change_number=patch.change_number,
+                subject=patch.subject,
+                url=patch.url,
+                current_patchset=max_patchset,
+                threads=extracted.threads,
+                review_messages=extracted.review_messages,
+            )
 
-        if show_progress:
-            # Clear the progress line
-            print("\r" + " " * 60 + "\r", end="", file=sys.stderr)
+        patches_with_comments = [
+            pc for pc in parallel_map(fetch, series.patches) if pc is not None
+        ]
 
         return SeriesComments(
             series=series,

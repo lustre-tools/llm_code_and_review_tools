@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gerrit_cli.reviewer import CodeReviewer, FileChange, content_to_hunks
+from gerrit_cli.reviewer import (
+    CodeReviewer,
+    FileChange,
+    content_to_hunks,
+    patch_to_contents,
+)
 
 
 def _ctx(start, n):
@@ -86,6 +91,149 @@ class TestContentToHunks:
     def test_unchanged_file_has_no_hunks(self):
         assert content_to_hunks([{"ab": _ctx(1, 5)}], 3) == []
 
+    def test_no_context_only_hunk_before_a_skip(self):
+        # The tail of a unified diff hunk, then the lines it left out:
+        # with less context than it carries, the tail must not open a
+        # hunk of its own just because a change comes after the skip.
+        content = [
+            {"skip": 10}, {"ab": _ctx(11, 3)}, {"b": ["new"]},
+            {"ab": _ctx(14, 3)}, {"skip": 50}, {"ab": _ctx(67, 3)},
+            {"a": ["gone"]}, {"ab": _ctx(71, 3)},
+        ]
+        for n in (0, 1, 2):
+            hunks = content_to_hunks(content, n)
+            assert len(hunks) == 2, n
+            assert all(any(ln.type != "context" for ln in h.lines)
+                       for h in hunks)
+
+
+# WHOLE_FILE as git format-patch writes it: three lines of context.
+PATCH = r"""From abc Mon Sep 17 00:00:00 2001
+Subject: [PATCH] LU-1 test: a change
+
+A commit message line like --- or +++ is not a file header.
+---
+
+diff --git a/big.sh b/big.sh
+index 1..2 100644
+--- a/big.sh
++++ b/big.sh
+@@ -98,7 +98,7 @@
+ l98
+ l99
+ l100
+-old101
++new101
+ l102
+ l103
+ l104
+@@ -498,7 +498,7 @@
+ l498
+ l499
+ l500
+-old501
++new501
+ l502
+ l503
+ l504
+diff --git a/new.c b/new.c
+new file mode 100644
+--- /dev/null
++++ b/new.c
+@@ -0,0 +1,2 @@
++one
++two
+diff --git a/gone.c b/gone.c
+deleted file mode 100644
+--- a/gone.c
++++ /dev/null
+@@ -1 +0,0 @@
+-only
+\ No newline at end of file
+--
+2.43.0
+"""
+
+
+class TestPatchToContents:
+
+    def test_same_hunks_as_the_whole_file(self):
+        content = patch_to_contents(PATCH)["big.sh"]
+        for n in (0, 1, 2, 3):
+            assert content_to_hunks(content, n) == content_to_hunks(
+                WHOLE_FILE, n), n
+
+    def test_added_and_deleted_files(self):
+        contents = patch_to_contents(PATCH)
+        assert contents["new.c"] == [{"b": ["one", "two"]}]
+        assert contents["gone.c"] == [{"a": ["only"]}]
+        assert set(contents) == {"big.sh", "new.c", "gone.c"}
+
+
+def _review_client(patch_text, files):
+    client = MagicMock()
+    client.format_change_url.return_value = "https://example.com/123"
+
+    def get(url):
+        if url.endswith("/files"):
+            return files
+        if url.endswith("/patch"):
+            return patch_text
+        if "/diff" in url:
+            return {"content": WHOLE_FILE}
+        return {"id": "x", "current_revision": "abc",
+                "revisions": {"abc": {"commit": {"message": "m",
+                                                 "parents": []}}}}
+    client.rest.get.side_effect = get
+    return client
+
+
+class TestReviewFromPatch:
+
+    @patch("gerrit_cli.reviewer.GerritCommentsClient")
+    def test_one_request_for_every_file(self, mock_client_class):
+        files = {"big.sh": {"status": "M", "lines_inserted": 2,
+                            "lines_deleted": 2},
+                 "new.c": {"status": "A", "lines_inserted": 2}}
+        client = _review_client(PATCH, files)
+        mock_client_class.return_value = client
+        mock_client_class.parse_gerrit_url.return_value = (client.url, 123)
+
+        data = CodeReviewer().get_review_data("https://example.com/123")
+
+        urls = [c.args[0] for c in client.rest.get.call_args_list]
+        assert not [u for u in urls if "/diff" in u]
+        big = next(f for f in data.files if f.path == "big.sh")
+        assert big.hunks == content_to_hunks(WHOLE_FILE, 3)
+
+    @patch("gerrit_cli.reviewer.GerritCommentsClient")
+    def test_file_whose_counts_disagree_is_fetched(self, mock_client_class):
+        files = {"big.sh": {"status": "M", "lines_inserted": 5,
+                            "lines_deleted": 1}}
+        client = _review_client(PATCH, files)
+        mock_client_class.return_value = client
+        mock_client_class.parse_gerrit_url.return_value = (client.url, 123)
+
+        CodeReviewer().get_review_data("https://example.com/123")
+
+        urls = [c.args[0] for c in client.rest.get.call_args_list]
+        assert [u for u in urls if "/diff" in u] == [
+            "/changes/123/revisions/current/files/big.sh/diff"]
+
+    @patch("gerrit_cli.reviewer.GerritCommentsClient")
+    def test_full_context_uses_the_file_diff(self, mock_client_class):
+        files = {"big.sh": {"status": "M", "lines_inserted": 1,
+                            "lines_deleted": 1}}
+        client = _review_client(PATCH, files)
+        mock_client_class.return_value = client
+        mock_client_class.parse_gerrit_url.return_value = (client.url, 123)
+
+        CodeReviewer().get_review_data("https://example.com/123",
+                                       context_lines=None)
+
+        urls = [c.args[0] for c in client.rest.get.call_args_list]
+        assert not [u for u in urls if u.endswith("/patch")]
+
 
 class TestReviewCompactByDefault:
 
@@ -99,6 +247,7 @@ class TestReviewCompactByDefault:
                                               "parents": []}}}},
             {"big.sh": {"status": "M", "lines_inserted": 2,
                         "lines_deleted": 2}},
+            Exception("no /patch: the per-file diff is used"),
             {"content": WHOLE_FILE},
         ]
         mock_client_class.return_value = client

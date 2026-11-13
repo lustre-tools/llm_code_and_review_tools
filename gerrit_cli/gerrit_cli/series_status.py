@@ -4,7 +4,8 @@ import json
 from dataclasses import dataclass
 
 from .extractor import extract_comments
-from .series import SeriesFinder
+from .parallel import parallel_map
+from .series import PatchInfo, SeriesFinder
 from .staging import StagingManager
 
 
@@ -50,15 +51,16 @@ class SeriesStatus:
         if not series or not series.patches:
             return []
 
-        statuses = []
+        client = self.series_finder.client
 
-        for patch in series.patches:
+        def status_of(patch: PatchInfo) -> PatchStatus:
             # Count unresolved comments
             try:
                 extracted = extract_comments(
                     url=patch.url,
                     include_resolved=False,
                     include_code_context=False,
+                    client=client,
                 )
                 unresolved_count = len(extracted.threads)
             except Exception:
@@ -82,13 +84,15 @@ class SeriesStatus:
             if len(subject) > 50:
                 subject = subject[:47] + "..."
 
-            statuses.append(PatchStatus(
+            return PatchStatus(
                 change_number=patch.change_number,
                 subject=subject,
                 unresolved_count=unresolved_count,
                 staged_count=staged_count,
                 status=status,
-            ))
+            )
+
+        statuses = parallel_map(status_of, series.patches)
 
         return statuses
 

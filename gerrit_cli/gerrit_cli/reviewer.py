@@ -33,6 +33,7 @@ Example usage:
     )
 """
 
+import re
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -41,6 +42,7 @@ from urllib.parse import quote
 from .client import GerritCommentsClient, with_patchset_comment
 from .mode import result_fields
 from .models import Author, ChangeInfo
+from .parallel import parallel_map
 
 
 @dataclass
@@ -100,10 +102,14 @@ def content_to_hunks(
     hunk: Optional[DiffHunk] = None
     old = new = 1
 
+    # Whether a change follows section i before any skip: only then
+    # does its tail lead into a hunk.
     change_after = [False] * len(content)
     seen = False
     for i in range(len(content) - 1, -1, -1):
         change_after[i] = seen
+        if content[i].get("skip"):
+            seen = False
         if _is_change(content[i]):
             seen = True
 
@@ -170,6 +176,73 @@ def content_to_hunks(
 
     close_hunk()
     return hunks
+
+
+# The context a unified diff from Gerrit's /patch endpoint carries.
+PATCH_CONTEXT = 3
+_HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def patch_to_contents(patch: str) -> dict[str, list[dict]]:
+    """Each file of a unified diff as Gerrit DiffInfo content.
+
+    The unchanged lines between hunks, which a unified diff leaves out,
+    become "skip" sections, so content_to_hunks cuts the same hunks as
+    from the per-file diff endpoint, for any context up to
+    PATCH_CONTEXT.  Keyed by the new path (the old one for a deleted
+    file).  A file with no hunks (binary, mode-only) is absent.
+    """
+    contents: dict[str, list[dict]] = {}
+    content: list[dict] | None = None
+    old_path = ""
+    next_old = 1
+    rem_old = rem_new = 0
+    for line in patch.split("\n"):
+        if rem_old or rem_new:
+            tag, text = line[:1], line[1:]
+            if tag == " ":
+                kind = "ab"
+                rem_old -= 1
+                rem_new -= 1
+                next_old += 1
+            elif tag == "-":
+                kind = "a"
+                rem_old -= 1
+                next_old += 1
+            elif tag == "+":
+                kind = "b"
+                rem_new -= 1
+            else:
+                continue  # "\ No newline at end of file"
+            last = content[-1] if content else {}
+            if kind == "ab" and "ab" in last:
+                last["ab"].append(text)
+            elif kind == "a" and _is_change(last) and "b" not in last:
+                last.setdefault("a", []).append(text)
+            elif kind == "b" and _is_change(last):
+                last.setdefault("b", []).append(text)
+            else:
+                content.append({kind: [text]})
+            continue
+        if line.startswith("diff --git "):
+            content = None
+        elif line.startswith("--- ") and content is None:
+            old_path = line[4:]
+        elif line.startswith("+++ ") and content is None:
+            new_path = line[4:]
+            path = old_path if new_path == "/dev/null" else new_path
+            content = contents.setdefault(path[2:], [])
+            next_old = 1
+        elif content is not None and (m := _HUNK_HEADER.match(line)):
+            start = int(m.group(1))
+            rem_old = int(m.group(2) or 1)
+            rem_new = int(m.group(4) or 1)
+            if rem_old == 0:
+                start += 1  # a pure insertion names the line before it
+            if start > next_old:
+                content.append({"skip": start - next_old})
+            next_old = start
+    return contents
 
 
 @dataclass
@@ -419,19 +492,63 @@ class CodeReviewer:
                 size_delta=file_info.get("size_delta", 0),
             )
 
-            # Get diff for this file
-            self._add_diff_to_file(change_number, revision, file_change,
-                                   context_lines, base=base)
+            files.append(file_change)
 
-            # Optionally get full file content
+        need_diff = self._diffs_from_patch(
+            change_number, revision, files, context_lines, base)
+
+        # What is left is a request per file: made several at a time,
+        # each filling in only its own FileChange.
+        diff_ids = {id(f) for f in need_diff}
+
+        def fill(file_change: FileChange) -> None:
+            if id(file_change) in diff_ids:
+                self._add_diff_to_file(change_number, revision, file_change,
+                                       context_lines, base=base)
             if include_file_content:
                 self._add_content_to_file(change_number, revision, file_change)
 
-            files.append(file_change)
+        parallel_map(fill, files if include_file_content else need_diff)
 
         # Sort by path
         files.sort(key=lambda f: f.path)
         return files
+
+    def _diffs_from_patch(
+        self,
+        change_number: int,
+        revision: str,
+        files: list[FileChange],
+        context_lines: int | None,
+        base: int | None,
+    ) -> list[FileChange]:
+        """Fill in what one /patch request can; return the files it can't.
+
+        One request for the whole change instead of one per file,
+        which also sends every unchanged line.  It carries
+        PATCH_CONTEXT lines of context and has no base, and a file
+        is taken from it only when its line counts agree with
+        Gerrit's own file list.
+        """
+        if base is not None or context_lines is None or context_lines > PATCH_CONTEXT:
+            return files
+        try:
+            patch = self.client.rest.get(
+                f"/changes/{change_number}/revisions/{revision}/patch")
+            contents = patch_to_contents(patch) if isinstance(patch, str) else {}
+        except Exception:
+            return files
+        rest = []
+        for fc in files:
+            content = contents.get(fc.path)
+            if content is None or (
+                sum(len(s.get("b", [])) for s in content) != fc.lines_added
+                or sum(len(s.get("a", [])) for s in content) != fc.lines_deleted
+            ):
+                rest.append(fc)
+                continue
+            fc.hunks = content_to_hunks(content, context_lines)
+        return rest
 
     def _add_diff_to_file(
         self,

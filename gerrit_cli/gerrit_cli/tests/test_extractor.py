@@ -235,13 +235,11 @@ class TestCommentExtractor:
                     "author": {"name": "Reviewer"},
                     "unresolved": True,
                     "updated": "2025-01-01",
+                    "context_lines": [
+                        {"line_number": n, "context_line": f"line{n}"}
+                        for n in range(1, 6)
+                    ],
                 }
-            ]
-        }
-        mock_client.get_revision_for_patchset.return_value = "abc123"
-        mock_client.get_file_diff.return_value = {
-            "content": [
-                {"b": ["line1", "line2", "line3", "line4", "line5"]}
             ]
         }
         mock_client_class.return_value = mock_client
@@ -255,7 +253,11 @@ class TestCommentExtractor:
         comment = result.threads[0].root_comment
         assert comment.code_context is not None
         assert comment.code_context.target_line == 3
-        assert len(comment.code_context.lines) == 5  # lines 1-5
+        assert comment.code_context.lines == [f"line{n}" for n in range(1, 6)]
+        assert comment.code_context.start_line == 1
+        assert comment.code_context.end_line == 5
+        # Gerrit cuts the context: one request, no file fetches.
+        mock_client.get_comments.assert_called_once_with(123, context_padding=2)
 
     @patch("gerrit_cli.extractor.GerritCommentsClient")
     def test_extract_skips_context_for_virtual_files(self, mock_client_class):
@@ -293,8 +295,6 @@ class TestCommentExtractor:
 
         comment = result.threads[0].root_comment
         assert comment.code_context is None
-        # get_file_diff should not have been called
-        mock_client.get_file_diff.assert_not_called()
 
     @patch("gerrit_cli.extractor.GerritCommentsClient")
     def test_extract_from_url(self, mock_client_class):

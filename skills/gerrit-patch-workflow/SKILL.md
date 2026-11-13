@@ -239,13 +239,18 @@ gc vote <url> <label> <score>        gc message <url> "text"
 gc set-topic <url> <topic>           gc hashtag <url> --add <tag>
 gc rebase <url>                      gc checkout <url>
 gc abandon <url>                     gc restore <url>
-gc reviewers <url>                   gc add-reviewer <url> <name>
-gc find-user <name>                  gc remove-reviewer <url> <name>
+gc reviewers <url>                   gc add-reviewer <url> <name> [<name> ...]
+gc find-user <name> [<name> ...]     gc remove-reviewer <url> <name>
 gc reviewer-candidates <url> --repo <tree> --ref upstream/master
 ```
 
 `add-reviewer` and `find-user` do fuzzy name matching -- confirm the match
 before adding someone to a change. `find-user` marks bot accounts `is_bot`.
+Look several people up in one `find-user` call and add several in one
+`add-reviewer` call (no shell loops). `add-reviewer` matches every name
+before adding anyone, and each entry of its `added` is Gerrit's own answer
+(`added_reviewer`, `added_cc`, `already_on_change` or `error`), so running
+`reviewers` afterwards to check is not needed.
 
 `reviewers` lists everyone on the change, CCs included: tell them apart by
 `role` (`REVIEWER` or `CC`), and skip `is_bot` accounts (`service_user`

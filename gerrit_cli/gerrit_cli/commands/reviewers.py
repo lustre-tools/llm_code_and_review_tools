@@ -5,6 +5,7 @@ import sys
 
 from ..ci_parse import is_bot_participant
 from ..errors import ErrorCode, ExitCode
+from ..parallel import parallel_map
 from ._helpers import _cli, error_code_for, output_error, output_success
 
 
@@ -280,94 +281,127 @@ def cmd_reviewers(args):
         sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
+def _match_account(client, name):
+    """(account, None) for the one account *name* means, or (None, why):
+    "none" or the list of fuzzy matches to choose from."""
+    matches = client.suggest_accounts(name, limit=5)
+    if not matches:
+        # Try a broader search
+        matches = client.search_accounts(name=name, limit=5)
+    if not matches:
+        return None, "none"
+    # An exact username or email wins over fuzzy neighbours
+    # ("LiX" also suggests "Lixin ..." accounts).
+    wanted = name.strip().lower()
+    exact = [m for m in matches
+             if wanted and wanted in ((m.get("username") or "").lower(),
+                                      (m.get("email") or "").lower())]
+    if len(matches) == 1:
+        return matches[0], None
+    if len(exact) == 1:
+        return exact[0], None
+    return None, [{"name": m.get("name", ""), "email": m.get("email", ""),
+                   "username": m.get("username", "")} for m in matches]
+
+
+def _who(account):
+    return {"name": account.get("name", ""), "email": account.get("email", ""),
+            "username": account.get("username", "")}
+
+
+def _outcome(result, state):
+    """What Gerrit says it did: added as reviewer or cc, already there
+    (it answers an add of someone present with nothing), or an error."""
+    if not isinstance(result, dict):
+        return {"result": "added_" + state.lower()}
+    if result.get("error"):
+        return {"result": "error", "error": result["error"]}
+    if result.get("reviewers"):
+        return {"result": "added_reviewer"}
+    if result.get("ccs"):
+        return {"result": "added_cc"}
+    return {"result": "already_on_change"}
+
+
 def cmd_add_reviewer(args):
-    """Add a reviewer to a change with fuzzy name matching."""
+    """Add one or more reviewers to a change, with fuzzy name matching.
+
+    Every name is matched before anyone is added, so a name that is
+    ambiguous or unknown adds nobody.  The adds run together, and each
+    reports Gerrit's own answer, so no `gc reviewers` is needed after.
+    """
     cli = _cli()
     command = "add-reviewer"
     pretty = getattr(args, 'pretty', False)
+    names = getattr(args, "names", None) or [args.name]
 
     try:
         base_url, change_number = cli.GerritCommentsClient.parse_gerrit_url(args.url)
         client = cli.GerritCommentsClient()
 
-        # First, try to find matching users
-        matches = client.suggest_accounts(args.name, limit=5)
-
-        if not matches:
-            # Try a broader search
-            matches = client.search_accounts(name=args.name, limit=5)
-
-        if not matches:
-            error_msg = f"No users found matching '{args.name}'. "
-            error_msg += "Try a different spelling or use 'gc find-user' to search."
+        found = parallel_map(lambda n: _match_account(client, n), names)
+        unknown = [n for n, (_, why) in zip(names, found) if why == "none"]
+        ambiguous = {n: why for n, (_, why) in zip(names, found)
+                     if isinstance(why, list)}
+        if unknown and not ambiguous:
+            error_msg = (f"No users found matching {', '.join(repr(n) for n in unknown)}. "
+                         "Nobody was added. Try a different spelling or use "
+                         "'gc find-user' to search.")
             sys.exit(output_error(ErrorCode.NOT_FOUND, error_msg, command, pretty))
-
-        # An exact username or email wins over fuzzy neighbours
-        # ("LiX" also suggests "Lixin ..." accounts).
-        wanted = args.name.strip().lower()
-        exact = [m for m in matches
-                 if wanted and wanted in ((m.get("username") or "").lower(),
-                                          (m.get("email") or "").lower())]
-
-        # If exactly one match, use it directly
-        if len(matches) == 1:
-            selected = matches[0]
-        elif len(exact) == 1:
-            selected = exact[0]
-        else:
-            # Multiple matches - show them and ask user to be more specific
-            match_list = []
-            for m in matches:
-                match_list.append({
-                    "name": m.get("name", ""),
-                    "email": m.get("email", ""),
-                    "username": m.get("username", ""),
-                })
-
+        if ambiguous:
             data = {
                 "error": "multiple_matches",
-                "message": f"Multiple users match '{args.name}'. Please be more specific.",
-                "matches": match_list,
+                "message": ("Multiple users match "
+                            + ", ".join(repr(n) for n in ambiguous)
+                            + ". Nobody was added; be more specific."),
+                "matches": (next(iter(ambiguous.values()))
+                            if len(ambiguous) == 1 else ambiguous),
                 "hint": "Use email or username for exact match, e.g.: gc add-reviewer URL user@example.com",
             }
+            if unknown:
+                data["not_found"] = unknown
             output_success(data, command, pretty)
             sys.exit(ExitCode.GENERAL_ERROR)
 
-        # Add the reviewer
-        reviewer_id = selected.get("username") or selected.get("email") or str(selected.get("_account_id"))
+        accounts = [account for account, _ in found]
         state = "CC" if args.cc else "REVIEWER"
 
         # Handle dry-run mode
-        dry_run = getattr(args, 'dry_run', False)
-        if dry_run:
+        if getattr(args, 'dry_run', False):
             data = {
                 "dry_run": True,
                 "change_number": change_number,
-                "would_add": {
-                    "name": selected.get("name", ""),
-                    "email": selected.get("email", ""),
-                    "username": selected.get("username", ""),
-                    "state": state,
-                },
+                "would_add": [{**_who(a), "state": state} for a in accounts],
             }
             output_success(data, command, pretty)
             sys.exit(ExitCode.SUCCESS)
 
-        result = client.add_reviewer(change_number, reviewer_id, state=state)
+        def add(account):
+            reviewer_id = (account.get("username") or account.get("email")
+                           or str(account.get("_account_id")))
+            try:
+                return client.add_reviewer(change_number, reviewer_id, state=state)
+            except Exception as e:  # one failure must not hide the others
+                return e
 
+        results = parallel_map(add, accounts)
+        errors = [r for r in results if isinstance(r, Exception)]
+        if errors and len(errors) == len(results):
+            raise errors[0]  # reported as the command's error, below
+        added = [
+            {**_who(a), "state": state,
+             **({"result": "error", "error": str(r)[:300]}
+                if isinstance(r, Exception) else _outcome(r, state))}
+            for a, r in zip(accounts, results)
+        ]
+        failed = any(a["result"] == "error" for a in added)
         data = {
-            "success": True,
+            "success": not failed,
             "change_number": change_number,
-            "added": {
-                "name": selected.get("name", ""),
-                "email": selected.get("email", ""),
-                "username": selected.get("username", ""),
-                "state": state,
-            },
+            "added": added,
         }
-
         output_success(data, command, pretty)
-        sys.exit(ExitCode.SUCCESS)
+        sys.exit(ExitCode.GENERAL_ERROR if failed else ExitCode.SUCCESS)
 
     except ValueError as e:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, str(e), command, pretty))
@@ -463,43 +497,40 @@ def cmd_remove_reviewer(args):
         sys.exit(output_error(error_code_for(e), str(e), command, pretty))
 
 
+def _find_user(client, query, limit):
+    # Use suggest for fuzzy matching
+    matches = client.suggest_accounts(query, limit=limit)
+    if not matches:
+        # Try a broader search
+        matches = client.search_accounts(name=query, limit=limit)
+    user_list = [{
+        "name": m.get("name", ""),
+        "email": m.get("email", ""),
+        "username": m.get("username", ""),
+        "account_id": m.get("_account_id"),
+        # Same bot list as 'reviewers' and 'reviewer-candidates':
+        # aireview and the RISC-V builder lack Gerrit's tag.
+        "is_bot": is_bot_participant(m),
+    } for m in matches or []]
+    data = {"query": query, "users": user_list, "count": len(user_list)}
+    if not user_list:
+        data["message"] = f"No users found matching '{query}'"
+    return data
+
+
 def cmd_find_user(args):
-    """Search for users by name."""
+    """Search for users by name; several queries are looked up together."""
     cli = _cli()
     command = "find-user"
     pretty = getattr(args, 'pretty', False)
+    queries = getattr(args, "queries", None) or [args.query]
 
     try:
         client = cli.GerritCommentsClient()
-
-        # Use suggest for fuzzy matching
-        matches = client.suggest_accounts(args.query, limit=args.limit)
-
-        if not matches:
-            # Try a broader search
-            matches = client.search_accounts(name=args.query, limit=args.limit)
-
-        user_list = []
-        for m in matches:
-            user_list.append({
-                "name": m.get("name", ""),
-                "email": m.get("email", ""),
-                "username": m.get("username", ""),
-                "account_id": m.get("_account_id"),
-                # Same bot list as 'reviewers' and 'reviewer-candidates':
-                # aireview and the RISC-V builder lack Gerrit's tag.
-                "is_bot": is_bot_participant(m),
-            })
-
-        data = {
-            "query": args.query,
-            "users": user_list,
-            "count": len(user_list),
-        }
-
-        if not user_list:
-            data["message"] = f"No users found matching '{args.query}'"
-
+        found = parallel_map(
+            lambda q: _find_user(client, q, args.limit), queries)
+        data = found[0] if len(found) == 1 else {
+            "results": found, "count": len(found)}
         output_success(data, command, pretty)
         sys.exit(ExitCode.SUCCESS)
 

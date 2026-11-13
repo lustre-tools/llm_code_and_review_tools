@@ -218,6 +218,8 @@ class TestCodeReviewer:
                     "lines_deleted": 2,
                 },
             },
+            # Third: the whole change as a patch, unavailable here
+            Exception("no /patch"),
             # Third call: get diff
             {
                 "content": [
@@ -527,6 +529,8 @@ class TestDiffParsing:
             },
             # Files list
             {"test.py": {"status": "M", "lines_inserted": 1, "lines_deleted": 1}},
+            # The whole change as a patch: unavailable here
+            Exception("no /patch"),
             # Diff
             {
                 "content": [
