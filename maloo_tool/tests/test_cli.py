@@ -46,6 +46,9 @@ def mock_client():
     # No id is a test session unless a test says so; the commands that
     # take a test set id refuse a session id.
     client.get_session.return_value = None
+    # SUBTEST_1 is a subtest; any other id is a test set.
+    client.get_subtest.side_effect = (
+        lambda i: {"id": i} if i == SUBTEST_1 else None)
     with patch("maloo_tool.cli._make_client", return_value=client):
         yield client
 
@@ -642,6 +645,7 @@ class TestBugs:
             return list(with_children if related else direct)
 
         mock_client.get_bug_links.side_effect = get_bug_links
+        mock_client.get_subtest.side_effect = None
         mock_client.get_subtest.return_value = {
             "id": SUBTEST_1, "sub_test_script_id": "script-np",
         }
@@ -1613,6 +1617,29 @@ class TestResolveBranchToJob:
 
     def test_generic_branch(self):
         assert _resolve_branch_to_job("some-branch") == "lustre-some-branch"
+
+
+# -- --type is worked out from the id --
+
+
+class TestBuggableType:
+    @pytest.mark.parametrize("cmd", [
+        ["link-bug", SUBTEST_1, "LU-1"], ["reject-bug", SUBTEST_1, "LU-1"],
+    ])
+    def test_type_mismatch_refused(self, runner, mock_client, cmd):
+        """--type any case; a type the id is not is refused, unsent."""
+        result = runner.invoke(main, ["--envelope", *cmd, "--type", "testset"])
+        env = json.loads(result.output)
+        assert result.exit_code == 4
+        assert "is a SubTest, not a TestSet" in env["error"]["message"]
+        mock_client.create_bug_link.assert_not_called()
+        mock_client.review_bug_link.assert_not_called()
+
+    def test_unknown_id_not_found(self, runner, mock_client):
+        mock_client.get_test_set.return_value = None
+        result = runner.invoke(main, ["--envelope", "link-bug", TSID_1, "LU-1"])
+        assert result.exit_code == 3
+        mock_client.create_bug_link.assert_not_called()
 
 
 # -- raise-bug command --

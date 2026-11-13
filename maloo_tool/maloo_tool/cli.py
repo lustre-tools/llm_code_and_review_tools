@@ -136,6 +136,49 @@ def _refuse_session_id(
     )
 
 
+_TYPE_HELP = (
+    "TestSet or SubTest, any case. Default: worked out from the id; "
+    "a type that does not match the id is refused")
+
+
+def _buggable_type_option(func: Any) -> Any:
+    return click.option(
+        "--type", "buggable_type", default=None,
+        type=click.Choice(["TestSet", "SubTest"], case_sensitive=False),
+        help=_TYPE_HELP)(func)
+
+
+def _resolve_buggable(
+    client: MalooClient, buggable_id: str, given: str | None,
+    command: str, pretty: bool,
+) -> str:
+    """Return "TestSet" or "SubTest" for BUGGABLE_ID.
+
+    A session id is refused (INVALID_INPUT), an unknown id is
+    NOT_FOUND, and a GIVEN type that does not match the id is
+    INVALID_INPUT, all before anything is sent.
+    """
+    _refuse_session_id(client, buggable_id, "test set or subtest",
+                       command, pretty)
+    if client.get_subtest(buggable_id):
+        actual = "SubTest"
+    elif client.get_test_set(buggable_id):
+        actual = "TestSet"
+    else:
+        _error(ErrorCode.NOT_FOUND,
+               f"{buggable_id} is neither a test set nor a subtest",
+               command, pretty)
+    if given and given.lower() != actual.lower():
+        _error(
+            ErrorCode.INVALID_INPUT,
+            f"{buggable_id} is a {actual}, not a {given}. Drop --type; "
+            "it is worked out from the id.",
+            command, pretty,
+            details={"id": buggable_id, "id_kind": actual},
+        )
+    return actual
+
+
 class MalooGroup(JsonErrorGroup):
     """Click group whose global options work in any position.
 
@@ -798,9 +841,7 @@ def bugs(buggable_id: str, direct_only: bool, related: bool, pretty: bool) -> No
 @main.command(name="link-bug")
 @click.argument("buggable_id")
 @click.argument("jira_ticket")
-@click.option(
-    "--type", "buggable_class", type=click.Choice(["TestSet", "SubTest"]),
-    default="TestSet", help="Type of entity to link (default: TestSet)")
+@_buggable_type_option
 @click.option(
     "--state", type=click.Choice(["accepted", "pending"]),
     default="accepted", help="Bug link state (default: accepted)")
@@ -808,7 +849,7 @@ def bugs(buggable_id: str, direct_only: bool, related: bool, pretty: bool) -> No
 def link_bug(
     buggable_id: str,
     jira_ticket: str,
-    buggable_class: str,
+    buggable_type: str | None,
     state: str,
     pretty: bool,
 ) -> None:
@@ -829,18 +870,21 @@ def link_bug(
     fails, the link was requested but its state is unknown: "state" is
     null and "warning" says so.
 
+    Link a failed subtest by its own id unless the cause is outside the
+    test (a previous test's leftovers, an infrastructure fault); then
+    link the test set.
+
     \b
     Examples:
+      maloo link-bug <subtest_id> LU-12345
       maloo link-bug <test_set_id> LU-12345
-      maloo link-bug <subtest_id> LU-12345 --type SubTest
 
     A test session id is refused with INVALID_INPUT before anything is
     sent.
     """
     client = _make_client()
-    _refuse_session_id(
-        client, buggable_id, "test set or subtest", "link-bug", pretty
-    )
+    buggable_class = _resolve_buggable(
+        client, buggable_id, buggable_type, "link-bug", pretty)
     resp = client.create_bug_link(
         buggable_class=buggable_class,
         buggable_id=buggable_id,
@@ -948,9 +992,7 @@ def link_bug(
 @main.command(name="reject-bug")
 @click.argument("buggable_id")
 @click.argument("jira_ticket")
-@click.option(
-    "--type", "buggable_class", type=click.Choice(["TestSet", "SubTest"]),
-    default="TestSet", help="Type of entity the link is on (default: TestSet)")
+@_buggable_type_option
 @click.option(
     "--reset", is_flag=True,
     help="Set the link back to pending instead of rejecting it")
@@ -958,7 +1000,7 @@ def link_bug(
 def reject_bug(
     buggable_id: str,
     jira_ticket: str,
-    buggable_class: str,
+    buggable_type: str | None,
     reset: bool,
     pretty: bool,
 ) -> None:
@@ -973,10 +1015,12 @@ def reject_bug(
 
     \b
     Examples:
-      maloo reject-bug <subtest_id> LU-9 --type SubTest
+      maloo reject-bug <subtest_id> LU-9
       maloo reject-bug <test_set_id> LU-12345 --reset
     """
     client = _make_client()
+    buggable_class = _resolve_buggable(
+        client, buggable_id, buggable_type, "reject-bug", pretty)
     target = "pending" if reset else "rejected"
     check = f"maloo bugs {buggable_id} --direct-only"
     details: dict[str, Any] = {"buggable_id": buggable_id, "bug": jira_ticket}
@@ -991,13 +1035,10 @@ def reject_bug(
 
     stored = stored_states()
     if not stored:
-        _refuse_session_id(
-            client, buggable_id, "test set or subtest", "reject-bug", pretty
-        )
         _error(
             ErrorCode.LINK_NOT_STORED,
-            f"{buggable_id} carries no {jira_ticket} link. Check the id and "
-            f"--type, and `{check}`.",
+            f"{buggable_id} carries no {jira_ticket} link. Check the id "
+            f"and `{check}`.",
             "reject-bug", pretty, details,
         )
     result: dict[str, Any] = {
