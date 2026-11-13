@@ -46,6 +46,9 @@ def mock_client():
     # No id is a test session unless a test says so; the commands that
     # take a test set id refuse a session id.
     client.get_session.return_value = None
+    # SUBTEST_1 is a subtest; any other id is a test set.
+    client.get_subtest.side_effect = (
+        lambda i: {"id": i} if i == SUBTEST_1 else None)
     with patch("maloo_tool.cli._make_client", return_value=client):
         yield client
 
@@ -642,6 +645,7 @@ class TestBugs:
             return list(with_children if related else direct)
 
         mock_client.get_bug_links.side_effect = get_bug_links
+        mock_client.get_subtest.side_effect = None
         mock_client.get_subtest.return_value = {
             "id": SUBTEST_1, "sub_test_script_id": "script-np",
         }
@@ -1615,6 +1619,31 @@ class TestResolveBranchToJob:
         assert _resolve_branch_to_job("some-branch") == "lustre-some-branch"
 
 
+# -- --type is worked out from the id --
+
+
+class TestBuggableType:
+    @pytest.mark.parametrize("cmd", [
+        ["raise-bug", SUBTEST_1], ["link-bug", SUBTEST_1, "LU-1"],
+        ["reject-bug", SUBTEST_1, "LU-1"],
+    ])
+    def test_type_mismatch_refused(self, runner, mock_client, cmd):
+        """--type any case; a type the id is not is refused, unsent."""
+        result = runner.invoke(main, ["--envelope", *cmd, "--type", "testset"])
+        env = json.loads(result.output)
+        assert result.exit_code == 4
+        assert "is a SubTest, not a TestSet" in env["error"]["message"]
+        mock_client.raise_bug.assert_not_called()
+        mock_client.create_bug_link.assert_not_called()
+        mock_client.review_bug_link.assert_not_called()
+
+    def test_unknown_id_not_found(self, runner, mock_client):
+        mock_client.get_test_set.return_value = None
+        result = runner.invoke(main, ["--envelope", "link-bug", TSID_1, "LU-1"])
+        assert result.exit_code == 3
+        mock_client.create_bug_link.assert_not_called()
+
+
 # -- raise-bug command --
 
 
@@ -1650,11 +1679,41 @@ class TestRaiseBug:
             "ticket": "LU-100", "url": "", "flash": "ok"
         }
         result = runner.invoke(main, [
-            "--envelope", "raise-bug", TSID_1, "--type", "SubTest",
+            "--envelope", "raise-bug", SUBTEST_1, "--type", "SubTest",
             "--summary", "subtest bug",
         ])
         env = _parse_output(result)
         assert env["data"]["buggable_type"] == "SubTest"
+
+    def test_raise_bug_type_from_subtest_id(self, runner, mock_client):
+        mock_client.raise_bug.return_value = {"ticket": "LU-1", "url": "", "flash": ""}
+        env = _parse_output(runner.invoke(main, ["--envelope", "raise-bug", SUBTEST_1]))
+        assert mock_client.raise_bug.call_args.kwargs["buggable_type"] == "SubTest"
+        assert env["data"]["buggable_type"] == "SubTest"
+
+    def test_type_any_case_accepted(self, runner, mock_client):
+        mock_client.raise_bug.return_value = {"ticket": "LU-1", "url": "", "flash": ""}
+        result = runner.invoke(main, ["raise-bug", SUBTEST_1, "--type", "subtest"])
+        assert result.exit_code == 0, result.output
+
+    def test_raise_bug_passes_component_and_version(self, runner, mock_client):
+        mock_client.raise_bug.return_value = {"ticket": "PROJ-1", "url": "", "flash": ""}
+        runner.invoke(main, [
+            "raise-bug", TSID_1, "--project", "PROJ",
+            "--version", "2.0.0", "--component", "Core",
+        ])
+        kw = mock_client.raise_bug.call_args.kwargs
+        assert kw["version"] == "2.0.0"
+        assert kw["component"] == "Core"
+
+    def test_raise_bug_invalid_input_exit_4(self, runner, mock_client):
+        from maloo_tool.errors import InvalidInputError
+        mock_client.raise_bug.side_effect = InvalidInputError(
+            "INVALID_INPUT", "Project PROJ needs --version")
+        result = runner.invoke(main, ["--envelope", "raise-bug", TSID_1, "--project", "PROJ"])
+        env = json.loads(result.output)
+        assert env["error"]["code"] == "INVALID_INPUT"
+        assert result.exit_code == 4
 
 
 # -- queue command: branch resolution --

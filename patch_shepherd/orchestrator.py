@@ -425,7 +425,8 @@ def execute_decisions(unknown_failures, decisions):
 
             bug_result = tool(
                 "raise-bug", suite_id,
-                "--project", "LU", "--summary", summary)
+                "--project", "LU", "--summary", summary,
+                "--description", reason or "Raised by patch_shepherd.")
             tool_calls += 1
 
             bug_key = _extract_bug_key(bug_result)
