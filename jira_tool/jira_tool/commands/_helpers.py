@@ -223,6 +223,18 @@ def _parse_visibility(value: str) -> dict[str, str]:
     return {"type": vis_type, "value": vis_value}
 
 
+_ACCOUNT_ID = re.compile(
+    r"^(?:[0-9a-f]{24}|(?:[0-9a-z]+:)?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
+    r"(?::[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})?)$",
+    re.IGNORECASE,
+)
+
+
+def looks_like_account_id(identifier: str) -> bool:
+    """True for a Cloud accountId: "712020:<uuid>", "qm:<uuid>:<uuid>", a uuid or 24 hex digits."""
+    return bool(_ACCOUNT_ID.match(identifier.strip()))
+
+
 def resolve_cloud_user(client: "JiraClient", identifier: str) -> str:
     """Resolve a display name or email to an accountId on Cloud.
 
@@ -239,9 +251,7 @@ def resolve_cloud_user(client: "JiraClient", identifier: str) -> str:
     Raises:
         InvalidInputError: If the identifier can't be resolved uniquely
     """
-    import re
-    # accountIds look like "712020:b43984b4-..." or hex UUIDs
-    if re.match(r'^[a-f0-9]+[:\-]', identifier, re.IGNORECASE):
+    if looks_like_account_id(identifier):
         return identifier
 
     users = client.search_users(identifier, max_results=5)
@@ -260,7 +270,8 @@ def resolve_cloud_user(client: "JiraClient", identifier: str) -> str:
             code=ErrorCode.INVALID_INPUT,
             message=(
                 f"Could not resolve user '{identifier}' to a unique Cloud user. "
-                f"Matches: {names}. Use an exact display name or accountId."
+                f"Matches: {names}. Use an exact display name or accountId "
+                "(for a mention, @[Display Name|accountId])."
             ),
         )
     return matches[0].get("accountId")

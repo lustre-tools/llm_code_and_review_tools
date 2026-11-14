@@ -7,7 +7,6 @@ import click
 from ..envelope import success_response
 from ..errors import ConfigError, ExitCode, JiraToolError, NotFoundError
 from ._helpers import (
-    _get_cloud_projects,
     get_client,
     handle_error,
     output_result,
@@ -22,7 +21,7 @@ def register(main):
     @click.option("--limit", default=10, help="Maximum results to return (default: 10)")
     @click.option("--project", "projects", multiple=True,
                   help="Cloud fallback: project(s) whose assignable users to search "
-                       "(repeatable; default: the JIRA_CLOUD_PROJECTS projects)")
+                       "(repeatable; default: every project the account can see)")
     @click.pass_context
     def user_search(ctx: click.Context, query: str, limit: int, projects: tuple[str, ...]) -> None:
         """
@@ -31,9 +30,9 @@ def register(main):
         QUERY is the search string.  On a server where search finds
         nothing (no Browse Users permission), QUERY is looked up as an
         exact username instead; "active" false is a deactivated account.
-        On Cloud without that permission, search falls back to the
-        assignable users of --project (default: the JIRA_CLOUD_PROJECTS
-        projects).
+        On Cloud without the Browse users and groups permission, search
+        falls back to the users assignable in --project (default: every
+        project the account can see).
         """
         command = "users"
         pretty = ctx.obj.get("pretty", False)
@@ -41,7 +40,8 @@ def register(main):
         try:
             client = get_client(ctx)
 
-            raw_users = client.search_users(query, max_results=limit)
+            raw_users = client.search_users(query, max_results=limit,
+                                            projects=list(projects) or None)
             if not raw_users and not client.config.is_cloud:
                 # Search needs Browse Users, which the Whamcloud accounts
                 # lack; an exact username still resolves.
@@ -49,13 +49,6 @@ def register(main):
                     raw_users = [client.get_user(query)]
                 except NotFoundError:
                     raw_users = []
-
-            fallback = list(projects) or sorted(_get_cloud_projects())
-            if not raw_users and client.config.is_cloud and fallback:
-                # Cloud returns [] (HTTP 200) without Browse users and groups.
-                raw_users = client.search_assignable_users(
-                    query, fallback, max_results=limit,
-                )
 
             users = []
             for u in raw_users:

@@ -17,7 +17,13 @@ import requests
 from llm_tool_common.config import user_state_dir
 from urllib3.exceptions import ConnectTimeoutError
 
-from .adf import MentionResolver, adf_to_markdown, markdown_to_adf
+from .adf import (
+    MentionResolver,
+    adf_mentions,
+    adf_to_markdown,
+    markdown_mentions,
+    markdown_to_adf,
+)
 from .config import AUTH_TYPE_BASIC, JiraConfig
 from .errors import (
     AuthError,
@@ -170,6 +176,7 @@ class JiraClient:
         self.debug = debug
         self._session = requests.Session()
         self._api_root: str | None = None
+        self._project_keys: list[str] | None = None
 
         headers = {
             "Content-Type": "application/json",
@@ -891,10 +898,22 @@ class JiraClient:
             context=f"{key}/comment/{comment_id}",
         )
 
-    def _resolve_mention(self, name: str) -> str:
+    def _mention_resolver(self, text: str, existing: Any = None) -> MentionResolver:
+        """Resolve @[Name] in *text* to an accountId.
+
+        A name given elsewhere in *text* as @[Name|accountId], or
+        mentioned in the *existing* ADF being replaced, reuses that
+        accountId; any other name is looked up.
+        """
         from .commands._helpers import resolve_cloud_user
 
-        return resolve_cloud_user(self, name)
+        known = adf_mentions(existing)
+        known.update(markdown_mentions(text))
+
+        def resolve(name: str) -> str:
+            return known.get(name.lower()) or resolve_cloud_user(self, name)
+
+        return resolve
 
     def add_comment(
         self,
@@ -916,7 +935,7 @@ class JiraClient:
         Returns:
             Created comment data
         """
-        comment_body = _text_to_adf(body, self._resolve_mention) if self.config.is_cloud else body
+        comment_body = _text_to_adf(body, self._mention_resolver(body)) if self.config.is_cloud else body
         json_data: dict[str, Any] = {"body": comment_body}
         if visibility:
             json_data["visibility"] = visibility
@@ -949,7 +968,13 @@ class JiraClient:
         Returns:
             Updated comment data
         """
-        comment_body = _text_to_adf(body, self._resolve_mention) if self.config.is_cloud else body
+        if self.config.is_cloud:
+            existing = None
+            if "@[" in body:
+                existing = self.get_comment(key, comment_id).get("body")
+            comment_body = _text_to_adf(body, self._mention_resolver(body, existing))
+        else:
+            comment_body = body
         json_data: dict[str, Any] = {"body": comment_body}
         if visibility:
             json_data["visibility"] = visibility
@@ -1289,7 +1314,7 @@ class JiraClient:
         }
 
         if comment:
-            comment_body = _text_to_adf(comment, self._resolve_mention) if self.config.is_cloud else comment
+            comment_body = _text_to_adf(comment, self._mention_resolver(comment)) if self.config.is_cloud else comment
             body["update"] = {"comment": [{"add": {"body": comment_body}}]}
 
         if fields:
@@ -1338,7 +1363,7 @@ class JiraClient:
 
         if description:
             body["fields"]["description"] = (
-                _text_to_adf(description, self._resolve_mention) if self.config.is_cloud else description
+                _text_to_adf(description, self._mention_resolver(description)) if self.config.is_cloud else description
             )
 
         return self._request("POST", "issue", json_data=body)
@@ -1374,7 +1399,7 @@ class JiraClient:
             update_fields["summary"] = summary
         if description is not None:
             update_fields["description"] = (
-                _text_to_adf(description, self._resolve_mention) if self.config.is_cloud else description
+                _text_to_adf(description, self._mention_resolver(description)) if self.config.is_cloud else description
             )
         if assignee is not None:
             if self.config.is_cloud:
@@ -1499,13 +1524,21 @@ class JiraClient:
         self,
         query: str,
         max_results: int = 10,
+        projects: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Search for users by username, display name, or email.
 
+        On Cloud, user/search returns an empty list (HTTP 200) when the
+        account lacks the global Browse users and groups permission, and
+        user/picker does the same.  The search then falls back to the
+        users assignable in *projects*, by default every project the
+        account can see.
+
         Args:
             query: Search string (matches username, display name, email)
             max_results: Maximum results to return (default: 10)
+            projects: Cloud fallback: project keys whose assignable users to search
 
         Returns:
             List of user dicts
@@ -1516,7 +1549,33 @@ class JiraClient:
             query_param: query,
             "maxResults": str(max_results),
         }
-        return self._request("GET", "user/search", params=params, context=f"user search: {query}")
+        users = self._request("GET", "user/search", params=params, context=f"user search: {query}")
+        if users or not self.config.is_cloud:
+            return users
+        projects = list(projects or self.visible_project_keys())
+        if not projects:
+            return users
+        return self.search_assignable_users(query, projects, max_results=max_results)
+
+    def visible_project_keys(self) -> list[str]:
+        """Keys of every project the account can browse (cached per client)."""
+        if self._project_keys is not None:
+            return self._project_keys
+        keys: list[str] = []
+        start = 0
+        while True:
+            page = self._request(
+                "GET", "project/search",
+                params={"startAt": str(start), "maxResults": "100"},
+                context="project search",
+            )
+            values = page.get("values") or []
+            keys.extend(p["key"] for p in values if p.get("key"))
+            start += len(values)
+            if page.get("isLast", True) or not values:
+                break
+        self._project_keys = keys
+        return keys
 
     def search_assignable_users(
         self,
@@ -1527,22 +1586,16 @@ class JiraClient:
         """
         Search users who can be assigned in any of *projects* (Cloud).
 
-        Cloud user/search returns an empty list with HTTP 200 when the
-        account lacks the global Browse users and groups permission.
-        user/assignable/search needs only Browse Projects, so it still
-        finds people.  It covers assignable users only.
+        user/assignable/multiProjectSearch needs only Browse Projects, so
+        it finds people where user/search finds nobody.  It covers
+        assignable users only.
         """
-        found: dict[str, dict[str, Any]] = {}
-        for project in projects:
-            users = self._request(
-                "GET", "user/assignable/search",
-                params={"query": query, "project": project,
-                        "maxResults": str(max_results)},
-                context=f"assignable user search: {query} in {project}",
-            )
-            for u in users:
-                found.setdefault(u.get("accountId") or u.get("name"), u)
-        return list(found.values())[:max_results]
+        return self._request(
+            "GET", "user/assignable/multiProjectSearch",
+            params={"query": query, "projectKeys": ",".join(projects),
+                    "maxResults": str(max_results)},
+            context=f"assignable user search: {query} in {','.join(projects)}",
+        )
 
     def get_user(self, username: str) -> dict[str, Any]:
         """

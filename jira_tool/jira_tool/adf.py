@@ -11,7 +11,8 @@ Supported:
              with indented continuation lines), "---" rules, and pipe
              tables whose second row is a |---| separator
   inline  -- `code`, **bold**, *italic*, [text](url), bare http(s) URLs,
-             and @[Display Name] mentions when a resolver is given
+             and mentions: @[Display Name|accountId] as is, @[Display Name]
+             when a resolver is given to look up its accountId
 
 Plain text with none of this markup converts exactly as before: one
 paragraph per blank-line-separated block, with hard breaks inside.
@@ -235,7 +236,8 @@ def _inline(text: str, resolve: MentionResolver | None, marks: list[Node] | None
     out: list[Node] = []
     pos = 0
     for m in _INLINE.finditer(text):
-        if m.group("mention") is not None and resolve is None:
+        if (m.group("mention") is not None and resolve is None
+                and split_mention(m.group("mention"))[1] is None):
             continue
         if m.start() > pos:
             out.append(_text(text[pos:m.start()], marks))
@@ -249,9 +251,11 @@ def _inline(text: str, resolve: MentionResolver | None, marks: list[Node] | None
             out.extend(_inline(m.group("link_text"), resolve,
                                marks + [{"type": "link", "attrs": {"href": m.group("link_url")}}]))
         elif m.group("mention") is not None:
-            name = m.group("mention")
+            name, account_id = split_mention(m.group("mention"))
+            if account_id is None:
+                account_id = resolve(name)
             out.append({"type": "mention",
-                        "attrs": {"id": resolve(name), "text": f"@{name}"}})
+                        "attrs": {"id": account_id, "text": f"@{name}"}})
         elif m.group("bold_em") is not None:
             out.extend(_inline(m.group("bold_em"), resolve,
                                marks + [{"type": "strong"}, {"type": "em"}]))
@@ -266,6 +270,48 @@ def _inline(text: str, resolve: MentionResolver | None, marks: list[Node] | None
     if pos < len(text):
         out.append(_text(text[pos:], marks))
     return _merge(out)
+
+
+def split_mention(inner: str) -> tuple[str, str | None]:
+    """Split the inside of @[...] into its display name and accountId.
+
+    "Name|accountId" carries its accountId; plain "Name" returns None
+    for it, to be looked up.
+    """
+    name, sep, account_id = inner.rpartition("|")
+    account_id = account_id.strip()
+    if sep and name.strip() and account_id and not any(c.isspace() for c in account_id):
+        return name.strip(), account_id
+    return inner.strip(), None
+
+
+def markdown_mentions(text: str) -> dict[str, str]:
+    """Display name (lowercased) to accountId for each @[Name|accountId] in *text*."""
+    found: dict[str, str] = {}
+    for m in _INLINE.finditer(text):
+        if m.group("mention") is not None:
+            name, account_id = split_mention(m.group("mention"))
+            if account_id:
+                found.setdefault(name.lower(), account_id)
+    return found
+
+
+def adf_mentions(adf: Any) -> dict[str, str]:
+    """Display name (lowercased) to accountId for each mention node in *adf*."""
+    found: dict[str, str] = {}
+
+    def walk(node: Any) -> None:
+        if isinstance(node, list):
+            for n in node:
+                walk(n)
+        elif isinstance(node, dict):
+            attrs = node.get("attrs") or {}
+            if node.get("type") == "mention" and attrs.get("id") and attrs.get("text"):
+                found.setdefault(attrs["text"].lstrip("@").strip().lower(), attrs["id"])
+            walk(node.get("content"))
+
+    walk(adf)
+    return found
 
 
 def _merge(nodes: list[Node]) -> list[Node]:
@@ -390,7 +436,9 @@ def _render_inline(nodes: list[Node]) -> str:
         elif t == "hardBreak":
             out.append("\n")
         elif t == "mention":
-            out.append("@[" + (attrs.get("text") or "unknown").lstrip("@") + "]")
+            name = (attrs.get("text") or "").lstrip("@") or "unknown"
+            account_id = attrs.get("id")
+            out.append(f"@[{name}|{account_id}]" if account_id else f"@[{name}]")
         elif t == "emoji":
             out.append(attrs.get("text") or attrs.get("shortName", ""))
         elif t in ("inlineCard", "blockCard", "embedCard"):

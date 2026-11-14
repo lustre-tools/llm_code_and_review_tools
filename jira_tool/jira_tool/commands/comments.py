@@ -116,8 +116,9 @@ def register(main):
         Use --reply-to COMMENT_ID to reply in that comment's thread (Cloud).
 
         On Cloud the text is Markdown: code fences, lists, > quotes, tables,
-        `code`, **bold**, *italic*, [text](url), and @[Display Name] mentions
-        are converted to JIRA formatting.
+        `code`, **bold**, *italic*, [text](url), and mentions are converted
+        to JIRA formatting.  Write a mention as @[Display Name|accountId],
+        the form reads return, or as @[Display Name] to look the name up.
         """
         body = body_opt or body
         if not body:
@@ -177,6 +178,10 @@ def register(main):
         KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
         COMMENT_ID is the numeric comment ID to edit.
         BODY is the new comment text.
+
+        On Cloud, a mention written @[Display Name] reuses the accountId
+        of a mention of that name already in the comment before looking
+        the name up; @[Display Name|accountId] is used as is.
         """
         command = "edit-comment"
         pretty = ctx.obj.get("pretty", False)

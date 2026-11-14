@@ -83,8 +83,10 @@ def get_tool_description() -> ToolDescription:
                 name="comment",
                 description="Add a comment to an issue, or edit one with --update, optionally with "
                 "restricted visibility. On Cloud the body is Markdown (code fences, lists, > quotes, "
-                "tables, `code`, **bold**, *italic*, [text](url), @[Display Name] mentions) and is "
-                "converted to JIRA formatting; reads return the same Markdown.",
+                "tables, `code`, **bold**, *italic*, [text](url), mentions) and is "
+                "converted to JIRA formatting; reads return the same Markdown. Mentions read as "
+                "@[Display Name|accountId] and are written back as is; a plain @[Display Name] "
+                "is looked up (jira users <name> shows what it resolves to).",
                 usage='jira comment <KEY> "<BODY>" [--update COMMENT_ID] [--reply-to COMMENT_ID] '
                 '[--visibility role:RoleName]',
                 arguments=[
@@ -118,7 +120,9 @@ def get_tool_description() -> ToolDescription:
             ),
             Command(
                 name="edit-comment",
-                description="Edit an existing comment on an issue, optionally changing visibility",
+                description="Edit an existing comment on an issue, optionally changing visibility. "
+                "On Cloud the body is Markdown as for comment; a plain @[Display Name] mention "
+                "reuses the accountId of a mention of that name already in the comment.",
                 usage='jira edit-comment <KEY> <COMMENT_ID> "<BODY>" [--visibility role:RoleName]',
                 arguments=[
                     Argument(name="key", description="Issue key or JIRA URL", required=True),
@@ -133,6 +137,7 @@ def get_tool_description() -> ToolDescription:
                 examples=[
                     'jira edit-comment PROJ-123 12345 "Updated comment text"',
                     'jira edit-comment PROJ-123 12345 "Internal" --visibility "role:Developers"',
+                    'jira edit-comment PROJ-123 12345 "@[Jane Doe|712020:<uuid>] see above"',
                 ],
                 output_fields=[
                     "issue_key", "comment.id", "comment.body", "comment.author",
@@ -387,10 +392,11 @@ def get_tool_description() -> ToolDescription:
                 arguments=[
                     Argument(name="query", description="Search string (matches username, display name, email)", required=True),
                     Argument(name="--limit", description="Maximum results to return", type="integer", default=10),
-                    Argument(name="--project", description="Cloud fallback: project whose assignable users to search (repeatable; default: the JIRA_CLOUD_PROJECTS projects)"),
+                    Argument(name="--project", description="Cloud fallback, used when the account lacks Browse users and groups: project whose assignable users to search (repeatable; default: every project the account can see)"),
                 ],
                 examples=["jira users john", "jira users pfarrell --limit 5"],
-                output_fields=["query", "total", "users[].name", "users[].display_name", "users[].email", "users[].active"],
+                output_fields=["query", "total", "users[].name", "users[].display_name", "users[].email",
+                               "users[].active", "users[].account_id"],
                 next_actions=["update (with --assignee)", "watch (with --user)"],
             ),
             Command(

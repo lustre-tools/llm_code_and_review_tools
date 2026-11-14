@@ -199,3 +199,223 @@ class TestTransitionComment:
         sent = json.loads(responses.calls[0].request.body)
         body = sent["update"]["comment"][0]["add"]["body"]
         assert body["type"] == "doc"
+
+
+ANDREAS = "712020:a3f0d19b-732a-41e2-9e73-9c88f74d83bb"
+PATRICK = "712020:52347719-9693-4a4c-96c0-a66b12299969"
+
+
+def _no_lookup(name):
+    raise AssertionError(f"looked up {name}")
+
+
+class TestMentionAccountIds:
+    """@[Name|accountId] carries the accountId through a read and a write."""
+
+    @pytest.mark.parametrize("inner,expected", [
+        ("Andreas Dilger", ("Andreas Dilger", None)),
+        (f"Andreas Dilger|{ANDREAS}", ("Andreas Dilger", ANDREAS)),
+        (f" Andreas Dilger | {ANDREAS} ", ("Andreas Dilger", ANDREAS)),
+        ("Andreas Dilger|", ("Andreas Dilger|", None)),
+        (f"|{ANDREAS}", (f"|{ANDREAS}", None)),
+        ("Andreas|Dilger Smith", ("Andreas|Dilger Smith", None)),
+    ])
+    def test_split_mention(self, inner, expected):
+        from jira_tool.adf import split_mention
+
+        assert split_mention(inner) == expected
+
+    def test_mention_with_account_id_needs_no_lookup(self):
+        doc = markdown_to_adf(f"cc @[Andreas Dilger|{ANDREAS}] please", _no_lookup)
+        assert doc["content"][0]["content"][1] == {
+            "type": "mention", "attrs": {"id": ANDREAS, "text": "@Andreas Dilger"}}
+
+    def test_mention_with_account_id_without_resolver(self):
+        nodes = markdown_to_adf(f"@[Andreas Dilger|{ANDREAS}]")["content"][0]["content"]
+        assert nodes == [{"type": "mention", "attrs": {"id": ANDREAS, "text": "@Andreas Dilger"}}]
+
+    def test_read_emits_account_id(self):
+        from jira_tool.adf import adf_to_markdown
+
+        doc = {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [
+            {"type": "mention", "attrs": {"id": ANDREAS, "text": "@Andreas Dilger",
+                                          "accessLevel": ""}},
+            {"type": "text", "text": " see this"}]}]}
+        assert adf_to_markdown(doc) == f"@[Andreas Dilger|{ANDREAS}] see this"
+
+    def test_read_without_text_or_id(self):
+        from jira_tool.adf import adf_to_markdown
+
+        doc = {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [
+            {"type": "mention", "attrs": {"id": ANDREAS}},
+            {"type": "mention", "attrs": {"text": "@Someone"}}]}]}
+        assert adf_to_markdown(doc) == f"@[unknown|{ANDREAS}]@[Someone]"
+
+    def test_read_write_round_trip_keeps_account_ids(self):
+        from jira_tool.adf import adf_to_markdown
+
+        doc = {"type": "doc", "version": 1, "content": [
+            {"type": "paragraph", "content": [
+                {"type": "mention", "attrs": {"id": ANDREAS, "text": "@Andreas Dilger"}},
+                {"type": "text", "text": " and "},
+                {"type": "mention", "attrs": {"id": PATRICK, "text": "@Patrick Farrell"}},
+                {"type": "text", "text": ": "},
+                {"type": "text", "text": "look", "marks": [{"type": "strong"}]}]},
+            {"type": "bulletList", "content": [{"type": "listItem", "content": [
+                {"type": "paragraph", "content": [
+                    {"type": "mention", "attrs": {"id": PATRICK, "text": "@Patrick Farrell"}}]}]}]}]}
+        assert markdown_to_adf(adf_to_markdown(doc), _no_lookup) == doc
+
+    def test_adf_mentions(self):
+        from jira_tool.adf import adf_mentions
+
+        doc = markdown_to_adf(f"> @[Andreas Dilger|{ANDREAS}]\n\n- @[Patrick Farrell|{PATRICK}]")
+        assert adf_mentions(doc) == {"andreas dilger": ANDREAS, "patrick farrell": PATRICK}
+        assert adf_mentions(None) == {}
+
+    def test_markdown_mentions(self):
+        from jira_tool.adf import markdown_mentions
+
+        text = f"@[Andreas Dilger|{ANDREAS}] and @[Patrick Farrell] and `@[Code|x]`"
+        assert markdown_mentions(text) == {"andreas dilger": ANDREAS}
+
+
+class TestLooksLikeAccountId:
+    @pytest.mark.parametrize("value,expected", [
+        (ANDREAS, True),
+        ("5b10ac8d82e05b22cc7d4ef5", True),
+        ("qm:a3f0d19b-732a-41e2-9e73-9c88f74d83bb:289ca33b-1090-47b9-a6f1-991e175b9add", True),
+        ("a3f0d19b-732a-41e2-9e73-9c88f74d83bb", True),
+        ("Ada-Lovelace", False),
+        ("Abe:Smith", False),
+        ("Andreas Dilger", False),
+    ])
+    def test_account_ids(self, value, expected):
+        from jira_tool.commands._helpers import looks_like_account_id
+
+        assert looks_like_account_id(value) is expected
+
+
+def _project_page(*keys):
+    return {"values": [{"key": k} for k in keys], "isLast": True, "startAt": 0}
+
+
+class TestCloudUserLookup:
+    """Without Browse users and groups, Cloud user/search finds nobody."""
+
+    @responses.activate
+    def test_search_falls_back_to_assignable_users(self, cloud_client):
+        responses.add(responses.GET, f"{CLOUD}/user/search", json=[], status=200)
+        responses.add(responses.GET, f"{CLOUD}/project/search",
+                      json=_project_page("TLU", "TLC"), status=200)
+        responses.add(responses.GET, f"{CLOUD}/user/assignable/multiProjectSearch",
+                      json=[{"accountId": ANDREAS, "displayName": "Andreas Dilger"}],
+                      status=200)
+        users = cloud_client.search_users("Andreas", max_results=5)
+        assert users == [{"accountId": ANDREAS, "displayName": "Andreas Dilger"}]
+        params = responses.calls[2].request.params
+        assert params["projectKeys"] == "TLU,TLC"
+        assert params["query"] == "Andreas"
+        assert params["maxResults"] == "5"
+
+    @responses.activate
+    def test_project_list_is_cached(self, cloud_client):
+        responses.add(responses.GET, f"{CLOUD}/user/search", json=[], status=200)
+        responses.add(responses.GET, f"{CLOUD}/project/search",
+                      json=_project_page("TLU"), status=200)
+        responses.add(responses.GET, f"{CLOUD}/user/assignable/multiProjectSearch",
+                      json=[], status=200)
+        cloud_client.search_users("a")
+        cloud_client.search_users("b")
+        assert sum("project/search" in c.request.url for c in responses.calls) == 1
+
+    @responses.activate
+    def test_project_list_follows_pages(self, cloud_client):
+        responses.add(responses.GET, f"{CLOUD}/project/search",
+                      json={"values": [{"key": "A"}], "isLast": False}, status=200)
+        responses.add(responses.GET, f"{CLOUD}/project/search",
+                      json={"values": [{"key": "B"}], "isLast": True}, status=200)
+        assert cloud_client.visible_project_keys() == ["A", "B"]
+        assert responses.calls[1].request.params["startAt"] == "1"
+
+    @responses.activate
+    def test_search_with_results_does_not_fall_back(self, cloud_client):
+        responses.add(responses.GET, f"{CLOUD}/user/search",
+                      json=[{"accountId": ANDREAS, "displayName": "Andreas Dilger"}],
+                      status=200)
+        assert len(cloud_client.search_users("Andreas")) == 1
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_cli_users_with_project(self, monkeypatch):
+        monkeypatch.setenv("JIRA_SERVER", "https://example.atlassian.net")
+        monkeypatch.setenv("JIRA_TOKEN", "t")
+        monkeypatch.setenv("JIRA_CLOUD_EMAIL", "a@example.com")
+        monkeypatch.setenv("JIRA_CLOUD_ID", "site")
+        responses.add(responses.GET, f"{CLOUD}/user/search", json=[], status=200)
+        responses.add(responses.GET, f"{CLOUD}/user/assignable/multiProjectSearch",
+                      json=[{"accountId": ANDREAS, "displayName": "Andreas Dilger",
+                             "active": True}], status=200)
+        result = CliRunner().invoke(main, ["users", "Dilger", "--project", "TLU"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["total"] == 1
+        assert data["users"][0]["account_id"] == ANDREAS
+        assert responses.calls[1].request.params["projectKeys"] == "TLU"
+
+    @responses.activate
+    def test_comment_mention_resolves_through_fallback(self, cloud_client):
+        responses.add(responses.GET, f"{CLOUD}/user/search", json=[], status=200)
+        responses.add(responses.GET, f"{CLOUD}/project/search",
+                      json=_project_page("TLU"), status=200)
+        responses.add(responses.GET, f"{CLOUD}/user/assignable/multiProjectSearch",
+                      json=[{"accountId": PATRICK, "displayName": "Patrick Farrell"}],
+                      status=200)
+        responses.add(responses.POST, f"{CLOUD}/issue/TLU-1/comment",
+                      json={"id": "1"}, status=201)
+        cloud_client.add_comment("TLU-1", "hi @[Patrick Farrell]")
+        sent = json.loads(responses.calls[-1].request.body)
+        assert sent["body"]["content"][0]["content"][1]["attrs"]["id"] == PATRICK
+
+    @responses.activate
+    def test_comment_mention_with_account_id_makes_no_lookup(self, cloud_client):
+        responses.add(responses.POST, f"{CLOUD}/issue/TLU-1/comment",
+                      json={"id": "1"}, status=201)
+        cloud_client.add_comment(
+            "TLU-1", f"@[Patrick Farrell|{PATRICK}] and again @[Patrick Farrell]")
+        assert len(responses.calls) == 1
+        nodes = json.loads(responses.calls[0].request.body)["body"]["content"][0]["content"]
+        assert [n["attrs"]["id"] for n in nodes if n["type"] == "mention"] == [PATRICK, PATRICK]
+
+    @responses.activate
+    def test_edit_reuses_mentions_of_the_comment(self, cloud_client):
+        existing = markdown_to_adf(f"old @[Andreas Dilger|{ANDREAS}] text")
+        responses.add(responses.GET, f"{CLOUD}/issue/TLU-1/comment/7",
+                      json={"id": "7", "body": existing}, status=200)
+        responses.add(responses.PUT, f"{CLOUD}/issue/TLU-1/comment/7",
+                      json={"id": "7"}, status=200)
+        cloud_client.edit_comment("TLU-1", "7", "new @[andreas dilger] text")
+        assert [c.request.method for c in responses.calls] == ["GET", "PUT"]
+        node = json.loads(responses.calls[1].request.body)["body"]["content"][0]["content"][1]
+        assert node == {"type": "mention", "attrs": {"id": ANDREAS, "text": "@andreas dilger"}}
+
+    @responses.activate
+    def test_edit_without_mentions_does_not_fetch(self, cloud_client):
+        responses.add(responses.PUT, f"{CLOUD}/issue/TLU-1/comment/7",
+                      json={"id": "7"}, status=200)
+        cloud_client.edit_comment("TLU-1", "7", "no mentions here")
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_unresolved_mention_names_the_syntax(self, cloud_client):
+        from jira_tool.errors import InvalidInputError
+
+        responses.add(responses.GET, f"{CLOUD}/issue/TLU-1/comment/7",
+                      json={"id": "7", "body": markdown_to_adf("old")}, status=200)
+        responses.add(responses.GET, f"{CLOUD}/user/search", json=[], status=200)
+        responses.add(responses.GET, f"{CLOUD}/project/search",
+                      json=_project_page("TLU"), status=200)
+        responses.add(responses.GET, f"{CLOUD}/user/assignable/multiProjectSearch",
+                      json=[], status=200)
+        with pytest.raises(InvalidInputError, match=r"@\[Display Name\|accountId\]"):
+            cloud_client.edit_comment("TLU-1", "7", "hi @[Nobody Here]")

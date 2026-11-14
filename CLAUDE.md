@@ -34,12 +34,18 @@ prefix or falls back to the default instance.
 - Converts description/comment Markdown to Atlassian Document Format
   (ADF) on write, and ADF back to the same Markdown on read: code
   fences, lists (nested), `>` quotes, tables, `code`, `**bold**`,
-  `*italic*`, `[text](url)`, and `@[Display Name]` mentions
+  `*italic*`, `[text](url)`, and mentions
+- Mentions read back as `@[Display Name|accountId]`, which writes
+  accept as is, so a comment read and written back keeps them. A
+  plain `@[Display Name]` is looked up; in `edit-comment` it first
+  reuses a mention of that name already in the comment
 - Threaded replies: `jira comment KEY --reply-to <comment id> "..."`;
   comments in a thread carry `parent_id` (the thread's root comment)
 - Uses `accountId` instead of `username` for Cloud (GDPR mode)
 - Resolves display names to `accountId` automatically for
-  assign, watch, and unwatch commands
+  assign, watch, unwatch and mentions; without the Browse users and
+  groups permission (where `user/search` finds nobody) it searches
+  the assignable users of every project the account can see
 - Uses `nextPageToken` pagination for Cloud search
 
 **Configuration (`~/.jira-tool.json`):**
