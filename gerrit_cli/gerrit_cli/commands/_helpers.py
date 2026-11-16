@@ -4,6 +4,7 @@ These were originally defined in cli.py and are kept here to avoid
 circular imports while sharing code across command modules.
 """
 
+import importlib
 import sys
 from typing import Any
 
@@ -27,8 +28,16 @@ def _cli():
 
         cli = _cli()
         manager = cli.RebaseManager()
+
+    Under ``python -m gerrit_cli.cli`` the running module is
+    ``__main__``, and ``main()`` sets FULL_ENVELOPE there, not on a
+    second ``gerrit_cli.cli`` import, so that one wins.
     """
-    return sys.modules["gerrit_cli.cli"]
+    main = sys.modules.get("__main__")
+    if getattr(getattr(main, "__spec__", None), "name", None) == "gerrit_cli.cli":
+        return main
+    mod = sys.modules.get("gerrit_cli.cli")
+    return mod if mod is not None else importlib.import_module("gerrit_cli.cli")
 
 
 # Bot account names to filter from reviewer lists
