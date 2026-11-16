@@ -24,7 +24,6 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
-from ..client import GerritCommentsClient
 from ..conflict_candidates import Selection, classify, phrase, query_candidates
 from ..conflict_report import Checked, report, target_tier
 from ..conflicts import (
@@ -270,7 +269,7 @@ class _Focus:
 
 
 def _open_target(client: Any, change: str) -> tuple[int, dict[str, Any]]:
-    _base, cn = GerritCommentsClient.parse_gerrit_url(change)
+    _base, cn = _cli().GerritCommentsClient.parse_gerrit_url(change)
     target = client.rest.get(f"/changes/{cn}?{_OPTIONS[1:]}")
     if target.get("status") != "NEW":
         raise ConflictRepoError(f"change {cn} is {target.get('status')}; only an open "

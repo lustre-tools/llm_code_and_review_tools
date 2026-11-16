@@ -417,6 +417,24 @@ def test_parser_defaults():
     assert args.with_ == [5, 6]
 
 
+def test_the_change_argument_is_parsed_by_the_cli_client(setup, monkeypatch):
+    import gerrit_cli.cli as cli
+
+    gerrit, local, client = setup
+    _target(gerrit, client.rest, {5: "T"})
+    seen = []
+
+    class Client:
+        @staticmethod
+        def parse_gerrit_url(url):
+            seen.append(url)
+            return "https://gerrit.invalid", 100
+
+    monkeypatch.setattr(cli, "GerritCommentsClient", Client)
+    out = run(client, local, change="Iabc")
+    assert seen == ["Iabc"] and out["change"] == 100
+
+
 def test_cmd_prints_invalid_input_for_a_bad_repo(setup, tmp_path, capsys, monkeypatch):
     from gerrit_cli.cli import build_parser
     from gerrit_cli.commands import conflicts as mod
