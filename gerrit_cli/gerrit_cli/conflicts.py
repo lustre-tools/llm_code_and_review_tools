@@ -873,12 +873,14 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
     def silent(c: int, merged: _Pick) -> list[dict]:
         if merged.status != "clean":
             return []
-        from gerrit_cli.conflict_hunks import silent_collisions
-
         commits = {st.patches[z].commit: st.base[z] for z in st.stack[target] + st.stack[c]}
         own = repo.changed_files(commits)
         both = set().union(*(own.get(st.patches[z].commit, set()) for z in st.stack[target])) \
             & set().union(*(own.get(st.patches[z].commit, set()) for z in st.stack[c]))
+        if not both:
+            return []
+        from gerrit_cli.conflict_hunks import silent_collisions
+
         texts = {path: (repo.blob(st.applied[target], path) or "",
                         repo.blob(st.applied[c], path) or "",
                         repo.blob(merged.commit, path) or "")
