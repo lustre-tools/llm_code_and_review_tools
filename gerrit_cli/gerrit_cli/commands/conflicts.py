@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import quote
 
 from ..client import GerritCommentsClient
-from ..conflict_candidates import Selection, classify, query_candidates
+from ..conflict_candidates import Selection, classify, phrase, query_candidates
 from ..conflict_report import Checked, report, target_tier
 from ..conflicts import (
     ConflictCheckError,
@@ -188,7 +188,8 @@ def _local_stack(client: Any, repo: Repo, remote: str, change: dict[str, Any], c
     ids = sorted({cid for _subject, cid in msgs.values() if cid})
     by_id: dict[str, dict[str, Any]] = {}
     if ids:
-        q = f"({' OR '.join(f'change:{i}' for i in ids)}) project:{project} branch:{branch}"
+        q = (f"({' OR '.join(f'change:{i}' for i in ids)}) "
+             f"project:{phrase(project)} branch:{phrase(branch)}")
         by_id = {c["change_id"]: c for c in _query(client, q, _OPTIONS + "&o=ALL_REVISIONS")
                  if c.get("status") == "NEW"}
         for c in by_id.values():

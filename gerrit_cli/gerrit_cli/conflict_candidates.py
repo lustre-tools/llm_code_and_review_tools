@@ -175,10 +175,26 @@ def fix_side(target_tier: str, target_rank: int,
     return row[cand_tier]
 
 
+def phrase(value: str) -> str:
+    """`value` as one quoted Gerrit query argument. The query parser
+    drops the backslash before any character inside quotes, so a
+    backslash or quote meant literally needs one of its own."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _path_regex(path: str) -> str:
+    """A file: regex matching exactly `path`. The regex (dk.brics, with
+    `"`, `<`, `@`, `#`, `~`, `&` special besides the usual) takes a
+    backslash before any character as that character, but the server
+    rejects one before some letters: only ASCII punctuation (bar `/`
+    and `_`) and space get one."""
+    return "^" + re.sub(r"([ -.:-@\[-^`{-~])", r"\\\1", path) + "$"
+
+
 def _query(project: str, branch: str, paths: list[str],
            age: int | None) -> str:
-    files = " OR ".join(f'file:"^{re.escape(p)}$"' for p in paths)
-    q = (f"project:{project} branch:{branch} status:open -is:wip "
+    files = " OR ".join(f"file:{phrase(_path_regex(p))}" for p in paths)
+    q = (f"project:{phrase(project)} branch:{phrase(branch)} status:open -is:wip "
          f"-is:private ({files})")
     return q + (f" -age:{age}d" if age is not None else "")
 

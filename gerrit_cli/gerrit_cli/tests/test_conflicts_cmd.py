@@ -81,14 +81,16 @@ class FakeRest:
         if "status:open" in q and c["status"] != "NEW":
             return False
         for key in ("project", "branch"):
-            m = re.search(rf"\b{key}:(\S+)", q)
-            if m and c[key] != m[1]:
+            m = re.search(rf'\b{key}:(?:"([^"]*)"|(\S+))', q)
+            if m and c[key] != (m[1] if m[1] is not None else m[2]):
                 return False
         if m := re.search(r"-age:(\d+)d", q):
             updated = datetime.strptime(c["updated"][:19], "%Y-%m-%d %H:%M:%S")
             if NOW - updated > timedelta(days=int(m[1])):
                 return False
-        files = {re.sub(r"\\(.)", r"\1", f) for f in re.findall(r'file:"\^(.*?)\$"', q)}
+        # one backslash each for the query parser and the regex
+        files = {re.sub(r"\\(.)", r"\1", re.sub(r"\\(.)", r"\1", f))
+                 for f in re.findall(r'file:"\^((?:\\.|[^"\\])*)\$"', q)}
         if files and not files & self.files[c["_number"]]:
             return False
         commits = set(re.findall(r"commit:([0-9a-f]+)", q))

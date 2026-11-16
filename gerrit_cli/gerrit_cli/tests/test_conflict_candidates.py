@@ -6,7 +6,7 @@ from urllib.parse import unquote
 import pytest
 
 from gerrit_cli.conflict_candidates import (
-    classify, fix_side, query_candidates, readiness, release_rank,
+    _query, classify, fix_side, query_candidates, readiness, release_rank,
     shared_hashtags,
 )
 
@@ -173,17 +173,23 @@ def test_query_batches_paths_and_dedupes():
     urls = [unquote(u) for u in client.rest.urls]
     assert sorted(c["_number"] for c in out) == [5, 7, 8]
     assert out.count(ready) == 1
-    assert any("file:\"^lustre/a0\\.c$\"" in u for u in urls)
-    assert any("lustre/b\\+c\\.h" in u for u in urls)
+    assert any('file:"^lustre/a0\\\\.c$"' in u for u in urls)
+    assert any("lustre/b\\\\+c\\\\.h" in u for u in urls)
     first = urls[0]
     assert first.count("file:") == 20 and " OR " in first
-    assert all("project:fs/lustre-release branch:master status:open -is:wip -is:private" in u
-               for u in urls)
+    assert all('project:"fs/lustre-release" branch:"master" status:open -is:wip -is:private'
+               in u for u in urls)
     assert any("&S=1" in u for u in urls)
     for o in ("LABELS", "DETAILED_LABELS", "CURRENT_REVISION",
               "CURRENT_COMMIT", "DETAILED_ACCOUNTS"):
         assert f"o={o}" in first
     assert "&n=500" in first
+
+
+def test_query_quotes_a_quote_in_a_path():
+    q = _query("p", "b", ['lustre/tests/a"b.sh'], None)
+    # the parser takes one backslash, the regex the next
+    assert 'file:"^lustre/tests/a\\\\\\"b\\\\.sh$"' in q
 
 
 def test_empty_paths_no_request():
