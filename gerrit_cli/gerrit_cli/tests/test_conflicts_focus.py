@@ -232,19 +232,86 @@ def test_as_uploaded_picks_the_targets_unshared_parents_too(gerrit, local):
 
 
 def test_an_as_uploaded_conflict_at_a_candidates_parent_names_via(gerrit, local):
+    """The target needs a rebase, so as uploaded is all there is: the
+    collision with its own line 15 is the parent's."""
     from gerrit_cli.conflicts import Repo, check_conflicts
+    old = gerrit.master
+    gerrit.advance({"a.c": _text({5: "M"})})
+    t = gerrit.change(1, old, {"a.c": _text({5: "T", 15: "T"})})
+    p = gerrit.change(300, gerrit.master, {"a.c": _text({5: "M", 15: "P"})})
+    c = gerrit.change(310, p.commit, {"a.c": _text({5: "M", 15: "P", 18: "C"})})
+    r = check_conflicts(Repo(local), str(gerrit.path), "master", [t, p, c], gerrit.owner,
+                        workers=2, focus={1}, hunks=True)
+    pair = _pair(r, 310)
+    assert pair["landing"]["target_first"] == "skipped"
+    assert pair["as_uploaded"]["theirs_on_target"] == "conflict"
+    assert pair["via"] == 300
+    [h] = [h for h in pair["hunks"]["as_uploaded"]["a.c"] if h["order"] == "theirs_on_target"]
+    assert h["kind"] == "edit-edit" and h["line"] >= 15
+
+
+def _drift_at_parent(gerrit):
+    """Target on an old base; the candidate's parent 300 edits next to
+    the line the branch moved: as uploaded, 300's pick conflicts."""
     old = gerrit.master
     gerrit.advance({"a.c": _text({6: "M"})})
     t = gerrit.change(1, old, {"a.c": _text({15: "T"})})
     p = gerrit.change(300, gerrit.master, {"a.c": _text({5: "P", 6: "M"})})
     c = gerrit.change(310, p.commit, {"a.c": _text({5: "P", 6: "M", 18: "C"})})
-    r = check_conflicts(Repo(local), str(gerrit.path), "master", [t, p, c], gerrit.owner,
-                        workers=2, focus={1}, hunks=True)
-    pair = _pair(r, 310)
-    assert pair["landing"]["target_first"] == "clean"
+    return t, p, c
+
+
+def test_via_falls_back_to_as_uploaded_only_when_landing_is_clean(gerrit, local, monkeypatch):
+    from gerrit_cli import conflicts as engine
+    t, p, c = _drift_at_parent(gerrit)
+    real = engine.Repo.pick
+
+    def pick(self, onto, commit, parent, **kw):
+        # the candidate_first landing order conflicts on the target
+        if commit == t.commit and onto not in (gerrit.master, c.commit):
+            return engine._Pick("conflict", files=("a.c",), onto=onto)
+        return real(self, onto, commit, parent, **kw)
+
+    monkeypatch.setattr(engine.Repo, "pick", pick)
+    pair = _pair(_check(gerrit, local, [t, p, c], focus={1}), 310)
+    assert pair["landing"] == {"target_first": "clean", "candidate_first": "conflict",
+                               "files": ["a.c"]}
     assert pair["as_uploaded"]["theirs_on_target"] == "conflict"
-    assert pair["via"] == 300
-    assert pair["hunks"]["as_uploaded"]["a.c"][0]["order"] == "theirs_on_target"
+    assert pair["via"] is None
+
+
+def test_an_errored_pick_names_no_via(gerrit, local, monkeypatch):
+    from gerrit_cli import conflicts as engine
+    t, p, c = _drift_at_parent(gerrit)
+    real = engine.Repo.pick
+
+    def pick(self, onto, commit, parent, **kw):
+        if commit == p.commit and onto == t.commit:
+            return engine._Pick("error", detail="boom")
+        return real(self, onto, commit, parent, **kw)
+
+    monkeypatch.setattr(engine.Repo, "pick", pick)
+    pair = _pair(_check(gerrit, local, [t, p, c], focus={1}), 310)
+    assert pair["as_uploaded"]["theirs_on_target"] == "error"
+    assert pair["via"] is None
+
+
+def test_only_a_drift_only_conflict_writes_a_commit(gerrit, local, monkeypatch):
+    from gerrit_cli import conflicts as engine
+    t1 = gerrit.change(1, gerrit.master, {"a.c": _text({5: "T"})})
+    c = gerrit.change(2, gerrit.master, {"a.c": _text({5: "C"})})
+    written = []
+    real = engine.Repo._run
+
+    def run(self, *args, **kw):
+        if args[0] == "commit-tree":
+            written.append(args)
+        return real(self, *args, **kw)
+
+    monkeypatch.setattr(engine.Repo, "_run", run)
+    _check(gerrit, local, [t1, c], focus={1})
+    # the two branch picks; no conflicted tree is kept
+    assert len(written) == 2
 
 
 def test_an_as_uploaded_parent_pick_failing_on_drift_only_goes_on(gerrit, local):

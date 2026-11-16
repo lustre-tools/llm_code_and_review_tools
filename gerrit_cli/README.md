@@ -565,8 +565,9 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   candidate's ancestor the conflict is at, `own_via` the target's
   in-flight parent it is at (the first change of the target's stack,
   bottom up, that does not apply on the candidate's): the colliding
-  lines are that parent's, not the change's own. The landing orders
-  name them first, the as-uploaded ones when landing is clean.
+  lines are that parent's, not the change's own. Only a conflicting
+  pick names one: the landing orders, or the as-uploaded ones when both
+  landing orders are clean (or were not tried).
   Collisions that land cleanly are reported in `silent_only` (with
   `as_uploaded` and `files` when that conflicts too), by `check`: `duplicate-test` (a test
   defined twice), `duplicate-value` (an `OBD_FAIL_*` value, or an

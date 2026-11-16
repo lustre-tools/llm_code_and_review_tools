@@ -1226,8 +1226,9 @@ is in conflicts if a landing order conflicts, in as_uploaded_only if only
 an as-uploaded one does (what the other owner, or CI on a stale base,
 sees; the landing is clean). via names the candidate's ancestor the
 conflict is at, own_via the target's in-flight parent it is at (the
-colliding lines are that parent's, not the change's own); landing names
-them first, as uploaded when landing is clean. Pairs that land cleanly
+colliding lines are that parent's, not the change's own); only a
+conflicting pick names one, as uploaded only when both landing orders
+are clean or were not tried. Pairs that land cleanly
 but still collide are in silent_only (with as_uploaded and files when
 that conflicts too), check: duplicate-test (a
 test defined twice), duplicate-value (an OBD_FAIL value, or an

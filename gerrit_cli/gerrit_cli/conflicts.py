@@ -307,9 +307,11 @@ class Repo:
             self._trees[commit] = r.stdout.strip()
         return self._trees[commit]
 
-    def pick(self, onto: str, commit: str, parent: str, keep: bool = False) -> _Pick:
-        """`keep`: a conflict also gets a commit of the merged tree, its
-        conflicted files holding the markers, to pick further onto."""
+    def pick(self, onto: str, commit: str, parent: str,
+             shared: set[str] | None = None) -> _Pick:
+        """`shared`: a conflict on none of these files also gets a commit
+        of the merged tree, its conflicted files holding the markers, to
+        pick further onto."""
         r = self._run("merge-tree", "--write-tree", "--name-only", "--no-messages",
                       f"--merge-base={parent}", onto, commit, scratch=True)
         lines = r.stdout.splitlines()
@@ -319,7 +321,7 @@ class Repo:
         if r.returncode == 1 and tree:
             files = tuple(dict.fromkeys(x for x in lines[1:] if x))
             kept = ""
-            if keep:
+            if shared is not None and not shared.intersection(files):
                 c = self._run("commit-tree", tree, "-p", onto, "-m", commit, scratch=True)
                 kept = c.stdout.strip() if c.returncode == 0 else ""
             return _Pick("conflict", commit=kept, onto=onto, files=files)
@@ -849,7 +851,7 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
         for z in zs:
             if z not in st.base:
                 return _Pick("error", detail=st.results.get(z, {}).get("reason", "")), z
-            pick = repo.pick(cur, st.patches[z].commit, st.base[z], keep=True)
+            pick = repo.pick(cur, st.patches[z].commit, st.base[z], shared=both)
             if pick.status == "conflict":
                 dropped.update(f for f in pick.files if f not in both)
                 kept = tuple(f for f in pick.files if f in both)
@@ -936,8 +938,13 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
         dropped: set[str] = set()
         t_up, tuat = uploaded(st.patches[c].commit, cz, both, dropped)
         c_up, cuat = uploaded(st.patches[target].commit, tz, both, dropped)
-        via = at if at is not None else cuat
-        own_via = cat if cat is not None else tuat
+        # only a conflict names a change; as uploaded only when landing is
+        # clean (or not tried)
+        quiet = not {t_first.status, c_first.status} & {"conflict", "error"}
+        via = at if t_first.status == "conflict" else \
+            cuat if quiet and c_up.status == "conflict" else None
+        own_via = cat if c_first.status == "conflict" else \
+            tuat if quiet and t_up.status == "conflict" else None
         pair: dict[str, Any] = {
             "target": target, "other": c,
             "landing": {"target_first": t_first.status, "candidate_first": c_first.status,
