@@ -392,11 +392,13 @@ def test_a_collision_in_a_targets_parent_names_it_in_own_via(setup, capsys, monk
     [c] = run(client, local)["conflicts"]
     assert c["cn"] == 200 and c["own_via"] == 90 and c["via"] is None
     assert c["fix_side"] == "target" and "via_change" not in c
-    assert c["own_via_change"] == {"cn": 90, "owner": "Olive Owner", "tier": "pending",
-                                   "readiness": "pending", "release_hashtags": []}
+    assert c["own_via_change"] == {"cn": 90, "owner": "Olive Owner", "mine": False,
+                                   "tier": "pending", "readiness": "pending",
+                                   "release_hashtags": []}
     [c] = _cmd(client, local, monkeypatch, capsys)["conflicts"]
     assert c["own_via"] == 90 and "via" not in c
-    assert c["own_via_change"] == {"cn": 90, "owner": "Olive Owner", "tier": "pending"}
+    assert c["own_via_change"] == {"cn": 90, "owner": "Olive Owner", "mine": False,
+                                   "tier": "pending"}
 
 
 def test_fix_side_of_a_collision_at_own_via_follows_that_parent(setup):
@@ -433,8 +435,9 @@ def test_fix_side_of_a_collision_at_via_follows_the_via_change(setup):
     c = next(e for e in out["conflicts"] if e["cn"] == 310)
     assert c["tier"] == "lands-first" and c["via"] == 300
     assert c["fix_side"] == "candidate"
-    assert c["via_change"] == {"cn": 300, "owner": "Olive Owner", "tier": "other",
-                               "readiness": "pending", "release_hashtags": []}
+    assert c["via_change"] == {"cn": 300, "owner": "Olive Owner", "mine": False,
+                               "tier": "other", "readiness": "pending",
+                               "release_hashtags": []}
 
 
 def test_a_change_on_the_same_ticket_is_same_effort(setup):
@@ -452,6 +455,25 @@ def test_a_change_on_the_same_ticket_is_same_effort(setup):
     [c] = out["conflicts"]
     assert c["cn"] == 200 and c["tier"] == "same-effort" and c["fix_side"] == "coordinate"
     assert out["not_tried"] == {"other": [300]}
+
+
+def test_mine_compares_the_account_not_the_display_name(setup, capsys, monkeypatch):
+    """me is a username (mvef), owner a display name (Marc Vef)."""
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    r = gerrit.change(200, gerrit.master, {"a.c": _text({5: "R"})})
+    rest.add(200, [r], ["a.c"], labels=READY,
+             owner={"_account_id": 7, "name": "Rae Other", "username": "rae"})
+    client.username = "olive"
+    out = run(client, local)
+    assert out["me"] == "olive" and out["owner"] == "Olive Owner"
+    assert out["mine"] is True and out["owner_username"] == "olive"
+    [c] = out["conflicts"]
+    assert c["mine"] is False and c["owner_username"] == "rae"
+    client.username = "rae"
+    [c] = _cmd(client, local, monkeypatch, capsys)["conflicts"]
+    assert c["mine"] is True
 
 
 def test_children_are_reported_in_own_stack(setup):
@@ -1001,7 +1023,7 @@ def test_default_output_is_compact(setup, capsys, monkeypatch):
     out = _cmd(client, local, monkeypatch, capsys)
     [c] = out["conflicts"]
     assert c == {"cn": 200, "subject": long[:67] + "...", "owner": "Olive Owner",
-                 "tier": "lands-first", "readiness": "ready", "fix_side": "target",
+                 "mine": False, "tier": "lands-first", "readiness": "ready", "fix_side": "target",
                  "files": ["a.c"], "release_hashtags": ["218_review_priority"],
                  "landing": "conflict/conflict", "as_uploaded": "conflict/conflict"}
     assert out["clean"] == 1 and out["not_tried"] == 1 and out["already_conflicting"] == 0

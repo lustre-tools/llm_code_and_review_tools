@@ -570,7 +570,8 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     chk = Checked(target, cn, ps, uploaded, focus.stack, [p.cn for p in ar.children],
                   br.queued_ids, result, on_branch, outdated, old, ar.patchsets.current, base,
                   hunks, focus.parents_detail)
-    return report(chk, sel, br.next_branch, os.environ.get("GERRIT_USER"))
+    return report(chk, sel, br.next_branch,
+                  getattr(client, "username", None) or os.environ.get("GERRIT_USER"))
 
 
 def cmd_conflicts(args: Any) -> None:

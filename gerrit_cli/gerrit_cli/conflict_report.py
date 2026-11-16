@@ -24,6 +24,14 @@ def owner_name(change: dict[str, Any]) -> str:
     return owner.get("name") or owner.get("username") or ""
 
 
+def is_mine(change: dict[str, Any], me: str | None) -> bool | None:
+    """Whether account `me` (a username) owns the change; None when no
+    account is known."""
+    if not me:
+        return None
+    return (change.get("owner") or {}).get("username") == me
+
+
 def target_tier(change: dict[str, Any], queued_ids: set[str],
                 ranks: Ranks = DEFAULT_RANKS) -> str:
     """A target's own tier (the fix_side row)."""
@@ -67,8 +75,9 @@ def on_next(result: dict[str, Any], cn: int, next_branch: str) -> dict[str, Any]
     return nxt["results"].get(str(cn)) or {"status": "not-tried"}
 
 
-def _change_info(n: int, change: dict[str, Any], tier: str, ranks: Ranks) -> dict[str, Any]:
-    return {"cn": n, "owner": owner_name(change), "tier": tier,
+def _change_info(n: int, change: dict[str, Any], tier: str, ranks: Ranks,
+                 me: str | None = None) -> dict[str, Any]:
+    return {"cn": n, "owner": owner_name(change), "mine": is_mine(change, me), "tier": tier,
             "readiness": readiness(change),
             "release_hashtags": sorted(h for h in change.get("hashtags") or []
                                        if release_rank([h], ranks) > 0)}
@@ -76,7 +85,8 @@ def _change_info(n: int, change: dict[str, Any], tier: str, ranks: Ranks) -> dic
 
 def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
                t_rank: int, parents: dict[int, dict[str, Any]] | None = None,
-               queued_ids: set[str] | frozenset[str] = frozenset()) -> dict[str, Any]:
+               queued_ids: set[str] | frozenset[str] = frozenset(),
+               me: str | None = None) -> dict[str, Any]:
     """One tried candidate, as listed under conflicts / as_uploaded_only.
     `parents`: the details of the target's in-flight parents."""
     n = pair["other"]
@@ -94,6 +104,7 @@ def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
         "cn": n, "commit": sha,
         "ps": ((c.get("revisions") or {}).get(sha) or {}).get("_number", 0),
         "subject": c.get("subject", ""), "owner": owner_name(c),
+        "owner_username": (c.get("owner") or {}).get("username"), "mine": is_mine(c, me),
         "tier": sel.tiers[n], "readiness": readiness(c),
         "hashtags": sorted(c.get("hashtags") or []),
         "fix_side": fix_side(t_tier, t_rank, m_tier,
@@ -107,9 +118,9 @@ def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
     e["via"] = pair["via"]
     e["own_via"] = pair.get("own_via")
     if mover != n:
-        e["via_change"] = _change_info(mover, sel.every[mover], m_tier, sel.ranks)
+        e["via_change"] = _change_info(mover, sel.every[mover], m_tier, sel.ranks, me)
     if ours is not None:
-        e["own_via_change"] = _change_info(pair["own_via"], ours, t_tier, sel.ranks)
+        e["own_via_change"] = _change_info(pair["own_via"], ours, t_tier, sel.ranks, me)
     e["silent"] = pair["silent"]
     if pair.get("base_drift"):
         e["base_drift"] = pair["base_drift"]
@@ -140,7 +151,8 @@ class _Buckets:
     skipped: list[dict[str, Any]]
 
 
-def _buckets(chk: Checked, sel: Selection, t_tier: str, t_rank: int) -> _Buckets:
+def _buckets(chk: Checked, sel: Selection, t_tier: str, t_rank: int,
+             me: str | None = None) -> _Buckets:
     """Each tried candidate under the one heading that says what to do
     about it; the ones the engine could not try under errors/skipped."""
     res = chk.result["results"]
@@ -152,7 +164,7 @@ def _buckets(chk: Checked, sel: Selection, t_tier: str, t_rank: int) -> _Buckets
     b.skipped.sort(key=lambda s: s["cn"])
     for pair in chk.result["focus_pairs"]:
         e = pair_entry(pair, sel, chk.landed, t_tier, t_rank, chk.parents_detail,
-                       chk.queued_ids)
+                       chk.queued_ids, me)
         landing = list(e.get("landing", {}).values())
         uploaded = list(e["as_uploaded"].values())
         if "conflict" in landing:
@@ -205,7 +217,7 @@ def report(chk: Checked, sel: Selection, next_branch: str, me: str | None) -> di
     hashtags = target.get("hashtags") or []
     ranks = sel.ranks
     t_tier, t_rank = target_tier(target, chk.queued_ids, ranks), release_rank(hashtags, ranks)
-    b = _buckets(chk, sel, t_tier, t_rank)
+    b = _buckets(chk, sel, t_tier, t_rank, me)
     tried = {pair["other"] for pair in chk.result["focus_pairs"]}
     notes = [f"hunks-for {n}: not a tried candidate"
              for n in sorted(chk.hunks - tried)] if isinstance(chk.hunks, set) else []
@@ -218,7 +230,9 @@ def report(chk: Checked, sel: Selection, next_branch: str, me: str | None) -> di
         "tested_commit": chk.stack[-1].commit,
         "subject": target.get("subject", ""),
         "owner": owner_name(target),
+        "owner_username": (target.get("owner") or {}).get("username"),
         "me": me,
+        "mine": is_mine(target, me),
         "readiness": readiness(target),
         "tier_of_target": t_tier,
         "release_hashtags": sorted(h for h in hashtags if release_rank([h], ranks) > 0),
@@ -268,7 +282,7 @@ ORDERS = {"landing": ("target_first", "candidate_first"),
 # full-only top-level keys: hashes, and what branch already says
 _FULL_ONLY = ("commit", "tested_commit", "project", "tip")
 _COUNTED = ("already_conflicting", "clean")
-_ENTRY_KEYS = ("cn", "subject", "owner", "tier", "readiness", "fix_side", "files")
+_ENTRY_KEYS = ("cn", "subject", "owner", "mine", "tier", "readiness", "fix_side", "files")
 
 
 def _short(subject: str) -> str:
@@ -293,7 +307,8 @@ def compact_entry(e: dict[str, Any], ranks: Ranks = DEFAULT_RANKS,
         if e.get(key) is not None:
             out[key] = e[key]
         if e.get(f"{key}_change"):
-            out[f"{key}_change"] = {k: e[f"{key}_change"][k] for k in ("cn", "owner", "tier")}
+            out[f"{key}_change"] = {k: e[f"{key}_change"][k]
+                                    for k in ("cn", "owner", "mine", "tier")}
     for key in ("silent", "same_function", "forced", "hunks"):
         if e.get(key) and (key != "same_function" or same_function):
             out[key] = e[key]

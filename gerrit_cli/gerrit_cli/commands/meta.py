@@ -1262,7 +1262,10 @@ take the candidate's place. One at own_via is that parent's: its tier
 (as in base.parents) and hashtags take the target's, and "target" means
 that parent moves. via_change and own_via_change {cn, owner, tier,
 readiness, release_hashtags} say who that is (compact: cn, owner, tier).
-Compare the change's owner with me to see whose move it is.
+mine says whose move it is: true when the change's owner is the account
+in use (me, a username; owner is the display name, owner_username in
+--full the owner's username), null when no account is configured; the
+target, each pair and via_change / own_via_change carry it.
 
 When the change does not apply on the branch tip, status is
 "needs-rebase", conflicts is null, as_uploaded_only has the pairs that
@@ -1295,18 +1298,19 @@ conflicts: search are not used.
 Read-only towards Gerrit; needs git 2.40 or newer.
 
 The default output is compact; --full prints every field. Compact: per
-pair cn, subject (cut at 70 characters), owner, tier, readiness, fix_side,
-files, release_hashtags (only the release ones), landing and as_uploaded
-as one string each in the order given by orders ("conflict/clean":
-target_first/candidate_first, target_on_theirs/theirs_on_target), and
-only when set: via, own_via, via_change / own_via_change (cn, owner,
-tier), silent, base_drift (a count), forced, hunks, and same_function only in watch and silent_only. clean,
-already_conflicting and not_tried are counts; commit, tested_commit
-(unless --commit tested another commit), project and tip are left out.
---full adds those, each pair's commit and ps (the candidate's current
-patchset, to fetch it), every hashtag, the per-order results as objects, the
-base_drift files and the change lists behind the counts. Hunks appear
-only with --hunks or --hunks-for, in either form.
+pair cn, subject (cut at 70 characters), owner, mine, tier, readiness,
+fix_side, files, release_hashtags (only the release ones), landing and
+as_uploaded as one string each in the order given by orders
+("conflict/clean": target_first/candidate_first,
+target_on_theirs/theirs_on_target), and only when set: via, own_via,
+via_change / own_via_change (cn, owner, mine, tier), silent, base_drift
+(a count), forced, hunks, and same_function only in watch and
+silent_only. clean, already_conflicting and not_tried are counts;
+commit, tested_commit (unless --commit tested another commit), project
+and tip are left out. --full adds those, each pair's commit and ps (the
+candidate's current patchset, to fetch it), every hashtag, the per-order
+results as objects, the base_drift files and the change lists behind the
+counts. Hunks appear only with --hunks or --hunks-for, in either form.
 """,
         "examples": [
             {

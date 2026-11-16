@@ -520,14 +520,14 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
 
 - **Output**: compact by default, enough to decide what to do; `--full`
   prints every field. Compact pairs keep `cn`, `subject` (cut at 70
-  characters), `owner`, `tier`, `readiness`, `fix_side`, `files`, the
-  release hashtags (`release_hashtags`) and `landing` / `as_uploaded` as
-  one string each, `"conflict/clean"`, in the order `orders` names
-  (`target_first/candidate_first`, `target_on_theirs/theirs_on_target`);
-  `via`, `own_via`, `via_change` / `own_via_change` (cn, owner, tier),
-  `silent`, `forced` and `base_drift` (a count) only when set,
-  `same_function` only in `watch` and `silent_only` (a pair that
-  conflicts needs a look anyway).
+  characters), `owner`, `mine`, `tier`, `readiness`, `fix_side`,
+  `files`, the release hashtags (`release_hashtags`) and `landing` /
+  `as_uploaded` as one string each, `"conflict/clean"`, in the order
+  `orders` names (`target_first/candidate_first`,
+  `target_on_theirs/theirs_on_target`); `via`, `own_via`, `via_change` /
+  `own_via_change` (cn, owner, mine, tier), `silent`, `forced` and
+  `base_drift` (a count) only when set, `same_function` only in `watch`
+  and `silent_only` (a pair that conflicts needs a look anyway).
   `clean`, `already_conflicting` and `not_tried` are counts; the commit
   hashes, `project` and `tip` are left out (`tested_commit` stays when
   `--commit` tested another commit). `--full` has them, each pair's
@@ -604,9 +604,11 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   tier and hashtags take the candidate's place; one at `own_via` is that
   parent's, whose tier (as in `base.parents`) and hashtags take the
   target's, and `target` then means that parent moves. `via_change` and
-  `own_via_change` {cn, owner, tier, readiness, release_hashtags} say
-  who that is (compact: cn, owner, tier). `owner` against `me`
-  (`GERRIT_USER`) tells whose move it is.
+  `own_via_change` {cn, owner, mine, tier, readiness, release_hashtags}
+  say who that is (compact: cn, owner, mine, tier). `mine` tells whose
+  move it is: true when the change's owner is the account in use (`me`,
+  a username; `owner` is the display name, `owner_username` in `--full`
+  the owner's username), null when no account is configured.
 - **The change itself**: `on_branch` and `on_next` (against
   `<branch>-next`, naming the queued change it collides with); `base`
   (on the branch or not, commits behind, in-flight parents with their
