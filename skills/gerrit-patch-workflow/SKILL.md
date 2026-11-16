@@ -319,7 +319,9 @@ violates them cannot be pushed:
   never add one to a new commit -- the hook generates it.
 - `Test-Parameters` lines (`testlist=`, `clientdistro=`, `env=` and the
   like) may go on any patch, to run the tests or distros that exercise
-  it. Only `Test-Parameters: trivial`, which cuts CI back to a minimal
+  it. Their sessions run in addition to the default testing, not in
+  place of it: only `trivial` and `fortestonly` cut the default back.
+  `Test-Parameters: trivial`, which cuts CI back to a minimal
   run, is restricted: use it on test-only patches, or on a patch whose
   only kernel change is to debug messages (the text, arguments or mask
   of a `CDEBUG`, `CERROR` and the like).
