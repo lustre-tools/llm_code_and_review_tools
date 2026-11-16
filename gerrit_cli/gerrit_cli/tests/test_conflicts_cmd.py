@@ -11,7 +11,7 @@ import pytest
 
 from gerrit_cli.commands._helpers import error_code_for
 from gerrit_cli.commands.conflicts import run_conflicts
-from gerrit_cli.conflicts import ConflictRepoError, Patch
+from gerrit_cli.conflicts import ConflictRepoError, Patch, Repo
 from gerrit_cli.errors import ErrorCode
 from gerrit_cli.tests.test_graph_conflicts import (  # noqa: F401
     _ENV, _git, _queue, _text, change_id, gerrit, local,
@@ -964,3 +964,23 @@ def test_branch_tips_fall_back_to_ls_remote(setup):
     out = run(client, local)
     assert out["conflicts"][0]["tier"] == "frozen"
     assert out["on_next"]["with"]["cn"] == 200
+
+
+def test_the_branch_and_the_target_stack_come_in_one_fetch(setup, monkeypatch):
+    gerrit, local, client = setup
+    rest = client.rest
+    p = gerrit.change(90, gerrit.master, {"b.c": _text({2: "P"})})
+    rest.add(90, [p], ["b.c"])
+    t = gerrit.change(100, p.commit, {"a.c": _text({5: "T"}), "b.c": _text({2: "P"})})
+    rest.add(100, [t], ["a.c", "b.c"])
+    fetches = []
+    real = Repo.fetch_refs
+
+    def fetch_refs(self, remote, refs):
+        fetches.append(sorted(refs))
+        return real(self, remote, refs)
+
+    monkeypatch.setattr(Repo, "fetch_refs", fetch_refs)
+    out = run(client, local)
+    assert out["on_branch"]["status"] == "clean"
+    assert fetches == [["refs/changes/00/100/1", "refs/changes/90/90/1", "refs/heads/master"]]

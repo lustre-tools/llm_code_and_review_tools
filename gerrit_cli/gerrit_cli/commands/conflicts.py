@@ -9,10 +9,10 @@ trial-merged against the target in both orders and both models
 (conflicts.py, focus mode), and each collision says which side should
 move (`fix_side`).
 
-run_conflicts runs the steps in order: open target -> branch and -next
--> related changes -> focus stack -> candidate selection -> engine ->
-older parent patchsets; conflict_report.py turns the result into the
-printed JSON.
+run_conflicts runs the steps in order: open target and related changes
+-> uploaded focus stack -> branch and -next (fetched with that stack)
+-> local focus stack -> candidate selection -> engine -> older parent
+patchsets; conflict_report.py turns the result into the printed JSON.
 """
 
 from __future__ import annotations
@@ -142,10 +142,11 @@ def _ancestors(client: Any, project: str, branch: str, changes: dict[int, dict[s
     return found
 
 
-def _target_stack(client: Any, repo: Repo, remote: str, change: dict[str, Any],
-                  related: list[dict[str, Any]], owners: dict[str, tuple[int, str]],
-                  patchsets: _Patchsets) -> tuple[list[Patch], dict[int, dict[str, Any]]]:
-    """The uploaded target and its in-flight parents, bottom first."""
+def _target_stack(client: Any, change: dict[str, Any], related: list[dict[str, Any]],
+                  owners: dict[str, tuple[int, str]], patchsets: _Patchsets,
+                  ) -> tuple[list[Patch], dict[int, dict[str, Any]]]:
+    """The uploaded target and its in-flight parents, bottom first (not
+    fetched: _branch fetches them with the branch)."""
     cn = change["_number"]
     by_sha = {e["commit"]["commit"]: e for e in related}
     below: list[int] = []
@@ -172,7 +173,6 @@ def _target_stack(client: Any, repo: Repo, remote: str, change: dict[str, Any],
         patches.append(Patch(n, ps, commit))
     commit, ps, _ = _current(change)
     patches.append(Patch(cn, ps, commit))
-    _fetch(repo, remote, {p.commit: change_ref(p.cn, p.ps) for p in patches})
     return patches, details
 
 
@@ -300,20 +300,27 @@ def _branch_tips(client: Any, repo: Repo, remote: str, project: str,
     return {b: r for b, r in zip(branches, revs) if r}
 
 
-def _branch(client: Any, repo_path: str, target: dict[str, Any]) -> _Branch:
-    """Fetch the branch and its -next; a stale -next holds what already
-    landed, so nothing in it counts as queued."""
-    project, branch = target["project"], target["branch"]
+def _clone(repo_path: str, project: str) -> tuple[Repo, str]:
+    """The checkout and its remote for `project`."""
     repo = Repo(repo_path)
     remote = repo.resolve_remote(project)
     if remote is None:
         raise ConflictRepoError(f"{repo.path} is not a clone of {project}; pass --repo")
+    return repo, remote
+
+
+def _branch(client: Any, repo: Repo, remote: str, target: dict[str, Any],
+            refs: dict[str, str]) -> _Branch:
+    """Fetch the branch and its -next, with `refs` ({commit: ref}) in the
+    same fetch: each fetch is an SSH connection of seconds. A stale -next
+    holds what already landed, so nothing in it counts as queued."""
+    project, branch = target["project"], target["branch"]
     next_branch = f"{branch}-next"
     heads = _branch_tips(client, repo, remote, project, [branch, next_branch])
     if branch not in heads:
         raise ConflictCheckError(f"{remote} has no branch {branch}")
     tip, next_tip = heads[branch], heads.get(next_branch)
-    _fetch(repo, remote, {sha: f"refs/heads/{b}" for b, sha in heads.items()})
+    _fetch(repo, remote, {**refs, **{sha: f"refs/heads/{b}" for b, sha in heads.items()}})
     queued_ids: set[str] = set()
     if next_tip and not repo.missing([tip, next_tip]) and repo.is_ancestor(tip, next_tip):
         queue = repo.first_parent_range(tip, next_tip)
@@ -348,13 +355,15 @@ def _around(get: Any, cn: int, target: dict[str, Any], related: list[dict[str, A
 
 
 def _focus(client: Any, br: _Branch, target: dict[str, Any], commit: str | None,
-           ar: _Around) -> _Focus:
+           ar: _Around, uploaded: tuple[list[Patch], dict[int, dict[str, Any]]] | None
+           ) -> _Focus:
+    """`uploaded`: _target_stack's result, for the uploaded target."""
     if commit:
         stack, parents_detail = _local_stack(client, br.repo, br.remote, target, commit, br.tip,
                                              ar.owners, ar.patchsets)
     else:
-        stack, parents_detail = _target_stack(client, br.repo, br.remote, target, ar.related,
-                                              ar.owners, ar.patchsets)
+        assert uploaded is not None
+        stack, parents_detail = uploaded
     bases = br.repo.parents([p.commit for p in stack if not p.base])
     diff_of = {p.commit: p.base or (bases.get(p.commit) or [""])[0] for p in stack}
     paths = sorted(set().union(*br.repo.changed_files(
@@ -500,9 +509,13 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     `ranks`: the release hashtags (the command reads them from the
     environment and the options)."""
     cn, target, related = _open_target(client, change)
-    br = _branch(client, repo_path, target)
+    repo, remote = _clone(repo_path, target["project"])
     ar = _around(client.rest.get, cn, target, related)
-    focus = _focus(client, br, target, commit, ar)
+    uploaded = None if commit else _target_stack(client, target, ar.related, ar.owners,
+                                                 ar.patchsets)
+    br = _branch(client, repo, remote, target,
+                 {p.commit: change_ref(p.cn, p.ps) for p in uploaded[0]} if uploaded else {})
+    focus = _focus(client, br, target, commit, ar, uploaded)
     sel = _select(client, br, target, focus, ar, max_age, with_, all_, now, ranks)
     result = _try(client, br, focus, ar, sel, hunks)
 
