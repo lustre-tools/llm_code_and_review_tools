@@ -1199,8 +1199,9 @@ rest are tiered:
   frozen       queued in <branch>-next (only when -next is not stale)
   lands-first  ready (Jenkins +1, Maloo +1, 2 non-owner CR +1, 1 for a
                backport) or a release blocker/priority hashtag
-  same-effort  shares a hashtag (not an ignored or release one) or the
-               topic with the change
+  same-effort  shares a hashtag (not an ignored or release one), the
+               topic or a ticket key named in the subject (LU-12345,
+               LU-23456: [A-Z][A-Z0-9]+-digits) with the change
   other        the rest; listed in not_tried unless --all
 same-effort and other are limited to --max-age days (default 30); --with
 CN checks a change whatever the filters say. These hashtags are fnmatch

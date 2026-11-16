@@ -543,8 +543,9 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   either. A change queued in `<branch>-next` is never skipped.
 - **Tiers**: `frozen` (queued in `<branch>-next`, when it is not
   stale), `lands-first` (ready, or a release blocker / release priority
-  hashtag), `same-effort` (shares a hashtag or the topic; the ignored
-  and the release hashtags do not count) and `other`. `same-effort` and `other` must have been
+  hashtag), `same-effort` (shares a hashtag, the topic or a ticket key
+  in the subject, `LU-12345`, `LU-23456`; the ignored and the release
+  hashtags do not count) and `other`. `same-effort` and `other` must have been
   updated within `--max-age` days (default 30). `other` is only listed
   (`not_tried`) unless `--all`. `--with CN` checks a change whatever the
   filters say.

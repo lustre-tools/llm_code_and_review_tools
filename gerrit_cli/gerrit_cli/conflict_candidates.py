@@ -25,6 +25,7 @@ _OPTIONS = ("LABELS", "DETAILED_LABELS", "CURRENT_REVISION",
 # the server about three times as much per change
 _VOTE_OPTIONS = ("LABELS", "DETAILED_LABELS", "DETAILED_ACCOUNTS")
 _PATHS_PER_QUERY = 20
+_TICKET_RE = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _CHANGES_PER_QUERY = 100
 
 
@@ -104,6 +105,11 @@ def release_rank(hashtags: list[str], ranks: Ranks = DEFAULT_RANKS) -> int:
 def shared_hashtags(a: list[str], b: list[str],
                     ranks: Ranks = DEFAULT_RANKS) -> list[str]:
     return sorted(t for t in set(a) & set(b) if not ranks.generic(t))
+
+
+def tickets(subject: str) -> set[str]:
+    """The Jira-style keys (LU-12345, LU-23456) a subject names."""
+    return set(_TICKET_RE.findall(subject or ""))
 
 
 def _is_owner(vote: dict[str, Any], owner: dict[str, Any]) -> bool:
@@ -208,7 +214,8 @@ def classify(
     same = shared_hashtags(change.get("hashtags") or [],
                            target.get("hashtags") or [], ranks)
     topic = change.get("topic")
-    if same or (topic and topic == target.get("topic")):
+    if same or (topic and topic == target.get("topic")) \
+            or tickets(change.get("subject", "")) & tickets(target.get("subject", "")):
         return "same-effort", None
     return "other", None
 

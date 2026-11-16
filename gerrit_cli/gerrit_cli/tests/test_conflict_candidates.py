@@ -112,6 +112,19 @@ def test_shared_pt_tag_makes_same_effort():
                     set(), 30, NOW) == ("same-effort", None)
 
 
+def test_the_same_ticket_in_both_subjects_makes_same_effort():
+    """A change without hashtags still finds the changes on its ticket."""
+    target = {"hashtags": [], "topic": None, "subject": "LU-23456 lnet: fix discovery"}
+    c = ch()
+    c["subject"] = "LU-99 LU-23456 lnet: discovery test"
+    assert classify(c, target, set(), 30, NOW) == ("same-effort", None)
+    c["subject"] = "LU-234567 lnet: discovery test"
+    assert classify(c, target, set(), 30, NOW) == ("other", None)
+    c["subject"] = "lnet: LU-23456x is not a ticket"
+    assert classify(c, target, set(), 30, NOW) == ("other", None)
+    assert classify(ch(), {"hashtags": [], "topic": None}, set(), 30, NOW) == ("other", None)
+
+
 def test_release_rank():
     assert release_rank(["a_review_blocker", "b_review_priority"]) == 2
     assert release_rank(["b_review_priority"]) == 1

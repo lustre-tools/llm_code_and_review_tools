@@ -412,6 +412,23 @@ def test_fix_side_of_a_collision_at_via_follows_the_via_change(setup):
     assert c["fix_side"] == "candidate"
 
 
+def test_a_change_on_the_same_ticket_is_same_effort(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    rest.changes[100]["subject"] = "LU-23456 lnet: fix discovery"
+    same = gerrit.change(200, gerrit.master, {"a.c": _text({5: "S"})})
+    rest.add(200, [same], ["a.c"])
+    rest.changes[200]["subject"] = "LU-23456 tests: discovery"
+    other = gerrit.change(300, gerrit.master, {"a.c": _text({15: "O"})})
+    rest.add(300, [other], ["a.c"])
+    rest.changes[300]["subject"] = "LU-23457 lnet: other"
+    out = run(client, local)
+    [c] = out["conflicts"]
+    assert c["cn"] == 200 and c["tier"] == "same-effort" and c["fix_side"] == "coordinate"
+    assert out["not_tried"] == {"other": [300]}
+
+
 def test_children_are_reported_in_own_stack(setup):
     gerrit, local, client = setup
     rest = client.rest
