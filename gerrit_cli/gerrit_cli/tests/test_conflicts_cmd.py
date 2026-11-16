@@ -310,6 +310,17 @@ def test_repo_that_is_not_a_clone_of_the_project_is_invalid_input(gerrit, local)
         run(client, local)
 
 
+def test_a_mirror_remote_says_a_gerrit_remote_is_needed(gerrit, local):
+    """A GitHub mirror has the branches but no refs/changes."""
+    client = FakeClient(gerrit)
+    _target(gerrit, client.rest, {5: "T"})
+    _git(local, "remote", "add", "origin", "https://github.com/lustre/lustre-release.git")
+    with pytest.raises(ConflictRepoError, match="fetches fs/lustre-release from Gerrit") \
+            as exc:
+        run(client, local)
+    assert "refs/changes" in str(exc.value) and "https://gerrit.invalid" in str(exc.value)
+
+
 def test_no_overlapping_changes_is_empty_ok(setup):
     gerrit, local, client = setup
     rest = client.rest

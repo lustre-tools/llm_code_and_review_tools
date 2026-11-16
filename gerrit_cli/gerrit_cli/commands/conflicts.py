@@ -327,12 +327,15 @@ def _branch_tips(client: Any, repo: Repo, remote: str, project: str,
     return {b: r for b, r in zip(branches, revs) if r}
 
 
-def _clone(repo_path: str, project: str) -> tuple[Repo, str]:
+def _clone(repo_path: str, project: str, gerrit_url: str = "<gerrit-url>") -> tuple[Repo, str]:
     """The checkout and its remote for `project`."""
     repo = Repo(repo_path)
     remote = repo.resolve_remote(project)
     if remote is None:
-        raise ConflictRepoError(f"{repo.path} is not a clone of {project}; pass --repo")
+        raise ConflictRepoError(
+            f"{repo.path}: no remote fetches {project} from Gerrit, whose refs/changes "
+            f"the trial merges need (a mirror has none); add one (git remote add gerrit "
+            f"{gerrit_url.rstrip('/')}/{project}) or pass --repo a clone that has one")
     return repo, remote
 
 
@@ -562,7 +565,8 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     `ranks`: the release hashtags (the command reads them from the
     environment and the options)."""
     cn, target = _open_target(client, change)
-    repo, remote = _clone(repo_path, target["project"])
+    repo, remote = _clone(repo_path, target["project"], getattr(client, "url", None)
+                          or "<gerrit-url>")
     if worktree:
         commit = _worktree_commit(repo, target)
     related, heads = _related_and_tips(client, repo, remote, cn, target)
