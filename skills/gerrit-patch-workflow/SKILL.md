@@ -218,248 +218,208 @@ uploaded. `gc explain conflicts` defines every field; this section is
 about what to do with them.
 
 ```bash
-gc conflicts 69392 --repo /abs/path/to/checkout            # summary first
-gc conflicts 69392 --repo /abs/path/to/checkout --hunks-for 65219 --hunks-for 69517
-gc conflicts 69392 --repo /abs/path/to/checkout --commit HEAD   # a local rearrangement
-gc conflicts 69392 --with 65219 --all    # one given change; the 'other' tier too
+gc conflicts <cn> --repo /abs/path/to/checkout                     # summary first
+gc conflicts <cn> --repo /abs/path/to/checkout --hunks-for <other>  # repeatable
+gc conflicts <cn> --repo /abs/path/to/checkout --commit <sha>       # a local edit
+gc conflicts <cn> --with <other> --all    # one given change; the 'other' tier too
+gc conflicts <cn> --repo . | jq -r '.status, ([(.conflicts // [])[] | .b = "landing"]
+    + [.as_uploaded_only[] | .b = "uploaded"] | .[] | [.b, .cn, .tier, .fix_side,
+    (.via // "-"), (.own_via // "-"), .landing, .as_uploaded,
+    (.files | join(","))] | @tsv)'                    # one line per collision
 ```
 
-`--hunks` for every collision can run to megabytes on a busy file: do not
-use it first. Read the summary, then rerun with `--hunks-for <cn>` for
-the collisions you will act on. The default output is compact (results
-as `"conflict/clean"` in the order `orders` names, `clean` and the like as
-counts); `--full` adds the change lists, hashes and every hashtag. A
-one-line overview, the status first, then per collision the landing and
-as-uploaded results of both orders:
+`--full` adds each pair's `commit` and `ps` and the lists behind the
+counts. Never start with `--hunks`: on a busy file it runs to megabytes.
 
-```bash
-gc conflicts 69392 --repo . | jq -r '.status, ((.conflicts // .as_uploaded_only)[] |
-    [.cn, .tier, .readiness, .fix_side, (.landing // "-"), .as_uploaded,
-     (.files | join(","))] | @tsv)'
-```
+**When.** Before uploading to a change in a busy area; when Gerrit or a
+bot reports a merge, cherry-pick or -next conflict; after a neighbour
+lands or is picked; before accepting a review suggestion that edits lines
+another in-flight change rewrites (decline or defer it, and say why).
 
-**When.** Before uploading a patchset to a change in a busy area; when
-Gerrit or a bot reports a merge conflict, a cannot-cherry-pick or a
-master-next conflict; after a neighbour lands or is picked; before
-accepting a review suggestion that edits lines another in-flight change
-rewrites (decline or defer it, and say why).
+**Reading the result**, heaviest first:
 
-**Trivial collisions: fix them, then say so.** When the user is working
-on the change and wants it to land cleanly, fix a collision without
-asking first if all of these hold:
+- `conflicts`: a landing order conflicts, what happens when both land.
+- `as_uploaded_only`: landing is clean, only the uploaded commits collide
+  (what the other owner, or CI on a stale base, sees). Act on it only
+  when the user is about to rebase or the other change lands next. With
+  `status: needs-rebase` it is the only model and `conflicts` is null.
+- `via`: the colliding lines are in that ancestor of the candidate, so
+  that change is the one in the way; `fix_side` already reflects it.
+- `own_via`: the colliding lines are in that parent of the change, not
+  in the change. Fix them there only if the user is working on that
+  parent; never change a parent you are not working on.
+- `on_next`: the change on `<branch>-next`; a `conflict` names the queued
+  change in `with`. The same pair may also be in `conflicts`: one
+  collision, seen against the queue. Ignore `stale` and `no-next`.
+- `on_branch`: the change's own stack on the branch tip; `under` names
+  the stack member below it, `by` the one that blocks it.
+- `silent_only`: a clean merge that still defines a test, fail_loc or
+  OBD_CONNECT value twice, or adds the same test to ALWAYS_EXCEPT twice:
+  a collision like any other.
+- `watch`: a clean merge, but both edit the functions in `same_function`:
+  build the combination and run the covering tests, first the pairs whose
+  shared function your edit touches, then by tier.
+- `base_drift` (the branch moved between the two bases),
+  `already_conflicting` (conflicts without your change) and `skipped`
+  (needs a new patchset anyway): not collisions to plan around.
 
-- the change that moves is the one being worked on (`fix_side: target`,
-  or the user said to move theirs);
-- the hunk kind is `insert-insert`, `adjacent` or `context`, never
-  `edit-edit` (a conflict with the own parent's newer patchset comes with
-  files only, no hunk kinds: read it by hand in the rebase and judge it
-  the same way);
-- the fix only moves or renumbers lines the change itself adds: insert in
-  the middle of a list instead of at its end, leave an unchanged line
-  between the two edits, take a test number or fail_loc value no open
-  change uses;
-- behaviour does not change: no condition rewritten, nothing moved across
-  ordering or locking, no hunk dropped or deferred, no new statement or
-  flag;
-- the diff stays about the size of the conflict, a few lines;
-- re-verifying (see Verify) shows the collision gone and none new.
+Report the landing conflicts one line each; `as_uploaded_only` and
+`watch` one line each, with counts, naming only the frozen ones and those
+with a release blocker or priority hashtag (configurable; `ranks` shows
+the globs in effect).
 
-Make the edit, verify it, and tell the user in a line or two what moved
-and what it no longer collides with ("moved `ci_ec_wait:1` after
-`ci_parity_io:1`; no longer collides with 65219 or 69517"). Leave it
-uncommitted unless they asked to commit or upload. If verification fails,
-undo it and report instead.
-
-**Everything else: report first, edit on the user's choice.**
-Deconflicting is one option, not the goal, and not at any cost. For a
-collision that fails any test above (`edit-edit`, a logic or design
-change, someone else's change, a rebase onto another change or a
-restack, a dropped or deferred
-hunk, a bigger diff, any sign of "works but stupid" below), touch no
-file. Report per collision the change, its owner, `fix_side`, the files
-and hunk kinds (where you fetched them), then the options with their
-cost:
-
-- rearrange (how big a change);
-- rearrange, but uglier;
-- defer the edit to whichever change lands second;
-- restack or rebase onto the other change (what it moves, which votes it
-  drops);
-- wait for the other change to land;
-- leave it to the other owner;
-- do nothing (the other change is far from landing).
-
-"This cannot be deconflicted" is a complete answer. Recommend one option.
-A mixed result is normal: fix the trivial collisions and report the rest
-in the same message. When the user says "go ahead and deconflict it",
-also apply clean rearrangements beyond trivial, and still stop at
-anything uglier.
-
-Read the rest of the result before recommending: the change's own
-`own_stack`, `on_branch` and `base.parents` (a conflicting parent in its
-own stack can be the real blocker); `status: needs-rebase`
-(then `conflicts` is null, `as_uploaded_only` holds the pairs that
-conflict as uploaded and `clean` the rest);
-`skipped` (candidates that need a new patchset anyway, not worth planning
-around); `silent_only` (a clean merge that still defines a test,
-fail_loc value or OBD_CONNECT flag value twice, or adds the same test to
-ALWAYS_EXCEPT twice); `watch` (a clean merge, but both edit the function
-named in `same_function`: build the combination and run the covering
-tests); `already_conflicting` (conflict without your change, not
-yours); `on_next` (a conflict in the queue; `stale` means ignore it).
-
-Check the own stack first: it changes the base the other collisions are
-measured on.
+**Own stack first**: it changes the base the rest is measured on.
 
 - `outdated_parent.status: clean`, or `on_old_patchset` without a
   `parent` conflict: it sits on an older patchset of its parent but
-  applies on the current one. Do not rebase; a project that submits by
-  cherry-pick lands it anyway. Mention it in one line.
+  applies on the current one. Do not rebase (a project that submits by
+  cherry-pick lands it anyway); mention it in one line.
 - `rebase_cause: parent`, or `outdated_parent.status: conflict`: the
-  change (or `rebase_onto.for`, the stack member below it) conflicts with
-  its parent's current patchset and cannot land as it is, so its votes
-  are lost either way. Rebase it locally onto `rebase_onto`, the parent's
-  commit staying byte-identical to its current patchset on Gerrit, and
-  resolve. A resolution that meets the trivial tests: do it without
-  asking and say so. Otherwise report it like any other collision. The
-  rebased commit stays local; never upload unless asked. Rerun
-  `gc conflicts --commit` on it before judging the other collisions.
+  change (or `rebase_onto.for`, below it) conflicts with its parent's
+  current patchset and cannot land as it is, so its votes are lost
+  either way. Rebase it locally onto `rebase_onto`, the parent's commit
+  byte-identical to its current patchset on Gerrit, and resolve it like
+  any collision below (files only, no hunk kinds: read it in the rebase).
+  Rerun `gc conflicts --commit` on the result before judging the rest.
+- `rebase_cause: branch` and `base.rebase` says a rebase would move
+  frozen or ready parents: wait for them to land, then rebase once. Any
+  other rebase drops votes and needs the user's OK.
 
-Landing and as-uploaded results differ in weight. A `landing` conflict
-is what happens when the changes land, so it is what matters. A conflict
-only in `as_uploaded` is what the other owner or CI sees on a stale
-base: lower weight, mention it, act on it only when the user is about to
-rebase or the other change is next to land. `via` names the candidate's
-ancestor the conflict sits in (null when it is in the candidate
-itself): the fix belongs to that change, not the candidate.
+**Who moves.** `fix_side` is the default answer. It encodes who goes
+first: frozen (in -next), release blocker, release priority, ready, the
+rest. The higher one does not move, whoever owns it. Never change a
+picked change's hash to make room.
 
-When the change is `needs-rebase`, only the as-uploaded model runs.
-`as_uploaded_only` holds the pairs that conflict on files both changes
-change; conflicts on files only one side changes come from the branch
-moving between the two bases and are counted in the pair's `base_drift`
-(`--full` lists the files), not as collisions. A stale change still collects many such pairs: summarise
-them by tier, readiness and release hashtags, name only the blockers,
-priority and frozen ones, and fetch no hunks unless the user asks. A
-conflict on a shared file can still be drift elsewhere in that file; the
-hunk kind `context` says so.
-
-Release blocker and priority hashtags are globs (`ranks` in the output
-shows the ones in effect); when a release renames its tags, set
-`GERRIT_CONFLICTS_BLOCKER_TAGS` / `GERRIT_CONFLICTS_PRIORITY_TAGS` or pass
-`--blocker-tag` / `--priority-tag`.
-
-**Who moves.** `fix_side` is the default answer. It encodes this order
-of who goes first: in -next (frozen), release blocker, release priority,
-ready, the rest (blocker over priority over plain ready applies between
-lands-first changes). The one earlier in the order does not move, whoever
-owns it; a lower-ranked change, ready or not, makes room for a
-release blocker. Never change a picked change's hash to make room.
-
-- `owner` against `me` says whose change it is, not what the user wants:
-  they may be working on a change they do not own (taking one over).
-  Decide from what they asked, and ask when unclear.
-- `target` on the change being worked on: that change's move.
+- `target`: the change being worked on moves.
 - `candidate`: the other owner's move. Name them and say what they would
   change; never edit their change.
 - `coordinate`: propose an order and who goes first.
-- When the user owns the target they may still choose to move their own
-  change although `fix_side` says `candidate` or `coordinate`, for example
-  both are release blockers and their own rearrangement is the cheapest.
-  Offer that as an option with its cost, never as your silent choice.
-- When the user is only reviewing, or did not ask for a change, report
-  only. Reworking someone else's change, even with access, needs its
-  owner's OK once it alters the design.
+- `owner` against `me` is Gerrit's record: if the user says the change
+  is theirs or they are taking it over, believe them. Moving their own
+  change against `fix_side`, when cheapest, is an option to offer with
+  its cost, never your silent choice.
+- A user who is only reviewing, or did not ask for a change, gets a
+  report only.
 
-**Rebase or rearrange.** Read `base.rebase`. If it says rebasing would
-move frozen or ready parents, or the base is too old to move, rebasing is
-out: rearrange, defer or wait. Otherwise rebasing onto the candidate is an
-option, but a rebase drops votes, so it needs the user's OK. The exception
-is a conflict with the own parent's current patchset (`rebase_cause:
-parent`, above): the change cannot land as it is, so that rebase is part
-of fixing it.
+**Trivial collisions: fix them, then say so.** The summary never
+justifies an edit: rerun with `--hunks-for <cn>` for exactly the
+collisions you would act on, landing conflicts with `fix_side: target`
+first. When the user is working on the change and wants it to land
+cleanly, fix a collision without asking if all of these hold:
 
-**Techniques** (from real cases):
+- the change being worked on moves, and the lines are its own (no
+  `own_via`);
+- every hunk of the pair, any model and order, is `insert-insert`,
+  `adjacent` or `context`: one `edit-edit` makes the pair non-trivial;
+- the fix only moves or renumbers lines the change adds, judged on its
+  own diff against its parent (`git diff "$P" "$C"`, see Verify); in the
+  working-tree diff, moving the change's block below an unchanged line
+  looks like moving that line;
+- behaviour does not change: no condition rewritten, nothing moved across
+  ordering or locking, no hunk dropped, no new statement or flag;
+- the diff stays about the size of the conflict, a few lines;
+- Verify shows the fixed collisions gone and nothing new.
 
-- Insert away from shared append points: the middle of a list, bitfield,
-  enum or test file, not the end. Never edit the last element's
-  terminator (`last:1;` to `last:1,`); every appender edits it too.
-- Keep at least one unchanged line, a blank one will do, between your edit
-  and theirs (64086 PS47).
-- Don't rewrite a shared condition; put the effect in a separate
-  statement (69392 PS6), then audit every reader and writer of the state
-  it changes, in the target and the candidates.
-- Number spaces: take a free gap (an OBD_FAIL value, 64441), pick test
-  numbers no open change uses, leave gaps when adding several.
-- Move a new test into a gap or another script (64142, 67602); move
-  helpers up away from where others append (64616).
-- Drop your hunk when another in-flight change makes the same edit and
-  record the follow-up. Then check tests that exist only on master or
-  -next: dropping a hunk on 64441 silently broke a test.
-- Keep a contested line as is, even with a style nit, and say why
-  (69111 PS14).
-- Keep churn out of lines others rewrite: defer a cleanup or shared helper
-  until the other lands (69517 PS8, 66481 PS24, 69825).
-- Redesign so the contested code is not needed (70461 PS4, 66882 PS42).
-  That is a design change; it needs the owner's OK.
-- Code that anticipates another change can look wrong until it lands
-  (64620 PS20 read as a regression). Say so in the commit message or
-  change-log.
-
-**Verdict, one per collision, in the report:**
-
-- `rearranged`: clean. Show the diff and the re-verify result (for a
-  trivial fix, the one-line note is enough).
-- `needs uglifying`: the only rearrangement that removes the collision
-  makes the code worse. Do not apply it. Say "this cannot be deconflicted
-  without uglifying the code", show the ugly variant and the clean
-  alternatives (defer, restack, wait, rebase), and state the landing
-  pressure you can see: release blocker or priority hashtags on either
-  change, master-next. Only the user can say whether the pressure is
-  worth it (it was for a release crunch: 69392 PS6, 68361). If accepted,
-  it is a temporary workaround: record the revert or follow-up (when,
-  which change) where the user keeps notes.
-- `defer`: leave the edit to whichever change lands second; say which
-  order is expected.
-- `not possible`: the reason (the same lines must change both ways, a real
-  dependency that needs a restack, a rebase blocked by frozen parents) and
-  the alternative (restack, wait, ask the other owner).
-
-Signs of "works but stupid": code placed where no reader would look;
-intent hidden by flag-twiddling; logic or flags that exist only to dodge
-the conflict; a moved hunk that changes ordering or locking; a diff bigger
-than the conflict it avoids; a reviewer would ask "why is this here?". Any
-of these is `needs uglifying`, never a silent `rearranged`. An
-`edit-edit` hunk on one condition or declaration is the usual case: both
-changes need that very line, so any fix is a workaround, and is presented
-as such with its alternatives.
-
-**Verify** every edit before reporting it, the trivial ones included.
-With the change as the HEAD commit (`-p HEAD~` assumes that) and the edit
-uncommitted, test it as a throwaway commit that no branch points at,
-built in a temporary index so the user's stays as it is:
+A conflict on a value space (fail_loc value, test number) needs a value
+no open change uses, and the tool only sees the pairs it tried. Grep the
+diffs of the open changes on that file before picking one, and take it
+from a gap: a free value at the shared append point still conflicts.
 
 ```bash
-T=$(mktemp) && cp "$(git rev-parse --git-path index)" "$T" && GIT_INDEX_FILE=$T git add -A &&
-  C=$(git log -1 --format=%B | GIT_INDEX_FILE=$T git commit-tree "$(GIT_INDEX_FILE=$T git write-tree)" -p HEAD~ -F -)
-rm -f "$T"
-gc conflicts 69392 --repo . --commit "$C" --with 65219 --with 69517
+gc search --all 'status:open project:<project> branch:<branch> file:<path>'
 ```
 
-It shows no remaining collision with the changes you deconflicted
-against, whatever their `fix_side`: none of them in `conflicts`,
-`as_uploaded_only` or `silent_only` (both models, both orders); use
-`--with <cn>` for any that the filters no longer select. Collisions given
-another verdict may remain. Then build. When both sides touch one
-function or change a signature or a struct, build the combination
-(target on candidate) too: a clean merge can still fail to build (65921).
-A pair in `watch` is exactly that case: a clean merge, the same function
-edited on both sides (`same_function`; the compact output shows it only
-in `watch` and `silent_only`, `--full` on every pair). Build the
-combination and run the tests covering those functions before calling it
-clean.
-Run the tests the changed code is covered by, on the change's own base
-and, if it is queued, on -next. Commit and upload only when the user
-asks. A content change gets a short change-log ("Deconflicted with #A,
+Tell the user in a line or two what moved and what it no longer collides
+with. If the fix changes something the commit message names (a fail_loc
+value, a test number), say the message needs the same edit when the
+change is amended; an uncommitted edit cannot carry it. If verification
+fails, undo the edit and report.
+
+**Everything else: report first, edit on the user's choice.**
+Deconflicting is one option, not the goal, and not at any cost. For a
+collision that fails any test above, and for a rebase or restack other
+than the parent rebase above, touch no file. Report per collision the
+change, its owner, `fix_side`, `via`/`own_via`, files and hunk kinds,
+then the options with their cost: rearrange (how big); rearrange, but
+uglier; defer the edit to whichever lands second; restack or rebase onto
+the other (what it moves, which votes it drops; out when `base.rebase`
+would move frozen or ready parents); wait for the other to land; leave it
+to the other owner; do nothing (the other is far from landing).
+Recommend one. "This cannot be deconflicted" is a complete answer. A
+mixed result is normal: fix the trivial ones and report the rest in the
+same message. "Go ahead and deconflict it" also covers clean
+rearrangements beyond trivial, never uglier ones.
+
+**Techniques** (patterns from real cases):
+
+- Insert away from shared append points (mid-list, mid-enum, mid-file);
+  never edit the last element's terminator (`last:1;` to `last:1,`).
+- Keep an unchanged line, a blank one will do, between your edit and
+  theirs; next to a large added block, move the boundary line, not the
+  block.
+- Don't rewrite a shared condition; put the effect in a separate
+  statement, then audit every reader and writer of the state it changes.
+- Leave gaps when adding several numbers; move a new test to a gap or
+  another script, helpers away from where others append.
+- Drop your hunk when another change makes the same edit, record the
+  follow-up, and check tests only on the branch or -next for breakage.
+- Keep a contested line as is, style nit included, and say why; defer
+  cleanups in lines others rewrite.
+- Redesign so the contested code is not needed (needs the owner's OK).
+  Code that anticipates another change can look wrong until it lands:
+  say so in the commit message or change-log.
+
+**Verdict, one per collision:** `rearranged` (the diff and the
+before/after comparison; for a trivial fix the one-line note); `defer`
+(which landing order is expected); `not possible` (why, e.g. the same
+lines must change both ways or frozen parents block the rebase, and the
+alternative); `needs uglifying`: the only rearrangement that removes it
+makes the code worse. Do not apply that: say "this cannot be deconflicted
+without uglifying the code", show the ugly variant, the clean
+alternatives and the landing pressure you see (release hashtags, -next).
+Only the user can weigh that; if they accept, record the revert or
+follow-up where they keep notes. Signs: code where no reader would look,
+intent hidden by flag-twiddling, logic that exists only to dodge the
+conflict, a moved hunk that changes ordering or locking, a diff bigger
+than the conflict, a reviewer asking "why is this here?". An `edit-edit`
+on one condition or declaration is the usual case.
+
+**Verify** every edit, the trivial ones included. Edit with the change's
+commit checked out: your local commit, also mid-stack, or the uploaded
+one (`gc checkout <cn>`, or `git fetch <remote>
+refs/changes/<last 2 digits>/<cn>/<ps>` and `git checkout FETCH_HEAD`).
+Compare a run on that commit with one on the edit, built as a throwaway
+commit on the change's parent in a temporary index (the user's index
+stays as it is):
+
+```bash
+X=<change-commit>; P=$(git rev-parse "$X^"); D=$(mktemp -d)
+gc conflicts <cn> --repo . --commit "$X" --with <other> > "$D/before.json"
+GIT_INDEX_FILE=$D/index git read-tree "$X" && GIT_INDEX_FILE=$D/index git add -u &&
+  C=$(git log -1 --format=%B "$X" |
+      GIT_INDEX_FILE=$D/index git commit-tree "$(GIT_INDEX_FILE=$D/index git write-tree)" -p "$P" -F -)
+git diff "$P" "$C"                     # the change's own diff, as judged above
+gc conflicts <cn> --repo . --commit "$C" --with <other> > "$D/after.json"
+for f in before after; do jq -r '((.conflicts // [])[] | "landing \(.cn) \(.landing) \(.as_uploaded)"),
+    (.as_uploaded_only[] | "uploaded \(.cn) \(.as_uploaded)"),
+    (.silent_only[] | "silent \(.cn)"), (.watch[] | "watch \(.cn)")' "$D/$f.json" > "$D/$f.txt"; done
+diff "$D/before.txt" "$D/after.txt"
+```
+
+`add -u` takes tracked files; add a new file by name. Pass `--with` for
+every change you deconflicted against (the filters may drop one once it
+merges cleanly), with the same flags in both runs. The collisions you
+fixed must be gone and nothing may appear that was not there before;
+unrelated as-uploaded entries may stay. When a fixed pair is still
+listed, `--hunks-for` it in both runs: no remaining hunk may involve the
+change's own lines.
+
+Then build and run the covering tests on the change's base and, if
+queued, on -next. A pair in `watch` after the edit, or one sharing a
+function, signature or struct, needs the combination built too: a clean
+merge can still fail to build. Every edit here, a rebase included,
+stays local and uncommitted until the user asks to commit or upload;
+then a content change gets a short change-log ("Deconflicted with #A,
 #B: ...; no functional change").
 
 ## Deleting comments and change messages
