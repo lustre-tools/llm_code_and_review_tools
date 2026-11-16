@@ -267,6 +267,8 @@ def test_worktree_tests_the_uncommitted_edit_of_the_change_at_head(setup, capsys
     assert _git(local, "log", "-1", "--format=%B", tested) == \
         _git(local, "log", "-1", "--format=%B", t.commit)
     assert _git(local, "ls-tree", "--name-only", tested) == "a.c\nb.c"
+    assert _git(local, "log", "-1", "--format=%an <%ae>", tested) == \
+        "gerrit-cli trial merge <trial-merge@gerrit-cli.invalid>"
     assert _git(local, "rev-parse", "HEAD") == t.commit
     assert _git(local, "status", "--porcelain") == status
     assert _git(local, "diff", "--cached", "--name-only") == ""

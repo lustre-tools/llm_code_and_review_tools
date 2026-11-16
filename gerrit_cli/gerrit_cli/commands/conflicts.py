@@ -583,7 +583,7 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     outdated, old = _older_parents(br, focus, ar, cn, on_branch)
     tiers_of_parents = {n: target_tier(d, br.queued_ids, ranks)
                         for n, d in focus.parents_detail.items()}
-    base = base_info(br.repo, result, {p.cn: p for p in focus.stack}, focus.cns, result["tip"],
+    base = base_info(br.repo, {p.cn: p for p in focus.stack}, focus.cns, result["tip"],
                      tiers_of_parents)
     uploaded, ps, _ = _current(target)
     chk = Checked(target, cn, ps, uploaded, focus.stack, [p.cn for p in ar.children],

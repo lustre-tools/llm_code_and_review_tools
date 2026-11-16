@@ -61,9 +61,11 @@ _FETCH_BATCH = 50
 _LOOKUP_BATCH = 30
 # The throwaway commits get fixed ids and need no user.name/email.
 _COMMIT_ENV = {
-    "GIT_AUTHOR_NAME": "gc graph", "GIT_AUTHOR_EMAIL": "gc-graph@invalid",
+    "GIT_AUTHOR_NAME": "gerrit-cli trial merge",
+    "GIT_AUTHOR_EMAIL": "trial-merge@gerrit-cli.invalid",
     "GIT_AUTHOR_DATE": "@0 +0000",
-    "GIT_COMMITTER_NAME": "gc graph", "GIT_COMMITTER_EMAIL": "gc-graph@invalid",
+    "GIT_COMMITTER_NAME": "gerrit-cli trial merge",
+    "GIT_COMMITTER_EMAIL": "trial-merge@gerrit-cli.invalid",
     "GIT_COMMITTER_DATE": "@0 +0000",
 }
 
@@ -1028,11 +1030,10 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
         return list(pool.map(one, todo)), already
 
 
-def base_info(repo: Repo, result: dict, patches: dict[int, Patch], focus_stack: list[int],
+def base_info(repo: Repo, patches: dict[int, Patch], focus_stack: list[int],
               tip: str, tiers: dict[int, str]) -> dict:
     """Whether the target stack sits on the branch and what a rebase
-    would move. The target is the top of focus_stack. `result` (the
-    check_conflicts result) is currently unused."""
+    would move. The target is the top of focus_stack."""
     bottom = patches[focus_stack[0]]
     parents = [bottom.base] if bottom.base else repo.parents([bottom.commit]).get(bottom.commit)
     base = parents[0] if parents else None

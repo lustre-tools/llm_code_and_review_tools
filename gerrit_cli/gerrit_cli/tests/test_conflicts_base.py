@@ -6,7 +6,7 @@ from gerrit_cli.tests.test_graph_conflicts import _check, _text, gerrit, local  
 
 def _info(gerrit, local, patches, stack, tiers):
     r = _check(gerrit, local, patches, focus=set(stack))
-    return base_info(Repo(local), r, {p.cn: p for p in patches}, stack, r["tip"], tiers)
+    return base_info(Repo(local), {p.cn: p for p in patches}, stack, r["tip"], tiers)
 
 
 def test_target_on_branch_is_rebasable(gerrit, local):
@@ -75,6 +75,6 @@ def test_off_branch_bottom_parent_is_behind_via_merge_base(gerrit, local):
     gerrit.advance({"b.c": _text({1: "m2"})})
     t = gerrit.change(2, p.commit, {"a.c": _text({2: "P", 15: "T"})})
     r = _check(gerrit, local, [p, t], focus={1, 2})
-    info = base_info(Repo(local), r, {2: t}, [2], r["tip"], {})
+    info = base_info(Repo(local), {2: t}, [2], r["tip"], {})
     assert info["on_branch"] is False
     assert info["behind"] == 2
