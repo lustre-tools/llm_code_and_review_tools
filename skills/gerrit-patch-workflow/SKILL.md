@@ -209,6 +209,27 @@ gc search 'project:fs/lustre-release hashtag:pt_ecro after:2026-08-22'
   trailer -- use `message:` for both. `comment:<number>` matches far too
   much to be useful there.
 
+### Old changes
+
+Gerrit holds many open changes nobody has worked on in years:
+experiments, debug patches, work abandoned in all but name. Any search
+for open changes on a file finds them. When the question is whether
+something overlaps or conflicts with your change, an old one is not a
+concern. Note it in a line, or as a count, and move on. Do not plan
+around it, deconflict against it, comment on it, or ask the user about
+it.
+
+- Old means no new patchset in six months. Judge by the current
+  patchset's upload date (`gc info`), not `updated`: a comment, a bot
+  vote or a hashtag moves `updated`, so `after:` and `-age:` let dead
+  changes through.
+- A change queued in -next, ready to land, or tagged as a release
+  blocker or priority is never old, whatever its date.
+- A change that already does the same work is worth naming however old,
+  so the user can revive it rather than write it again.
+- `gc conflicts` already leaves out stale changes that share nothing
+  with yours.
+
 ## Deconflicting
 
 "Does this conflict with", "will this land cleanly", "can we avoid the

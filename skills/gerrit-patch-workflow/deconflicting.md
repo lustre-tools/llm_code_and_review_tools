@@ -108,6 +108,7 @@ for exactly the collisions you would act on, landing conflicts with
 Finding the free value is part of the fix; the tool sees only the pairs
 it tried. List the open changes on the file, read the values they add,
 and take a gap: a free value at the shared append point still conflicts.
+Old changes (see "Old changes" in SKILL.md) do not hold a value.
 
 ```bash
 gc search --all 'status:open project:<project> branch:<branch> file:<path>'
