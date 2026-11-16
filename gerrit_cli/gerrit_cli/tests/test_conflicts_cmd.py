@@ -11,7 +11,7 @@ import pytest
 
 from gerrit_cli.commands._helpers import error_code_for
 from gerrit_cli.commands.conflicts import run_conflicts
-from gerrit_cli.conflicts import ConflictRepoError, Patch, Repo
+from gerrit_cli.conflicts import ConflictCheckError, ConflictRepoError, Patch, Repo
 from gerrit_cli.errors import ErrorCode
 from gerrit_cli.tests.test_graph_conflicts import (  # noqa: F401
     _ENV, _git, _queue, _text, change_id, gerrit, local,
@@ -1008,6 +1008,45 @@ def test_a_tip_the_remote_does_not_have_is_read_from_the_remote(setup):
     assert out["on_branch"]["status"] == "clean"
     [c] = out["conflicts"]
     assert c["cn"] == 200 and c["tier"] == "frozen"
+
+
+def test_an_undecodable_tips_answer_falls_back_to_ls_remote(setup):
+    gerrit, local, client = setup
+    _target(gerrit, client.rest, {5: "T"})
+
+    def garbled(project, branch):
+        raise ValueError("Expecting value: line 1 column 1")
+
+    client.get_branch_revision = garbled
+    assert run(client, local)["on_branch"]["status"] == "clean"
+
+
+def test_a_tip_the_remote_never_delivers_is_an_error(setup, monkeypatch):
+    gerrit, local, client = setup
+    _target(gerrit, client.rest, {5: "T"})
+    base = gerrit.master
+    gerrit.advance({"z.c": "z\n"})
+    ahead = gerrit.change(999, gerrit.master, {"y.c": "y\n"}).commit
+    _git(gerrit.path, "update-ref", "-d", "refs/changes/99/999/1")
+    client.get_branch_revision = lambda project, branch: ahead if branch == "master" else None
+    real = Repo.fetch_refs
+
+    def no_branches(self, remote, refs):
+        return real(self, remote, [r for r in refs if not r.startswith("refs/heads/")])
+
+    monkeypatch.setattr(Repo, "fetch_refs", no_branches)
+    with pytest.raises(ConflictCheckError, match="could not fetch master"):
+        run(client, local)
+    # with --commit the local stack is walked from the tip before the engine runs
+    # built by hand: _local_commit would fetch master into the clone
+    blob = _git(local, "hash-object", "-w", "--stdin", input=_text({15: "T"}))
+    env = dict(_ENV, GIT_INDEX_FILE=str(local / ".git" / "scratch-index"))
+    _git(local, "read-tree", base, env=env)
+    _git(local, "update-index", "--add", "--cacheinfo", f"100644,{blob},a.c", env=env)
+    local_commit = _git(local, "commit-tree", _git(local, "write-tree", env=env), "-p", base,
+                        "-m", f"change 100 moved\n\nChange-Id: {change_id(100)}")
+    with pytest.raises(ConflictCheckError, match="could not fetch master"):
+        run(client, local, commit=local_commit)
 
 
 def test_a_bug_reading_the_tips_is_not_hidden_by_the_fallback(setup):

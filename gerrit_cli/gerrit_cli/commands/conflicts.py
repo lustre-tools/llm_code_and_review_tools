@@ -305,7 +305,7 @@ def _branch_tips(client: Any, repo: Repo, remote: str, project: str,
     SSH costs a connection of seconds; it is the fallback."""
     try:
         revs = parallel_map(lambda b: client.get_branch_revision(project, b), branches)
-    except (requests.RequestException, OSError):
+    except (requests.RequestException, OSError, ValueError):
         return repo.branch_tips(remote, branches)
     return {b: r for b, r in zip(branches, revs) if r}
 
@@ -337,6 +337,8 @@ def _branch(repo: Repo, remote: str, target: dict[str, Any], heads: dict[str, st
         if branch not in heads:
             raise ConflictCheckError(f"{remote} has no branch {branch}")
         _fetch(repo, remote, {sha: f"refs/heads/{b}" for b, sha in heads.items()})
+        if repo.missing([heads[branch]]):
+            raise ConflictCheckError(f"could not fetch {branch} from {remote}")
     tip, next_tip = heads[branch], heads.get(next_branch)
     queued_ids: set[str] = set()
     if next_tip and not repo.missing([tip, next_tip]) and repo.is_ancestor(tip, next_tip):
