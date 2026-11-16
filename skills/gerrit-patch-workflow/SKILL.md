@@ -226,13 +226,16 @@ gc conflicts 69392 --with 65219 --all    # one given change; the 'other' tier to
 
 `--hunks` for every collision can run to megabytes on a busy file: do not
 use it first. Read the summary, then rerun with `--hunks-for <cn>` for
-the collisions you will act on. A one-line overview, the status first,
-then per collision the landing and as-uploaded results of both orders:
+the collisions you will act on. The default output is compact (results
+as `"conflict/clean"` in the order `orders` names, `clean` and the like as
+counts); `--full` adds the change lists, hashes and every hashtag. A
+one-line overview, the status first, then per collision the landing and
+as-uploaded results of both orders:
 
 ```bash
 gc conflicts 69392 --repo . | jq -r '.status, ((.conflicts // .as_uploaded_only)[] |
-    [.cn, .tier, .readiness, .fix_side, ((.landing // {}) | [.[]] | join("/")),
-     (.as_uploaded | [.[]] | join("/")), (.files | join(","))] | @tsv)'
+    [.cn, .tier, .readiness, .fix_side, (.landing // "-"), .as_uploaded,
+     (.files | join(","))] | @tsv)'
 ```
 
 **When.** Before uploading a patchset to a change in a busy area; when

@@ -1,5 +1,7 @@
 """The JSON `gc conflicts` prints: the engine's result for the focus
 stack and the selected candidates, sorted into what the reader acts on.
+`report` builds the full output (--full); `compact` cuts it down to
+what deciding needs, the default.
 
 Nothing here talks to Gerrit or runs git; the command gathers every
 input first (commands/conflicts.py).
@@ -207,4 +209,63 @@ def report(chk: Checked, sel: Selection, next_branch: str, me: str | None) -> di
     })
     if notes:
         out["notes"] = notes
+    return out
+
+
+SUBJECT_MAX = 70
+ORDERS = {"landing": ("target_first", "candidate_first"),
+          "as_uploaded": ("target_on_theirs", "theirs_on_target")}
+# full-only top-level keys: hashes, and what branch already says
+_FULL_ONLY = ("commit", "tested_commit", "project", "tip")
+_COUNTED = ("already_conflicting", "clean")
+_ENTRY_KEYS = ("cn", "subject", "owner", "tier", "readiness", "fix_side", "files")
+
+
+def _short(subject: str) -> str:
+    return subject if len(subject) <= SUBJECT_MAX else subject[:SUBJECT_MAX - 3] + "..."
+
+
+def compact_entry(e: dict[str, Any]) -> dict[str, Any]:
+    """One pair of the full output, its per-order results joined in
+    ORDERS order and only the fields that say something."""
+    out = {k: e[k] for k in _ENTRY_KEYS if k in e}
+    if "subject" in out:
+        out["subject"] = _short(out["subject"])
+    release = [h for h in e.get("hashtags") or [] if release_rank([h]) > 0]
+    if release:
+        out["release_hashtags"] = release
+    for model, orders in ORDERS.items():
+        if model in e:
+            out[model] = "/".join(e[model][o] for o in orders)
+    if e.get("via") is not None:
+        out["via"] = e["via"]
+    for key in ("silent", "forced", "hunks"):
+        if e.get(key):
+            out[key] = e[key]
+    if e.get("base_drift"):
+        out["base_drift"] = len(e["base_drift"])
+    return out
+
+
+def compact(full: dict[str, Any]) -> dict[str, Any]:
+    """The default output: `report`'s with the change lists that are
+    only counted (clean, already_conflicting, not_tried) as numbers,
+    each pair through compact_entry, and no commit hashes."""
+    out: dict[str, Any] = {}
+    for key, value in full.items():
+        if key in _FULL_ONLY:
+            continue
+        if key in _COUNTED:
+            out[key] = len(value)
+        elif key == "not_tried":
+            out[key] = sum(len(v) for v in value.values())
+        elif key in ("conflicts", "as_uploaded_only", "silent_only") and value is not None:
+            out[key] = [compact_entry(e) for e in value]
+        else:
+            out[key] = value
+    if full.get("tested_commit") != full.get("commit"):
+        out["tested_commit"] = full["tested_commit"]
+    out["orders"] = {m: "/".join(o) for m, o in ORDERS.items()}
+    out["full"] = ("--full adds commit hashes, every hashtag, base_drift files "
+                   "and the changes behind clean, already_conflicting and not_tried")
     return out

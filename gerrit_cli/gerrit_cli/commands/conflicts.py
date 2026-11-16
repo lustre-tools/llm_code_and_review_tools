@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import quote
 
 from ..conflict_candidates import Selection, classify, phrase, query_candidates
-from ..conflict_report import Checked, report, target_tier
+from ..conflict_report import Checked, compact, report, target_tier
 from ..conflicts import (
     ConflictCheckError,
     ConflictRepoError,
@@ -505,6 +505,6 @@ def cmd_conflicts(args: Any) -> None:
             args.with_ or [], args.all,
             True if args.hunks else set(getattr(args, "hunks_for", None) or []),
             datetime.now(timezone.utc).replace(tzinfo=None))
-        output_success(result, command, pretty)
+        output_success(result if args.full else compact(result), command, pretty)
     except Exception as e:
         sys.exit(output_error(error_code_for(e), str(e), command, pretty))

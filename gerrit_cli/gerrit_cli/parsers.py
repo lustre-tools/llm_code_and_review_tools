@@ -1418,6 +1418,13 @@ def add_conflicts_parser(subparsers):
              "as the change instead of its uploaded patchset",
     )
     parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Every field: commit hashes, all hashtags, per-order results "
+             "as objects, base_drift files and the change lists behind "
+             "clean, already_conflicting and not_tried (default: compact)",
+    )
+    parser.add_argument(
         "--hunks",
         action="store_true",
         help="Include each conflict's marker regions and their kind "

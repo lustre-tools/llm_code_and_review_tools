@@ -411,8 +411,8 @@ def test_output_has_no_user_specific_strings(setup):
 def test_parser_defaults():
     from gerrit_cli.cli import build_parser
     args = build_parser().parse_args(["conflicts", "100"])
-    assert (args.repo, args.commit, args.hunks, args.max_age, args.with_, args.all) == \
-        (".", None, False, 30, None, False)
+    assert (args.repo, args.commit, args.hunks, args.max_age, args.with_, args.all,
+            args.full) == (".", None, False, 30, None, False, False)
     args = build_parser().parse_args(["conflicts", "100", "--with", "5", "--with", "6"])
     assert args.with_ == [5, 6]
 
@@ -782,3 +782,71 @@ def test_target_blocked_by_a_parent_conflicting_with_the_branch(setup):
     out = run(client, local)
     assert out["on_branch"]["status"] == "blocked"
     assert out["rebase_cause"] == "branch" and "rebase_onto" not in out
+
+
+def _cmd(client, local, monkeypatch, capsys, *extra):
+    from gerrit_cli.cli import build_parser
+    from gerrit_cli.commands import conflicts as mod
+
+    monkeypatch.setattr(mod, "_client", lambda: client)
+    args = build_parser().parse_args(["conflicts", "100", "--repo", str(local), *extra])
+    args.func(args)
+    return json.loads(capsys.readouterr().out)
+
+
+def _busy(gerrit, rest):
+    _target(gerrit, rest, {5: "T"})
+    long = "LU-1 llite: " + "x" * 100
+    r = gerrit.change(200, gerrit.master, {"a.c": _text({5: "R"})})
+    rest.add(200, [r], ["a.c"], labels=READY,
+             hashtags=["pw_shepherd", "218_review_priority", "ec"])
+    rest.changes[200]["subject"] = long
+    far = gerrit.change(300, gerrit.master, {"a.c": _text({15: "F"})})
+    rest.add(300, [far], ["a.c"], labels=READY)
+    other = gerrit.change(400, gerrit.master, {"a.c": _text({18: "O"})})
+    rest.add(400, [other], ["a.c"])
+    return long
+
+
+def test_default_output_is_compact(setup, capsys, monkeypatch):
+    gerrit, local, client = setup
+    long = _busy(gerrit, client.rest)
+    out = _cmd(client, local, monkeypatch, capsys)
+    [c] = out["conflicts"]
+    assert c == {"cn": 200, "subject": long[:67] + "...", "owner": "Olive Owner",
+                 "tier": "lands-first", "readiness": "ready", "fix_side": "target",
+                 "files": ["a.c"], "release_hashtags": ["218_review_priority"],
+                 "landing": "conflict/conflict", "as_uploaded": "conflict/conflict"}
+    assert out["clean"] == 1 and out["not_tried"] == 1 and out["already_conflicting"] == 0
+    assert out["orders"] == {"landing": "target_first/candidate_first",
+                             "as_uploaded": "target_on_theirs/theirs_on_target"}
+    for key in ("commit", "tested_commit", "tip", "project"):
+        assert key not in out
+    for key in ("status", "base", "on_branch", "on_next", "own_stack", "skipped",
+                "errors", "counts", "silent_only", "branch"):
+        assert key in out
+
+
+def test_full_is_the_report_unchanged(setup, capsys, monkeypatch):
+    gerrit, local, client = setup
+    _busy(gerrit, client.rest)
+    out = _cmd(client, local, monkeypatch, capsys, "--full")
+    assert out == json.loads(json.dumps(run(client, local)))
+    assert out["clean"] == [300] and out["not_tried"] == {"other": [400]}
+    assert out["conflicts"][0]["landing"] == {"target_first": "conflict",
+                                              "candidate_first": "conflict"}
+
+
+def test_compact_keeps_asked_hunks_and_counts_base_drift():
+    from gerrit_cli.conflict_report import compact_entry
+
+    e = {"cn": 1, "subject": "s", "owner": "o", "tier": "other", "readiness": "pending",
+         "hashtags": ["x_review_blocker", "pw_halt"], "fix_side": "candidate",
+         "files": ["a.c"],
+         "as_uploaded": {"target_on_theirs": "clean", "theirs_on_target": "conflict"},
+         "via": 7, "silent": [], "base_drift": ["b.c", "c.c"], "hunks": {"as_uploaded": {}}}
+    assert compact_entry(e) == {
+        "cn": 1, "subject": "s", "owner": "o", "tier": "other", "readiness": "pending",
+        "fix_side": "candidate", "files": ["a.c"], "release_hashtags": ["x_review_blocker"],
+        "as_uploaded": "clean/conflict", "via": 7, "hunks": {"as_uploaded": {}},
+        "base_drift": 2}

@@ -515,7 +515,22 @@ gc conflicts 12345 --repo ~/lustre-release --hunks-for 23456
 gc conflicts 12345 --repo ~/lustre-release --commit HEAD
                                                       # a local rearrangement
 gc conflicts 12345 --with 23456 --all                 # force one in, try every tier
+gc conflicts 12345 --repo ~/lustre-release --full     # every field
 ```
+
+- **Output**: compact by default, enough to decide what to do; `--full`
+  prints every field. Compact pairs keep `cn`, `subject` (cut at 70
+  characters), `owner`, `tier`, `readiness`, `fix_side`, `files`, the
+  release hashtags (`release_hashtags`) and `landing` / `as_uploaded` as
+  one string each, `"conflict/clean"`, in the order `orders` names
+  (`target_first/candidate_first`, `target_on_theirs/theirs_on_target`);
+  `via`, `silent`, `forced` and `base_drift` (a count) only when set.
+  `clean`, `already_conflicting` and `not_tried` are counts; the commit
+  hashes, `project` and `tip` are left out (`tested_commit` stays when
+  `--commit` tested another commit). `--full` has every hashtag, the
+  per-order results as objects, the `base_drift` files and the change
+  lists behind the counts. Hunks appear only with `--hunks` /
+  `--hunks-for`, in either form.
 
 - **Candidates**: open changes on the same project and branch whose
   files overlap the change's stack (Gerrit `file:` queries), minus its

@@ -1253,6 +1253,18 @@ release-tagged, so those show up nowhere), minus the own stack, plus open
 trial merges, plus not_tried); tried = pairs trial-merged; conflicting = entries in conflicts,
 as_uploaded_only and silent_only. Gerrit's mergeable flag and conflicts:
 search are not used. Read-only towards Gerrit; needs git 2.40 or newer.
+
+The default output is compact; --full prints every field. Compact: per
+pair cn, subject (cut at 70 characters), owner, tier, readiness, fix_side,
+files, release_hashtags (only the release ones), landing and as_uploaded
+as one string each in the order given by orders ("conflict/clean":
+target_first/candidate_first, target_on_theirs/theirs_on_target), and
+only when set: via, silent, base_drift (a count), forced, hunks. clean,
+already_conflicting and not_tried are counts; commit, tested_commit
+(unless --commit tested another commit), project and tip are left out.
+--full adds those, every hashtag, the per-order results as objects, the
+base_drift files and the change lists behind the counts. Hunks appear
+only with --hunks or --hunks-for, in either form.
 """,
         "examples": [
             {
@@ -1270,6 +1282,10 @@ search are not used. Read-only towards Gerrit; needs git 2.40 or newer.
             {
                 "command": "gc conflicts 12345 --with 23456 --all",
                 "description": "Also check one given change and the 'other' tier",
+            },
+            {
+                "command": "gc conflicts 12345 --repo ~/lustre-release --full",
+                "description": "Every field, with the changes behind the counts",
             },
         ],
         "related": ["graph", "rebase", "related", "info"],
