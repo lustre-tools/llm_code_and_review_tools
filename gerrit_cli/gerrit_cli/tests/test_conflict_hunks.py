@@ -169,6 +169,29 @@ def test_two_fail_locs_with_one_value():
         {"check": "duplicate-value", "file": h, "what": "0x143a"}]
 
 
+def test_a_test_defined_with_a_space_before_the_parens_counts():
+    one = "test_311 () {\n}\n"
+    t = one + "test_312 () {\n}\n"
+    got = silent_collisions({_SH: (t, t, t + "test_312 () {\n}\n")})
+    assert got == [{"check": "duplicate-test", "file": _SH, "what": "test_312"}]
+
+
+def test_fail_loc_values_compare_as_numbers():
+    h = "include/obd_support.h"
+    t = "#define OBD_FAIL_B 0x0143a\n"
+    c = "#define OBD_FAIL_C 0x143A\n"
+    assert silent_collisions({h: (t, c, t + c)}) == [
+        {"check": "duplicate-value", "file": h, "what": "0x143a"}]
+
+
+def test_a_fail_loc_quoted_in_a_comment_is_not_a_define():
+    h = "include/obd_support.h"
+    t = "#define OBD_FAIL_B 0x143a\n"
+    for c in ("/* #define OBD_FAIL_OLD 0x143a removed */\n",
+              " * #define OBD_FAIL_OLD 0x143a\n"):
+        assert silent_collisions({h: (t, c, t + c)}) == []
+
+
 def test_unmatched_paths_run_nothing():
     t = "test_312() {\n}\n"
     assert silent_collisions({"lustre/foo.c": (t, t, t + t)}) == []

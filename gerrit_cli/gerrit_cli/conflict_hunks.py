@@ -113,13 +113,15 @@ def conflict_regions(repo: Repo, onto: str, commit: str, parent: str,
 
 
 def _test_keys(text: str) -> list[str]:
-    return ([f"test_{m}" for m in re.findall(r"^test_(\w+)\(\)", text, re.M)]
+    return ([f"test_{m}" for m in re.findall(r"^test_(\w+)[ \t]*\(\)", text, re.M)]
             + [f"run_test {m}" for m in re.findall(r"^\s*run_test\s+(\w+)", text, re.M)])
 
 
 def _fail_values(text: str) -> list[str]:
-    return [m.lower() for m in
-            re.findall(r"#define\s+OBD_FAIL_\w+\s+(0x[0-9a-fA-F]+)", text)]
+    """Each OBD_FAIL value, as a number (0x0143a is 0x143a). Anchored
+    at the line start, so a define quoted in a comment is not one."""
+    return [f"{int(m, 16):#x}" for m in re.findall(
+        r"^[ \t]*#[ \t]*define[ \t]+OBD_FAIL_\w+[ \t]+(0x[0-9a-fA-F]+)", text, re.M)]
 
 
 # (path glob, text -> keys that must stay unique). fnmatch's `*` crosses `/`.
