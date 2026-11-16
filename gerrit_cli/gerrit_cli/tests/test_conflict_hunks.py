@@ -202,3 +202,22 @@ def test_own_added_survives_a_git_timeout(local, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", slow)
     assert repo.own_added("a" * 40, "b" * 40, ["x.c"]) == {"x.c": set()}
+
+
+def test_a_form_feed_does_not_shift_line_numbers(gerrit, local):
+    t = gerrit.change(1, gerrit.master, {"a.c": _text({2: "x\fy\x1cz w", 5: "T"})})
+    c = gerrit.change(2, gerrit.master, {"a.c": _text({2: "x\fy\x1cz w", 5: "C"})})
+    _fetch(gerrit, local)
+    with Repo(local) as repo:
+        [r] = conflict_regions(repo, t.commit, c.commit, gerrit.master, ["a.c"], {})["a.c"]
+    assert r["line"] == 5
+    assert r["text"].split("\n")[0] == "x\fy\x1cz w"
+
+
+def test_crlf_regions_split_like_lf():
+    from gerrit_cli.conflict_hunks import _regions
+
+    blob = "a\r\n<<<<<<< x\r\nA\r\n||||||| b\r\nB\r\n=======\r\nC\r\n>>>>>>> y\r\n"
+    [r] = _regions(blob)
+    assert (r["start"], r["end"], r["ours"], r["base"], r["theirs"]) == (1, 7, ["A"], ["B"],
+                                                                         ["C"])

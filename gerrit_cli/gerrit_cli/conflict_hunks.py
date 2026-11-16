@@ -46,8 +46,17 @@ def classify(base: list[str], ours: list[str], theirs: list[str],
     return "adjacent"
 
 
+def _lines(blob: str) -> list[str]:
+    r"""Lines as git numbers them, split at \n only; str.splitlines()
+    also splits at \f, \x1c-\x1e, \x85 and U+2028."""
+    lines = blob.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    return [line[:-1] if line.endswith("\r") else line for line in lines]
+
+
 def _regions(blob: str) -> list[dict[str, Any]]:
-    lines = blob.splitlines()
+    lines = _lines(blob)
     out = []
     i = 0
     while i < len(lines):
@@ -87,7 +96,7 @@ def conflict_regions(repo: Repo, onto: str, commit: str, parent: str,
         result[path] = []
         if not blob:
             continue
-        lines = blob.splitlines()
+        lines = _lines(blob)
         for reg in _regions(blob):
             lo = max(0, reg["start"] - _CONTEXT)
             hi = min(len(lines), reg["end"] + 1 + _CONTEXT)
