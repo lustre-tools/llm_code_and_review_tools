@@ -524,8 +524,8 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   release hashtags (`release_hashtags`) and `landing` / `as_uploaded` as
   one string each, `"conflict/clean"`, in the order `orders` names
   (`target_first/candidate_first`, `target_on_theirs/theirs_on_target`);
-  `via`, `own_via`, `silent`, `forced` and `base_drift` (a count) only
-  when set,
+  `via`, `own_via`, `via_change` / `own_via_change` (cn, owner, tier),
+  `silent`, `forced` and `base_drift` (a count) only when set,
   `same_function` only in `watch` and `silent_only` (a pair that
   conflicts needs a look anyway).
   `clean`, `already_conflicting` and `not_tried` are counts; the commit
@@ -601,10 +601,12 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
 
   Within `lands-first` a release blocker outranks priority, which
   outranks plain ready. A collision at `via` is that change's, so its
-  tier and hashtags take the candidate's place. With `own_via`,
-  `target` means the target's side moves at that parent, the commit
-  that holds the colliding lines. `owner` against `me` (`GERRIT_USER`)
-  tells whose move it is.
+  tier and hashtags take the candidate's place; one at `own_via` is that
+  parent's, whose tier (as in `base.parents`) and hashtags take the
+  target's, and `target` then means that parent moves. `via_change` and
+  `own_via_change` {cn, owner, tier, readiness, release_hashtags} say
+  who that is (compact: cn, owner, tier). `owner` against `me`
+  (`GERRIT_USER`) tells whose move it is.
 - **The change itself**: `on_branch` and `on_next` (against
   `<branch>-next`, naming the queued change it collides with); `base`
   (on the branch or not, commits behind, in-flight parents with their

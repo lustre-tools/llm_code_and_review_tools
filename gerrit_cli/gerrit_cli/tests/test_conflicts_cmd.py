@@ -391,9 +391,32 @@ def test_a_collision_in_a_targets_parent_names_it_in_own_via(setup, capsys, monk
     rest.add(200, [r], ["a.c"], labels=READY)
     [c] = run(client, local)["conflicts"]
     assert c["cn"] == 200 and c["own_via"] == 90 and c["via"] is None
-    assert c["fix_side"] == "target"
+    assert c["fix_side"] == "target" and "via_change" not in c
+    assert c["own_via_change"] == {"cn": 90, "owner": "Olive Owner", "tier": "pending",
+                                   "readiness": "pending", "release_hashtags": []}
     [c] = _cmd(client, local, monkeypatch, capsys)["conflicts"]
     assert c["own_via"] == 90 and "via" not in c
+    assert c["own_via_change"] == {"cn": 90, "owner": "Olive Owner", "tier": "pending"}
+
+
+def test_fix_side_of_a_collision_at_own_via_follows_that_parent(setup):
+    """The target is pending, its ready parent holds the colliding line:
+    the parent's tier is our side's."""
+    gerrit, local, client = setup
+    rest = client.rest
+    p = gerrit.change(90, gerrit.master, {"a.c": _text({5: "P"})})
+    rest.add(90, [p], ["a.c"], labels=READY)
+    t = gerrit.change(100, p.commit, {"a.c": _text({5: "P"}), "b.c": _text({9: "T"})})
+    rest.add(100, [t], ["b.c"])
+    r = gerrit.change(200, gerrit.master, {"a.c": _text({5: "R"})})
+    rest.add(200, [r], ["a.c"], labels=READY, hashtags=["218_review_priority"])
+    [c] = run(client, local)["conflicts"]
+    assert c["own_via"] == 90 and c["own_via_change"]["tier"] == "lands-first"
+    # lands-first against a release-priority lands-first candidate
+    assert c["fix_side"] == "target"
+    rest.changes[90]["hashtags"] = ["218_review_blocker"]
+    [c] = run(client, local)["conflicts"]
+    assert c["fix_side"] == "candidate"
 
 
 def test_fix_side_of_a_collision_at_via_follows_the_via_change(setup):
@@ -410,6 +433,8 @@ def test_fix_side_of_a_collision_at_via_follows_the_via_change(setup):
     c = next(e for e in out["conflicts"] if e["cn"] == 310)
     assert c["tier"] == "lands-first" and c["via"] == 300
     assert c["fix_side"] == "candidate"
+    assert c["via_change"] == {"cn": 300, "owner": "Olive Owner", "tier": "other",
+                               "readiness": "pending", "release_hashtags": []}
 
 
 def test_a_change_on_the_same_ticket_is_same_effort(setup):

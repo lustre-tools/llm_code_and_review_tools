@@ -1254,8 +1254,10 @@ fix_side says which change should move, whoever runs the command:
   pending             target      target       coordinate   candidate
 Within lands-first a release blocker outranks priority, which outranks
 plain ready. A collision at via is that change's: its tier and hashtags
-take the candidate's place. With own_via, "target" means the target's
-side moves at that parent, the commit holding the colliding lines.
+take the candidate's place. One at own_via is that parent's: its tier
+(as in base.parents) and hashtags take the target's, and "target" means
+that parent moves. via_change and own_via_change {cn, owner, tier,
+readiness, release_hashtags} say who that is (compact: cn, owner, tier).
 Compare the change's owner with me to see whose move it is.
 
 When the change does not apply on the branch tip, status is
@@ -1293,8 +1295,8 @@ pair cn, subject (cut at 70 characters), owner, tier, readiness, fix_side,
 files, release_hashtags (only the release ones), landing and as_uploaded
 as one string each in the order given by orders ("conflict/clean":
 target_first/candidate_first, target_on_theirs/theirs_on_target), and
-only when set: via, own_via, silent, base_drift (a count), forced,
-hunks, and same_function only in watch and silent_only. clean,
+only when set: via, own_via, via_change / own_via_change (cn, owner,
+tier), silent, base_drift (a count), forced, hunks, and same_function only in watch and silent_only. clean,
 already_conflicting and not_tried are counts; commit, tested_commit
 (unless --commit tested another commit), project and tip are left out.
 --full adds those, each pair's commit and ps (the candidate's current

@@ -9,7 +9,7 @@ input first (commands/conflicts.py).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .conflict_candidates import DEFAULT_RANKS, Ranks, Selection, fix_side, readiness, \
@@ -51,6 +51,7 @@ class Checked:
     current_ps: dict[int, int]  # change -> its current patchset
     base: dict[str, Any]  # base_info
     hunks: bool | set[int]
+    parents_detail: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def landed(self) -> bool:
@@ -66,14 +67,28 @@ def on_next(result: dict[str, Any], cn: int, next_branch: str) -> dict[str, Any]
     return nxt["results"].get(str(cn)) or {"status": "not-tried"}
 
 
+def _change_info(n: int, change: dict[str, Any], tier: str, ranks: Ranks) -> dict[str, Any]:
+    return {"cn": n, "owner": owner_name(change), "tier": tier,
+            "readiness": readiness(change),
+            "release_hashtags": sorted(h for h in change.get("hashtags") or []
+                                       if release_rank([h], ranks) > 0)}
+
+
 def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
-               t_rank: int) -> dict[str, Any]:
-    """One tried candidate, as listed under conflicts / as_uploaded_only."""
+               t_rank: int, parents: dict[int, dict[str, Any]] | None = None,
+               queued_ids: set[str] | frozenset[str] = frozenset()) -> dict[str, Any]:
+    """One tried candidate, as listed under conflicts / as_uploaded_only.
+    `parents`: the details of the target's in-flight parents."""
     n = pair["other"]
     c = sel.every[n]
-    # a collision at via is that change's: its tier decides who moves
+    # a collision at via / own_via is that change's: its tier decides
+    # who moves on its side
     mover = pair["via"] if pair.get("via") in sel.every else n
     m_tier = sel.tiers.get(mover) or sel.ancestor_tiers.get(mover, "other")
+    ours = (parents or {}).get(pair.get("own_via"))
+    if ours is not None:
+        t_tier = target_tier(ours, queued_ids, sel.ranks)
+        t_rank = release_rank(ours.get("hashtags") or [], sel.ranks)
     sha = c.get("current_revision") or ""
     e: dict[str, Any] = {
         "cn": n, "commit": sha,
@@ -91,6 +106,10 @@ def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
                         for k in ("target_on_theirs", "theirs_on_target")}
     e["via"] = pair["via"]
     e["own_via"] = pair.get("own_via")
+    if mover != n:
+        e["via_change"] = _change_info(mover, sel.every[mover], m_tier, sel.ranks)
+    if ours is not None:
+        e["own_via_change"] = _change_info(pair["own_via"], ours, t_tier, sel.ranks)
     e["silent"] = pair["silent"]
     if pair.get("base_drift"):
         e["base_drift"] = pair["base_drift"]
@@ -132,7 +151,8 @@ def _buckets(chk: Checked, sel: Selection, t_tier: str, t_rank: int) -> _Buckets
                   for n in sel.kept if res.get(str(n), {}).get("status") == "skipped"]
     b.skipped.sort(key=lambda s: s["cn"])
     for pair in chk.result["focus_pairs"]:
-        e = pair_entry(pair, sel, chk.landed, t_tier, t_rank)
+        e = pair_entry(pair, sel, chk.landed, t_tier, t_rank, chk.parents_detail,
+                       chk.queued_ids)
         landing = list(e.get("landing", {}).values())
         uploaded = list(e["as_uploaded"].values())
         if "conflict" in landing:
@@ -272,6 +292,8 @@ def compact_entry(e: dict[str, Any], ranks: Ranks = DEFAULT_RANKS,
     for key in ("via", "own_via"):
         if e.get(key) is not None:
             out[key] = e[key]
+        if e.get(f"{key}_change"):
+            out[f"{key}_change"] = {k: e[f"{key}_change"][k] for k in ("cn", "owner", "tier")}
     for key in ("silent", "same_function", "forced", "hunks"):
         if e.get(key) and (key != "same_function" or same_function):
             out[key] = e[key]
