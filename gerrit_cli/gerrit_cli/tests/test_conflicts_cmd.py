@@ -929,6 +929,20 @@ def test_full_is_the_report_unchanged(setup, capsys, monkeypatch):
                                               "candidate_first": "conflict"}
 
 
+def test_full_names_each_pairs_commit_and_patchset(setup, capsys, monkeypatch):
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    r1 = gerrit.change(200, gerrit.master, {"a.c": _text({5: "R"})})
+    r2 = gerrit.change(200, gerrit.master, {"a.c": _text({5: "R2"})}, ps=2)
+    rest.add(200, [r1, r2], ["a.c"], labels=READY)
+    full = _cmd(client, local, monkeypatch, capsys, "--full")
+    [c] = full["conflicts"]
+    assert c["commit"] == r2.commit and c["ps"] == 2
+    [c] = _cmd(client, local, monkeypatch, capsys)["conflicts"]
+    assert "commit" not in c and "ps" not in c
+
+
 def test_compact_keeps_asked_hunks_and_counts_base_drift():
     from gerrit_cli.conflict_report import compact_entry
 

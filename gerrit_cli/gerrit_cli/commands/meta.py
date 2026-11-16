@@ -1288,11 +1288,12 @@ pair cn, subject (cut at 70 characters), owner, tier, readiness, fix_side,
 files, release_hashtags (only the release ones), landing and as_uploaded
 as one string each in the order given by orders ("conflict/clean":
 target_first/candidate_first, target_on_theirs/theirs_on_target), and
-only when set: via, own_via, silent, base_drift (a count), forced, hunks, and
-same_function only in watch and silent_only. clean,
+only when set: via, own_via, silent, base_drift (a count), forced,
+hunks, and same_function only in watch and silent_only. clean,
 already_conflicting and not_tried are counts; commit, tested_commit
 (unless --commit tested another commit), project and tip are left out.
---full adds those, every hashtag, the per-order results as objects, the
+--full adds those, each pair's commit and ps (the candidate's current
+patchset, to fetch it), every hashtag, the per-order results as objects, the
 base_drift files and the change lists behind the counts. Hunks appear
 only with --hunks or --hunks-for, in either form.
 """,

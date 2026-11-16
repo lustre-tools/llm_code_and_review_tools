@@ -530,9 +530,10 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   conflicts needs a look anyway).
   `clean`, `already_conflicting` and `not_tried` are counts; the commit
   hashes, `project` and `tip` are left out (`tested_commit` stays when
-  `--commit` tested another commit). `--full` has every hashtag, the
-  per-order results as objects, the `base_drift` files and the change
-  lists behind the counts. Hunks appear only with `--hunks` /
+  `--commit` tested another commit). `--full` has them, each pair's
+  `commit` and `ps` (the candidate's current patchset, to fetch it),
+  every hashtag, the per-order results as objects, the `base_drift`
+  files and the change lists behind the counts. Hunks appear only with `--hunks` /
   `--hunks-for`, in either form.
 
 - **Candidates**: open changes on the same project and branch whose

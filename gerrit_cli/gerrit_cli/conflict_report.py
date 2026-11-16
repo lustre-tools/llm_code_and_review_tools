@@ -74,8 +74,11 @@ def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
     # a collision at via is that change's: its tier decides who moves
     mover = pair["via"] if pair.get("via") in sel.every else n
     m_tier = sel.tiers.get(mover) or sel.ancestor_tiers.get(mover, "other")
+    sha = c.get("current_revision") or ""
     e: dict[str, Any] = {
-        "cn": n, "subject": c.get("subject", ""), "owner": owner_name(c),
+        "cn": n, "commit": sha,
+        "ps": ((c.get("revisions") or {}).get(sha) or {}).get("_number", 0),
+        "subject": c.get("subject", ""), "owner": owner_name(c),
         "tier": sel.tiers[n], "readiness": readiness(c),
         "hashtags": sorted(c.get("hashtags") or []),
         "fix_side": fix_side(t_tier, t_rank, m_tier,
@@ -136,8 +139,8 @@ def _buckets(chk: Checked, sel: Selection, t_tier: str, t_rank: int) -> _Buckets
         elif "conflict" in statuses:
             b.uploaded_only.append(e)
         elif pair["silent"]:
-            b.silent_only.append({k: e[k] for k in ("cn", "tier", "fix_side", "silent",
-                                                    "same_function") if k in e})
+            b.silent_only.append({k: e[k] for k in ("cn", "commit", "ps", "tier", "fix_side",
+                                                    "silent", "same_function") if k in e})
         elif "error" in statuses:
             b.errors.append({"cn": e["cn"], "reason": "trial merge failed"})
         elif "same_function" in e:
@@ -296,6 +299,7 @@ def compact(full: dict[str, Any]) -> dict[str, Any]:
     if full.get("tested_commit") != full.get("commit"):
         out["tested_commit"] = full["tested_commit"]
     out["orders"] = {m: "/".join(o) for m, o in ORDERS.items()}
-    out["full"] = ("--full adds commit hashes, every hashtag, base_drift files "
-                   "and the changes behind clean, already_conflicting and not_tried")
+    out["full"] = ("--full adds commit hashes (each pair's commit and ps too), every "
+                   "hashtag, base_drift files and the changes behind clean, "
+                   "already_conflicting and not_tried")
     return out
