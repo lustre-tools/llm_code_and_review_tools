@@ -34,6 +34,17 @@ LEAN_CLAUDE_ARGS = [
     # concurrent reviews share its cache.
     "--exclude-dynamic-system-prompt-sections",
 ]
+
+
+def lean_claude_args(extra_tools: tuple = ()) -> list[str]:
+    """LEAN_CLAUDE_ARGS with `extra_tools` added to its --tools."""
+    args = list(LEAN_CLAUDE_ARGS)
+    if extra_tools:
+        i = args.index("--tools") + 1
+        args[i] = ",".join([*args[i].split(","), *extra_tools])
+    return args
+
+
 # The patch under review could plant instructions, settings or skills in
 # the worktree; a review loads none of them, lean or not (Patrick,
 # 2026-11-06). claude reads only the user's settings, CLAUDE.md and
@@ -142,6 +153,8 @@ class AgentSpec:
         prompt_on_stdin: bool = False,
         allowed_tools: Optional[list[str]] = None,
         worktree: Optional[Path] = None,
+        extra_tools: tuple = (),
+        agents: Optional[str] = None,
     ) -> list[str]:
         # resume: a session to continue (claude forks it; cursor
         # continues the chat itself). settings: claude's per-run
@@ -154,12 +167,16 @@ class AgentSpec:
         # effort: claude gets --effort; codex gets a config override
         # for model_reasoning_effort (Codex has no --effort flag).
         # gemini/opencode/cursor ignore it (the CLI warns when dropped).
+        # extra_tools, claude: tools on top of the lean set or the
+        # allowlist (the Agent tool for --lenses). agents, claude: an
+        # --agents definition (the lens agent).
         # extra_args come after so a later --agent-arg=-c can override.
         if self.name == "claude":
             cmd = ["claude", "-p", prompt_text, *CLAUDE_SOURCE_ARGS]
             if allowed_tools:
                 cmd += ["--permission-mode", "dontAsk",
-                        "--allowedTools", ",".join(allowed_tools)]
+                        "--allowedTools",
+                        ",".join([*allowed_tools, *extra_tools])]
             else:
                 cmd += ["--dangerously-skip-permissions"]
             cmd += ["--verbose", "--output-format", "stream-json"]
@@ -172,7 +189,9 @@ class AgentSpec:
             if settings:
                 cmd += ["--settings", settings]
             if lean:
-                cmd += LEAN_CLAUDE_ARGS
+                cmd += lean_claude_args(extra_tools)
+            if agents:
+                cmd += ["--agents", agents]
             if system_file:
                 cmd += ["--append-system-prompt-file", system_file]
             return cmd + extra_args

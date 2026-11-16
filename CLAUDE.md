@@ -202,6 +202,12 @@ lreview run --repo ~/tree --last 3   # Review the newest 3 local commits
 the review-core deep dive (much cheaper; artifacts `-light`-suffixed
 so the modes never overwrite each other).
 
+`--lenses` adds five lens subagents (concurrency, lifecycle, data,
+semantics, build) whose candidates the reviewer verifies: more bugs in
+one run than two or three ordinary runs, at about 2.5x the cost
+(`--lens-effort medium`, the default) or 5x (`high`). See
+`lreview/docs/lens-review-evaluation.md`.
+
 `--last N` (`-n`) points lreview at a directory instead of Gerrit and
 reviews the newest N commits of that repo, each in its own worktree
 pinned to that commit. Local results are never posted; `--output`

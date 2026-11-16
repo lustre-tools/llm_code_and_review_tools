@@ -42,6 +42,9 @@
 # [run]
 # post = false                        # false
 # memory = false                      # false
+# lenses = false                      # false; see "Lens reviews"
+# lens-model = "opus"                 # the review's model
+# lens-effort = "high"                # medium
 # db = "~/lreview-db"                 # lreview-db/ in the tools checkout
 
 # [chat]

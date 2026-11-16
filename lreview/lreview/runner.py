@@ -299,6 +299,8 @@ class ReviewResult:
     model: Optional[str] = None
     agent: str = DEFAULT_AGENT
     effort: Optional[str] = None
+    # "<lens model>/<lens effort>" for a --lenses review, else None
+    lenses: Optional[str] = None
     tokens: Optional[int] = None
     cost_usd: Optional[float] = None
     duration: float = 0.0
@@ -345,6 +347,11 @@ class BatchConfig:
     preload: bool = False
     # Review a commit with Lustre-change: trailers as a backport
     backport: bool = False
+    # claude, full mode: five lens subagents feed the reviewer
+    # (lenses.py); lens_model None means the review's own model
+    lenses: bool = False
+    lens_model: Optional[str] = None
+    lens_effort: Optional[str] = None
     # Added to the agent's environment (e.g. lreview bench's offline PATH)
     env: dict = field(default_factory=dict)
     agent_args: list[str] = field(default_factory=list)
@@ -375,6 +382,11 @@ class BatchConfig:
         if self.mode not in REVIEW_MODES:
             raise ValueError(
                 f"mode must be one of {REVIEW_MODES}, got {self.mode!r}")
+        if self.lenses:
+            if self.agent != "claude" or self.mode != "full":
+                raise ValueError("--lenses needs the claude agent and "
+                                 "--mode full")
+            validate_selection("claude", self.lens_model, self.lens_effort)
         if self.jobs < 1:
             raise ValueError(f"jobs must be >= 1, got {self.jobs}")
         if self.stall_timeout < 0:
@@ -456,6 +468,11 @@ def review_prompt(config: BatchConfig,
     if upstreams:
         from .backport import backport_prompt
         prompt += ".\n\n" + backport_prompt(upstreams)
+    if config.lenses and not preloaded:
+        from .lenses import task_text
+        prompt += (".\n\nThe protocol has one more task for this review, "
+                   "between TASK 1C and Task 2:\n\n"
+                   + task_text(config.prompts_dir).rstrip().rstrip("."))
     if config.mode == "full" and not preloaded:
         prompt += ".\n\n" + CLOSING_NOTE
     if preloaded and worktree is not None:
@@ -513,8 +530,14 @@ def preload_file(config: BatchConfig) -> Path:
         "below exactly as they are there; they are already loaded, so "
         "do not read them again. Load every other file the protocol "
         "calls for from the prompt directory, as it directs.\n"]
+    if config.lenses:
+        parts[0] += ("For this review lreview adds TASK 1D to "
+                     "review-core.md below; it is not in the file.\n")
     for name in PRELOAD_FILES:
         text = (config.prompts_dir / name).read_text()
+        if config.lenses and name == "review-core.md":
+            from .lenses import with_task
+            text = with_task(text, config.prompts_dir)
         parts.append(f"\n\n======== {name} ========\n\n{text}")
     parts.append(f"\n\n======== lreview ========\n\n{CLOSING_NOTE}\n")
     content = "".join(parts)
@@ -627,7 +650,26 @@ def build_agent_cmd(config: BatchConfig,
                      and config.agent == "claude" else None),
         prompt_on_stdin=_prompt_on_stdin(config, change),
         allowed_tools=expand_allowed_tools(config, worktree),
-        worktree=worktree)
+        worktree=worktree, **lens_args(config))
+
+
+def lens_args(config: BatchConfig) -> dict:
+    """build_cmd arguments for a --lenses review: the Agent tool and
+    the lens agent type."""
+    if not config.lenses:
+        return {}
+    from .lenses import LENS_REVIEW_TOOLS, agents_json
+    return {"extra_tools": LENS_REVIEW_TOOLS,
+            "agents": agents_json(config.lens_model or config.model,
+                                  config.lens_effort)}
+
+
+def lens_label(config: BatchConfig) -> Optional[str]:
+    """How the lenses ran, for the results: "<model>/<effort>"."""
+    if not config.lenses:
+        return None
+    return (f"{config.lens_model or config.model or 'default'}/"
+            f"{config.lens_effort or 'default'}")
 
 
 def attach_backport(config: BatchConfig, change: ResolvedChange) -> None:
@@ -1426,6 +1468,7 @@ def _review_and_cleanup(
 
     result.agent = config.agent
     result.effort = config.effort
+    result.lenses = lens_label(config)
     if config.agent == "claude" and result.log_path:
         result.session_id = parse_session_id(result.log_path)
     if result.log_path and result.log_path.is_file():
@@ -1472,7 +1515,7 @@ def record_telemetry(config: BatchConfig, result: ReviewResult):
     run = {
         "mode": config.mode, "agent": config.agent, "model": config.model,
         "effort": config.effort, "lean": config.lean,
-        "preload": config.preload,
+        "preload": config.preload, "lenses": lens_label(config),
         "memory": config.memory_db is not None,
         "since": getattr(result.change, "since", None) is not None,
         "prompts_rev": _git_out(config.prompts_dir, "rev-parse",
@@ -1506,21 +1549,30 @@ def telemetry_path(log_path: Path) -> Path:
 def _stash_stale_artifacts(config: BatchConfig, repo_dir: Path) -> None:
     """Move pre-existing review artifacts out of an in-place repo so a
     stale gerrit-review.json is never collected as this run's result."""
-    for name in (REVIEW_JSON_NAME, REVIEW_RESULT_NAME, METADATA_JSON_NAME):
-        path = repo_dir / name
+    from .lenses import lens_files
+    for path in [repo_dir / name for name in
+                 (REVIEW_JSON_NAME, REVIEW_RESULT_NAME, METADATA_JSON_NAME)
+                 ] + lens_files(repo_dir):
         if path.exists():
-            dest = config.results_dir / f"stale-{os.getpid()}-{name}"
+            dest = config.results_dir / f"stale-{os.getpid()}-{path.name}"
             shutil.move(str(path), dest)
-            _log(f"note: moved pre-existing {name} from the repo "
+            _log(f"note: moved pre-existing {path.name} from the repo "
                  f"to {dest}")
 
 
 def _remove_artifacts(repo_dir: Path) -> None:
-    for name in (REVIEW_JSON_NAME, REVIEW_RESULT_NAME, METADATA_JSON_NAME):
+    from .lenses import LENS_OUTPUT_DIR, lens_files
+    for path in [repo_dir / name for name in
+                 (REVIEW_JSON_NAME, REVIEW_RESULT_NAME, METADATA_JSON_NAME)
+                 ] + lens_files(repo_dir):
         try:
-            (repo_dir / name).unlink()
+            path.unlink()
         except OSError:
             pass
+    try:  # only when the lenses left it empty
+        (repo_dir / LENS_OUTPUT_DIR).rmdir()
+    except OSError:
+        pass
 
 
 def run_batch(
@@ -1654,6 +1706,7 @@ def update_summary(results_dir: Path, results: list[ReviewResult],
                 "model": result.model,
                 "agent": result.agent,
                 "effort": result.effort,
+                "lenses": result.lenses,
                 "tokens": result.tokens,
                 "cost_usd": result.cost_usd,
                 "duration_s": round(result.duration),

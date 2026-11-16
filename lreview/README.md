@@ -314,6 +314,45 @@ lreview run --mode light --repo lustre-release -m 64086   # cheap pass
 lreview run --repo lustre-release -m 64086                # full gate
 ```
 
+## Lens reviews (`--lenses`)
+
+A single review finds a different handful of bugs each time it runs,
+but repeating it mostly re-finds the same ones. `--lenses` gets more out
+of one run: after categorising the change, the reviewer starts five
+subagents at once, one per class of bug (`lreview/lens.md`):
+concurrency, lifecycle, data, semantics and build. Each goes deep on its
+class across the whole change and writes every candidate it cannot rule
+out to `review-context/LENS-<lens>.json`; the reviewer then verifies
+every candidate in the protocol's own Task 2/3 and reports as usual.
+
+```bash
+lreview run --lenses 64086                      # lenses: Sonnet, medium
+lreview run --lenses --lens-effort high 64086   # the full variant
+lreview run --lenses --lens-model opus 64086    # lenses on another model
+```
+
+On `lreview bench`, with the lenses at high, known-bug recall went from
+59% to 70% and from 83% to 92.5% on two case sets, one run beat two or
+three ordinary runs together, and real defects per review rose by
+roughly 35-50% with unchanged precision. A review costs about 5x an
+ordinary one and takes about twice as long; with the lenses at medium
+(the default) it costs about 2.5x and keeps roughly 70% of the gain.
+`docs/lens-review-evaluation.md` has the measurements.
+
+- claude only, `--mode full` only, and not for `--github` reviews.
+- The lenses run as a custom agent type, `lens`, passed with claude's
+  `--agents`: their model (`--lens-model`, default the review's) and
+  effort (`--lens-effort`, default `medium`) are set apart from the
+  reviewer's. A lean review adds the Agent tool to its tools, and an
+  `--allow-tool` review adds it to the allowlist.
+- lreview puts TASK 1D, the lens step, into the preloaded
+  review-core.md in front of Task 2 (into the first message without
+  `--preload`); the prompts checkout is not changed.
+- An in-place review removes the `LENS-*.json` files it wrote, and
+  `review-context/` when that leaves it empty.
+- The results record the lens setup: `lenses` in `summary.json` and the
+  telemetry (`sonnet/medium`), and in `bench-run.json`.
+
 ## Cost, speed and telemetry
 
 A full review is one headless claude session. Almost all of its wall
@@ -812,6 +851,9 @@ opencode's `--model` wants the `provider/model` form.
 | `--agent NAME` | `claude` (or `$LREVIEW_AGENT`) | Agent backend: claude, codex, cursor (verified), auggie, gemini, opencode |
 | `--model NAME` | `sonnet` for claude, `gpt-6.1-sol` for codex (or `$LREVIEW_MODEL`); `cursor-grok-4.6-high` for cursor; auggie/gemini/opencode use their own default | Model for the review runs; see `lreview models`, `auggie models list --json` or `agent --list-models` |
 | `--effort LEVEL` | `high` for claude, else the agent's own (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max, plus `ultra` on the codex models that have it — claude (`--effort`), codex (`-c model_reasoning_effort=...`) or auggie (`--reasoning-effort`); ignored for gemini/opencode/cursor (a cursor model slug carries its effort). Known model ladders are checked before the run; Auggie validates its own model/effort support |
+| `--lenses` | off | Five lens subagents feed the reviewer (claude, full mode); see "Lens reviews" |
+| `--lens-model M` | the review's model | Model for the `--lenses` subagents |
+| `--lens-effort LEVEL` | `medium` | Effort for the `--lenses` subagents |
 | `--memory, -m` | off | Read/update the per-change review memory document |
 | `--clear-memory, -c` | off | With `-m`: delete the change's memory document first |
 | `--no-resume` | off | With `-m` (claude): start a fresh session from the memory document instead of resuming the recorded review conversation |

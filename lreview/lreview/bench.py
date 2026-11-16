@@ -177,6 +177,8 @@ def environment(config, cases_path: Path = CASES_PATH) -> dict:
         "agent_version": version([config.agent, "--version"]),
         "model": config.model, "effort": config.effort, "mode": config.mode,
         "lean": config.lean, "preload": config.preload,
+        "lenses": config.lenses, "lens_model": config.lens_model,
+        "lens_effort": config.lens_effort,
         "memory": config.memory_db is not None,
         "resume": config.memory_db is not None and config.resume,
         "offline": "offline-bin" in config.env.get("PATH", ""),
@@ -553,6 +555,8 @@ def default_label(args) -> str:
         parts.append(args.effort)
     if args.mode != "full":
         parts.append(args.mode)
+    if getattr(args, "lenses", False):
+        parts.append("lenses")
     if not args.lean:
         parts.append("nolean")
     if not args.preload:

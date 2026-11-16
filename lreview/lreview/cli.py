@@ -131,6 +131,25 @@ def resolve_model(agent: str, model: str = None) -> str:
     return canonical_model(agent, model)
 
 
+def check_lenses(args) -> bool:
+    """--lenses and its lens options make sense together."""
+    if args.lenses and (args.agent != "claude" or args.mode != "full"):
+        print("error: --lenses needs the claude agent and --mode full")
+        return False
+    if args.lenses and getattr(args, "github", None):
+        print("error: --lenses does not apply to --github reviews")
+        return False
+    if (args.lens_model or args.lens_effort) and not args.lenses:
+        print("error: --lens-model and --lens-effort go with --lenses")
+        return False
+    return True
+
+
+def lens_effort(args):
+    from .lenses import DEFAULT_LENS_EFFORT
+    return args.lens_effort or (DEFAULT_LENS_EFFORT if args.lenses else None)
+
+
 def check_selection(args, model) -> bool:
     """Report an impossible model/effort pair before any review runs.
 
@@ -373,6 +392,9 @@ def print_dry_run_plan(args, changes, memory_db) -> None:
                 f"mode {args.mode}"]
     if args.effort:
         settings.append(f"effort {args.effort}")
+    if args.lenses:
+        lenses = args.lens_model or model or "default"
+        settings.append(f"lenses ({lenses}, {lens_effort(args)})")
     print(f"  agent:     {', '.join(settings)}")
     if memory_db is not None:
         from .memory import find_doc
@@ -417,6 +439,8 @@ def cmd_run(args) -> int:
 
     if args.allow_tool and args.agent not in ("claude", "cursor"):
         print("error: --allow-tool needs the claude or cursor agent")
+        return 1
+    if not check_lenses(args):
         return 1
 
     prompts_status = ensure_prompts(args)
@@ -644,6 +668,9 @@ def cmd_run(args) -> int:
         lean=args.lean,
         preload=args.preload,
         backport=args.backport,
+        lenses=args.lenses,
+        lens_model=args.lens_model,
+        lens_effort=lens_effort(args),
         agent_args=args.agent_arg or [],
         allowed_tools=args.allow_tool or [],
     )
@@ -814,7 +841,7 @@ def cmd_bench(args) -> int:
     model = resolve_model(args.agent, args.model)
     from .models import resolve_effort
     args.effort = resolve_effort(args.agent, args.effort)
-    if not check_selection(args, model):
+    if not check_selection(args, model) or not check_lenses(args):
         return 1
     label = args.label or bench.default_label(args)
     label_dir = bench_dir / label
@@ -840,6 +867,8 @@ def cmd_bench(args) -> int:
             model=model, effort=args.effort,
             memory_db=(label_dir / "db") if args.memory else None,
             resume=args.resume, lean=args.lean, preload=args.preload,
+            lenses=args.lenses, lens_model=args.lens_model,
+            lens_effort=lens_effort(args),
             env=bench.offline_env(bench_dir) if args.offline else {},
             allowed_tools=allow, denied_tools=deny,
             agent_args=args.agent_arg or [])
@@ -1050,7 +1079,7 @@ def build_parser() -> argparse.ArgumentParser:
                                 metavar="{setup,check,run,chat,models,render,post}")
 
     from .agents import AGENTS
-    from .models import EFFORT_LEVELS
+    from .models import CLAUDE_EFFORTS, EFFORT_LEVELS
     default_prefix = os.environ.get("LREVIEW_PREFIX")
     default_agent = os.environ.get("LREVIEW_AGENT", DEFAULT_AGENT)
     default_prompts = os.environ.get("REVIEW_PROMPTS_DIR") or None
@@ -1199,6 +1228,21 @@ def build_parser() -> argparse.ArgumentParser:
              "codex-only, and gpt-5.5 / gpt-5.3-codex-spark stop at "
              "xhigh; see 'lreview models'")
     run_p.add_argument(
+        "--lenses", action="store_true",
+        help="Lens review (claude, full mode): after categorising the "
+             "change, the reviewer starts five lens subagents "
+             "(concurrency, lifecycle, data, semantics, build) and "
+             "verifies every candidate they write. More bugs per run at "
+             "about 2.5x the cost of a review (lenses at medium effort) "
+             "or 5x (at high); see lreview/docs/lens-review-evaluation.md")
+    run_p.add_argument(
+        "--lens-model", default=None,
+        help="Model for the --lenses lenses (default: the review's)")
+    run_p.add_argument(
+        "--lens-effort", choices=list(CLAUDE_EFFORTS), default=None,
+        help="Effort for the --lenses lenses (default: medium; high "
+             "found more for about twice the cost)")
+    run_p.add_argument(
         "--memory", "-m", action="store_true",
         help="Use per-change review memory: read the change's notes "
              "document from the lreview-db before analyzing (what the "
@@ -1317,6 +1361,21 @@ def build_parser() -> argparse.ArgumentParser:
                            default=_env_flag("LREVIEW_LEAN", DEFAULT_LEAN))
     bench_run.add_argument("--preload", action=argparse.BooleanOptionalAction,
                            default=_env_flag("LREVIEW_PRELOAD", DEFAULT_PRELOAD))
+    bench_run.add_argument(
+        "--lenses", action="store_true",
+        help="Lens review (claude, full mode): after categorising the "
+             "change, the reviewer starts five lens subagents "
+             "(concurrency, lifecycle, data, semantics, build) and "
+             "verifies every candidate they write. More bugs per run at "
+             "about 2.5x the cost of a review (lenses at medium effort) "
+             "or 5x (at high); see lreview/docs/lens-review-evaluation.md")
+    bench_run.add_argument(
+        "--lens-model", default=None,
+        help="Model for the --lenses lenses (default: the review's)")
+    bench_run.add_argument(
+        "--lens-effort", choices=list(CLAUDE_EFFORTS), default=None,
+        help="Effort for the --lenses lenses (default: medium; high "
+             "found more for about twice the cost)")
     bench_run.add_argument(
         "--memory", "-m", action="store_true",
         help="Review memory: each rep is a round that reads the notes "
