@@ -59,8 +59,40 @@ def _current(change: dict[str, Any]) -> tuple[str, int, str]:
     return sha, rev.get("_number", 0), parents[0].get("commit", "") if parents else ""
 
 
-def _query(client: Any, q: str) -> list[dict[str, Any]]:
-    return client.rest.get(f"/changes/?q={quote(q, safe='')}{_OPTIONS}&n=500") or []
+def _query(client: Any, q: str, options: str = _OPTIONS) -> list[dict[str, Any]]:
+    return client.rest.get(f"/changes/?q={quote(q, safe='')}{options}&n=500") or []
+
+
+class _Patchsets:
+    """Which patchset of which change each known commit is, and each
+    change's current patchset."""
+
+    def __init__(self) -> None:
+        self.of: dict[str, tuple[int, int]] = {}
+        self.current: dict[int, int] = {}
+
+    def add_change(self, change: dict[str, Any]) -> None:
+        cn = change.get("_number", 0)
+        for sha, rev in (change.get("revisions") or {}).items():
+            if rev.get("_number"):
+                self.of[sha] = (cn, rev["_number"])
+        if ps := _current(change)[1]:
+            self.current[cn] = ps
+
+    def add_related(self, entry: dict[str, Any]) -> None:
+        cn = entry["_change_number"]
+        self.of[entry["commit"]["commit"]] = (cn, entry.get("_revision_number", 0))
+        if entry.get("_current_revision_number"):
+            self.current[cn] = entry["_current_revision_number"]
+
+    def older(self, commit: str, below: int | None = None) -> dict[str, int] | None:
+        """{"of", "ps", "current"} when `commit` is an older patchset (of
+        change `below`, when given)."""
+        cn, ps = self.of.get(commit, (0, 0))
+        cur = self.current.get(cn)
+        if not ps or not cur or ps == cur or (below is not None and cn != below):
+            return None
+        return {"of": cn, "ps": ps, "current": cur}
 
 
 def _owner_name(change: dict[str, Any]) -> str:
@@ -114,7 +146,7 @@ def _ancestors(client: Any, project: str, branch: str, changes: dict[int, dict[s
 
 def _target_stack(client: Any, repo: Repo, remote: str, change: dict[str, Any],
                   related: list[dict[str, Any]], owners: dict[str, tuple[int, str]],
-                  ) -> tuple[list[Patch], dict[int, dict[str, Any]]]:
+                  patchsets: _Patchsets) -> tuple[list[Patch], dict[int, dict[str, Any]]]:
     """The uploaded target and its in-flight parents, bottom first."""
     cn = change["_number"]
     by_sha = {e["commit"]["commit"]: e for e in related}
@@ -129,6 +161,8 @@ def _target_stack(client: Any, repo: Repo, remote: str, change: dict[str, Any],
     below.reverse()
     details = {c["_number"]: c for c in _query(client, " OR ".join(f"change:{n}" for n in below))} \
         if below else {}
+    for d in details.values():
+        patchsets.add_change(d)
     patches = []
     for n in below:
         if n in details:
@@ -144,12 +178,16 @@ def _target_stack(client: Any, repo: Repo, remote: str, change: dict[str, Any],
     return patches, details
 
 
-def _local_stack(client: Any, repo: Repo, change: dict[str, Any], commit: str, tip: str,
-                 owners: dict[str, tuple[int, str]],
+def _local_stack(client: Any, repo: Repo, remote: str, change: dict[str, Any], commit: str,
+                 tip: str, owners: dict[str, tuple[int, str]], patchsets: _Patchsets,
                  ) -> tuple[list[Patch], dict[int, dict[str, Any]]]:
     """The local commit and the changes below it, bottom first. A commit
     without an open change of its own belongs to the change above it,
-    the ones above the top change to the target."""
+    the ones above the top change to the target. A change below the
+    target whose local commit is an older patchset of it is its current
+    patchset instead, the commit above standing on the older one as on
+    Gerrit; a local commit that is no patchset stays (the user edits
+    that change too)."""
     cn, project, branch = change["_number"], change["project"], change["branch"]
     sha = repo.rev_parse(commit)
     if sha is None:
@@ -160,7 +198,10 @@ def _local_stack(client: Any, repo: Repo, change: dict[str, Any], commit: str, t
     by_id: dict[str, dict[str, Any]] = {}
     if ids:
         q = f"({' OR '.join(f'change:{i}' for i in ids)}) project:{project} branch:{branch}"
-        by_id = {c["change_id"]: c for c in _query(client, q) if c.get("status") == "NEW"}
+        by_id = {c["change_id"]: c for c in _query(client, q, _OPTIONS + "&o=ALL_REVISIONS")
+                 if c.get("status") == "NEW"}
+        for c in by_id.values():
+            patchsets.add_change(c)
     start = (repo.parents(local[:1]).get(local[0]) or [""])[0] if local else ""
     groups: list[list[Any]] = []  # [change, commit, base], bottom first
     run_base = start
@@ -184,10 +225,18 @@ def _local_stack(client: Any, repo: Repo, change: dict[str, Any], commit: str, t
     groups[-1][1] = sha
     parents = repo.parents([g[1] for g in groups])
     patches = []
+    newer: dict[str, str] = {}
     for found, top, base in groups:
         n = found["_number"]
         owners[top] = (n, "NEW")
-        patches.append(Patch(n, 0, top, "" if parents.get(top) == [base] else base))
+        cur, cur_ps, _ = _current(found)
+        if n != cn and patchsets.older(top, n):
+            owners[cur] = (n, "NEW")
+            newer[cur] = change_ref(n, cur_ps)
+            patches.append(Patch(n, cur_ps, cur))
+        else:
+            patches.append(Patch(n, 0, top, "" if parents.get(top) == [base] else base))
+    _fetch(repo, remote, newer)
     return patches, {g[0]["_number"]: g[0] for g in groups[:-1]}
 
 
@@ -222,10 +271,13 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
 
     related = (get(f"/changes/{cn}/revisions/current/related") or {}).get("changes") or []
     owners: dict[str, tuple[int, str]] = {}
+    patchsets = _Patchsets()
     for e in related:
         owners[e["commit"]["commit"]] = (e["_change_number"], e.get("status", ""))
+        patchsets.add_related(e)
     uploaded, ps, _ = _current(target)
     owners[uploaded] = (cn, target.get("status", ""))
+    patchsets.add_change(target)
     at = next((i for i, e in enumerate(related) if e.get("_change_number") == cn), 0)
     above = [e for e in reversed(related[:at]) if e.get("status") == "NEW"]
     children = [Patch(e["_change_number"], e["_revision_number"], e["commit"]["commit"])
@@ -237,11 +289,16 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     for c in changes_by_commit(get, loose) if loose else []:
         for h in c.get("revisions") or {}:
             owners[h] = (c.get("_number", 0), c.get("status", ""))
+        patchsets.add_change(c)
+    child_base = {e["_change_number"]: (e["commit"].get("parents") or [{}])[0].get("commit", "")
+                  for e in above}
 
     if commit:
-        stack, parents_detail = _local_stack(client, repo, target, commit, tip, owners)
+        stack, parents_detail = _local_stack(client, repo, remote, target, commit, tip, owners,
+                                             patchsets)
     else:
-        stack, parents_detail = _target_stack(client, repo, remote, target, related, owners)
+        stack, parents_detail = _target_stack(client, repo, remote, target, related, owners,
+                                              patchsets)
     focus_stack = [p.cn for p in stack]
     bases = repo.parents([p.commit for p in stack if not p.base])
     diff_of = {p.commit: p.base or (bases.get(p.commit) or [""])[0] for p in stack}
@@ -329,6 +386,23 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     hashtags = target.get("hashtags") or []
     t_tier, t_rank = _tier(target, queued_ids), release_rank(hashtags)
 
+    old = {p.cn: o for below_p, p in zip(stack, stack[1:])
+           if (o := patchsets.older(diff_of[p.commit], below_p.cn))}
+    old.update({n: o for n, sha in child_base.items() if (o := patchsets.older(sha))})
+    outdated = old.pop(cn, None)
+    if outdated is not None:
+        target_p, parent_p = stack[-1], stack[-2]
+        if on_branch.get("parent"):
+            outdated["status"], files = "conflict", on_branch["parent"]["files"]
+        else:
+            with repo:
+                pick = repo.pick(parent_p.commit, target_p.commit, diff_of[target_p.commit])
+            outdated["status"] = "clean" if pick.ok else pick.status
+            files = list(pick.files)
+        outdated = {"cn": outdated.pop("of"), **outdated}
+        if files:
+            outdated["files"] = files
+
     def entry(pair: dict[str, Any]) -> dict[str, Any]:
         n = pair["other"]
         c = every[n]
@@ -401,13 +475,32 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
         "branch": branch,
         "tip": result["tip"],
         "status": "ok" if landed else "needs-rebase",
+    }
+    if not landed:
+        # a blocked target: `by` is the stack member that does not apply
+        stuck, seen = cn, set()
+        while res.get(str(stuck), {}).get("status") == "blocked" and stuck not in seen:
+            seen.add(stuck)
+            stuck = res[str(stuck)].get("by", stuck)
+        parent = res.get(str(stuck), {}).get("parent")
+        out["rebase_cause"] = "parent" if parent else "branch"
+        if parent:
+            onto = {"cn": parent["cn"]}
+            if (cur := patchsets.current.get(parent["cn"])) is not None:
+                onto["ps"] = cur
+            if stuck != cn:
+                onto["for"] = stuck
+            out["rebase_onto"] = onto
+    if outdated is not None:
+        out["outdated_parent"] = outdated
+    out.update({
         "base": base_info(repo, result, {p.cn: p for p in stack}, focus_stack,
                           result["tip"], tiers_of_parents),
         "on_branch": on_branch,
         "on_next": on_next,
-        "own_stack": own_stack(result, focus_stack, [p.cn for p in children]),
+        "own_stack": own_stack(result, focus_stack, [p.cn for p in children], old),
         "conflicts": conflicts if landed else None,
-    }
+    })
     if not landed:
         out["as_uploaded_only"] = uploaded_only
     out.update({

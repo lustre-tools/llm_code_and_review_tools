@@ -235,17 +235,47 @@ gc conflicts 69392 --repo . | jq -r '.status, ((.conflicts // .as_uploaded_only)
      (.as_uploaded | [.[]] | join("/")), (.files | join(","))] | @tsv)'
 ```
 
-**When.** Before uploading a patchset in a busy area; when `gc graph`
-shows a conflict edge or a bot posts a cannot-cherry-pick or master-next
-conflict; after a neighbour lands or is picked; before accepting a review
-suggestion that edits lines another in-flight change rewrites (decline or
-defer it, and say why).
+**When.** Before uploading a patchset to a change in a busy area; when
+Gerrit or a bot reports a merge conflict, a cannot-cherry-pick or a
+master-next conflict; after a neighbour lands or is picked; before
+accepting a review suggestion that edits lines another in-flight change
+rewrites (decline or defer it, and say why).
 
-**Report first, edit only on the user's choice.** Deconflicting is one
-option, not the goal, and not at any cost. The first output is a report,
-and no file is touched before the user picks. Per collision: the change,
-its owner, `fix_side`, the files and hunk kinds (where you fetched them),
-then the options with their cost:
+**Trivial collisions: fix them, then say so.** When the user is working
+on the change and wants it to land cleanly, fix a collision without
+asking first if all of these hold:
+
+- the change that moves is the one being worked on (`fix_side: target`,
+  or the user said to move theirs);
+- the hunk kind is `insert-insert`, `adjacent` or `context`, never
+  `edit-edit` (a conflict with the own parent's newer patchset comes with
+  files only, no hunk kinds: read it by hand in the rebase and judge it
+  the same way);
+- the fix only moves or renumbers lines the change itself adds: insert in
+  the middle of a list instead of at its end, leave an unchanged line
+  between the two edits, take a test number or fail_loc value no open
+  change uses;
+- behaviour does not change: no condition rewritten, nothing moved across
+  ordering or locking, no hunk dropped or deferred, no new statement or
+  flag;
+- the diff stays about the size of the conflict, a few lines;
+- re-verifying (see Verify) shows the collision gone and none new.
+
+Make the edit, verify it, and tell the user in a line or two what moved
+and what it no longer collides with ("moved `ci_ec_wait:1` after
+`ci_parity_io:1`; no longer collides with 65219 or 69517"). Leave it
+uncommitted unless they asked to commit or upload. If verification fails,
+undo it and report instead.
+
+**Everything else: report first, edit on the user's choice.**
+Deconflicting is one option, not the goal, and not at any cost. For a
+collision that fails any test above (`edit-edit`, a logic or design
+change, someone else's change, a rebase onto another change or a
+restack, a dropped or deferred
+hunk, a bigger diff, any sign of "works but stupid" below), touch no
+file. Report per collision the change, its owner, `fix_side`, the files
+and hunk kinds (where you fetched them), then the options with their
+cost:
 
 - rearrange (how big a change);
 - rearrange, but uglier;
@@ -257,8 +287,10 @@ then the options with their cost:
 - do nothing (the other change is far from landing).
 
 "This cannot be deconflicted" is a complete answer. Recommend one option.
-The exception is an explicit "go ahead and deconflict it": then apply a
-clean `rearranged`, but still stop at anything uglier.
+A mixed result is normal: fix the trivial collisions and report the rest
+in the same message. When the user says "go ahead and deconflict it",
+also apply clean rearrangements beyond trivial, and still stop at
+anything uglier.
 
 Read the rest of the result before recommending: the change's own
 `own_stack`, `on_branch` and `base.parents` (a conflicting parent in its
@@ -269,6 +301,23 @@ conflict as uploaded and `clean` the rest);
 around); `silent_only` (a clean merge that still defines a test or fail_loc
 value twice); `already_conflicting` (conflict without your change, not
 yours); `on_next` (a conflict in the queue; `stale` means ignore it).
+
+Check the own stack first: it changes the base the other collisions are
+measured on.
+
+- `outdated_parent.status: clean`, or `on_old_patchset` without a
+  `parent` conflict: it sits on an older patchset of its parent but
+  applies on the current one. Do not rebase; a project that submits by
+  cherry-pick lands it anyway. Mention it in one line.
+- `rebase_cause: parent`, or `outdated_parent.status: conflict`: the
+  change (or `rebase_onto.for`, the stack member below it) conflicts with
+  its parent's current patchset and cannot land as it is, so its votes
+  are lost either way. Rebase it locally onto `rebase_onto`, the parent's
+  commit staying byte-identical to its current patchset on Gerrit, and
+  resolve. A resolution that meets the trivial tests: do it without
+  asking and say so. Otherwise report it like any other collision. The
+  rebased commit stays local; never upload unless asked. Rerun
+  `gc conflicts --commit` on it before judging the other collisions.
 
 Landing and as-uploaded results differ in weight. A `landing` conflict
 is what happens when the changes land, so it is what matters. A conflict
@@ -313,7 +362,10 @@ release blocker. Never change a picked change's hash to make room.
 **Rebase or rearrange.** Read `base.rebase`. If it says rebasing would
 move frozen or ready parents, or the base is too old to move, rebasing is
 out: rearrange, defer or wait. Otherwise rebasing onto the candidate is an
-option, but a rebase drops votes, so it needs the user's OK.
+option, but a rebase drops votes, so it needs the user's OK. The exception
+is a conflict with the own parent's current patchset (`rebase_cause:
+parent`, above): the change cannot land as it is, so that rebase is part
+of fixing it.
 
 **Techniques** (from real cases):
 
@@ -344,7 +396,8 @@ option, but a rebase drops votes, so it needs the user's OK.
 
 **Verdict, one per collision, in the report:**
 
-- `rearranged`: clean. Show the diff and the re-verify result.
+- `rearranged`: clean. Show the diff and the re-verify result (for a
+  trivial fix, the one-line note is enough).
 - `needs uglifying`: the only rearrangement that removes the collision
   makes the code worse. Do not apply it. Say "this cannot be deconflicted
   without uglifying the code", show the ugly variant and the clean
@@ -369,19 +422,29 @@ of these is `needs uglifying`, never a silent `rearranged`. An
 changes need that very line, so any fix is a workaround, and is presented
 as such with its alternatives.
 
-**Verify**, only after the user has picked an option and the edit is
-made. `gc conflicts <cn> --commit HEAD` shows no remaining collision
-with the changes you deconflicted against, whatever their `fix_side`:
-none of them in `conflicts`, `as_uploaded_only` or `silent_only` (both
-models, both orders); use `--with <cn>` for any that the filters no
-longer select. Collisions given another verdict may remain. Then build.
-When both sides touch one function or change a signature or a struct,
-build the combination (target on candidate) too: a clean merge can still
-fail to build (65921). Run the tests the changed code is covered by, on
-the change's own base and, if it is queued, on -next. Show the
-uncommitted diff first; commit and upload only when the user asks. A
-content change gets a short change-log ("Deconflicted with #A, #B: ...;
-no functional change").
+**Verify** every edit before reporting it, the trivial ones included.
+With the change as the HEAD commit (`-p HEAD~` assumes that) and the edit
+uncommitted, test it as a throwaway commit that no branch points at,
+built in a temporary index so the user's stays as it is:
+
+```bash
+T=$(mktemp) && cp "$(git rev-parse --git-path index)" "$T" && GIT_INDEX_FILE=$T git add -A &&
+  C=$(git log -1 --format=%B | GIT_INDEX_FILE=$T git commit-tree "$(GIT_INDEX_FILE=$T git write-tree)" -p HEAD~ -F -)
+rm -f "$T"
+gc conflicts 69392 --repo . --commit "$C" --with 65219 --with 69517
+```
+
+It shows no remaining collision with the changes you deconflicted
+against, whatever their `fix_side`: none of them in `conflicts`,
+`as_uploaded_only` or `silent_only` (both models, both orders); use
+`--with <cn>` for any that the filters no longer select. Collisions given
+another verdict may remain. Then build. When both sides touch one
+function or change a signature or a struct, build the combination
+(target on candidate) too: a clean merge can still fail to build (65921).
+Run the tests the changed code is covered by, on the change's own base
+and, if it is queued, on -next. Commit and upload only when the user
+asks. A content change gets a short change-log ("Deconflicted with #A,
+#B: ...; no functional change").
 
 ## Deleting comments and change messages
 

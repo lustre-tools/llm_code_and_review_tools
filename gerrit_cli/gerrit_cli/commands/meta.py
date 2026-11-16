@@ -1211,14 +1211,14 @@ tip) and as uploaded (as_uploaded: target_on_theirs, theirs_on_target;
 each own diff picked onto the other's uploaded commit). An as-uploaded
 conflict counts only on files both sides change; one on a file only one
 side changes is the branch moving between their bases, listed in
-base_drift instead. A pair is in conflicts if any of the four conflicts; via names the candidate's
-ancestor the conflict is at. Pairs that merge cleanly but define the same
-test or fail_loc value twice are in silent_only. --hunks adds the
-conflict-marker regions with their kind: insert-insert, edit-edit,
-adjacent, context; --hunks-for CN (repeatable) only for the pairs with
-those changes. --hunks is large on a busy file: run without it first,
-then --hunks-for the collisions you will act on (a change that was not
-tried is named in notes).
+base_drift instead. A pair is in conflicts if any of the four conflicts;
+via names the candidate's ancestor the conflict is at. Pairs that merge
+cleanly but define the same test or fail_loc value twice are in
+silent_only. --hunks adds the conflict-marker regions with their kind:
+insert-insert, edit-edit, adjacent, context; --hunks-for CN (repeatable)
+only for the pairs with those changes. --hunks is large on a busy file:
+run without it first, then --hunks-for the collisions you will act on (a
+change that was not tried is named in notes).
 
 fix_side says which change should move, whoever runs the command:
   target \\ candidate  frozen      lands-first  same-effort  other
@@ -1230,8 +1230,18 @@ plain ready. Compare the change's owner with me to see whose move it is.
 
 When the change does not apply on the branch tip, status is
 "needs-rebase", conflicts is null, as_uploaded_only has the pairs that
-conflict as uploaded, and clean those that do not. Only an open change
-can be checked. base says whether rebasing is an option (rebase:
+conflict as uploaded, and clean those that do not; rebase_cause is
+"parent" when it, or the stack member it is blocked by, conflicts with
+the newer patchset of its own parent (rebase_onto {cn, ps, for}: rebase
+onto that; for names the blocking member), "branch" otherwise. Only an
+open change can be checked. outdated_parent {cn, ps, current, status,
+files} is set when the change sits on an older patchset of its parent,
+status saying whether it applies on the current one; own_stack entries
+sitting on an older patchset of the change below carry on_old_patchset
+{of, ps, current}, and a child conflicting with the current one parent
+{cn, files}. With --commit, a local commit below the change that is an
+older patchset of its change is replaced by the current patchset; a
+local edit is tested as it is. base says whether rebasing is an option (rebase:
 "would move ready/queued parents" when a parent is frozen or
 lands-first); on_branch and on_next are the change against the branch
 and <branch>-next; own_stack how its parents and children fare;

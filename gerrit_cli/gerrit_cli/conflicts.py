@@ -901,16 +901,22 @@ def base_info(repo: Repo, result: dict, patches: dict[int, Patch], focus_stack: 
             "rebase": "would move ready/queued parents" if moves else "possible"}
 
 
-def own_stack(result: dict, focus_stack: list[int], children: list[int]) -> dict:
-    """How the target's own parents and children fare against the branch."""
+def own_stack(result: dict, focus_stack: list[int], children: list[int],
+              old: dict[int, dict] | None = None) -> dict:
+    """How the target's own parents and children fare against the branch.
+    `old`: change -> the older patchset of the change below it that it
+    sits on ({"of", "ps", "current"})."""
     res = result["results"]
+    old = old or {}
 
-    def entry(cn: int, with_parent: bool) -> dict:
+    def entry(cn: int) -> dict:
         r = res.get(str(cn), {})
         e: dict[str, Any] = {"cn": cn, "status": r.get("status", "skipped")}
-        if with_parent and r.get("parent"):
+        if r.get("parent"):
             e["parent"] = r["parent"]
+        if cn in old:
+            e["on_old_patchset"] = old[cn]
         return e
 
-    return {"parents": [entry(cn, True) for cn in focus_stack[:-1]],
-            "children": [entry(cn, False) for cn in children]}
+    return {"parents": [entry(cn) for cn in focus_stack[:-1]],
+            "children": [entry(cn) for cn in children]}

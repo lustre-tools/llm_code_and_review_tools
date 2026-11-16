@@ -566,11 +566,24 @@ gc conflicts 12345 --with 23456 --all                 # force one in, try every 
   still applies on the rearranged change). When the change does not
   apply on the tip, `status` is `needs-rebase`, `conflicts` is `null`,
   `as_uploaded_only` has the pairs that conflict as uploaded and `clean`
-  those that do not. A merged or abandoned change is refused.
+  those that do not; `rebase_cause` says why: `parent` (it, or the
+  stack member it is blocked by, conflicts with the newer patchset of
+  its own parent: `rebase_onto` {cn, ps, for}, `for` naming that
+  member) or `branch`. A merged or abandoned change is refused.
+- **Older patchsets in the own stack**: `outdated_parent` {cn, ps,
+  current, status, files} when the change sits on an older patchset of
+  its parent, with whether it applies on the current one (`clean` or
+  `conflict`); a parent or child sitting on an older patchset of the
+  change below it carries `on_old_patchset` {of, ps, current} in
+  `own_stack`, and a child conflicting with the current one `parent`
+  {cn, files}.
 - `--commit SHA`: the local commit and the local commits below it down
   to the branch; each commit's last Change-Id names its change, and a
   commit without an open change belongs to the change above it. The
-  stack must contain the change, as its top change.
+  stack must contain the change, as its top change. A local commit that
+  is an older patchset of its change is replaced by the current
+  patchset, the commit above it staying on the older one, as on Gerrit;
+  a commit that is no patchset (a local edit) is tested as it is.
 - `--repo` (default `.`) must be a clone whose remote fetches the
   change's project; only objects are fetched into it (see *Sharing a
   clone* above). Needs git 2.40 or newer.

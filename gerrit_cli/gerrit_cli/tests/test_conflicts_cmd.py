@@ -379,7 +379,8 @@ def test_children_are_reported_in_own_stack(setup):
     moved = _local_commit(local, gerrit.master, {"a.c": _text({6: "T"})},
                           f"change 100 moved\n\nChange-Id: {change_id(100)}")
     out = run(client, local, commit=moved)
-    assert out["own_stack"]["children"] == [{"cn": 110, "status": "conflict"}]
+    assert out["own_stack"]["children"] == [
+        {"cn": 110, "status": "conflict", "parent": {"cn": 100, "files": ["a.c"]}}]
 
 
 def test_target_parents_carry_their_tier(setup):
@@ -464,7 +465,8 @@ def test_a_child_on_an_older_patchset_is_still_the_targets_child(setup, monkeypa
     assert seen["results"]["110"]["under"] == 100
     assert seen["results"]["105"]["under"] == 100
     assert sorted(out["own_stack"]["children"], key=lambda c: c["cn"]) == [
-        {"cn": 105, "status": "clean"}, {"cn": 110, "status": "clean"}]
+        {"cn": 105, "status": "clean", "on_old_patchset": {"of": 100, "ps": 1, "current": 2}},
+        {"cn": 110, "status": "clean", "on_old_patchset": {"of": 100, "ps": 1, "current": 2}}]
     assert out["counts"]["candidates"] == 0 and out["clean"] == []
 
 
@@ -614,3 +616,149 @@ def test_hunks_for_a_change_not_tried_is_noted(setup):
     assert out["notes"] == ["hunks-for 999: not a tried candidate"]
     assert "hunks" in out["conflicts"][0]
     assert "notes" not in run(client, local, hunks={200})
+
+
+def _old_parent(gerrit, rest, current_edits):
+    """Change 90 with PS1 (b.c) and PS2 (`current_edits`); the target on PS1."""
+    p1 = gerrit.change(90, gerrit.master, {"b.c": _text({2: "P1"})})
+    p2 = gerrit.change(90, gerrit.master, current_edits, ps=2)
+    rest.add(90, [p1, p2], sorted(current_edits))
+    return p1, p2
+
+
+def test_target_on_an_older_parent_patchset_that_still_applies(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    p1, _p2 = _old_parent(gerrit, rest, {"b.c": _text({2: "P2"})})
+    t = gerrit.change(100, p1.commit, {"a.c": _text({5: "T"}), "b.c": _text({2: "P1"})})
+    rest.add(100, [t], ["a.c"])
+    out = run(client, local)
+    assert out["status"] == "ok"
+    assert out["outdated_parent"] == {"cn": 90, "ps": 1, "current": 2, "status": "clean"}
+    assert "rebase_cause" not in out
+    assert out["own_stack"]["parents"] == [{"cn": 90, "status": "clean"}]
+
+
+def test_target_conflicting_with_its_parents_newer_patchset(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    p1, _p2 = _old_parent(gerrit, rest, {"a.c": _text({5: "P2"})})
+    t = gerrit.change(100, p1.commit, {"a.c": _text({5: "T"}), "b.c": _text({2: "P1"})})
+    rest.add(100, [t], ["a.c"])
+    out = run(client, local)
+    assert out["status"] == "needs-rebase" and out["conflicts"] is None
+    assert out["rebase_cause"] == "parent"
+    assert out["rebase_onto"] == {"cn": 90, "ps": 2}
+    assert out["outdated_parent"] == {"cn": 90, "ps": 1, "current": 2,
+                                      "status": "conflict", "files": ["a.c"]}
+
+
+def test_target_conflicting_with_the_branch_names_the_branch(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    base = gerrit.master
+    gerrit.advance({"a.c": _text({5: "master"})})
+    t = gerrit.change(100, base, {"a.c": _text({5: "T"})})
+    rest.add(100, [t], ["a.c"])
+    out = run(client, local)
+    assert out["status"] == "needs-rebase"
+    assert out["rebase_cause"] == "branch"
+    assert "rebase_onto" not in out and "outdated_parent" not in out
+
+
+def test_a_parent_on_an_older_patchset_of_the_one_below(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    g1 = gerrit.change(80, gerrit.master, {"b.c": _text({1: "G1"})})
+    g2 = gerrit.change(80, gerrit.master, {"b.c": _text({1: "G2"})}, ps=2)
+    rest.add(80, [g1, g2], ["b.c"])
+    p = gerrit.change(90, g1.commit, {"b.c": _text({1: "G1", 9: "P"})})
+    rest.add(90, [p], ["b.c"])
+    t = gerrit.change(100, p.commit, {"a.c": _text({5: "T"}), "b.c": _text({1: "G1", 9: "P"})})
+    rest.add(100, [t], ["a.c"])
+    out = run(client, local)
+    assert out["status"] == "ok" and "outdated_parent" not in out
+    assert out["own_stack"]["parents"] == [
+        {"cn": 80, "status": "clean"},
+        {"cn": 90, "status": "clean", "on_old_patchset": {"of": 80, "ps": 1, "current": 2}}]
+
+
+def test_a_child_on_an_older_patchset_conflicting_with_the_current_one(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    t1 = gerrit.change(100, gerrit.master, {"a.c": _text({5: "T"})})
+    t2 = gerrit.change(100, gerrit.master, {"a.c": _text({5: "T", 6: "T2"})}, ps=2)
+    rest.add(100, [t1, t2], ["a.c"])
+    child = gerrit.change(110, t1.commit, {"a.c": _text({5: "T", 6: "child"})})
+    rest.add(110, [child], ["a.c"])
+    out = run(client, local)
+    assert out["own_stack"]["children"] == [
+        {"cn": 110, "status": "conflict", "parent": {"cn": 100, "files": ["a.c"]},
+         "on_old_patchset": {"of": 100, "ps": 1, "current": 2}}]
+
+
+def test_commit_on_an_older_parent_patchset_is_tried_on_the_current_one(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    p1, p2 = _old_parent(gerrit, rest, {"a.c": _text({5: "P2"})})
+    t = gerrit.change(100, p1.commit, {"a.c": _text({9: "T"}), "b.c": _text({2: "P1"})})
+    rest.add(100, [t], ["a.c"])
+    _git(local, "fetch", "-q", "origin", "refs/changes/90/90/1")
+    mine = _local_commit(local, p1.commit, {"a.c": _text({5: "T"}), "b.c": _text({2: "P1"})},
+                         f"change 100 edited\n\nChange-Id: {change_id(100)}")
+    out = run(client, local, commit=mine)
+    assert out["tested_commit"] == mine
+    assert out["status"] == "needs-rebase"
+    assert out["rebase_cause"] == "parent" and out["rebase_onto"] == {"cn": 90, "ps": 2}
+    assert out["outdated_parent"] == {"cn": 90, "ps": 1, "current": 2,
+                                      "status": "conflict", "files": ["a.c"]}
+
+
+def test_commit_on_a_locally_edited_parent_keeps_the_local_parent(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    p1, _p2 = _old_parent(gerrit, rest, {"a.c": _text({5: "P2"})})
+    t = gerrit.change(100, p1.commit, {"a.c": _text({9: "T"}), "b.c": _text({2: "P1"})})
+    rest.add(100, [t], ["a.c"])
+    edited = _local_commit(local, gerrit.master, {"b.c": _text({2: "P1 edited"})},
+                           f"change 90 edited\n\nChange-Id: {change_id(90)}")
+    mine = _local_commit(local, edited, {"a.c": _text({5: "T"}), "b.c": _text({2: "P1 edited"})},
+                         f"change 100 edited\n\nChange-Id: {change_id(100)}")
+    out = run(client, local, commit=mine)
+    assert out["status"] == "ok"
+    assert "outdated_parent" not in out and "rebase_cause" not in out
+    assert out["own_stack"]["parents"] == [{"cn": 90, "status": "clean"}]
+
+
+def test_target_blocked_by_a_parent_on_an_older_patchset(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    g1 = gerrit.change(80, gerrit.master, {"b.c": _text({1: "G1"})})
+    g2 = gerrit.change(80, gerrit.master, {"b.c": _text({1: "G2", 9: "G2"})}, ps=2)
+    rest.add(80, [g1, g2], ["b.c"])
+    p = gerrit.change(90, g1.commit, {"b.c": _text({1: "G1", 9: "P"})})
+    rest.add(90, [p], ["b.c"])
+    t = gerrit.change(100, p.commit, {"a.c": _text({5: "T"}), "b.c": _text({1: "G1", 9: "P"})})
+    rest.add(100, [t], ["a.c"])
+    out = run(client, local)
+    assert out["status"] == "needs-rebase" and out["on_branch"]["status"] == "blocked"
+    assert out["rebase_cause"] == "parent"
+    assert out["rebase_onto"] == {"cn": 80, "ps": 2, "for": 90}
+    assert "outdated_parent" not in out
+    assert out["own_stack"]["parents"][1] == {
+        "cn": 90, "status": "conflict", "parent": {"cn": 80, "files": ["b.c"]},
+        "on_old_patchset": {"of": 80, "ps": 1, "current": 2}}
+
+
+def test_target_blocked_by_a_parent_conflicting_with_the_branch(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    base = gerrit.master
+    gerrit.advance({"b.c": _text({2: "master"})})
+    p = gerrit.change(90, base, {"b.c": _text({2: "P"})})
+    rest.add(90, [p], ["b.c"])
+    t = gerrit.change(100, p.commit, {"a.c": _text({5: "T"}), "b.c": _text({2: "P"})})
+    rest.add(100, [t], ["a.c"])
+    out = run(client, local)
+    assert out["on_branch"]["status"] == "blocked"
+    assert out["rebase_cause"] == "branch" and "rebase_onto" not in out
