@@ -546,7 +546,7 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   stale), `lands-first` (ready, or a release blocker / release priority
   hashtag), `same-effort` (shares a hashtag, the topic or a ticket key
   in the subject, `LU-12345`, `LU-23456`; the ignored and the release
-  hashtags do not count) and `other`. `same-effort` and `other` must have been
+  hashtags and the ignored tickets do not count) and `other`. `same-effort` and `other` must have been
   updated within `--max-age` days (default 30). `other` is only listed
   (`not_tried`) unless `--all`. `--with CN` checks a change whatever the
   filters say.
@@ -642,12 +642,15 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   `GERRIT_CONFLICTS_BLOCKER_TAGS` (default `*_review_blocker`),
   `GERRIT_CONFLICTS_PRIORITY_TAGS` (default `*_review_priority`) and
   `GERRIT_CONFLICTS_IGNORE_TAGS`, the hashtags that never make two
-  changes the same effort (default `pw_*,fortestonly,forbuildonly`). A
+  changes the same effort (default `pw_*,fortestonly,forbuildonly`),
+  and `GERRIT_CONFLICTS_IGNORE_TICKETS`, the ticket keys that never do
+  (umbrella tickets for unrelated cleanups; default
+  `LU-6142,LU-17000`). A
   `*_review_blocker` or `*_review_priority` tag never counts as shared,
   even with other release globs configured. `--blocker-tag GLOB` /
   `--priority-tag GLOB` (repeatable or comma-separated) replace the
-  first two for one run. `ranks` {blocker, priority, ignore} echoes the
-  globs in effect, in both output forms.
+  first two for one run. `ranks` {blocker, priority, ignore,
+  ignore_tickets} echoes the globs in effect, in both output forms.
 - `--repo` (default `.`) must be a clone whose remote fetches the
   change's project; only objects are fetched into it (see *Sharing a
   clone* above). Needs git 2.40 or newer.

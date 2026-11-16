@@ -125,6 +125,23 @@ def test_the_same_ticket_in_both_subjects_makes_same_effort():
     assert classify(ch(), {"hashtags": [], "topic": None}, set(), 30, NOW) == ("other", None)
 
 
+def test_umbrella_tickets_do_not_make_same_effort():
+    """LU-6142 (code cleanup) names 164 master commits since 2024."""
+    from gerrit_cli.conflict_candidates import Ranks
+
+    target = {"hashtags": [], "topic": None, "subject": "LU-6142 llite: cleanup"}
+    c = ch()
+    c["subject"] = "LU-6142 osc: other cleanup"
+    assert classify(c, target, set(), 30, NOW) == ("other", None)
+    target["subject"], c["subject"] = "LU-6142 build: x", "LU-6142 build: y"
+    assert classify(c, target, set(), 30, NOW) == ("other", None)
+    r = Ranks.from_env({"GERRIT_CONFLICTS_IGNORE_TICKETS": "LU-1*"})
+    assert r.ignore_tickets == ("LU-1*",)
+    assert classify(c, target, set(), 30, NOW, r) == ("same-effort", None)
+    assert Ranks.from_env({"GERRIT_CONFLICTS_IGNORE_TICKETS": " "}).ignore_tickets == \
+        ("LU-6142", "LU-17000")
+
+
 def test_release_rank():
     assert release_rank(["a_review_blocker", "b_review_priority"]) == 2
     assert release_rank(["b_review_priority"]) == 1
@@ -260,7 +277,8 @@ def test_ranks_default_to_todays_tags():
     assert Ranks.from_env({}) == DEFAULT_RANKS
     assert DEFAULT_RANKS.as_dict() == {
         "blocker": ["*_review_blocker"], "priority": ["*_review_priority"],
-        "ignore": ["pw_*", "fortestonly", "forbuildonly"]}
+        "ignore": ["pw_*", "fortestonly", "forbuildonly"],
+        "ignore_tickets": ["LU-6142", "LU-17000"]}
     blank = {"GERRIT_CONFLICTS_BLOCKER_TAGS": " , ", "GERRIT_CONFLICTS_IGNORE_TAGS": ""}
     assert Ranks.from_env(blank) == DEFAULT_RANKS
 

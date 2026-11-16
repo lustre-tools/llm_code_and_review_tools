@@ -1201,7 +1201,8 @@ rest are tiered:
                backport) or a release blocker/priority hashtag
   same-effort  shares a hashtag (not an ignored or release one), the
                topic or a ticket key named in the subject (LU-12345,
-               LU-23456: [A-Z][A-Z0-9]+-digits) with the change
+               LU-23456: [A-Z][A-Z0-9]+-digits; not an ignored one)
+               with the change
   other        the rest; listed in not_tried unless --all
 same-effort and other are limited to --max-age days (default 30); --with
 CN checks a change whatever the filters say. These hashtags are fnmatch
@@ -1209,11 +1210,14 @@ globs (case-sensitive), each list replaced by its environment variable
 (comma-separated, also read from gerrit-cli's .env) when set and not
 blank: GERRIT_CONFLICTS_BLOCKER_TAGS (default *_review_blocker),
 GERRIT_CONFLICTS_PRIORITY_TAGS (default *_review_priority),
-GERRIT_CONFLICTS_IGNORE_TAGS (default pw_*,fortestonly,forbuildonly). A
+GERRIT_CONFLICTS_IGNORE_TAGS (default pw_*,fortestonly,forbuildonly),
+GERRIT_CONFLICTS_IGNORE_TICKETS (ticket keys that never make the same
+effort: umbrella tickets; default LU-6142,LU-17000). A
 *_review_blocker or *_review_priority tag never counts as shared, even
 with other release globs configured. --blocker-tag GLOB and
 --priority-tag GLOB (repeatable or comma-separated) replace the first two
-for one run; ranks {blocker, priority, ignore} echoes those in effect.
+for one run; ranks {blocker, priority, ignore, ignore_tickets} echoes
+those in effect.
 
 Each checked pair is tried in both orders as it would land (landing:
 target_first, candidate_first; each change's stack picked onto the branch

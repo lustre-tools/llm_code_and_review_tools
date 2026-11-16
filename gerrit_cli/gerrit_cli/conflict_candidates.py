@@ -19,6 +19,7 @@ _RELEASE_DEFAULTS = ("*_review_blocker", "*_review_priority")
 BLOCKER_ENV = "GERRIT_CONFLICTS_BLOCKER_TAGS"
 PRIORITY_ENV = "GERRIT_CONFLICTS_PRIORITY_TAGS"
 IGNORE_ENV = "GERRIT_CONFLICTS_IGNORE_TAGS"
+IGNORE_TICKETS_ENV = "GERRIT_CONFLICTS_IGNORE_TICKETS"
 _OPTIONS = ("LABELS", "DETAILED_LABELS", "CURRENT_REVISION",
             "CURRENT_COMMIT", "DETAILED_ACCOUNTS")
 # enough for readiness() bar the backport check; all five options cost
@@ -34,15 +35,17 @@ class Ranks:
     """Which hashtags (fnmatch globs, case-sensitive) make a change a
     release blocker or release priority, and which never make two
     changes the same effort (neither do the release ones, configured or
-    default)."""
+    default); `ignore_tickets` the ticket keys that do not either
+    (umbrella tickets naming unrelated cleanups)."""
     blocker: tuple[str, ...] = (_RELEASE_DEFAULTS[0],)
     priority: tuple[str, ...] = (_RELEASE_DEFAULTS[1],)
     ignore: tuple[str, ...] = ("pw_*", "fortestonly", "forbuildonly")
+    ignore_tickets: tuple[str, ...] = ("LU-6142", "LU-17000")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str], blocker: list[str] | None = None,
                  priority: list[str] | None = None) -> "Ranks":
-        """The defaults, replaced by each of the three environment
+        """The defaults, replaced by each of the four environment
         variables (comma-separated globs) that is set and not blank,
         and then by the --blocker-tag / --priority-tag values given
         (each comma-separated too; blank ones are dropped)."""
@@ -56,7 +59,8 @@ class Ranks:
         d = cls()
         return cls(globs(BLOCKER_ENV, blocker, d.blocker),
                    globs(PRIORITY_ENV, priority, d.priority),
-                   globs(IGNORE_ENV, None, d.ignore))
+                   globs(IGNORE_ENV, None, d.ignore),
+                   globs(IGNORE_TICKETS_ENV, None, d.ignore_tickets))
 
     def rank(self, hashtags: list[str]) -> int:
         """2 for a release blocker, 1 for release priority, else 0."""
@@ -72,7 +76,12 @@ class Ranks:
 
     def as_dict(self) -> dict[str, list[str]]:
         return {"blocker": list(self.blocker), "priority": list(self.priority),
-                "ignore": list(self.ignore)}
+                "ignore": list(self.ignore), "ignore_tickets": list(self.ignore_tickets)}
+
+    def shared_tickets(self, a: str, b: str) -> set[str]:
+        """The ticket keys both subjects name, but the ignored ones."""
+        return {t for t in tickets(a) & tickets(b)
+                if not any(fnmatchcase(t, g) for g in self.ignore_tickets)}
 
 
 DEFAULT_RANKS = Ranks()
@@ -215,7 +224,7 @@ def classify(
                            target.get("hashtags") or [], ranks)
     topic = change.get("topic")
     if same or (topic and topic == target.get("topic")) \
-            or tickets(change.get("subject", "")) & tickets(target.get("subject", "")):
+            or ranks.shared_tickets(change.get("subject", ""), target.get("subject", "")):
         return "same-effort", None
     return "other", None
 

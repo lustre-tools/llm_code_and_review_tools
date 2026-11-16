@@ -309,7 +309,8 @@ def compact(full: dict[str, Any]) -> dict[str, Any]:
     r = full.get("ranks") or {}
     ranks = Ranks(tuple(r.get("blocker", DEFAULT_RANKS.blocker)),
                   tuple(r.get("priority", DEFAULT_RANKS.priority)),
-                  tuple(r.get("ignore", DEFAULT_RANKS.ignore)))
+                  tuple(r.get("ignore", DEFAULT_RANKS.ignore)),
+                  tuple(r.get("ignore_tickets", DEFAULT_RANKS.ignore_tickets)))
     out: dict[str, Any] = {}
     for key, value in full.items():
         if key in _FULL_ONLY:

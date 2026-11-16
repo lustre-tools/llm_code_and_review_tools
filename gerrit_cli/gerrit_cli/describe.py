@@ -501,7 +501,7 @@ def get_tool_description() -> ToolDescription:
             ),
             Command(
                 name="conflicts",
-                description="Trial-merge a change (or a local commit standing in for it) against the open changes on its branch that touch its files and are likely to land soon; says per collision which side should move. Candidate tiers: frozen (queued in <branch>-next), lands-first (ready or release-tagged), same-effort (shares a hashtag, the topic or a ticket key such as LU-12345 in the subject), other (tried only with --all)",
+                description="Trial-merge a change (or a local commit standing in for it) against the open changes on its branch that touch its files and are likely to land soon; says per collision which side should move. Candidate tiers: frozen (queued in <branch>-next), lands-first (ready or release-tagged), same-effort (shares a hashtag, the topic or a ticket key such as LU-12345 in the subject, bar the umbrella tickets in $GERRIT_CONFLICTS_IGNORE_TICKETS), other (tried only with --all)",
                 usage="gc conflicts <CHANGE> [--repo PATH] [--commit SHA] [--full] [--hunks | --hunks-for CN ...] [--max-age DAYS] [--blocker-tag GLOB ...] [--priority-tag GLOB ...] [--with CN ...] [--all]",
                 arguments=[
                     Argument(name="change", description="Gerrit change URL, number or Change-Id", required=True),

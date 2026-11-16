@@ -973,6 +973,7 @@ def _cmd(client, local, monkeypatch, capsys, *extra, env=None):
     monkeypatch.setattr(mod, "_client", lambda: client)
     for name in ("BLOCKER", "PRIORITY", "IGNORE"):
         monkeypatch.delenv(f"GERRIT_CONFLICTS_{name}_TAGS", raising=False)
+    monkeypatch.delenv("GERRIT_CONFLICTS_IGNORE_TICKETS", raising=False)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
     args = build_parser().parse_args(["conflicts", "100", "--repo", str(local), *extra])
