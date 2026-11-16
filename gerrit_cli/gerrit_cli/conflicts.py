@@ -423,6 +423,7 @@ def check_conflicts(
     focus: set[int] | None = None,
     hunks: bool | set[int] = False,
     pair_with: set[int] | None = None,
+    tips: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Trial-merge `patches` against the fetched tip of `branch` and
     against each other.
@@ -439,14 +440,17 @@ def check_conflicts(
     finds the owners of other parent commits that are not on the branch.
     `next_branch` names the queue to check against when the remote has
     it; `change_lookup` turns the Change-Ids of the queued patches the
-    changes collide with into change numbers.
+    changes collide with into change numbers. `tips` are the branch and
+    next_branch tips already read (a missing branch left out); without
+    them they are read from the remote.
     """
     say = log or (lambda _msg: None)
     workers = workers or min(8, os.cpu_count() or 2)
     st = _State({p.cn: p for p in patches})
 
     with repo:
-        heads = repo.branch_tips(remote, [branch] + ([next_branch] if next_branch else []))
+        heads = dict(tips) if tips is not None else repo.branch_tips(
+            remote, [branch] + ([next_branch] if next_branch else []))
         if branch not in heads:
             raise ConflictCheckError(f"{remote} has no branch {branch}")
         tip = heads[branch]

@@ -2,6 +2,7 @@
 
 import json
 import re
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import unquote
@@ -132,6 +133,14 @@ class FakeClient:
     def __init__(self, gerrit):
         self.rest = FakeRest(gerrit)
         self.url = "https://gerrit.invalid"
+        self.branch_reads: list[str] = []
+
+    def get_branch_revision(self, project, branch):
+        assert project == "fs/lustre-release"
+        self.branch_reads.append(branch)
+        r = subprocess.run(["git", "-C", str(self.rest.gerrit.path), "rev-parse", "--verify",
+                            "--quiet", f"refs/heads/{branch}"], capture_output=True, text=True)
+        return r.stdout.strip() or None
 
 
 @pytest.fixture
@@ -921,3 +930,37 @@ def test_release_tags_come_from_the_environment_and_the_options(setup, capsys, m
                "--blocker-tag", "none", env={"GERRIT_CONFLICTS_PRIORITY_TAGS": "rel_*"})
     assert out["ranks"]["priority"] == ["other_*"] and out["ranks"]["blocker"] == ["none"]
     assert out["conflicts"] == [] and out["counts"]["candidates"] == 0
+
+
+def test_branch_tips_are_read_once_by_rest(setup, monkeypatch):
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    q = gerrit.change(200, gerrit.master, {"a.c": _text({5: "Q"})})
+    rest.add(200, [q], ["a.c"], age_days=90)
+    _queue(gerrit, [(200, {"a.c": _text({5: "Q"})})])
+
+    def no_ls_remote(*_a, **_k):
+        raise AssertionError("ls-remote used")
+
+    monkeypatch.setattr("gerrit_cli.conflicts.Repo.branch_tips", no_ls_remote)
+    out = run(client, local)
+    assert sorted(client.branch_reads) == ["master", "master-next"]
+    assert out["conflicts"][0]["tier"] == "frozen"
+
+
+def test_branch_tips_fall_back_to_ls_remote(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    q = gerrit.change(200, gerrit.master, {"a.c": _text({5: "Q"})})
+    rest.add(200, [q], ["a.c"], age_days=90)
+    _queue(gerrit, [(200, {"a.c": _text({5: "Q"})})])
+
+    def broken(project, branch):
+        raise OSError("REST down")
+
+    client.get_branch_revision = broken
+    out = run(client, local)
+    assert out["conflicts"][0]["tier"] == "frozen"
+    assert out["on_next"]["with"]["cn"] == 200

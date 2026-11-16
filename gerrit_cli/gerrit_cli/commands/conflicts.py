@@ -248,6 +248,7 @@ class _Branch:
     tip: str
     next_branch: str
     queued_ids: set[str]  # Change-Ids queued on a current -next
+    heads: dict[str, str]  # branch and -next tips; a missing one left out
 
 
 @dataclass
@@ -284,7 +285,18 @@ def _open_target(client: Any, change: str) -> tuple[int, dict[str, Any]]:
     return cn, target
 
 
-def _branch(repo_path: str, target: dict[str, Any]) -> _Branch:
+def _branch_tips(client: Any, repo: Repo, remote: str, project: str,
+                 branches: list[str]) -> dict[str, str]:
+    """Tip of each branch that exists. By REST: `git ls-remote` over
+    SSH costs a connection of seconds; it is the fallback."""
+    try:
+        revs = [client.get_branch_revision(project, b) for b in branches]
+    except Exception:
+        return repo.branch_tips(remote, branches)
+    return {b: r for b, r in zip(branches, revs) if r}
+
+
+def _branch(client: Any, repo_path: str, target: dict[str, Any]) -> _Branch:
     """Fetch the branch and its -next; a stale -next holds what already
     landed, so nothing in it counts as queued."""
     project, branch = target["project"], target["branch"]
@@ -293,7 +305,7 @@ def _branch(repo_path: str, target: dict[str, Any]) -> _Branch:
     if remote is None:
         raise ConflictRepoError(f"{repo.path} is not a clone of {project}; pass --repo")
     next_branch = f"{branch}-next"
-    heads = repo.branch_tips(remote, [branch, next_branch])
+    heads = _branch_tips(client, repo, remote, project, [branch, next_branch])
     if branch not in heads:
         raise ConflictCheckError(f"{remote} has no branch {branch}")
     tip, next_tip = heads[branch], heads.get(next_branch)
@@ -302,7 +314,7 @@ def _branch(repo_path: str, target: dict[str, Any]) -> _Branch:
     if next_tip and not repo.missing([tip, next_tip]) and repo.is_ancestor(tip, next_tip):
         queue = repo.first_parent_range(tip, next_tip)
         queued_ids = {cid for _subject, cid in repo.messages(queue).values() if cid}
-    return _Branch(repo, remote, project, branch, tip, next_branch, queued_ids)
+    return _Branch(repo, remote, project, branch, tip, next_branch, queued_ids, heads)
 
 
 def _around(get: Any, cn: int, target: dict[str, Any]) -> _Around:
@@ -439,7 +451,7 @@ def _try(client: Any, br: _Branch, focus: _Focus, ar: _Around, sel: Selection,
     return check_conflicts(
         br.repo, br.remote, br.branch, patches, ar.owners, lookup=commit_lookup(get),
         next_branch=br.next_branch, change_lookup=change_id_lookup(get, br.project, br.branch),
-        focus=set(focus.cns), hunks=hunks, pair_with=set(sel.kept))
+        focus=set(focus.cns), hunks=hunks, pair_with=set(sel.kept), tips=br.heads)
 
 
 def _on_branch(result: dict[str, Any], cn: int) -> dict[str, Any]:
@@ -484,7 +496,7 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     `ranks`: the release hashtags (the command reads them from the
     environment and the options)."""
     cn, target = _open_target(client, change)
-    br = _branch(repo_path, target)
+    br = _branch(client, repo_path, target)
     ar = _around(client.rest.get, cn, target)
     focus = _focus(client, br, target, commit, ar)
     sel = _select(client, br, target, focus, ar, max_age, with_, all_, now, ranks)
