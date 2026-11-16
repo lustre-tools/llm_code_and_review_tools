@@ -751,8 +751,6 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
     not apply on the tip). With `hunks`, each pair carries the conflict
     regions of every order that conflicts; a set of candidates limits
     that to their pairs."""
-    from gerrit_cli.conflict_hunks import conflict_regions, silent_collisions
-
     targets = [cn for cn in focus if cn in st.stack
                and not any(cn in st.stack[o] for o in focus if o != cn)]
     if not targets:
@@ -810,6 +808,8 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
         changes `onto` holds on top of the branch tip."""
         if pick.status != "conflict":
             return
+        from gerrit_cli.conflict_hunks import conflict_regions
+
         added: dict[str, set[str]] = {}
         for y in carried:
             for path, lines in repo.own_added(st.patches[y].commit, st.base[y],
@@ -823,6 +823,8 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
     def silent(c: int, merged: _Pick) -> list[dict]:
         if merged.status != "clean":
             return []
+        from gerrit_cli.conflict_hunks import silent_collisions
+
         commits = {st.patches[z].commit: st.base[z] for z in st.stack[target] + st.stack[c]}
         own = repo.changed_files(commits)
         both = set().union(*(own.get(st.patches[z].commit, set()) for z in st.stack[target])) \

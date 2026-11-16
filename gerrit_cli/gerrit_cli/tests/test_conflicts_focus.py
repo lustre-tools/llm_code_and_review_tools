@@ -28,6 +28,17 @@ def test_both_orders_are_reported(gerrit, local):
     assert _pair(r, 2)["via"] is None
 
 
+def test_neither_hunks_nor_silent_checks_load_their_module(gerrit, local, monkeypatch):
+    import sys
+
+    # conflicting both ways and no --hunks: nothing needs conflict_hunks
+    monkeypatch.setitem(sys.modules, "gerrit_cli.conflict_hunks", None)
+    t = gerrit.change(1, gerrit.master, {"a.c": _text({5: "T"})})
+    c = gerrit.change(2, gerrit.master, {"a.c": _text({5: "C"})})
+    r = _check(gerrit, local, [t, c], focus={1})
+    assert _pair(r, 2)["landing"]["target_first"] == "conflict"
+
+
 def test_clean_pairs_are_listed_clean(gerrit, local):
     t = gerrit.change(1, gerrit.master, {"a.c": _text({2: "T"})})
     c = gerrit.change(2, gerrit.master, {"a.c": _text({15: "C"})})
