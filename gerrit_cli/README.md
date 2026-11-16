@@ -533,8 +533,8 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   `--commit` tested another commit). `--full` has them, each pair's
   `commit` and `ps` (the candidate's current patchset, to fetch it),
   every hashtag, the per-order results as objects, the `base_drift`
-  files and the change lists behind the counts. Hunks appear only with `--hunks` /
-  `--hunks-for`, in either form.
+  files and the change lists behind the counts. Hunks appear only with
+  `--hunks` / `--hunks-for`, in either form.
 
 - **Candidates**: open changes on the same project and branch whose
   files overlap the change's stack (Gerrit `file:` queries), minus its
@@ -567,8 +567,8 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   bottom up, that does not apply on the candidate's): the colliding
   lines are that parent's, not the change's own. The landing orders
   name them first, the as-uploaded ones when landing is clean.
-  Collisions that merge cleanly are
-  reported in `silent_only`, by `check`: `duplicate-test` (a test
+  Collisions that land cleanly are reported in `silent_only` (with
+  `as_uploaded` and `files` when that conflicts too), by `check`: `duplicate-test` (a test
   defined twice), `duplicate-value` (an `OBD_FAIL_*` value, or an
   `OBD_CONNECT_*` / `OBD_CONNECT2_*` flag value, each namespace on its
   own, used twice), `duplicate-exception` (both sides add the same test

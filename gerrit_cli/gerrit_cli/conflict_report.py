@@ -133,15 +133,21 @@ def _buckets(chk: Checked, sel: Selection, t_tier: str, t_rank: int) -> _Buckets
     b.skipped.sort(key=lambda s: s["cn"])
     for pair in chk.result["focus_pairs"]:
         e = pair_entry(pair, sel, chk.landed, t_tier, t_rank)
-        statuses = [*e.get("landing", {}).values(), *e["as_uploaded"].values()]
-        if "conflict" in e.get("landing", {}).values():
+        landing = list(e.get("landing", {}).values())
+        uploaded = list(e["as_uploaded"].values())
+        if "conflict" in landing:
             b.conflicts.append(e)
-        elif "conflict" in statuses:
-            b.uploaded_only.append(e)
+        elif "error" in landing:
+            b.errors.append({"cn": e["cn"], "reason": "trial merge failed"})
         elif pair["silent"]:
-            b.silent_only.append({k: e[k] for k in ("cn", "commit", "ps", "tier", "fix_side",
-                                                    "silent", "same_function") if k in e})
-        elif "error" in statuses:
+            # a landing problem, whatever the as-uploaded merges say
+            keys = ("cn", "commit", "ps", "tier", "fix_side", "silent", "same_function")
+            if "conflict" in uploaded:
+                keys += ("files", "as_uploaded", "via", "own_via")
+            b.silent_only.append({k: e[k] for k in keys if k in e})
+        elif "conflict" in uploaded:
+            b.uploaded_only.append(e)
+        elif "error" in uploaded:
             b.errors.append({"cn": e["cn"], "reason": "trial merge failed"})
         elif "same_function" in e:
             b.watch.append(e)

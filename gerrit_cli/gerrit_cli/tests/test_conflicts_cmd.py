@@ -662,6 +662,52 @@ def test_a_landed_pair_conflicting_only_as_uploaded_is_in_as_uploaded_only(setup
     assert out["counts"]["conflicting"] == 1 and out["counts"]["as_uploaded_only"] == 1
 
 
+def _stale_and_target(gerrit, rest, stale_h, target_h):
+    """A ready candidate on an old base that conflicts with the target only
+    as uploaded; each side also adds `*_h` to obd_support.h."""
+    gerrit.advance({"inc/obd_support.h": _text({})})
+    old = gerrit.master
+    gerrit.advance({"a.c": _text({6: "M"})})
+    stale = gerrit.change(200, old, {"a.c": _text({4: "S"}), "inc/obd_support.h": stale_h})
+    rest.add(200, [stale], ["a.c", "inc/obd_support.h"], labels=READY)
+    t = gerrit.change(100, gerrit.master, {"a.c": _text({6: "M", 7: "T"}),
+                                           "inc/obd_support.h": target_h})
+    rest.add(100, [t], ["a.c", "inc/obd_support.h"])
+    return stale, t
+
+
+def test_a_silent_collision_is_not_hidden_by_an_as_uploaded_conflict(setup):
+    """A duplicate fail_loc on a stale ready candidate is a landing problem."""
+    gerrit, local, client = setup
+    _stale_and_target(gerrit, client.rest, _text({17: "#define OBD_FAIL_Y 0x1234"}),
+                      _text({3: "#define OBD_FAIL_X 0x1234"}))
+    out = run(client, local)
+    assert out["as_uploaded_only"] == []
+    [e] = out["silent_only"]
+    assert e["cn"] == 200 and e["silent"][0]["check"] == "duplicate-value"
+    assert e["as_uploaded"] == {"target_on_theirs": "conflict", "theirs_on_target": "clean"}
+    assert out["counts"]["conflicting"] == 1 and out["counts"]["as_uploaded_only"] == 0
+
+
+def test_a_landing_error_is_an_error_whatever_as_uploaded_says(setup, monkeypatch):
+    from gerrit_cli import conflicts as engine
+
+    gerrit, local, client = setup
+    stale, t = _stale_and_target(gerrit, client.rest, _text({17: "S"}), _text({3: "T"}))
+    real = engine.Repo.pick
+
+    def pick(self, onto, commit, parent, **kw):
+        if (commit, onto) not in ((stale.commit, t.commit), (t.commit, stale.commit)) \
+                and commit in (stale.commit, t.commit) and onto != gerrit.master:
+            return engine._Pick("error", detail="boom")
+        return real(self, onto, commit, parent, **kw)
+
+    monkeypatch.setattr(engine.Repo, "pick", pick)
+    out = run(client, local)
+    assert out["errors"] == [{"cn": 200, "reason": "trial merge failed"}]
+    assert out["as_uploaded_only"] == [] and out["conflicts"] == []
+
+
 def test_needs_rebase_lists_clean_pairs_in_clean(setup):
     gerrit, local, client = setup
     rest = client.rest
