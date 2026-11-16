@@ -798,9 +798,10 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
     """Every candidate (a patch outside `focus`) against the focus stack
     in both merge orders. Returns (pairs, candidates whose own stack does
     not apply on the tip). A pair whose sides' own diffs edit the same
-    function carries same_function. With `hunks`, each pair carries the
-    conflict regions of every order that conflicts; a set of candidates
-    limits that to their pairs."""
+    function carries same_function. A conflict at a candidate's in-flight
+    ancestor names it in via, one at a target's parent in own_via. With
+    `hunks`, each pair carries the conflict regions of every order that
+    conflicts; a set of candidates limits that to their pairs."""
     targets = [cn for cn in focus if cn in st.stack
                and not any(cn in st.stack[o] for o in focus if o != cn)]
     if not targets:
@@ -922,6 +923,7 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
             "as_uploaded": {"target_on_theirs": t_up.status, "theirs_on_target": c_up.status,
                             "files": sorted(set(t_up.files) | set(c_up.files))},
             "via": at if at is not None and at != c else None,
+            "own_via": cat if cat is not None and cat != target else None,
         }
         if dropped:
             pair["base_drift"] = sorted(dropped)

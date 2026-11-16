@@ -534,7 +534,7 @@ def get_tool_description() -> ToolDescription:
                     "conflicts[].cn", "conflicts[].tier", "conflicts[].readiness",
                     "conflicts[].fix_side", "conflicts[].files",
                     "conflicts[].landing", "conflicts[].as_uploaded",
-                    "conflicts[].via", "conflicts[].silent",
+                    "conflicts[].via", "conflicts[].own_via", "conflicts[].silent",
                     "conflicts[].base_drift (compact: a count)", "conflicts[].hunks",
                     "conflicts[].release_hashtags (compact)", "conflicts[].hashtags (--full)",
                     "conflicts[].same_function (--full; compact: watch[] and silent_only[] only)",

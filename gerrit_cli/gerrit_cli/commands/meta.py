@@ -1221,7 +1221,9 @@ each own diff picked onto the other's uploaded commit). An as-uploaded
 conflict counts only on files both sides change; one on a file only one
 side changes is the branch moving between their bases, listed in
 base_drift instead. A pair is in conflicts if any of the four conflicts;
-via names the candidate's ancestor the conflict is at. Pairs that merge
+via names the candidate's ancestor the conflict is at, own_via the
+target's in-flight parent it is at (the colliding lines are that
+parent's, not the change's own). Pairs that merge
 cleanly but still collide are in silent_only, check: duplicate-test (a
 test defined twice), duplicate-value (an OBD_FAIL value, or an
 OBD_CONNECT / OBD_CONNECT2 flag value, used twice), duplicate-exception
@@ -1279,7 +1281,7 @@ pair cn, subject (cut at 70 characters), owner, tier, readiness, fix_side,
 files, release_hashtags (only the release ones), landing and as_uploaded
 as one string each in the order given by orders ("conflict/clean":
 target_first/candidate_first, target_on_theirs/theirs_on_target), and
-only when set: via, silent, base_drift (a count), forced, hunks, and
+only when set: via, own_via, silent, base_drift (a count), forced, hunks, and
 same_function only in watch and silent_only. clean,
 already_conflicting and not_tried are counts; commit, tested_commit
 (unless --commit tested another commit), project and tip are left out.

@@ -84,6 +84,7 @@ def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
     e["as_uploaded"] = {k: pair["as_uploaded"][k]
                         for k in ("target_on_theirs", "theirs_on_target")}
     e["via"] = pair["via"]
+    e["own_via"] = pair.get("own_via")
     e["silent"] = pair["silent"]
     if pair.get("base_drift"):
         e["base_drift"] = pair["base_drift"]
@@ -254,8 +255,9 @@ def compact_entry(e: dict[str, Any], ranks: Ranks = DEFAULT_RANKS,
     for model, orders in ORDERS.items():
         if model in e:
             out[model] = "/".join(e[model][o] for o in orders)
-    if e.get("via") is not None:
-        out["via"] = e["via"]
+    for key in ("via", "own_via"):
+        if e.get(key) is not None:
+            out[key] = e[key]
     for key in ("silent", "same_function", "forced", "hunks"):
         if e.get(key) and (key != "same_function" or same_function):
             out[key] = e[key]

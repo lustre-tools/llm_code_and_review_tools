@@ -524,7 +524,8 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   release hashtags (`release_hashtags`) and `landing` / `as_uploaded` as
   one string each, `"conflict/clean"`, in the order `orders` names
   (`target_first/candidate_first`, `target_on_theirs/theirs_on_target`);
-  `via`, `silent`, `forced` and `base_drift` (a count) only when set,
+  `via`, `own_via`, `silent`, `forced` and `base_drift` (a count) only
+  when set,
   `same_function` only in `watch` and `silent_only` (a pair that
   conflicts needs a look anyway).
   `clean`, `already_conflicting` and `not_tried` are counts; the commit
@@ -555,7 +556,10 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   change; one on a file only one side changes comes from the branch
   moving between their bases and is listed in `base_drift` instead.
   A pair is in `conflicts` when any of the four conflicts; `via` names the
-  candidate's ancestor the conflict is at. Collisions that merge cleanly are
+  candidate's ancestor the conflict is at, `own_via` the target's
+  in-flight parent it is at (the first change of the target's stack,
+  bottom up, that does not apply on the candidate's): the colliding
+  lines are that parent's, not the change's own. Collisions that merge cleanly are
   reported in `silent_only`, by `check`: `duplicate-test` (a test
   defined twice), `duplicate-value` (an `OBD_FAIL_*` value, or an
   `OBD_CONNECT_*` / `OBD_CONNECT2_*` flag value, each namespace on its

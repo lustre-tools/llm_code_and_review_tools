@@ -378,6 +378,23 @@ def test_same_effort_and_candidate_stack_land_together(setup):
     assert c["hashtags"] == ["ec_work"]
 
 
+def test_a_collision_in_a_targets_parent_names_it_in_own_via(setup, capsys, monkeypatch):
+    """69268 vs 69771: the colliding line is in parent 69267."""
+    gerrit, local, client = setup
+    rest = client.rest
+    p = gerrit.change(90, gerrit.master, {"a.c": _text({5: "P"})})
+    rest.add(90, [p], ["a.c"])
+    t = gerrit.change(100, p.commit, {"a.c": _text({5: "P"}), "b.c": _text({9: "T"})})
+    rest.add(100, [t], ["b.c"])
+    r = gerrit.change(200, gerrit.master, {"a.c": _text({5: "R"})})
+    rest.add(200, [r], ["a.c"], labels=READY)
+    [c] = run(client, local)["conflicts"]
+    assert c["cn"] == 200 and c["own_via"] == 90 and c["via"] is None
+    assert c["fix_side"] == "target"
+    [c] = _cmd(client, local, monkeypatch, capsys)["conflicts"]
+    assert c["own_via"] == 90 and "via" not in c
+
+
 def test_children_are_reported_in_own_stack(setup):
     gerrit, local, client = setup
     rest = client.rest

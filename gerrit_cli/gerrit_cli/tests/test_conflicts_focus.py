@@ -189,3 +189,23 @@ def test_a_pair_without_drift_has_no_base_drift_key(gerrit, local):
     t = gerrit.change(1, gerrit.master, {"a.c": _text({5: "T"})})
     c = gerrit.change(2, gerrit.master, {"a.c": _text({5: "C"})})
     assert "base_drift" not in _pair(_check(gerrit, local, [t, c], focus={1}), 2)
+
+
+def test_conflict_in_a_target_parent_names_own_via(gerrit, local):
+    """69268: the colliding line is in its parent 69267, not in its own diff."""
+    t1 = gerrit.change(1, gerrit.master, {"a.c": _text({5: "T"})})
+    t2 = gerrit.change(2, t1.commit, {"a.c": _text({5: "T"}), "b.c": _text({9: "T2"})})
+    c = gerrit.change(3, gerrit.master, {"a.c": _text({5: "C"})})
+    p = _pair(_check(gerrit, local, [t1, t2, c], focus={1, 2}), 3)
+    assert p["landing"]["candidate_first"] == "conflict"
+    assert p["own_via"] == 1
+    assert p["via"] is None
+
+
+def test_conflict_in_the_targets_own_diff_has_no_own_via(gerrit, local):
+    t1 = gerrit.change(1, gerrit.master, {"b.c": _text({9: "T1"})})
+    t2 = gerrit.change(2, t1.commit, {"a.c": _text({5: "T"}), "b.c": _text({9: "T1"})})
+    c = gerrit.change(3, gerrit.master, {"a.c": _text({5: "C"})})
+    p = _pair(_check(gerrit, local, [t1, t2, c], focus={1, 2}), 3)
+    assert p["landing"]["candidate_first"] == "conflict"
+    assert p["own_via"] is None
