@@ -68,6 +68,13 @@ _COMMIT_ENV = {
 }
 
 
+# a patch in one shape whatever the user's diff configuration (noprefix,
+# interHunkContext, an external diff, textconv)
+_PLAIN_DIFF = ("-c", "core.quotePath=false", "-c", "diff.interHunkContext=0",
+               "diff-tree", "-r", "-p", "-U0", "--no-renames", "--no-color",
+               "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/")
+
+
 class ConflictCheckError(Exception):
     """The repository can't be used or the branch can't be fetched."""
 
@@ -385,13 +392,18 @@ class Repo:
         """The `+` lines of commit's own diff against parent, per path."""
         out: dict[str, set[str]] = {}
         for path in paths:
-            r = self._run("diff", "--no-color", "-U0", parent, commit, "--", path,
-                          scratch=True, binary=True)
+            r = self._run(*_PLAIN_DIFF, parent, commit, "--", path, scratch=True, binary=True)
+            out[path] = set()
             if r.returncode != 0:
-                out[path] = set()
                 continue
-            out[path] = {ln[1:] for ln in r.stdout.decode(errors="replace").splitlines()
-                         if ln.startswith("+") and not ln.startswith("+++")}
+            in_hunk = False
+            for ln in r.stdout.decode(errors="replace").splitlines():
+                if ln.startswith("diff --git "):
+                    in_hunk = False
+                elif ln.startswith("@@"):
+                    in_hunk = True
+                elif in_hunk and ln.startswith("+"):
+                    out[path].add(ln[1:])
         return out
 
     def functions(self, commit: str, parent: str) -> dict[str, set[str]]:
@@ -402,10 +414,7 @@ class Repo:
         the repository's attributes mark binary has no hunks."""
         from gerrit_cli.conflict_functions import edited_functions, parse_diff
 
-        r = self._run("-c", "core.quotePath=false", "-c", "diff.interHunkContext=0",
-                      "diff-tree", "-r", "-p", "-U0", "--no-renames", "--no-color",
-                      "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/",
-                      parent, commit, binary=True)
+        r = self._run(*_PLAIN_DIFF, parent, commit, binary=True)
         if r.returncode != 0:
             return {}
         hunks = parse_diff(r.stdout.decode(errors="replace"))

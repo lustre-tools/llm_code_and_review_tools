@@ -298,3 +298,14 @@ def test_an_exception_one_side_adds_again_is_not_a_duplicate():
     base = "always_except LU-1 56\n"
     t = base + "always_except LU-2 56\n"
     assert silent_collisions({_SH: (t, base, t)}) == []
+
+
+def test_own_added_ignores_the_users_diff_configuration(gerrit, local):
+    """An external diff driver or a textconv must not change what is read;
+    an added line starting "++" is still an added line."""
+    t = gerrit.change(1, gerrit.master, {"a.c": _text({5: "T", 6: "++x"})})
+    _fetch(gerrit, local)
+    _git(local, "config", "diff.external", "true")
+    _git(local, "config", "diff.noprefix", "true")
+    with Repo(local) as repo:
+        assert repo.own_added(t.commit, gerrit.master, ["a.c"]) == {"a.c": {"T", "++x"}}
