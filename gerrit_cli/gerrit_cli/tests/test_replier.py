@@ -14,6 +14,63 @@ class TestCommentReplier:
     """Tests for CommentReplier."""
 
     @patch("gerrit_cli.replier.GerritCommentsClient")
+    def test_reply_reports_the_new_reply_id(self, mock_client_class, monkeypatch):
+        """fb-c1aad40f5ed1: the result named the comment replied to
+        (81fb91db_6c5b8051), not the reply just posted."""
+        monkeypatch.delenv("GERRIT_CLI_MODE", raising=False)
+        mock_client = MagicMock()
+        mock_client.get_change_detail.return_value = {"current_revision": "abc"}
+        mock_client.get_comments.return_value = {"f.c": [
+            {"id": "81fb91db_6c5b8051", "message": "Why?", "updated": "2026-11-14 19:00:00"},
+            {"id": "older_done", "in_reply_to": "81fb91db_6c5b8051",
+             "message": "My reading", "updated": "2026-11-13 10:00:00"},
+            {"id": "c8317bd5_863c06c3", "in_reply_to": "81fb91db_6c5b8051",
+             "message": "My reading", "updated": "2026-11-14 20:00:00"},
+            {"id": "other", "in_reply_to": "81fb91db_6c5b8051",
+             "message": "Something else", "updated": "2026-11-14 21:00:00"},
+        ]}
+        mock_client_class.return_value = mock_client
+        parent = Comment(
+            id="81fb91db_6c5b8051", patch_set=1, file_path="f.c", line=3,
+            message="Why?", author=Author(name="R"), unresolved=True,
+            updated="2026-11-14 19:00:00",
+        )
+
+        result = CommentReplier().reply_to_comment(123, parent, "My reading\n")
+
+        assert result.success is True
+        assert result.comment_id == "c8317bd5_863c06c3"
+        assert result.in_reply_to == "81fb91db_6c5b8051"
+        data = result.to_dict()
+        assert data["comment_id"] == "c8317bd5_863c06c3"
+        assert data["in_reply_to"] == "81fb91db_6c5b8051"
+
+    @patch("gerrit_cli.replier.GerritCommentsClient")
+    def test_batch_reply_reports_the_new_reply_ids(self, mock_client_class, monkeypatch):
+        monkeypatch.delenv("GERRIT_CLI_MODE", raising=False)
+        mock_client = MagicMock()
+        mock_client.get_change_detail.return_value = {"current_revision": "abc"}
+        mock_client.get_comments.return_value = {"f.c": [
+            {"id": "r1", "in_reply_to": "p1", "message": "Done", "updated": "2"},
+            {"id": "r2", "in_reply_to": "p2", "message": "Done", "updated": "2"},
+        ]}
+        mock_client_class.return_value = mock_client
+
+        def parent(cid):
+            return Comment(id=cid, patch_set=1, file_path="f.c", line=1,
+                           message="x", author=Author(name="R"),
+                           unresolved=True, updated="1")
+
+        results = CommentReplier().batch_reply(123, [
+            {"comment": parent("p1"), "message": "Done"},
+            {"comment": parent("p2"), "message": "Done"},
+            {"comment": parent("p3"), "message": "Done"},
+        ])
+
+        assert [r.comment_id for r in results] == ["r1", "r2", None]
+        assert [r.in_reply_to for r in results] == ["p1", "p2", "p3"]
+
+    @patch("gerrit_cli.replier.GerritCommentsClient")
     def test_reply_to_comment_success(self, mock_client_class):
         """Test successful reply to comment."""
         mock_client = MagicMock()
@@ -42,7 +99,7 @@ class TestCommentReplier:
         )
 
         assert result.success is True
-        assert result.comment_id == "comment1"
+        assert result.in_reply_to == "comment1"
         assert result.message == "Done"
         assert result.marked_resolved is True
         assert result.error is None
@@ -330,7 +387,7 @@ class TestCommentReplier:
             ],
         )
 
-        assert [r.comment_id for r in results] == ["gone", "kept", "ps"]
+        assert [r.in_reply_to for r in results] == ["gone", "kept", "ps"]
         assert all(r.success for r in results)
         posts = {
             c.kwargs["revision_id"]: c.kwargs["comments"]

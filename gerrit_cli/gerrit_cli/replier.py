@@ -58,6 +58,29 @@ def _reply_input(parent: Comment, message: str, mark_resolved: bool) -> dict[str
     return comment_input
 
 
+def _find_replies(posted: Any, wanted: list[tuple[str, str]]) -> list[Optional[str]]:
+    """The id of each new reply, a (parent id, message) pair, in a
+    get_comments() or get_drafts() answer; None where none is found.
+
+    Gerrit's review answer carries no comment ids, so the reply is found
+    by its parent and text; of several alike (a second "Done"), the
+    newest.
+    """
+    found: list[Optional[str]] = []
+    for parent_id, message in wanted:
+        best: Optional[dict] = None
+        for path_comments in (posted.values() if isinstance(posted, dict) else ()):
+            for comment in path_comments if isinstance(path_comments, list) else ():
+                if (isinstance(comment, dict)
+                        and comment.get("in_reply_to") == parent_id
+                        and (comment.get("message") or "").strip() == message.strip()
+                        and (best is None
+                             or str(comment.get("updated") or "") >= str(best.get("updated") or ""))):
+                    best = comment
+        found.append(best.get("id") if best else None)
+    return found
+
+
 class CommentReplier:
     """Reply to comments on Gerrit changes."""
 
@@ -102,21 +125,35 @@ class CommentReplier:
                 comments={comment.file_path: [_reply_input(comment, message, mark_resolved)]},
             )
 
-            return ReplyResult(
-                success=True,
-                comment_id=comment.id,
-                message=message,
-                marked_resolved=mark_resolved,
-            )
-
         except Exception as e:
             return ReplyResult(
                 success=False,
-                comment_id=comment.id,
+                comment_id=None,
+                in_reply_to=comment.id,
                 message=message,
                 marked_resolved=False,
                 error=_error_text(e),
             )
+
+        [reply_id] = self._new_reply_ids(change_number, [(comment.id, message)])
+        return ReplyResult(
+            success=True,
+            comment_id=reply_id,
+            in_reply_to=comment.id,
+            message=message,
+            marked_resolved=mark_resolved,
+        )
+
+    def _new_reply_ids(self, change_number: int,
+                       wanted: list[tuple[str, str]]) -> list[Optional[str]]:
+        """The ids of replies just posted (see _find_replies), read back
+        from the change; None for each when that read fails."""
+        try:
+            posted = (self.client.get_drafts(change_number) if is_drafts_mode()
+                      else self.client.get_comments(change_number))
+        except Exception:
+            return [None] * len(wanted)
+        return _find_replies(posted, wanted)
 
     def mark_done(
         self,
@@ -201,7 +238,8 @@ class CommentReplier:
             error = _error_text(e)
             return [
                 ReplyResult(
-                    success=False, comment_id=reply_spec["comment"].id,
+                    success=False, comment_id=None,
+                    in_reply_to=reply_spec["comment"].id,
                     message=reply_spec["message"], marked_resolved=False, error=error,
                 )
                 for reply_spec in replies
@@ -222,15 +260,21 @@ class CommentReplier:
                 "\nCheck the change in the web UI: if the replies are "
                 "there, they were posted; if not, publish or delete their "
                 "drafts." if uncertain else "")
+        reply_ids = (
+            self._new_reply_ids(change_number, [
+                (reply_spec["comment"].id, reply_spec["message"]) for reply_spec in replies
+            ]) if error is None else [None] * len(replies)
+        )
         return [
             ReplyResult(
                 success=error is None,
-                comment_id=reply_spec["comment"].id,
+                comment_id=reply_id,
+                in_reply_to=reply_spec["comment"].id,
                 message=reply_spec["message"],
                 marked_resolved=error is None and reply_spec.get("mark_resolved", False),
                 error=error,
             )
-            for reply_spec in replies
+            for reply_spec, reply_id in zip(replies, reply_ids)
         ]
 
     def push_staged(
