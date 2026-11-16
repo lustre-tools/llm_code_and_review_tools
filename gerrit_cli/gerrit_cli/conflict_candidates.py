@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 from .graph.nodes import _LUSTRE_CHANGE_TRAILER_RE
 from .graph.review import _is_bot_account, _parse_labels
+from .parallel import parallel_map
 
 # release tags of the current scheme: never a shared effort, whatever
 # the configured release globs
@@ -285,22 +286,32 @@ def query_candidates(client: Any, project: str, branch: str,
     """The open changes on `paths` updated within max_age_days, and the
     older ones that land anyway. The older ones are read with the votes
     only, then the few that may land in full."""
+    batches = [paths[i:i + _PATHS_PER_QUERY] for i in range(0, len(paths), _PATHS_PER_QUERY)]
+
+    def search(job: tuple[list[str], bool]) -> list[dict[str, Any]]:
+        batch, stale = job
+        return _fetch(client, _query(project, branch, batch, max_age_days, stale),
+                      _VOTE_OPTIONS if stale else _OPTIONS)
+
+    found = parallel_map(search, [(b, False) for b in batches] + [(b, True) for b in batches])
     seen: dict[int, dict[str, Any]] = {}
+    for ch in (c for page in found[:len(batches)] for c in page):
+        seen.setdefault(ch["_number"], ch)
     maybe: list[int] = []
-    for i in range(0, len(paths), _PATHS_PER_QUERY):
-        batch = paths[i:i + _PATHS_PER_QUERY]
-        for ch in _fetch(client, _query(project, branch, batch, max_age_days)):
-            seen.setdefault(ch["_number"], ch)
-        for ch in _fetch(client, _query(project, branch, batch, max_age_days, stale=True),
-                         _VOTE_OPTIONS):
-            # a backport needs one +1 fewer; whether it is one takes the
-            # commit message
-            if _lands_anyway(ch, queued_ids, ranks, need=1) and ch["_number"] not in maybe:
-                maybe.append(ch["_number"])
+    for ch in (c for page in found[len(batches):] for c in page):
+        # a backport needs one +1 fewer; whether it is one takes the
+        # commit message
+        if _lands_anyway(ch, queued_ids, ranks, need=1) and ch["_number"] not in maybe:
+            maybe.append(ch["_number"])
     todo = [n for n in maybe if n not in seen]
-    for i in range(0, len(todo), _CHANGES_PER_QUERY):
-        q = " OR ".join(f"change:{n}" for n in todo[i:i + _CHANGES_PER_QUERY])
-        for ch in _fetch(client, f"({q}) status:open"):
+
+    def details(chunk: list[int]) -> list[dict[str, Any]]:
+        q = " OR ".join(f"change:{n}" for n in chunk)
+        return _fetch(client, f"({q}) status:open")
+
+    for page in parallel_map(details, [todo[i:i + _CHANGES_PER_QUERY]
+                                       for i in range(0, len(todo), _CHANGES_PER_QUERY)]):
+        for ch in page:
             if _lands_anyway(ch, queued_ids, ranks):
                 seen.setdefault(ch["_number"], ch)
     return list(seen.values())

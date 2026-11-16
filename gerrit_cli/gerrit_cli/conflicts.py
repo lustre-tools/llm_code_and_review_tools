@@ -50,6 +50,8 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
+from .parallel import parallel_map
+
 _OID_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _CHANGE_ID_RE = re.compile(r"^Change-Id:\s*(I[0-9a-f]{40})\s*$", re.M)
 # merge-tree --write-tree with --merge-base
@@ -105,12 +107,13 @@ def changes_by_commit(get: Callable[[str], Any], shas: list[str], batch: int = _
                       options: str = "") -> list[dict[str, Any]]:
     """The changes (all revisions) that have one of `shas` as a patch set.
     `get` is a REST client's get; `options` extra `&o=` parameters."""
-    out = []
-    for i in range(0, len(shas), batch):
-        query = " OR ".join(f"commit:{h}" for h in shas[i:i + batch])
-        out.extend(get(f"/changes/?q={quote(query, safe=':+ ')}&o=ALL_REVISIONS{options}&n=500")
-                   or [])
-    return out
+    def one(chunk: list[str]) -> list[dict[str, Any]]:
+        query = " OR ".join(f"commit:{h}" for h in chunk)
+        return get(f"/changes/?q={quote(query, safe=':+ ')}&o=ALL_REVISIONS{options}&n=500") or []
+
+    return [c for page in parallel_map(one, [shas[i:i + batch]
+                                              for i in range(0, len(shas), batch)])
+            for c in page]
 
 
 def commit_lookup(get: Callable[[str], Any], batch: int = _LOOKUP_BATCH
@@ -129,12 +132,16 @@ def commit_lookup(get: Callable[[str], Any], batch: int = _LOOKUP_BATCH
 def change_id_lookup(get: Callable[[str], Any], project: str, branch: str,
                      batch: int = _LOOKUP_BATCH) -> Callable[[list[str]], dict[str, int]]:
     """check_conflicts' `change_lookup`: Change-Id -> change number."""
+    def one(chunk: list[str]) -> list[dict[str, Any]]:
+        ids = " OR ".join(f"change:{c}" for c in chunk)
+        query = f"({ids}) project:{project} branch:{branch}"
+        return get(f"/changes/?q={quote(query, safe=':+ ()')}&n=500") or []
+
     def change_lookup(change_ids: list[str]) -> dict[str, int]:
         found = {}
-        for i in range(0, len(change_ids), batch):
-            ids = " OR ".join(f"change:{c}" for c in change_ids[i:i + batch])
-            query = f"({ids}) project:{project} branch:{branch}"
-            for change in get(f"/changes/?q={quote(query, safe=':+ ()')}&n=500") or []:
+        for page in parallel_map(one, [change_ids[i:i + batch]
+                                       for i in range(0, len(change_ids), batch)]):
+            for change in page:
                 found[change.get("change_id", "")] = change.get("_number", 0)
         return found
     return change_lookup

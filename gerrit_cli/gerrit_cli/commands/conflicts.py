@@ -46,6 +46,7 @@ from ..conflicts import (
     commit_lookup,
 )
 from ..errors import ErrorCode
+from ..parallel import parallel_map
 from ._helpers import _cli, error_code_for, output_error, output_success
 
 _DETAIL = ("CURRENT_REVISION", "CURRENT_COMMIT", "LABELS", "DETAILED_LABELS",
@@ -276,13 +277,16 @@ class _Focus:
         return [p.cn for p in self.stack]
 
 
-def _open_target(client: Any, change: str) -> tuple[int, dict[str, Any]]:
+def _open_target(client: Any, change: str
+                 ) -> tuple[int, dict[str, Any], list[dict[str, Any]]]:
+    """(number, change, related changes), the two read at once."""
     _base, cn = _cli().GerritCommentsClient.parse_gerrit_url(change)
-    target = client.rest.get(f"/changes/{cn}?{_OPTIONS[1:]}")
+    target, related = parallel_map(client.rest.get, [
+        f"/changes/{cn}?{_OPTIONS[1:]}", f"/changes/{cn}/revisions/current/related"])
     if target.get("status") != "NEW":
         raise ConflictRepoError(f"change {cn} is {target.get('status')}; only an open "
                                 "change can be checked")
-    return cn, target
+    return cn, target, (related or {}).get("changes") or []
 
 
 def _branch_tips(client: Any, repo: Repo, remote: str, project: str,
@@ -290,7 +294,7 @@ def _branch_tips(client: Any, repo: Repo, remote: str, project: str,
     """Tip of each branch that exists. By REST: `git ls-remote` over
     SSH costs a connection of seconds; it is the fallback."""
     try:
-        revs = [client.get_branch_revision(project, b) for b in branches]
+        revs = parallel_map(lambda b: client.get_branch_revision(project, b), branches)
     except Exception:
         return repo.branch_tips(remote, branches)
     return {b: r for b, r in zip(branches, revs) if r}
@@ -317,8 +321,8 @@ def _branch(client: Any, repo_path: str, target: dict[str, Any]) -> _Branch:
     return _Branch(repo, remote, project, branch, tip, next_branch, queued_ids, heads)
 
 
-def _around(get: Any, cn: int, target: dict[str, Any]) -> _Around:
-    related = (get(f"/changes/{cn}/revisions/current/related") or {}).get("changes") or []
+def _around(get: Any, cn: int, target: dict[str, Any], related: list[dict[str, Any]]
+            ) -> _Around:
     owners: dict[str, tuple[int, str]] = {}
     patchsets = _Patchsets()
     for e in related:
@@ -495,9 +499,9 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     pair's conflict regions, a set of change numbers for those pairs;
     `ranks`: the release hashtags (the command reads them from the
     environment and the options)."""
-    cn, target = _open_target(client, change)
+    cn, target, related = _open_target(client, change)
     br = _branch(client, repo_path, target)
-    ar = _around(client.rest.get, cn, target)
+    ar = _around(client.rest.get, cn, target, related)
     focus = _focus(client, br, target, commit, ar)
     sel = _select(client, br, target, focus, ar, max_age, with_, all_, now, ranks)
     result = _try(client, br, focus, ar, sel, hunks)
