@@ -1246,8 +1246,13 @@ local edit is tested as it is. base says whether rebasing is an option (rebase:
 lands-first); on_branch and on_next are the change against the branch
 and <branch>-next; own_stack how its parents and children fare;
 already_conflicting the candidates that do not apply on the tip by
-themselves. Gerrit's mergeable flag and conflicts: search are not used.
-Read-only towards Gerrit; needs git 2.40 or newer.
+themselves. counts: candidates = the open changes the file: queries found
+(they leave out changes older than --max-age that are not ready, queued or
+release-tagged, so those show up nowhere), minus the own stack, plus open
+--with changes; after_filters = those the filters kept (handed to the
+trial merges, plus not_tried); tried = pairs trial-merged; conflicting = entries in conflicts,
+as_uploaded_only and silent_only. Gerrit's mergeable flag and conflicts:
+search are not used. Read-only towards Gerrit; needs git 2.40 or newer.
 """,
         "examples": [
             {

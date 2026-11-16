@@ -587,6 +587,15 @@ gc conflicts 12345 --with 23456 --all                 # force one in, try every 
 - `--repo` (default `.`) must be a clone whose remote fetches the
   change's project; only objects are fetched into it (see *Sharing a
   clone* above). Needs git 2.40 or newer.
+- `counts`: `candidates` the open changes the `file:` queries found on
+  the change's files (the queries themselves leave out changes not
+  updated within `--max-age` days unless ready, queued or carrying a
+  release hashtag, so those appear nowhere), minus its own stack, plus
+  the `--with` changes that are open on the branch; `after_filters`
+  those not in `skipped` by the filters: the ones handed to the trial
+  merges plus `not_tried`; `tried` the pairs actually trial-merged
+  (not `already_conflicting`, errors or skipped by the engine); `conflicting` the entries in `conflicts`,
+  `as_uploaded_only` and `silent_only`.
 
 ## Commands
 
