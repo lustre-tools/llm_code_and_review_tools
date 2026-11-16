@@ -243,6 +243,49 @@ def test_commit_option_keeps_unknown_commits_in_the_targets_diff(setup):
     assert [c["cn"] for c in out["conflicts"]] == [200]
 
 
+def _checkout(local: Path, ref: str) -> None:
+    _git(local, "fetch", "-q", "origin", ref)
+    _git(local, "checkout", "-q", "FETCH_HEAD")
+
+
+def test_worktree_tests_the_uncommitted_edit_of_the_change_at_head(setup, capsys,
+                                                                   monkeypatch):
+    gerrit, local, client = setup
+    rest = client.rest
+    t = _target(gerrit, rest, {5: "T"})
+    r = gerrit.change(200, gerrit.master, {"a.c": _text({5: "R"})})
+    rest.add(200, [r], ["a.c"], labels=READY)
+    _checkout(local, "refs/changes/00/100/1")
+    (local / "a.c").write_text(_text({15: "T"}))
+    (local / "new.c").write_text("untracked\n")
+    status = _git(local, "status", "--porcelain")
+    out = _cmd(client, local, monkeypatch, capsys, "--worktree", "--full")
+    assert out["conflicts"] == [] and out["clean"] == [200]
+    tested = out["tested_commit"]
+    assert tested != t.commit
+    assert _git(local, "rev-parse", f"{tested}^") == gerrit.master
+    assert _git(local, "log", "-1", "--format=%B", tested) == \
+        _git(local, "log", "-1", "--format=%B", t.commit)
+    assert _git(local, "ls-tree", "--name-only", tested) == "a.c\nb.c"
+    assert _git(local, "rev-parse", "HEAD") == t.commit
+    assert _git(local, "status", "--porcelain") == status
+    assert _git(local, "diff", "--cached", "--name-only") == ""
+    assert "refs/heads" not in _git(local, "for-each-ref")
+
+
+def test_worktree_on_another_change_is_invalid_input(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    o = gerrit.change(300, gerrit.master, {"a.c": _text({15: "O"})})
+    rest.add(300, [o], ["a.c"])
+    _checkout(local, "refs/changes/00/300/1")
+    with pytest.raises(ConflictRepoError, match="not 100; check out") as exc:
+        run_conflicts(client, str(local), "100", None, 30, [], False, False, NOW,
+                      worktree=True)
+    assert error_code_for(exc.value) == ErrorCode.INVALID_INPUT
+
+
 def test_commit_not_in_repo_is_invalid_input(setup):
     gerrit, local, client = setup
     _target(gerrit, client.rest, {5: "T"})

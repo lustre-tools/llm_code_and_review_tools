@@ -336,6 +336,37 @@ class Repo:
         self._trees[new] = tree
         return _Pick("clean", commit=new)
 
+    def commit_worktree(self) -> tuple[str, str]:
+        """(HEAD, a commit of HEAD's tree with the tracked working-tree
+        edits, on HEAD's parent with HEAD's message). Built in a
+        temporary index; the user's index, HEAD and branches stay as
+        they are, the commit is referenced by nothing."""
+        head = self.rev_parse("HEAD")
+        if head is None:
+            raise ConflictRepoError(f"{self.path}: no commit checked out")
+        parents = self.parents([head]).get(head) or []
+        if len(parents) != 1:
+            raise ConflictRepoError(f"{self.path}: HEAD is a root or merge commit")
+        message = self._run("log", "-1", "--format=%B", head).stdout
+        tmp = tempfile.mkdtemp(prefix="gc-conflicts-index-")
+        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(tmp, "index"), **_COMMIT_ENV)
+
+        def git(*args: str, input: str | None = None) -> str:
+            r = subprocess.run(["git", "-C", str(self.path), *args], capture_output=True,
+                               text=True, input=input, env=env, timeout=600)
+            if r.returncode != 0:
+                raise ConflictRepoError(f"git {args[0]} failed: {r.stderr.strip()}")
+            return r.stdout.strip()
+
+        try:
+            git("read-tree", head)
+            git("add", "-u")
+            commit = git("commit-tree", git("write-tree"), "-p", parents[0], "-F", "-",
+                         input=message)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        return head, commit
+
     def merge_tree_diff3(self, onto: str, commit: str, parent: str) -> str | None:
         """The tree of the trial merge, conflicted files written with
         diff3 markers (the base section is what classifies a region)."""

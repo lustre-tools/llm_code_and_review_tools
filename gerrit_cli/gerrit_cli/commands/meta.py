@@ -1191,6 +1191,12 @@ its files and are likely to land soon. --repo is a local clone of the
 project (default: the current directory); only fetched objects are added
 to it. --commit SHA tests a local commit, and the local commits below it,
 instead of the uploaded patchset: verify a rearrangement before uploading.
+--worktree tests the uncommitted edits of tracked files in the checkout,
+whose HEAD must be the change (else invalid input): a throwaway commit
+of HEAD's tree with those edits, on HEAD's parent with HEAD's message,
+built in a temporary index and tested as --commit tests a commit; the
+index, HEAD and branches are left alone. Compare --commit HEAD with
+--worktree to verify an edit.
 
 Candidates are skipped (listed in skipped, with the reason) when they need
 a new patchset anyway: a Code-Review -1/-2 from a human other than the
@@ -1320,6 +1326,10 @@ counts. Hunks appear only with --hunks or --hunks-for, in either form.
             {
                 "command": "gc conflicts 12345 --repo ~/lustre-release --hunks-for 23456",
                 "description": "Conflict regions of the collision with 23456 only",
+            },
+            {
+                "command": "gc conflicts 12345 --repo ~/lustre-release --worktree",
+                "description": "Check the uncommitted edits of the change checked out",
             },
             {
                 "command": "gc conflicts 12345 --repo ~/lustre-release --commit HEAD",

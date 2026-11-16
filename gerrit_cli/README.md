@@ -514,6 +514,7 @@ gc conflicts 12345 --repo ~/lustre-release --hunks-for 23456
                                                       # conflict regions of one pair
 gc conflicts 12345 --repo ~/lustre-release --commit HEAD
                                                       # a local rearrangement
+gc conflicts 12345 --repo ~/lustre-release --worktree # uncommitted edits of 12345
 gc conflicts 12345 --with 23456 --all                 # force one in, try every tier
 gc conflicts 12345 --repo ~/lustre-release --full     # every field
 ```
@@ -638,6 +639,14 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   is an older patchset of its change is replaced by the current
   patchset, the commit above it staying on the older one, as on Gerrit;
   a commit that is no patchset (a local edit) is tested as it is.
+- `--worktree`: the uncommitted edits to tracked files in `--repo`'s
+  checkout, whose HEAD must be the change (its last Change-Id; a change
+  mid-stack is checked out first). A throwaway commit of HEAD's tree
+  with those edits, on HEAD's parent with HEAD's message, is built in a
+  temporary index and tested as `--commit` would test it
+  (`tested_commit`); the index, HEAD and branches are left alone. An
+  untracked file is not included until it is added. To verify an edit,
+  compare a run with `--commit HEAD` against one with `--worktree`.
 - **Release hashtags** are fnmatch globs (case-sensitive), each list
   replaced by its environment variable (comma-separated; read from the
   environment or gerrit-cli's `.env`) when that is set and not blank:

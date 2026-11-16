@@ -131,9 +131,9 @@ owner sets this variable; agents must not set, unset, or override it.
   `gc series-status <url>`, `gc related <url>`,
   `gc diff <url> [A [B]]` (between patchsets; default the newest
   against the one before)
-- **Conflicts:** `gc conflicts <url> --repo <clone> [--commit SHA]
-  [--hunks-for CN]` trial-merges a change (or a local commit standing in for
-  it) against the open changes likely to land soon, both orders, as
+- **Conflicts:** `gc conflicts <url> --repo <clone> [--commit SHA |
+  --worktree] [--hunks-for CN]` trial-merges a change (or a local commit,
+  or the checkout's uncommitted edits, standing in for it) against the open changes likely to land soon, both orders, as
   landed and as uploaded, and says per collision which side should
   move (`fix_side`)
 - **CI:** `gc maloo <url>`, `gc watch <file>`

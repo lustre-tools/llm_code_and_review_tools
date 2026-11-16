@@ -1412,12 +1412,21 @@ def add_conflicts_parser(subparsers):
         help="Local clone of the change's project (default: the current "
              "directory). Only fetched objects are added to it.",
     )
-    parser.add_argument(
+    tested = parser.add_mutually_exclusive_group()
+    tested.add_argument(
         "--commit",
         default=None,
         metavar="SHA",
         help="Test this local commit (and the local commits below it) "
              "as the change instead of its uploaded patchset",
+    )
+    tested.add_argument(
+        "--worktree",
+        action="store_true",
+        help="Test the uncommitted edits of tracked files in --repo's "
+             "checkout, whose HEAD must be the change (as --commit with a "
+             "throwaway commit of them; the index and branches are left "
+             "alone)",
     )
     parser.add_argument(
         "--full",

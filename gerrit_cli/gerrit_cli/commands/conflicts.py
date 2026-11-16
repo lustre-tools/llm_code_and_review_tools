@@ -540,16 +540,31 @@ def _older_parents(br: _Branch, focus: _Focus, ar: _Around, cn: int,
     return outdated, old
 
 
+def _worktree_commit(repo: Repo, target: dict[str, Any]) -> str:
+    """The throwaway commit standing for the checkout's uncommitted
+    edits of the change at HEAD."""
+    head, commit = repo.commit_worktree()
+    cid = repo.messages([head]).get(head, ("", ""))[1]
+    if cid != target.get("change_id"):
+        raise ConflictRepoError(
+            f"HEAD ({head[:12]}) is " + (f"change {cid}" if cid else "no change")
+            + f", not {target['_number']}; check out the change to test its edits")
+    return commit
+
+
 def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, max_age: int,
                   with_: list[int], all_: bool, hunks: bool | set[int], now: datetime,
-                  ranks: Ranks = DEFAULT_RANKS) -> dict[str, Any]:
+                  ranks: Ranks = DEFAULT_RANKS, worktree: bool = False) -> dict[str, Any]:
     """Check one change, or a local commit standing in for it, against
-    the open changes that touch its files. `hunks`: True for every
+    the open changes that touch its files. `worktree`: test the
+    checkout's uncommitted edits of the change at HEAD. `hunks`: True for every
     pair's conflict regions, a set of change numbers for those pairs;
     `ranks`: the release hashtags (the command reads them from the
     environment and the options)."""
     cn, target = _open_target(client, change)
     repo, remote = _clone(repo_path, target["project"])
+    if worktree:
+        commit = _worktree_commit(repo, target)
     related, heads = _related_and_tips(client, repo, remote, cn, target)
     ar = _around(client.rest.get, cn, target, related)
     uploaded = None if commit else _target_stack(client, target, ar.related, ar.owners,
@@ -587,7 +602,8 @@ def cmd_conflicts(args: Any) -> None:
             args.with_ or [], args.all,
             True if args.hunks else set(getattr(args, "hunks_for", None) or []),
             datetime.now(timezone.utc).replace(tzinfo=None),
-            Ranks.from_env(os.environ, args.blocker_tag, args.priority_tag))
+            Ranks.from_env(os.environ, args.blocker_tag, args.priority_tag),
+            worktree=getattr(args, "worktree", False))
         output_success(result if args.full else compact(result), command, pretty)
     except Exception as e:
         sys.exit(output_error(error_code_for(e), str(e), command, pretty))

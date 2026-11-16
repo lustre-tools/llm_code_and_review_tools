@@ -502,11 +502,12 @@ def get_tool_description() -> ToolDescription:
             Command(
                 name="conflicts",
                 description="Trial-merge a change (or a local commit standing in for it) against the open changes on its branch that touch its files and are likely to land soon; says per collision which side should move. Candidate tiers: frozen (queued in <branch>-next), lands-first (ready or release-tagged), same-effort (shares a hashtag, the topic or a ticket key such as LU-12345 in the subject, bar the umbrella tickets in $GERRIT_CONFLICTS_IGNORE_TICKETS), other (tried only with --all)",
-                usage="gc conflicts <CHANGE> [--repo PATH] [--commit SHA] [--full] [--hunks | --hunks-for CN ...] [--max-age DAYS] [--blocker-tag GLOB ...] [--priority-tag GLOB ...] [--with CN ...] [--all]",
+                usage="gc conflicts <CHANGE> [--repo PATH] [--commit SHA | --worktree] [--full] [--hunks | --hunks-for CN ...] [--max-age DAYS] [--blocker-tag GLOB ...] [--priority-tag GLOB ...] [--with CN ...] [--all]",
                 arguments=[
                     Argument(name="change", description="Gerrit change URL, number or Change-Id", required=True),
                     Argument(name="--repo", description="Local clone of the change's project", default="."),
                     Argument(name="--commit", description="Local commit to test as the change instead of its uploaded patchset"),
+                    Argument(name="--worktree", description="Test the uncommitted edits of tracked files in --repo's checkout, whose HEAD must be the change (a throwaway commit; index and branches untouched)", type="boolean", default=False),
                     Argument(name="--full", description="Every field (default: compact; per-order results joined as \"a/b\", clean/already_conflicting/not_tried as counts, no commit hashes)", type="boolean", default=False),
                     Argument(name="--hunks", description="Include conflict-marker regions and their kind for every pair (large on a busy file)", type="boolean", default=False),
                     Argument(name="--hunks-for", description="Conflict-marker regions only for the pairs with this change (repeatable)", type="integer"),
@@ -518,10 +519,11 @@ def get_tool_description() -> ToolDescription:
                 ],
                 examples=["gc conflicts 12345 --repo ~/lustre-release",
                           "gc conflicts 12345 --repo ~/lustre-release --hunks-for 23456",
-                          "gc conflicts 12345 --repo ~/lustre-release --commit HEAD"],
+                          "gc conflicts 12345 --repo ~/lustre-release --commit HEAD",
+                          "gc conflicts 12345 --repo ~/lustre-release --worktree"],
                 output_fields=[
                     "change", "patchset", "commit (--full)",
-                    "tested_commit (--full; compact only when --commit tested another commit)",
+                    "tested_commit (--full; compact only when --commit / --worktree tested another commit)",
                     "subject", "owner", "owner_username (--full)", "me", "mine",
                     "readiness", "tier_of_target",
                     "release_hashtags", "ranks", "project (--full)", "branch", "tip (--full)",
