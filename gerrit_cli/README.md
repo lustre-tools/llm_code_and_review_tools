@@ -563,9 +563,13 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   to `ALWAYS_EXCEPT`, through `always_except` or an assignment). Only
   what both sides added counts, not what the base already holds twice.
   `same_function` [{file, functions}] names the functions both sides'
-  own diffs edit (from the `git diff -U0` hunk headers, C files with
-  git's `cpp` rule so a goto label does not hide the function, plus the
-  functions and prototypes a hunk adds or removes); a pair that merges
+  own diffs edit: the function each hunk of `git diff-tree -U0` sits
+  in, looked up in the old text with git's `cpp` funcname rule (a goto
+  label does not hide the function; the user's diff drivers, attributes
+  and `diff.*` settings do not change it), plus the functions and
+  prototypes a hunk adds or removes. Shell keywords (`if (( ... ))`) and
+  upper-case macro names (`LUSTRE_RW_ATTR(...)`) are not functions; a
+  path the repository's attributes mark binary has none; a pair that merges
   cleanly but shares one is listed in `watch` rather than `clean`:
   build the combination and run the covering tests.
   `--hunks` adds the conflict regions with their kind (`insert-insert`,
@@ -617,8 +621,10 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   `GERRIT_CONFLICTS_BLOCKER_TAGS` (default `*_review_blocker`),
   `GERRIT_CONFLICTS_PRIORITY_TAGS` (default `*_review_priority`) and
   `GERRIT_CONFLICTS_IGNORE_TAGS`, the hashtags that never make two
-  changes the same effort (default `pw_*,fortestonly,forbuildonly`).
-  `--blocker-tag GLOB` / `--priority-tag GLOB` (repeatable) replace the
+  changes the same effort (default `pw_*,fortestonly,forbuildonly`). A
+  `*_review_blocker` or `*_review_priority` tag never counts as shared,
+  even with other release globs configured. `--blocker-tag GLOB` /
+  `--priority-tag GLOB` (repeatable or comma-separated) replace the
   first two for one run. `ranks` {blocker, priority, ignore} echoes the
   globs in effect, in both output forms.
 - `--repo` (default `.`) must be a clone whose remote fetches the

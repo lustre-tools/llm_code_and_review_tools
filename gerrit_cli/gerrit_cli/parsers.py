@@ -1455,18 +1455,18 @@ def add_conflicts_parser(subparsers):
         dest="blocker_tag",
         action="append",
         metavar="GLOB",
-        help="Hashtag glob marking a release blocker (repeatable; replaces "
-             "$GERRIT_CONFLICTS_BLOCKER_TAGS and the default "
-             "*_review_blocker)",
+        help="Hashtag glob marking a release blocker (repeatable or "
+             "comma-separated; replaces $GERRIT_CONFLICTS_BLOCKER_TAGS and "
+             "the default *_review_blocker)",
     )
     parser.add_argument(
         "--priority-tag",
         dest="priority_tag",
         action="append",
         metavar="GLOB",
-        help="Hashtag glob marking release priority (repeatable; replaces "
-             "$GERRIT_CONFLICTS_PRIORITY_TAGS and the default "
-             "*_review_priority)",
+        help="Hashtag glob marking release priority (repeatable or "
+             "comma-separated; replaces $GERRIT_CONFLICTS_PRIORITY_TAGS and "
+             "the default *_review_priority)",
     )
     parser.add_argument(
         "--with",

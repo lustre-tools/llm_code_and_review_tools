@@ -249,3 +249,20 @@ def test_custom_ranks_drive_rank_shared_tags_and_tier():
     c = ch(tags=["rel_prio"], updated="2026-01-01 00:00:00.000000000")
     assert classify(c, TARGET, set(), 30, NOW, r) == ("lands-first", None)
     assert classify(c, TARGET, set(), 30, NOW)[0] is None  # stale by default
+
+
+def test_default_release_tags_never_make_same_effort_under_other_globs():
+    from gerrit_cli.conflict_candidates import Ranks
+
+    r = Ranks(blocker=("rel_blocker",), priority=("rel_prio",), ignore=())
+    both = ["218_review_priority", "217_review_blocker", "rel_prio", "ec"]
+    assert shared_hashtags(both, both, r) == ["ec"]
+
+
+def test_option_values_split_on_commas_and_drop_blanks():
+    from gerrit_cli.conflict_candidates import DEFAULT_RANKS, Ranks
+
+    env = {"GERRIT_CONFLICTS_BLOCKER_TAGS": "env_b"}
+    assert Ranks.from_env(env, blocker=["a,b", " c "]).blocker == ("a", "b", "c")
+    assert Ranks.from_env(env, blocker=[""]).blocker == ("env_b",)
+    assert Ranks.from_env({}, blocker=[" , "], priority=[""]) == DEFAULT_RANKS

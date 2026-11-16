@@ -12,6 +12,9 @@ from urllib.parse import quote
 from .graph.nodes import _LUSTRE_CHANGE_TRAILER_RE
 from .graph.review import _is_bot_account, _parse_labels
 
+# release tags of the current scheme: never a shared effort, whatever
+# the configured release globs
+_RELEASE_DEFAULTS = ("*_review_blocker", "*_review_priority")
 BLOCKER_ENV = "GERRIT_CONFLICTS_BLOCKER_TAGS"
 PRIORITY_ENV = "GERRIT_CONFLICTS_PRIORITY_TAGS"
 IGNORE_ENV = "GERRIT_CONFLICTS_IGNORE_TAGS"
@@ -24,9 +27,10 @@ _PATHS_PER_QUERY = 20
 class Ranks:
     """Which hashtags (fnmatch globs, case-sensitive) make a change a
     release blocker or release priority, and which never make two
-    changes the same effort (the release ones never do either)."""
-    blocker: tuple[str, ...] = ("*_review_blocker",)
-    priority: tuple[str, ...] = ("*_review_priority",)
+    changes the same effort (neither do the release ones, configured or
+    default)."""
+    blocker: tuple[str, ...] = (_RELEASE_DEFAULTS[0],)
+    priority: tuple[str, ...] = (_RELEASE_DEFAULTS[1],)
     ignore: tuple[str, ...] = ("pw_*", "fortestonly", "forbuildonly")
 
     @classmethod
@@ -34,13 +38,14 @@ class Ranks:
                  priority: list[str] | None = None) -> "Ranks":
         """The defaults, replaced by each of the three environment
         variables (comma-separated globs) that is set and not blank,
-        and then by the --blocker-tag / --priority-tag globs given."""
+        and then by the --blocker-tag / --priority-tag values given
+        (each comma-separated too; blank ones are dropped)."""
+        def split(values: list[str]) -> tuple[str, ...]:
+            return tuple(g.strip() for v in values for g in v.split(",") if g.strip())
+
         def globs(name: str, given: list[str] | None, default: tuple[str, ...]
                   ) -> tuple[str, ...]:
-            if given:
-                return tuple(given)
-            parts = tuple(g.strip() for g in (env.get(name) or "").split(",") if g.strip())
-            return parts or default
+            return split(given or []) or split([env.get(name) or ""]) or default
 
         d = cls()
         return cls(globs(BLOCKER_ENV, blocker, d.blocker),
@@ -56,7 +61,8 @@ class Ranks:
         return 0
 
     def generic(self, tag: str) -> bool:
-        return self.rank([tag]) > 0 or any(fnmatchcase(tag, g) for g in self.ignore)
+        return self.rank([tag]) > 0 or any(
+            fnmatchcase(tag, g) for g in self.ignore + _RELEASE_DEFAULTS)
 
     def as_dict(self) -> dict[str, list[str]]:
         return {"blocker": list(self.blocker), "priority": list(self.priority),

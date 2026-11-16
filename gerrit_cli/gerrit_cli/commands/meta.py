@@ -1208,9 +1208,11 @@ globs (case-sensitive), each list replaced by its environment variable
 (comma-separated, also read from gerrit-cli's .env) when set and not
 blank: GERRIT_CONFLICTS_BLOCKER_TAGS (default *_review_blocker),
 GERRIT_CONFLICTS_PRIORITY_TAGS (default *_review_priority),
-GERRIT_CONFLICTS_IGNORE_TAGS (default pw_*,fortestonly,forbuildonly).
---blocker-tag GLOB and --priority-tag GLOB (repeatable) replace the first
-two for one run; ranks {blocker, priority, ignore} echoes those in effect.
+GERRIT_CONFLICTS_IGNORE_TAGS (default pw_*,fortestonly,forbuildonly). A
+*_review_blocker or *_review_priority tag never counts as shared, even
+with other release globs configured. --blocker-tag GLOB and
+--priority-tag GLOB (repeatable or comma-separated) replace the first two
+for one run; ranks {blocker, priority, ignore} echoes those in effect.
 
 Each checked pair is tried in both orders as it would land (landing:
 target_first, candidate_first; each change's stack picked onto the branch
@@ -1225,15 +1227,17 @@ test defined twice), duplicate-value (an OBD_FAIL value, or an
 OBD_CONNECT / OBD_CONNECT2 flag value, used twice), duplicate-exception
 (both add the same test to ALWAYS_EXCEPT); only what both sides added
 counts, not what the base already had twice. same_function [{file,
-functions}] names the functions both sides' own diffs edit (hunk-header
-context, C files by git's cpp rule, and the definitions and prototypes a
-hunk adds or removes); a pair that merges cleanly and shares one is in
-watch instead of clean ("clean merge, same function edited: build the
-combination"). --hunks adds the conflict-marker regions with their kind:
-insert-insert, edit-edit, adjacent, context; --hunks-for CN (repeatable)
-only for the pairs with those changes. --hunks is large on a busy file:
-run without it first, then --hunks-for the collisions you will act on (a
-change that was not tried is named in notes).
+functions}] names the functions both sides' own diffs edit (the function
+a hunk sits in, found by git's cpp funcname rule in the old text whatever
+the user's diff settings, and the definitions and prototypes a hunk adds
+or removes; keywords and upper-case macro names are not functions); a
+pair that merges cleanly and shares one is in watch instead of clean
+("clean merge, same function edited: build the combination"). --hunks
+adds the conflict-marker regions with their kind: insert-insert,
+edit-edit, adjacent, context; --hunks-for CN (repeatable) only for the
+pairs with those changes. --hunks is large on a busy file: run without it
+first, then --hunks-for the collisions you will act on (a change that was
+not tried is named in notes).
 
 fix_side says which change should move, whoever runs the command:
   target \\ candidate  frozen      lands-first  same-effort  other

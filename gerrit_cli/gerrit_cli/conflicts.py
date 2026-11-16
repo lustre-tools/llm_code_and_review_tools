@@ -159,10 +159,9 @@ class Repo:
             raise ConflictRepoError(f"{self.path}: not a git repository")
         self.objects = r.stdout.strip()
         self._scratch: str | None = None
-        self._attributes: str | None = None
         self._trees: dict[str, str] = {}
 
-    def _run(self, *args: str, scratch: bool = False, input: str | None = None,
+    def _run(self, *args: str, scratch: bool = False, input: str | bytes | None = None,
              timeout: int = 600, binary: bool = False) -> subprocess.CompletedProcess[Any]:
         env = None
         if scratch:
@@ -351,31 +350,50 @@ class Repo:
 
     def functions(self, commit: str, parent: str) -> dict[str, set[str]]:
         """The functions commit's own diff against parent edits, per
-        path. C sources take git's cpp hunk-header rule: the default one
-        names a goto label in column 0 instead of the function. Inside
-        `with`, which writes the attributes file saying so."""
-        from gerrit_cli.conflict_functions import edited_functions
+        path. Plumbing with every option that shapes the patch given, so
+        the user's diff configuration (noprefix, interHunkContext, an
+        external diff, textconv) does not change what is parsed; a path
+        the repository's attributes mark binary has no hunks."""
+        from gerrit_cli.conflict_functions import edited_functions, parse_diff
 
-        r = self._run("-c", f"core.attributesFile={self._attributes}", "diff", "--no-color",
-                      "--no-ext-diff", "--no-renames", "-U0", parent, commit, binary=True)
+        r = self._run("-c", "core.quotePath=false", "-c", "diff.interHunkContext=0",
+                      "diff-tree", "-r", "-p", "-U0", "--no-renames", "--no-color",
+                      "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/",
+                      parent, commit, binary=True)
         if r.returncode != 0:
             return {}
-        return edited_functions(r.stdout.decode(errors="replace"))
+        hunks = parse_diff(r.stdout.decode(errors="replace"))
+        return edited_functions(hunks, self.texts(parent, sorted({h.path for h in hunks})))
+
+    def texts(self, rev: str, paths: list[str]) -> dict[str, str]:
+        """The text of each path that exists at rev."""
+        if not paths:
+            return {}
+        r = self._run("cat-file", "--batch", input="".join(f"{rev}:{p}\n" for p in paths)
+                      .encode(), binary=True)
+        out: dict[str, str] = {}
+        data, pos = r.stdout or b"", 0
+        for path in paths:
+            nl = data.find(b"\n", pos)
+            if nl < 0:
+                break
+            head = data[pos:nl].split()
+            pos = nl + 1
+            if len(head) != 3 or head[1] != b"blob":
+                continue
+            size = int(head[2])
+            out[path] = data[pos:pos + size].decode(errors="replace")
+            pos += size + 1
+        return out
 
     def __enter__(self) -> "Repo":
         self._scratch = tempfile.mkdtemp(prefix="gc-conflicts-")
-        fd, self._attributes = tempfile.mkstemp(prefix="gc-conflicts-attr-")
-        with os.fdopen(fd, "w") as f:
-            f.write("*.c diff=cpp\n*.h diff=cpp\n")
         return self
 
     def __exit__(self, *exc: object) -> None:
         if self._scratch:
             shutil.rmtree(self._scratch, ignore_errors=True)
             self._scratch = None
-        if self._attributes:
-            os.unlink(self._attributes)
-            self._attributes = None
         self._trees.clear()
 
 

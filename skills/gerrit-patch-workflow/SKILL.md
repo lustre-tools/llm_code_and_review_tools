@@ -301,10 +301,11 @@ own stack can be the real blocker); `status: needs-rebase`
 (then `conflicts` is null, `as_uploaded_only` holds the pairs that
 conflict as uploaded and `clean` the rest);
 `skipped` (candidates that need a new patchset anyway, not worth planning
-around); `silent_only` (a clean merge that still defines a test, fail_loc value or
-OBD_CONNECT flag value twice, or adds the same test to ALWAYS_EXCEPT
-twice); `watch` (a clean merge, but both edit the function named in
-`same_function`: build the combination and run the covering tests); `already_conflicting` (conflict without your change, not
+around); `silent_only` (a clean merge that still defines a test,
+fail_loc value or OBD_CONNECT flag value twice, or adds the same test to
+ALWAYS_EXCEPT twice); `watch` (a clean merge, but both edit the function
+named in `same_function`: build the combination and run the covering
+tests); `already_conflicting` (conflict without your change, not
 yours); `on_next` (a conflict in the queue; `stale` means ignore it).
 
 Check the own stack first: it changes the base the other collisions are
@@ -335,8 +336,8 @@ itself): the fix belongs to that change, not the candidate.
 When the change is `needs-rebase`, only the as-uploaded model runs.
 `as_uploaded_only` holds the pairs that conflict on files both changes
 change; conflicts on files only one side changes come from the branch
-moving between the two bases and are listed in the pair's `base_drift`,
-not counted. A stale change still collects many such pairs: summarise
+moving between the two bases and are counted in the pair's `base_drift`
+(`--full` lists the files), not as collisions. A stale change still collects many such pairs: summarise
 them by tier, readiness and release hashtags, name only the blockers,
 priority and frozen ones, and fetch no hunks unless the user asks. A
 conflict on a shared file can still be drift elsewhere in that file; the
@@ -451,8 +452,9 @@ against, whatever their `fix_side`: none of them in `conflicts`,
 another verdict may remain. Then build. When both sides touch one
 function or change a signature or a struct, build the combination
 (target on candidate) too: a clean merge can still fail to build (65921).
-A pair in `watch` (or any pair with `same_function`) is exactly that
-case: a clean merge, the same function edited on both sides. Build the
+A pair in `watch` is exactly that case: a clean merge, the same function
+edited on both sides (`same_function`; the compact output shows it only
+in `watch` and `silent_only`, `--full` on every pair). Build the
 combination and run the tests covering those functions before calling it
 clean.
 Run the tests the changed code is covered by, on the change's own base
