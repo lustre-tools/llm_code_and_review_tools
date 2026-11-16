@@ -556,8 +556,13 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   change; one on a file only one side changes comes from the branch
   moving between their bases and is listed in `base_drift` instead.
   A pair is in `conflicts` when any of the four conflicts; `via` names the
-  candidate's ancestor the conflict is at. Duplicate test definitions or
-  fail_loc values that merge cleanly are reported in `silent_only`.
+  candidate's ancestor the conflict is at. Collisions that merge cleanly are
+  reported in `silent_only`, by `check`: `duplicate-test` (a test
+  defined twice), `duplicate-value` (an `OBD_FAIL_*` value, or an
+  `OBD_CONNECT_*` / `OBD_CONNECT2_*` flag value, each namespace on its
+  own, used twice), `duplicate-exception` (both sides add the same test
+  to `ALWAYS_EXCEPT`, through `always_except` or an assignment). Only
+  what both sides added counts, not what the base already holds twice.
   `same_function` [{file, functions}] names the functions both sides'
   own diffs edit (from the `git diff -U0` hunk headers, C files with
   git's `cpp` rule so a goto label does not hide the function, plus the

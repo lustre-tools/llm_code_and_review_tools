@@ -301,8 +301,9 @@ own stack can be the real blocker); `status: needs-rebase`
 (then `conflicts` is null, `as_uploaded_only` holds the pairs that
 conflict as uploaded and `clean` the rest);
 `skipped` (candidates that need a new patchset anyway, not worth planning
-around); `silent_only` (a clean merge that still defines a test or fail_loc
-value twice); `watch` (a clean merge, but both edit the function named in
+around); `silent_only` (a clean merge that still defines a test, fail_loc value or
+OBD_CONNECT flag value twice, or adds the same test to ALWAYS_EXCEPT
+twice); `watch` (a clean merge, but both edit the function named in
 `same_function`: build the combination and run the covering tests); `already_conflicting` (conflict without your change, not
 yours); `on_next` (a conflict in the queue; `stale` means ignore it).
 

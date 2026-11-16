@@ -1396,7 +1396,8 @@ def add_conflicts_parser(subparsers):
                     "<branch>-next, ready or release priority, or sharing a "
                     "hashtag or topic with it. Both merge orders, both as "
                     "landed on the branch tip and as uploaded; also "
-                    "duplicate tests and fail_loc values that merge "
+                    "duplicate tests, fail_loc and connect flag "
+                    "values and test exceptions that merge "
                     "cleanly, and clean merges editing the same "
                     "function. 'gc explain conflicts' describes the output.",
     )

@@ -244,3 +244,57 @@ def test_crlf_regions_split_like_lf():
     [r] = _regions(blob)
     assert (r["start"], r["end"], r["ours"], r["base"], r["theirs"]) == (1, 7, ["A"], ["B"],
                                                                          ["C"])
+
+
+_IDL = "include/uapi/linux/lustre/lustre_idl.h"
+
+
+def test_two_connect_flags_with_one_value():
+    t = "#define OBD_CONNECT_A\t\t0x1ULL /* a */\n#define OBD_CONNECT_B\t\t0x2ULL\n"
+    c = "#define OBD_CONNECT_A\t\t0x1ULL /* a */\n#define OBD_CONNECT_C\t\t0x02ULL\n"
+    m = t + "#define OBD_CONNECT_C\t\t0x02ULL\n"
+    assert silent_collisions({_IDL: (t, c, m)}) == [
+        {"check": "duplicate-value", "file": _IDL, "what": "OBD_CONNECT 0x2"}]
+
+
+def test_connect_and_connect2_are_separate_namespaces():
+    t = "#define OBD_CONNECT_B 0x4ULL\n"
+    c = "#define OBD_CONNECT2_B 0x4ULL\n"
+    assert silent_collisions({_IDL: (t, c, t + c)}) == []
+    c2 = "#define OBD_CONNECT2_C 0x4ULL\n"
+    assert silent_collisions({_IDL: (c, c2, c + c2)}) == [
+        {"check": "duplicate-value", "file": _IDL, "what": "OBD_CONNECT2 0x4"}]
+
+
+def test_a_connect_flag_composite_is_not_a_value():
+    t = "#define OBD_CONNECT_B 0x4ULL\n"
+    c = "#define OBD_CONNECT_MASK (OBD_CONNECT_B | 0x4ULL)\n"
+    assert silent_collisions({_IDL: (t, c, t + c)}) == []
+
+
+def test_both_skipping_the_same_test_is_a_duplicate_exception():
+    base = "ALWAYS_EXCEPT=\"$SANITY_EXCEPT \"\nalways_except LU-1 42a 42b\n"
+    t = base + "always_except LU-2 56\n"
+    c = base + "always_except LU-3\t56 # flaky\n"
+    m = base + "always_except LU-2 56\nalways_except LU-3\t56 # flaky\n"
+    assert silent_collisions({_SH: (t, c, m)}) == [
+        {"check": "duplicate-exception", "file": _SH, "what": "ALWAYS_EXCEPT 56"}]
+
+
+def test_exceptions_in_assignments_and_continued_lines():
+    from gerrit_cli.conflict_hunks import _exceptions
+
+    text = ('ALWAYS_EXCEPT="$X_EXCEPT 1a"\n'
+            'ALWAYS_EXCEPT+=" 14b  21b"\n'
+            '\tALWAYS_EXCEPT="$ALWAYS_EXCEPT 9"\n'
+            "export ALWAYS_EXCEPT=$Y_EXCEPT\n"
+            "\talways_except LU-4 smoke \\\n\t\tteardown\n"
+            "# always_except LU-5 77\n")
+    assert _exceptions(text) == ["ALWAYS_EXCEPT " + t
+                                 for t in ("1a", "14b", "21b", "9", "smoke", "teardown")]
+
+
+def test_an_exception_one_side_adds_again_is_not_a_duplicate():
+    base = "always_except LU-1 56\n"
+    t = base + "always_except LU-2 56\n"
+    assert silent_collisions({_SH: (t, base, t)}) == []

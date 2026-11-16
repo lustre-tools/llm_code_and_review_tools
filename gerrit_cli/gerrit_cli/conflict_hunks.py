@@ -124,10 +124,39 @@ def _fail_values(text: str) -> list[str]:
         r"^[ \t]*#[ \t]*define[ \t]+OBD_FAIL_\w+[ \t]+(0x[0-9a-fA-F]+)", text, re.M)]
 
 
-# (path glob, text -> keys that must stay unique). fnmatch's `*` crosses `/`.
-SILENT_CHECKS: list[tuple[str, Callable[[str], list[str]]]] = [
-    ("lustre/tests/*.sh", _test_keys),
-    ("*/obd_support.h", _fail_values),
+def _connect_flags(text: str) -> list[str]:
+    """Each OBD_CONNECT_* and OBD_CONNECT2_* flag value, as a number in
+    its own namespace (the two are separate 64-bit words)."""
+    return [f"{ns} {int(v, 16):#x}" for ns, v in re.findall(
+        r"^[ \t]*#[ \t]*define[ \t]+(OBD_CONNECT2?)_\w+[ \t]+(0x[0-9a-fA-F]+)",
+        text, re.M)]
+
+
+def _exceptions(text: str) -> list[str]:
+    """Each test an `always_except` line or an ALWAYS_EXCEPT assignment
+    adds to the exception list (the ticket and $VARs are not tests)."""
+    text = text.replace("\\\n", " ")
+    out: list[str] = []
+    for line in text.split("\n"):
+        line = line.split(" #", 1)[0].split("\t#", 1)[0]
+        if m := re.match(r"^[ \t]*always_except[ \t]+\S+(.*)", line):
+            words = m[1].split()
+        elif m := re.match(r'^[ \t]*(?:export[ \t]+)?ALWAYS_EXCEPT\+?=(?:"([^"]*)"|(\S*))',
+                           line):
+            words = (m[1] if m[1] is not None else m[2]).split()
+        else:
+            continue
+        out += [f"ALWAYS_EXCEPT {w}" for w in words if not w.startswith("$")]
+    return out
+
+
+# (path glob, check name, text -> keys that must stay unique). fnmatch's
+# `*` crosses `/`.
+SILENT_CHECKS: list[tuple[str, str, Callable[[str], list[str]]]] = [
+    ("lustre/tests/*.sh", "duplicate-test", _test_keys),
+    ("lustre/tests/*.sh", "duplicate-exception", _exceptions),
+    ("*/obd_support.h", "duplicate-value", _fail_values),
+    ("*/lustre_idl.h", "duplicate-value", _connect_flags),
 ]
 
 
@@ -137,12 +166,11 @@ def silent_collisions(texts: dict[str, tuple[str, str, str]]) -> list[dict]:
     `texts` maps path to (target-only, candidate-only, merged)."""
     out: list[dict] = []
     for path, (target, cand, merged) in sorted(texts.items()):
-        for glob, keys in SILENT_CHECKS:
+        for glob, check, keys in SILENT_CHECKS:
             if not fnmatch(path, glob):
                 continue
             t, c, m = Counter(keys(target)), Counter(keys(cand)), Counter(keys(merged))
             for key in sorted(m):
                 if m[key] > t[key] and m[key] > c[key]:
-                    out.append({"check": "duplicate-value" if key.startswith("0x")
-                                else "duplicate-test", "file": path, "what": key})
+                    out.append({"check": check, "file": path, "what": key})
     return out

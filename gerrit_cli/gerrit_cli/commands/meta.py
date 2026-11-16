@@ -1213,12 +1213,16 @@ conflict counts only on files both sides change; one on a file only one
 side changes is the branch moving between their bases, listed in
 base_drift instead. A pair is in conflicts if any of the four conflicts;
 via names the candidate's ancestor the conflict is at. Pairs that merge
-cleanly but define the same test or fail_loc value twice are in
-silent_only. same_function [{file, functions}] names the functions both
-sides' own diffs edit (hunk-header context, C files by git's cpp rule,
-and the definitions and prototypes a hunk adds or removes); a pair that
-merges cleanly and shares one is in watch instead of clean ("clean
-merge, same function edited: build the combination"). --hunks adds the conflict-marker regions with their kind:
+cleanly but still collide are in silent_only, check: duplicate-test (a
+test defined twice), duplicate-value (an OBD_FAIL value, or an
+OBD_CONNECT / OBD_CONNECT2 flag value, used twice), duplicate-exception
+(both add the same test to ALWAYS_EXCEPT); only what both sides added
+counts, not what the base already had twice. same_function [{file,
+functions}] names the functions both sides' own diffs edit (hunk-header
+context, C files by git's cpp rule, and the definitions and prototypes a
+hunk adds or removes); a pair that merges cleanly and shares one is in
+watch instead of clean ("clean merge, same function edited: build the
+combination"). --hunks adds the conflict-marker regions with their kind:
 insert-insert, edit-edit, adjacent, context; --hunks-for CN (repeatable)
 only for the pairs with those changes. --hunks is large on a busy file:
 run without it first, then --hunks-for the collisions you will act on (a
