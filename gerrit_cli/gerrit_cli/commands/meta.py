@@ -1273,7 +1273,9 @@ older patchset of its change is replaced by the current patchset; a
 local edit is tested as it is. base says whether rebasing is an option (rebase:
 "would move ready/queued parents" when a parent is frozen or
 lands-first); on_branch and on_next are the change against the branch
-and <branch>-next; own_stack how its parents and children fare;
+and <branch>-next; own_stack how its parents and children fare (the
+parents in both, bottom first, are every in-flight change the stack is
+tried with, including those below a parent's current patchset);
 already_conflicting the candidates that do not apply on the tip by
 themselves. counts: candidates = the open changes the file: queries found
 (they leave out changes older than --max-age that are not ready, queued or

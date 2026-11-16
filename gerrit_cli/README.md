@@ -609,7 +609,10 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   (on the branch or not, commits behind, in-flight parents with their
   tier, and whether a rebase would move ready or queued parents);
   `own_stack` (parents and children: with `--commit`, whether each child
-  still applies on the rearranged change). When the change does not
+  still applies on the rearranged change). The parents in `base` and
+  `own_stack`, bottom first, are every in-flight change the stack is
+  tried with, including those below a parent's current patchset when
+  the change sits on an older one, so `own_via` always names one. When the change does not
   apply on the tip, `status` is `needs-rebase`, `conflicts` is `null`,
   `as_uploaded_only` has the pairs that conflict as uploaded and `clean`
   those that do not; `rebase_cause` says why: `parent` (it, or the

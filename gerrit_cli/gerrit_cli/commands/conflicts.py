@@ -148,7 +148,10 @@ def _target_stack(client: Any, change: dict[str, Any], related: list[dict[str, A
                   owners: dict[str, tuple[int, str]], patchsets: _Patchsets,
                   ) -> tuple[list[Patch], dict[int, dict[str, Any]]]:
     """The uploaded target and its in-flight parents, bottom first (not
-    fetched: _branch fetches them with the branch)."""
+    fetched: _branch fetches them with the branch). Below the related
+    list's chain come the changes the bottom parent's current patchset
+    stands on: the engine picks that patchset, so its parents are part
+    of the stack whether or not the target's chain has them."""
     cn = change["_number"]
     by_sha = {e["commit"]["commit"]: e for e in related}
     below: list[int] = []
@@ -164,6 +167,20 @@ def _target_stack(client: Any, change: dict[str, Any], related: list[dict[str, A
         if below else {}
     for d in details.values():
         patchsets.add_change(d)
+    in_chain = {e["_change_number"]: e["commit"]["commit"] for e in related}
+    bottom = details.get(below[0]) if below else None
+    # the chain already goes below the patchset it names
+    if bottom is not None and _current(bottom)[0] != in_chain.get(below[0]):
+        found = _ancestors(client, change["project"], change["branch"],
+                           {bottom["_number"]: bottom}, set(below) | {cn}, owners)
+        deeper, cur = [], bottom
+        while (o := owners.get(_current(cur)[2])) and o[0] in found and o[0] not in deeper:
+            deeper.append(o[0])
+            cur = found[o[0]]
+        for n in deeper:
+            details[n] = found[n]
+            patchsets.add_change(found[n])
+        below[:0] = deeper[::-1]
     patches = []
     for n in below:
         if n in details:

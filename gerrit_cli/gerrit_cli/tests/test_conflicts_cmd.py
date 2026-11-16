@@ -792,6 +792,29 @@ def test_target_on_an_older_parent_patchset_that_still_applies(setup):
     assert out["own_stack"]["parents"] == [{"cn": 90, "status": "clean"}]
 
 
+def test_parents_below_the_parents_newer_patchset_are_the_targets_too(setup):
+    """70145 on 65219 PS38; 65219's current PS sits on 69702, which the
+    related list of 70145 does not name."""
+    gerrit, local, client = setup
+    rest = client.rest
+    deep = gerrit.change(80, gerrit.master, {"c.c": _text({5: "D"})})
+    rest.add(80, [deep], ["c.c"])
+    p1 = gerrit.change(90, gerrit.master, {"b.c": _text({2: "P1"})})
+    p2 = gerrit.change(90, deep.commit, {"b.c": _text({2: "P2"}), "c.c": _text({5: "D"})},
+                       ps=2)
+    rest.add(90, [p1, p2], ["b.c"])
+    t = gerrit.change(100, p1.commit, {"a.c": _text({5: "T"}), "b.c": _text({2: "P1"})})
+    rest.add(100, [t], ["a.c"])
+    hit = gerrit.change(200, gerrit.master, {"c.c": _text({5: "H"})})
+    rest.add(200, [hit], ["c.c"], labels=READY)
+    out = run(client, local, with_=[200])
+    assert [p["cn"] for p in out["own_stack"]["parents"]] == [80, 90]
+    assert [p["cn"] for p in out["base"]["parents"]] == [80, 90]
+    assert out["outdated_parent"]["cn"] == 90
+    [c] = out["conflicts"]
+    assert c["cn"] == 200 and c["own_via"] == 80
+
+
 def test_target_conflicting_with_its_parents_newer_patchset(setup):
     gerrit, local, client = setup
     rest = client.rest
