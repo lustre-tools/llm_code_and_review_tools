@@ -274,22 +274,22 @@ class ExtractedComments:
 class ReplyResult:
     """Result of replying to a comment.
 
-    comment_id is the new reply's id (None when nothing was posted, or
-    the reply could not be read back); in_reply_to is the comment
-    replied to.
+    comment_id is the comment replied to; reply_id is the new reply's
+    id (None when nothing was posted, or the reply could not be read
+    back).
     """
     success: bool
-    comment_id: Optional[str]
+    comment_id: str
     message: str
     marked_resolved: bool
     error: Optional[str] = None
-    in_reply_to: Optional[str] = None
+    reply_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
             "success": self.success,
             "comment_id": self.comment_id,
-            "in_reply_to": self.in_reply_to,
+            "reply_id": self.reply_id,
             "message": self.message,
             "marked_resolved": self.marked_resolved,
             "error": self.error,

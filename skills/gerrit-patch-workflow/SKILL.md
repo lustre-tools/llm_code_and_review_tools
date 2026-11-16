@@ -107,6 +107,8 @@ gc batch <change> replies.json    # '-' reads the JSON from stdin
 
 `comment_id` is the exact address and reaches resolved and bot threads
 too; entries can instead use `thread_index`, or `file` and `line`.
+In the output of `reply`, `done`, `ack` and `batch`, `comment_id` is the
+comment replied to and `reply_id` the id of the reply just posted.
 
 Declining a finding is a legitimate outcome -- reply with why. Do not
 silently skip a comment, and do not answer a finding by adding an

@@ -39,11 +39,11 @@ class TestCommentReplier:
         result = CommentReplier().reply_to_comment(123, parent, "My reading\n")
 
         assert result.success is True
-        assert result.comment_id == "c8317bd5_863c06c3"
-        assert result.in_reply_to == "81fb91db_6c5b8051"
+        assert result.reply_id == "c8317bd5_863c06c3"
+        assert result.comment_id == "81fb91db_6c5b8051"
         data = result.to_dict()
-        assert data["comment_id"] == "c8317bd5_863c06c3"
-        assert data["in_reply_to"] == "81fb91db_6c5b8051"
+        assert data["reply_id"] == "c8317bd5_863c06c3"
+        assert data["comment_id"] == "81fb91db_6c5b8051"
 
     @patch("gerrit_cli.replier.GerritCommentsClient")
     def test_batch_reply_reports_the_new_reply_ids(self, mock_client_class, monkeypatch):
@@ -67,8 +67,8 @@ class TestCommentReplier:
             {"comment": parent("p3"), "message": "Done"},
         ])
 
-        assert [r.comment_id for r in results] == ["r1", "r2", None]
-        assert [r.in_reply_to for r in results] == ["p1", "p2", "p3"]
+        assert [r.reply_id for r in results] == ["r1", "r2", None]
+        assert [r.comment_id for r in results] == ["p1", "p2", "p3"]
 
     @patch("gerrit_cli.replier.GerritCommentsClient")
     def test_reply_to_comment_success(self, mock_client_class):
@@ -99,7 +99,7 @@ class TestCommentReplier:
         )
 
         assert result.success is True
-        assert result.in_reply_to == "comment1"
+        assert result.comment_id == "comment1"
         assert result.message == "Done"
         assert result.marked_resolved is True
         assert result.error is None
@@ -387,7 +387,7 @@ class TestCommentReplier:
             ],
         )
 
-        assert [r.in_reply_to for r in results] == ["gone", "kept", "ps"]
+        assert [r.comment_id for r in results] == ["gone", "kept", "ps"]
         assert all(r.success for r in results)
         posts = {
             c.kwargs["revision_id"]: c.kwargs["comments"]

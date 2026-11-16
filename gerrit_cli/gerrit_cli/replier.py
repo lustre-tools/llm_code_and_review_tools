@@ -128,8 +128,7 @@ class CommentReplier:
         except Exception as e:
             return ReplyResult(
                 success=False,
-                comment_id=None,
-                in_reply_to=comment.id,
+                comment_id=comment.id,
                 message=message,
                 marked_resolved=False,
                 error=_error_text(e),
@@ -138,8 +137,8 @@ class CommentReplier:
         [reply_id] = self._new_reply_ids(change_number, [(comment.id, message)])
         return ReplyResult(
             success=True,
-            comment_id=reply_id,
-            in_reply_to=comment.id,
+            comment_id=comment.id,
+            reply_id=reply_id,
             message=message,
             marked_resolved=mark_resolved,
         )
@@ -238,8 +237,7 @@ class CommentReplier:
             error = _error_text(e)
             return [
                 ReplyResult(
-                    success=False, comment_id=None,
-                    in_reply_to=reply_spec["comment"].id,
+                    success=False, comment_id=reply_spec["comment"].id,
                     message=reply_spec["message"], marked_resolved=False, error=error,
                 )
                 for reply_spec in replies
@@ -268,8 +266,8 @@ class CommentReplier:
         return [
             ReplyResult(
                 success=error is None,
-                comment_id=reply_id,
-                in_reply_to=reply_spec["comment"].id,
+                comment_id=reply_spec["comment"].id,
+                reply_id=reply_id,
                 message=reply_spec["message"],
                 marked_resolved=error is None and reply_spec.get("mark_resolved", False),
                 error=error,

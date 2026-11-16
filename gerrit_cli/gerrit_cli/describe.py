@@ -153,7 +153,7 @@ def get_tool_description() -> ToolDescription:
             ),
             Command(
                 name="reply",
-                description="Reply to a comment thread (URL optional if recently ran 'comments')",
+                description="Reply to a comment thread (URL optional if recently ran 'comments'). Output: comment_id is the comment replied to, reply_id the new reply's id (null if it could not be read back); done, ack and batch report the same",
                 usage='gc reply <THREAD_INDEX|COMMENT_ID> "<MESSAGE>" [--url URL]',
                 arguments=[
                     Argument(name="thread", description="Thread index from 'comments' output, or a comment id in the thread (root_comment.id). Indices shift as threads are resolved; use comment ids for more than one reply", required=True),

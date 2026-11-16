@@ -148,7 +148,9 @@ def add_reply_parser(subparsers):
             "'gc comments'. The thread is its index in the 'comments' "
             "listing, or the id of a comment in it (root_comment.id). "
             "Indices shift as threads are resolved, so for more than one "
-            "reply use comment ids, or 'gc batch'."
+            "reply use comment ids, or 'gc batch'. In the output, "
+            "comment_id is the comment replied to and reply_id the new "
+            "reply's id (null if it could not be read back)."
         ),
     )
     parser.add_argument(
