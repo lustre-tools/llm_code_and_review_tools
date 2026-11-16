@@ -1641,3 +1641,52 @@ def test_stall_point_cursor_tool_call(tmp_path):
     log.write_text(json.dumps(started) + "\n" + json.dumps(
         {**started, "subtype": "completed"}) + "\n")
     assert stall_point(log)["waiting_on"] == "model"
+
+
+class TestPluginsOff:
+    """A lean claude review gets settings that disable the user's
+    plugins; --no-lean and other agents keep them."""
+
+    def _settings(self, cmd):
+        return (json.loads(cmd[cmd.index("--settings") + 1])
+                if "--settings" in cmd else None)
+
+    def test_lean_claude_disables_them(self, tmp_path, monkeypatch):
+        from lreview import agents
+        monkeypatch.setattr(agents, "enabled_plugins", lambda: ("sp@m",))
+        cmd = build_agent_cmd(_config(tmp_path, tmp_path, lean=True))
+        assert self._settings(cmd) == {"enabledPlugins": {"sp@m": False}}
+
+    def test_no_lean_keeps_them(self, tmp_path, monkeypatch):
+        from lreview import agents
+        monkeypatch.setattr(agents, "enabled_plugins", lambda: ("sp@m",))
+        cmd = build_agent_cmd(_config(tmp_path, tmp_path, lean=False))
+        assert self._settings(cmd) is None
+
+    def test_codex_is_untouched(self, tmp_path, monkeypatch):
+        from lreview import agents
+        monkeypatch.setattr(agents, "enabled_plugins", lambda: ("sp@m",))
+        cmd = build_agent_cmd(_config(tmp_path, tmp_path, lean=True,
+                                      agent="codex"))
+        assert "--settings" not in cmd
+
+    def test_merged_with_the_memory_hook(self, tmp_path, monkeypatch):
+        from lreview import agents
+        monkeypatch.setattr(agents, "enabled_plugins", lambda: ("sp@m",))
+        change = _change(64086, "a" * 40)
+        config = _config(tmp_path, tmp_path, lean=True,
+                         memory_db=tmp_path / "db")
+        settings = self._settings(build_agent_cmd(config, change))
+        assert settings["enabledPlugins"] == {"sp@m": False}
+        assert settings["hooks"]["SessionStart"]
+
+    def test_the_metadata_nudge_keeps_them_off_too(self, tmp_path,
+                                                   monkeypatch):
+        from lreview import agents
+        from lreview.runner import plugin_settings
+        monkeypatch.setattr(agents, "enabled_plugins", lambda: ("sp@m",))
+        config = _config(tmp_path, tmp_path, lean=True)
+        assert json.loads(plugin_settings(config)) == {
+            "enabledPlugins": {"sp@m": False}}
+        assert plugin_settings(_config(tmp_path, tmp_path,
+                                       lean=False)) is None

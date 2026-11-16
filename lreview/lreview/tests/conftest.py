@@ -35,3 +35,11 @@ def _keep_results_out_of_the_checkout(tmp_path, monkeypatch):
 def _ignore_users_config(tmp_path, monkeypatch):
     """Tests must not read the developer's ~/.config/lreview/lreview-config.toml."""
     monkeypatch.setenv("LREVIEW_CONFIG", str(tmp_path / "no-config.toml"))
+
+
+@pytest.fixture(autouse=True)
+def _no_user_plugins(monkeypatch):
+    """`claude plugin list` would run the developer's claude (or a
+    test's stub, which treats every call as a review)."""
+    from lreview import agents
+    monkeypatch.setattr(agents, "enabled_plugins", lambda: ())

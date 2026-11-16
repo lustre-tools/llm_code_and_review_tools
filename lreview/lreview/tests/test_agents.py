@@ -1,8 +1,12 @@
 """Tests for the agent backends."""
 
+import json
+import os
+
 import pytest
 
 from lreview.agents import AGENTS, get_agent
+from lreview.agents import enabled_plugins as _REAL_ENABLED_PLUGINS
 
 PROMPT = ("Using the prompt /p/review-core.md run a deep dive "
           "regression analysis of the top commit")
@@ -262,3 +266,38 @@ class TestCodexLean:
         cmd = get_agent("codex").build_cmd(None, None, [], PROMPT,
                                            prompt_on_stdin=True)
         assert cmd[-1] == "-" and PROMPT not in cmd
+
+
+class TestUserPlugins:
+    """A lean claude review switches off the user's plugins."""
+
+    def _fake_claude(self, tmp_path, monkeypatch, output):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "claude"
+        fake.write_text("#!/bin/sh\n[ \"$1 $2 $3\" = \"plugin list --json\" ] "
+                        "|| exit 9\ncat <<'END'\n" + output + "\nEND\n")
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+
+    def test_lists_only_the_enabled_ones(self, tmp_path, monkeypatch):
+        self._fake_claude(tmp_path, monkeypatch, json.dumps([
+            {"id": "hooks-plugin@market", "enabled": True},
+            {"id": "off@market", "enabled": False},
+            {"id": "other-plugin@synced", "enabled": True}]))
+        assert _REAL_ENABLED_PLUGINS.__wrapped__() == (
+            "hooks-plugin@market", "other-plugin@synced")
+
+    def test_a_claude_that_cannot_say_means_none(self, tmp_path,
+                                                 monkeypatch):
+        self._fake_claude(tmp_path, monkeypatch, "not json")
+        assert _REAL_ENABLED_PLUGINS.__wrapped__() == ()
+
+    def test_settings_turn_each_one_off(self, monkeypatch):
+        from lreview import agents
+        monkeypatch.setattr(agents, "enabled_plugins",
+                            lambda: ("a@m", "b@m"))
+        assert agents.plugins_off_settings() == {
+            "enabledPlugins": {"a@m": False, "b@m": False}}
+        monkeypatch.setattr(agents, "enabled_plugins", lambda: ())
+        assert agents.plugins_off_settings() == {}

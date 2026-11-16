@@ -566,6 +566,16 @@ def compaction_settings(doc: Optional[Path] = None,
     }]}})
 
 
+def plugin_settings(config: BatchConfig) -> Optional[str]:
+    """--settings that keep the user's plugins out of a lean claude
+    review, or None."""
+    if not (config.lean and config.agent == "claude"):
+        return None
+    from .agents import plugins_off_settings
+    off = plugins_off_settings()
+    return json.dumps(off) if off else None
+
+
 def expand_allowed_tools(config: BatchConfig,
                          worktree: Optional[Path]) -> list[str]:
     """Return the allowlist rules with the placeholders filled in.
@@ -603,12 +613,15 @@ def build_agent_cmd(config: BatchConfig,
         from .memory import ensure_doc
         doc = ensure_doc(config.memory_db, change)
     upstreams = getattr(change, "backport", None)
-    settings = compaction_settings(doc, upstreams) if doc or upstreams else None
+    settings = {}
+    if doc or upstreams:
+        settings.update(json.loads(compaction_settings(doc, upstreams)))
+    settings.update(json.loads(plugin_settings(config) or "{}"))
     return spec.build_cmd(
         config.model, config.effort, config.agent_args,
         review_prompt(config, change, session, worktree),
         resume=session.session_id if session is not None else None,
-        settings=settings, lean=config.lean,
+        settings=json.dumps(settings) if settings else None, lean=config.lean,
         system_file=(str(preload_file(config))
                      if _preloading(config, change)
                      and config.agent == "claude" else None),
@@ -842,6 +855,7 @@ def _ask_for_metadata(config: BatchConfig, change, log_path: Path,
     cmd = get_agent(config.agent).build_cmd(
         config.model, config.effort, config.agent_args, METADATA_NUDGE,
         resume=session_id, lean=config.lean,
+        settings=plugin_settings(config),
         system_file=(str(preload_file(config))
                      if _preloading(config, change)
                      and config.agent == "claude" else None),

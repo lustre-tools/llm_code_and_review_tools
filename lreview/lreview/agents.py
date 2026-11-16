@@ -12,9 +12,11 @@ only claude's carries a dollar cost. auggie, gemini and opencode are
 best-effort command templates.
 """
 
+import functools
 import json
 import os
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -40,6 +42,35 @@ LEAN_CLAUDE_ARGS = [
 CLAUDE_SOURCE_ARGS = ["--setting-sources", "user"]
 CODEX_SOURCE_ARGS = ["-c", "project_doc_max_bytes=0"]
 CHECKOUT_SKILL_DIRS = (".agents/skills", ".codex/skills")
+
+
+@functools.lru_cache(maxsize=1)
+def enabled_plugins() -> tuple:
+    """Ids of the plugins the user has enabled for claude, or ().
+
+    Reading user settings also loads the user's plugins, whose hooks
+    and skills reach every review: a SessionStart hook can tell the
+    reviewer to go and use skills it does not have.  A lean review
+    turns each of these off; claude's built-in plugins are not listed
+    and stay.
+    """
+    try:
+        out = subprocess.run(["claude", "plugin", "list", "--json"],
+                             capture_output=True, text=True, timeout=60,
+                             stdin=subprocess.DEVNULL).stdout
+        plugins = json.loads(out)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ()
+    if not isinstance(plugins, list):
+        return ()
+    return tuple(p["id"] for p in plugins
+                 if isinstance(p, dict) and p.get("enabled") and p.get("id"))
+
+
+def plugins_off_settings() -> dict:
+    """claude settings that disable every enabled user plugin."""
+    ids = enabled_plugins()
+    return {"enabledPlugins": {i: False for i in ids}} if ids else {}
 
 
 def checkout_skill_args(worktree: Optional[Path]) -> list[str]:

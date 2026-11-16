@@ -328,7 +328,11 @@ writes (most of it thinking). Two defaults keep both down:
   cache instead of Claude Code's 1-hour one. The interactive setup
   otherwise puts some 40K tokens in front of every call, and a 1-hour
   cache write costs 2x input against 1.25x; calls in a review are
-  seconds apart.
+  seconds apart. It also switches off every plugin the user has
+  enabled (`claude plugin list`), through the review's own
+  `--settings`: a plugin's SessionStart hook otherwise reaches every
+  reviewer, and one that says "always use your skills" sends a
+  review after skills it does not have.
 - **`--preload`** (default on, claude full mode; codex and cursor get
   the same text at the start of the first message, on stdin): the
   protocol (`review-core.md`) and the files it always loads go into
