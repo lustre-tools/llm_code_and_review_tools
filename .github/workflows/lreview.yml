@@ -20,7 +20,7 @@ jobs:
           git clone https://github.com/lustre-tools/llm_code_and_review_tools.git tools
           git -C tools checkout 22a5534ee45c0989bd50724c2d2aaabaf38ca46e
           git -C tools submodule update --init review-prompts
-          pip install ./tools/gerrit_cli ./tools/lreview
+          pip install ./tools/llm_tool_common ./tools/gerrit_cli ./tools/lreview
       - run: lreview run --github "$PR_URL" --repo "$GITHUB_WORKSPACE" --post
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
