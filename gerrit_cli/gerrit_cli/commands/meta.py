@@ -1092,7 +1092,7 @@ that conflicts or has nothing to do.
                 "description": "Rebase the change on the server",
             },
         ],
-        "related": ["related", "checkout", "upload"],
+        "related": ["related", "checkout", "upload", "conflicts"],
     },
     "set-topic": {
         "summary": "Set a change's topic",
@@ -1181,7 +1181,181 @@ linear chain, this shows the whole topology.
                 "description": "Graph a ticket's changes into a file",
             },
         ],
-        "related": ["series-status", "related", "set-topic", "hashtag"],
+        "related": ["series-status", "related", "set-topic", "hashtag", "conflicts"],
+    },
+    "conflicts": {
+        "summary": "Which open changes a change collides with, and who moves",
+        "description": """
+Trial-merge one change against the open changes on its branch that touch
+its files and are likely to land soon. --repo is a local clone of the
+project (default: the current directory); only fetched objects are added
+to it. --commit SHA tests a local commit, and the local commits below it,
+instead of the uploaded patchset: verify a rearrangement before uploading.
+--worktree tests the uncommitted edits of tracked files in the checkout,
+whose HEAD must be the change (else invalid input): a throwaway commit
+of HEAD's tree with those edits, on HEAD's parent with HEAD's message,
+built in a temporary index and tested as --commit tests a commit; the
+index, HEAD and branches are left alone. Compare --commit HEAD with
+--worktree to verify an edit.
+
+Candidates are skipped (listed in skipped, with the reason) when they need
+a new patchset anyway: a Code-Review -1/-2 from a human other than the
+owner, a Jenkins -1, or an in-flight change below them with either. The
+rest are tiered:
+  frozen       queued in <branch>-next (only when -next is not stale)
+  lands-first  ready (Jenkins +1, Maloo +1, 2 non-owner CR +1, 1 for a
+               backport) or a release blocker/priority hashtag
+  same-effort  shares a hashtag (not an ignored or release one), the
+               topic or a ticket key named in the subject (LU-12345,
+               LU-23456: [A-Z][A-Z0-9]+-digits; not an ignored one)
+               with the change
+  other        the rest; listed in not_tried unless --all
+same-effort and other are limited to --max-age days (default 30); --with
+CN checks a change whatever the filters say. These hashtags are fnmatch
+globs (case-sensitive), each list replaced by its environment variable
+(comma-separated, also read from gerrit-cli's .env) when set and not
+blank: GERRIT_CONFLICTS_BLOCKER_TAGS (default *_review_blocker),
+GERRIT_CONFLICTS_PRIORITY_TAGS (default *_review_priority),
+GERRIT_CONFLICTS_IGNORE_TAGS (default pw_*,fortestonly,forbuildonly),
+GERRIT_CONFLICTS_IGNORE_TICKETS (ticket keys that never make the same
+effort: umbrella tickets; default LU-6142,LU-17000). A
+*_review_blocker or *_review_priority tag never counts as shared, even
+with other release globs configured. --blocker-tag GLOB and
+--priority-tag GLOB (repeatable or comma-separated) replace the first two
+for one run; ranks {blocker, priority, ignore, ignore_tickets} echoes
+those in effect.
+
+Each checked pair is tried in both orders as it would land (landing:
+target_first, candidate_first; each change's stack picked onto the branch
+tip) and as uploaded (as_uploaded: target_on_theirs, theirs_on_target;
+each side's stack part above what both stacks share picked onto the
+other's uploaded commit). An as-uploaded conflict counts only on files
+both stack parts change; one on a file only one side changes is the
+branch moving between their bases, listed in base_drift instead. A pair
+is in conflicts if a landing order conflicts, in as_uploaded_only if only
+an as-uploaded one does (what the other owner, or CI on a stale base,
+sees; the landing is clean). via names the candidate's ancestor the
+conflict is at, own_via the target's in-flight parent it is at (the
+colliding lines are that parent's, not the change's own); only a
+conflicting pick names one, as uploaded only when both landing orders
+are clean or were not tried. Pairs that land cleanly
+but still collide are in silent_only (with as_uploaded and files when
+that conflicts too), check: duplicate-test (a
+test defined twice), duplicate-value (an OBD_FAIL value, or an
+OBD_CONNECT / OBD_CONNECT2 flag value, used twice), duplicate-exception
+(both add the same test to ALWAYS_EXCEPT); only what both sides added
+counts, not what the base already had twice. same_function [{file,
+functions}] names the functions both sides' own diffs edit (the function
+a hunk sits in, found by git's cpp funcname rule in the old text whatever
+the user's diff settings, and the definitions and prototypes a hunk adds
+or removes; keywords and upper-case macro names are not functions); a
+pair that merges cleanly and shares one is in watch instead of clean
+("clean merge, same function edited: build the combination"). --hunks
+adds the conflict-marker regions with their kind: insert-insert,
+edit-edit, adjacent, context; a region's line is where it starts in the
+merged file as written with its markers (diff3 style, as text shows),
+not a line number of either side; --hunks-for CN (repeatable) only for the
+pairs with those changes. --hunks is large on a busy file: run without it
+first, then --hunks-for the collisions you will act on (a change that was
+not tried is named in notes).
+
+fix_side says which change should move, whoever runs the command:
+  target \\ candidate  frozen      lands-first  same-effort  other
+  frozen              coordinate  candidate    candidate    candidate
+  lands-first         target      coordinate   candidate    candidate
+  pending             target      target       coordinate   candidate
+Within lands-first a release blocker outranks priority, which outranks
+plain ready. A collision at via is that change's: its tier and hashtags
+take the candidate's place. One at own_via is that parent's: its tier
+(as in base.parents) and hashtags take the target's, and "target" means
+that parent moves. via_change and own_via_change {cn, owner, tier,
+readiness, release_hashtags} say who that is (compact: cn, owner, tier).
+mine says whose move it is: true when the change's owner is the account
+in use (me, a username; owner is the display name, owner_username in
+--full the owner's username), null when no account is configured; the
+target, each pair and via_change / own_via_change carry it.
+
+When the change does not apply on the branch tip, status is
+"needs-rebase", conflicts is null, as_uploaded_only has the pairs that
+conflict as uploaded, and clean those that do not; rebase_cause is
+"parent" when it, or the stack member it is blocked by, conflicts with
+the newer patchset of its own parent (rebase_onto {cn, ps, for}: rebase
+onto that; for names the blocking member), "branch" otherwise. Only an
+open change can be checked. outdated_parent {cn, ps, current, status,
+files} is set when the change sits on an older patchset of its parent,
+status saying whether it applies on the current one; own_stack entries
+sitting on an older patchset of the change below carry on_old_patchset
+{of, ps, current}, and a child conflicting with the current one parent
+{cn, files}. With --commit, a local commit below the change that is an
+older patchset of its change is replaced by the current patchset; a
+local edit is tested as it is. base says whether rebasing is an option
+(rebase: "would move ready/queued parents" when a parent is frozen or
+lands-first); on_branch and on_next are the change against the branch
+and <branch>-next (on_next: clean, conflict with the queued change in
+with, blocked, error, queued when it is in the queue itself, not-tried
+when it does not apply on the branch tip so there is nothing to put on
+-next, stale or no-next); errors [{cn, reason}] the candidates that
+could not be tried: a commit that could not be fetched, or a trial merge
+git failed ("trial merge failed"); own_stack how its parents and
+children fare (the parents in both, bottom first, are every in-flight
+change the stack is tried with, including those below a parent's current
+patchset); already_conflicting the candidates that do not apply on the
+tip by themselves. counts: candidates = the open changes the file:
+queries found (they leave out changes older than --max-age that are not
+ready, queued or release-tagged, so those show up nowhere), minus the
+own stack, plus open --with changes; after_filters = those the filters
+kept (handed to the trial merges, plus not_tried); tried = pairs
+trial-merged; conflicting = entries in conflicts and silent_only;
+as_uploaded_only = entries in as_uploaded_only; watch = entries in
+watch. Gerrit's mergeable flag and conflicts: search are not used. It
+models Gerrit's cherry-pick submit (outdated_parent: clean means the
+change lands as it is only there); the silent checks, the readiness
+voters (jenkins, Maloo, the Code-Review count) and the ignored-ticket
+defaults are Lustre's. Read-only towards Gerrit; needs git 2.40 or
+newer.
+
+The default output is compact; --full prints every field. Compact: per
+pair cn, subject (cut at 70 characters), owner, mine, tier, readiness,
+fix_side, files, release_hashtags (only the release ones), landing and
+as_uploaded as one string each in the order given by orders
+("conflict/clean": target_first/candidate_first,
+target_on_theirs/theirs_on_target), and only when set: via, own_via,
+via_change / own_via_change (cn, owner, mine, tier), silent, base_drift
+(a count), forced, hunks, and same_function only in watch and
+silent_only. clean, already_conflicting and not_tried are counts;
+commit, tested_commit (unless --commit tested another commit), project
+and tip are left out. --full adds those, each pair's commit and ps (the
+candidate's current patchset, to fetch it), every hashtag, the per-order
+results as objects, the base_drift files and the change lists behind the
+counts. Hunks appear only with --hunks or --hunks-for, in either form.
+""",
+        "examples": [
+            {
+                "command": "gc conflicts 12345 --repo ~/lustre-release",
+                "description": "Collisions of the uploaded patchset",
+            },
+            {
+                "command": "gc conflicts 12345 --repo ~/lustre-release --hunks-for 23456",
+                "description": "Conflict regions of the collision with 23456 only",
+            },
+            {
+                "command": "gc conflicts 12345 --repo ~/lustre-release --worktree",
+                "description": "Check the uncommitted edits of the change checked out",
+            },
+            {
+                "command": "gc conflicts 12345 --repo ~/lustre-release --commit HEAD",
+                "description": "Check a local rearrangement before uploading",
+            },
+            {
+                "command": "gc conflicts 12345 --with 23456 --all",
+                "description": "Also check one given change and the 'other' tier",
+            },
+            {
+                "command": "gc conflicts 12345 --repo ~/lustre-release --full",
+                "description": "Every field, with the changes behind the counts",
+            },
+        ],
+        "related": ["graph", "rebase", "related", "info"],
     },
     "describe": {
         "summary": "Machine-readable description of the commands",

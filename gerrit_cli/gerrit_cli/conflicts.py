@@ -1,4 +1,6 @@
-"""Trial merges of a graph's in-flight changes (`gc graph --conflicts REPO`).
+"""Trial merges of in-flight changes: a graph's (`gc graph --conflicts
+REPO`), or one change against the changes likely to land around it
+(`gc conflicts`, which passes `focus`).
 
 A change lands the way Gerrit's cherry-pick submit lands it: its own diff
 (parent commit -> commit) picked onto the branch after the in-flight
@@ -43,9 +45,12 @@ import subprocess
 import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
+
+from .parallel import parallel_map
 
 _OID_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 _CHANGE_ID_RE = re.compile(r"^Change-Id:\s*(I[0-9a-f]{40})\s*$", re.M)
@@ -53,13 +58,23 @@ _CHANGE_ID_RE = re.compile(r"^Change-Id:\s*(I[0-9a-f]{40})\s*$", re.M)
 _MIN_GIT = (2, 40)
 _TIMED_OUT = -1
 _FETCH_BATCH = 50
+_LOOKUP_BATCH = 30
 # The throwaway commits get fixed ids and need no user.name/email.
 _COMMIT_ENV = {
-    "GIT_AUTHOR_NAME": "gc graph", "GIT_AUTHOR_EMAIL": "gc-graph@invalid",
+    "GIT_AUTHOR_NAME": "gerrit-cli trial merge",
+    "GIT_AUTHOR_EMAIL": "trial-merge@gerrit-cli.invalid",
     "GIT_AUTHOR_DATE": "@0 +0000",
-    "GIT_COMMITTER_NAME": "gc graph", "GIT_COMMITTER_EMAIL": "gc-graph@invalid",
+    "GIT_COMMITTER_NAME": "gerrit-cli trial merge",
+    "GIT_COMMITTER_EMAIL": "trial-merge@gerrit-cli.invalid",
     "GIT_COMMITTER_DATE": "@0 +0000",
 }
+
+
+# a patch in one shape whatever the user's diff configuration (noprefix,
+# interHunkContext, an external diff, textconv)
+_PLAIN_DIFF = ("-c", "core.quotePath=false", "-c", "diff.interHunkContext=0",
+               "diff-tree", "-r", "-p", "-U0", "--no-renames", "--no-color",
+               "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/")
 
 
 class ConflictCheckError(Exception):
@@ -75,14 +90,18 @@ class Patch:
     cn: int
     ps: int
     commit: str
+    # the commit its own diff starts from when that is not its parent: a
+    # local change whose stack has commits without a change of their own
+    base: str = ""
 
 
 @dataclass(frozen=True)
 class _Pick:
-    status: str  # "clean" | "empty" | "conflict" | "error"
+    status: str  # "clean" | "empty" | "conflict" | "error" | "skipped"
     commit: str = ""
     files: tuple[str, ...] = ()
     detail: str = ""
+    onto: str = ""  # conflicts only: the commit the pick was tried on
 
     @property
     def ok(self) -> bool:
@@ -91,6 +110,50 @@ class _Pick:
 
 def change_ref(cn: int, ps: int) -> str:
     return f"refs/changes/{cn % 100:02d}/{cn}/{ps}"
+
+
+def changes_by_commit(get: Callable[[str], Any], shas: list[str], batch: int = _LOOKUP_BATCH,
+                      options: str = "") -> list[dict[str, Any]]:
+    """The changes (all revisions) that have one of `shas` as a patch set.
+    `get` is a REST client's get; `options` extra `&o=` parameters."""
+    def one(chunk: list[str]) -> list[dict[str, Any]]:
+        query = " OR ".join(f"commit:{h}" for h in chunk)
+        return get(f"/changes/?q={quote(query, safe=':+ ')}&o=ALL_REVISIONS{options}&n=500") or []
+
+    return [c for page in parallel_map(one, [shas[i:i + batch]
+                                              for i in range(0, len(shas), batch)])
+            for c in page]
+
+
+def commit_lookup(get: Callable[[str], Any], batch: int = _LOOKUP_BATCH
+                  ) -> Callable[[list[str]], dict[str, tuple[int, str]]]:
+    """check_conflicts' `lookup`: (change, status) owning each commit."""
+    def lookup(shas: list[str]) -> dict[str, tuple[int, str]]:
+        found = {}
+        for change in changes_by_commit(get, shas, batch):
+            for h in change.get("revisions") or {}:
+                if h in shas:
+                    found[h] = (change.get("_number", 0), change.get("status", ""))
+        return found
+    return lookup
+
+
+def change_id_lookup(get: Callable[[str], Any], project: str, branch: str,
+                     batch: int = _LOOKUP_BATCH) -> Callable[[list[str]], dict[str, int]]:
+    """check_conflicts' `change_lookup`: Change-Id -> change number."""
+    def one(chunk: list[str]) -> list[dict[str, Any]]:
+        ids = " OR ".join(f"change:{c}" for c in chunk)
+        query = f"({ids}) project:{project} branch:{branch}"
+        return get(f"/changes/?q={quote(query, safe=':+ ()')}&n=500") or []
+
+    def change_lookup(change_ids: list[str]) -> dict[str, int]:
+        found = {}
+        for page in parallel_map(one, [change_ids[i:i + batch]
+                                       for i in range(0, len(change_ids), batch)]):
+            for change in page:
+                found[change.get("change_id", "")] = change.get("_number", 0)
+        return found
+    return change_lookup
 
 
 class Repo:
@@ -114,8 +177,8 @@ class Repo:
         self._scratch: str | None = None
         self._trees: dict[str, str] = {}
 
-    def _run(self, *args: str, scratch: bool = False, input: str | None = None,
-             timeout: int = 600) -> subprocess.CompletedProcess[str]:
+    def _run(self, *args: str, scratch: bool = False, input: str | bytes | None = None,
+             timeout: int = 600, binary: bool = False) -> subprocess.CompletedProcess[Any]:
         env = None
         if scratch:
             env = dict(os.environ, GIT_OBJECT_DIRECTORY=self._scratch or "",
@@ -123,10 +186,12 @@ class Repo:
         try:
             return subprocess.run(
                 ["git", "-C", str(self.path), *args], capture_output=True,
-                text=True, input=input, timeout=timeout, env=env,
+                text=not binary, input=input, timeout=timeout, env=env,
             )
         except subprocess.TimeoutExpired:
-            return subprocess.CompletedProcess(args, _TIMED_OUT, "", f"timed out after {timeout} s")
+            empty: str | bytes = b"" if binary else ""
+            return subprocess.CompletedProcess(args, _TIMED_OUT, empty,
+                                               f"timed out after {timeout} s")
 
     def resolve_remote(self, project: str) -> str | None:
         """The remote that fetches Gerrit `project`, "origin" first."""
@@ -170,8 +235,19 @@ class Repo:
                 out[parts[0]] = (parts[1], ids[-1] if ids else "")
         return out
 
+    def rev_parse(self, rev: str) -> str | None:
+        """The commit `rev` names, None when there is none."""
+        r = self._run("rev-parse", "--verify", "--quiet", "--end-of-options", f"{rev}^{{commit}}")
+        return (r.stdout.strip() or None) if r.returncode == 0 else None
+
     def is_ancestor(self, commit: str, of: str) -> bool:
         return self._run("merge-base", "--is-ancestor", commit, of).returncode == 0
+
+    def count(self, range_: str) -> int:
+        return int(self._run("rev-list", "--count", range_).stdout.strip() or 0)
+
+    def merge_base(self, a: str, b: str) -> str:
+        return self._run("merge-base", a, b).stdout.strip()
 
     def missing(self, commits: list[str]) -> set[str]:
         r = self._run("cat-file", "--batch-check=%(objectname) %(objecttype)",
@@ -240,7 +316,11 @@ class Repo:
             self._trees[commit] = r.stdout.strip()
         return self._trees[commit]
 
-    def pick(self, onto: str, commit: str, parent: str) -> _Pick:
+    def pick(self, onto: str, commit: str, parent: str,
+             shared: set[str] | None = None) -> _Pick:
+        """`shared`: a conflict on none of these files also gets a commit
+        of the merged tree, its conflicted files holding the markers, to
+        pick further onto."""
         r = self._run("merge-tree", "--write-tree", "--name-only", "--no-messages",
                       f"--merge-base={parent}", onto, commit, scratch=True)
         lines = r.stdout.splitlines()
@@ -248,7 +328,12 @@ class Repo:
         # prints the result tree first
         tree = lines[0] if lines and _OID_RE.match(lines[0]) else ""
         if r.returncode == 1 and tree:
-            return _Pick("conflict", files=tuple(dict.fromkeys(x for x in lines[1:] if x)))
+            files = tuple(dict.fromkeys(x for x in lines[1:] if x))
+            kept = ""
+            if shared is not None and not shared.intersection(files):
+                c = self._run("commit-tree", tree, "-p", onto, "-m", commit, scratch=True)
+                kept = c.stdout.strip() if c.returncode == 0 else ""
+            return _Pick("conflict", commit=kept, onto=onto, files=files)
         if r.returncode != 0 or not tree:
             return _Pick("error", detail=r.stderr.strip() or f"exit {r.returncode}")
         if tree == self.tree_of(onto):
@@ -260,8 +345,106 @@ class Repo:
         self._trees[new] = tree
         return _Pick("clean", commit=new)
 
+    def commit_worktree(self) -> tuple[str, str]:
+        """(HEAD, a commit of HEAD's tree with the tracked working-tree
+        edits, on HEAD's parent with HEAD's message). Built in a
+        temporary index; the user's index, HEAD and branches stay as
+        they are, the commit is referenced by nothing."""
+        head = self.rev_parse("HEAD")
+        if head is None:
+            raise ConflictRepoError(f"{self.path}: no commit checked out")
+        parents = self.parents([head]).get(head) or []
+        if len(parents) != 1:
+            raise ConflictRepoError(f"{self.path}: HEAD is a root or merge commit")
+        message = self._run("log", "-1", "--format=%B", head).stdout
+        tmp = tempfile.mkdtemp(prefix="gc-conflicts-index-")
+        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(tmp, "index"), **_COMMIT_ENV)
+
+        def git(*args: str, input: str | None = None) -> str:
+            r = subprocess.run(["git", "-C", str(self.path), *args], capture_output=True,
+                               text=True, input=input, env=env, timeout=600)
+            if r.returncode != 0:
+                raise ConflictRepoError(f"git {args[0]} failed: {r.stderr.strip()}")
+            return r.stdout.strip()
+
+        try:
+            git("read-tree", head)
+            git("add", "-u")
+            commit = git("commit-tree", git("write-tree"), "-p", parents[0], "-F", "-",
+                         input=message)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        return head, commit
+
+    def merge_tree_diff3(self, onto: str, commit: str, parent: str) -> str | None:
+        """The tree of the trial merge, conflicted files written with
+        diff3 markers (the base section is what classifies a region)."""
+        r = self._run("-c", "merge.conflictStyle=diff3", "merge-tree", "--write-tree",
+                      "--no-messages", f"--merge-base={parent}", onto, commit, scratch=True)
+        lines = r.stdout.splitlines()
+        if r.returncode not in (0, 1) or not lines or not _OID_RE.match(lines[0]):
+            return None
+        return lines[0]
+
+    def blob(self, tree: str, path: str) -> str | None:
+        r = self._run("cat-file", "-p", f"{tree}:{path}", scratch=True, binary=True)
+        return r.stdout.decode(errors="replace") if r.returncode == 0 else None
+
+    def own_added(self, commit: str, parent: str, paths: list[str]) -> dict[str, set[str]]:
+        """The `+` lines of commit's own diff against parent, per path."""
+        out: dict[str, set[str]] = {}
+        for path in paths:
+            r = self._run(*_PLAIN_DIFF, parent, commit, "--", path, scratch=True, binary=True)
+            out[path] = set()
+            if r.returncode != 0:
+                continue
+            in_hunk = False
+            for ln in r.stdout.decode(errors="replace").splitlines():
+                if ln.startswith("diff --git "):
+                    in_hunk = False
+                elif ln.startswith("@@"):
+                    in_hunk = True
+                elif in_hunk and ln.startswith("+"):
+                    out[path].add(ln[1:])
+        return out
+
+    def functions(self, commit: str, parent: str) -> dict[str, set[str]]:
+        """The functions commit's own diff against parent edits, per
+        path. Plumbing with every option that shapes the patch given, so
+        the user's diff configuration (noprefix, interHunkContext, an
+        external diff, textconv) does not change what is parsed; a path
+        the repository's attributes mark binary has no hunks."""
+        from gerrit_cli.conflict_functions import edited_functions, parse_diff
+
+        r = self._run(*_PLAIN_DIFF, parent, commit, binary=True)
+        if r.returncode != 0:
+            return {}
+        hunks = parse_diff(r.stdout.decode(errors="replace"))
+        return edited_functions(hunks, self.texts(parent, sorted({h.path for h in hunks})))
+
+    def texts(self, rev: str, paths: list[str]) -> dict[str, str]:
+        """The text of each path that exists at rev."""
+        if not paths:
+            return {}
+        r = self._run("cat-file", "--batch", input="".join(f"{rev}:{p}\n" for p in paths)
+                      .encode(), binary=True)
+        out: dict[str, str] = {}
+        data, pos = r.stdout or b"", 0
+        for path in paths:
+            nl = data.find(b"\n", pos)
+            if nl < 0:
+                break
+            head = data[pos:nl].split()
+            pos = nl + 1
+            if len(head) != 3 or head[1] != b"blob":
+                continue
+            size = int(head[2])
+            out[path] = data[pos:pos + size].decode(errors="replace")
+            pos += size + 1
+        return out
+
     def __enter__(self) -> "Repo":
-        self._scratch = tempfile.mkdtemp(prefix="gc-graph-conflicts-")
+        self._scratch = tempfile.mkdtemp(prefix="gc-conflicts-")
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -294,23 +477,37 @@ def check_conflicts(
     change_lookup: Callable[[list[str]], dict[str, int]] | None = None,
     log: Callable[[str], None] | None = None,
     workers: int | None = None,
+    focus: set[int] | None = None,
+    hunks: bool | set[int] = False,
+    pair_with: set[int] | None = None,
+    tips: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Trial-merge `patches` against the fetched tip of `branch` and
     against each other.
+
+    With `focus`, the changes in it form the target stack and every other
+    patch is a candidate: each candidate is tried against the target in
+    both merge orders ("focus_pairs") instead of the graph's pairs;
+    `pair_with` limits that to the candidates in it (the other patches
+    are there for the stacks they hold up). A target that does not apply
+    on the tip is still tried as uploaded, its landing orders "skipped".
 
     `owners` maps known patch set commits to (change, status): a parent
     owned by one of `patches` is the change a patch stands on. `lookup`
     finds the owners of other parent commits that are not on the branch.
     `next_branch` names the queue to check against when the remote has
     it; `change_lookup` turns the Change-Ids of the queued patches the
-    changes collide with into change numbers.
+    changes collide with into change numbers. `tips` are the branch and
+    next_branch tips already read (a missing branch left out); without
+    them they are read from the remote.
     """
     say = log or (lambda _msg: None)
     workers = workers or min(8, os.cpu_count() or 2)
     st = _State({p.cn: p for p in patches})
 
     with repo:
-        heads = repo.branch_tips(remote, [branch] + ([next_branch] if next_branch else []))
+        heads = dict(tips) if tips is not None else repo.branch_tips(
+            remote, [branch] + ([next_branch] if next_branch else []))
         if branch not in heads:
             raise ConflictCheckError(f"{remote} has no branch {branch}")
         tip = heads[branch]
@@ -330,9 +527,16 @@ def check_conflicts(
         _link(repo, st, missing, owners)
         _off_branch(repo, st, tip, owners, lookup)
         _check_tip(repo, st, tip, workers)
-        own = repo.changed_files({st.patches[cn].commit: st.base[cn] for cn in st.applied})
-        own_by_cn = {cn: own.get(st.patches[cn].commit, set()) for cn in st.applied}
-        pairs, tried, errors = _check_pairs(repo, st, own_by_cn, workers)
+        pairs, tried, errors = [], 0, 0
+        focus_pairs: list[dict[str, Any]] = []
+        already: list[int] = []
+        if focus:
+            focus_pairs, already = _check_focus_pairs(repo, st, focus, workers, hunks,
+                                                      pair_with)
+        else:
+            own = repo.changed_files({st.patches[cn].commit: st.base[cn] for cn in st.applied})
+            own_by_cn = {cn: own.get(st.patches[cn].commit, set()) for cn in st.applied}
+            pairs, tried, errors = _check_pairs(repo, st, own_by_cn, workers)
         queue = (_check_next(repo, st, branch, tip, next_branch, next_tip, change_lookup, workers)
                  if next_branch and next_tip else None)
 
@@ -346,16 +550,19 @@ def check_conflicts(
     for res in st.results.values():
         summary[res["status"]] += 1
     say(", ".join(f"{n} {s}" for s, n in sorted(summary.items()))
-        + f"; {tried} pair(s) tried, {len(pairs)} conflicting"
-        + (f", {errors} failed" if errors else ""))
-    out = {
+        + (f"; {len(focus_pairs)} focus pair(s) tried" if focus else
+           f"; {tried} pair(s) tried, {len(pairs)} conflicting"
+           + (f", {errors} failed" if errors else "")))
+    out: dict[str, Any] = {
         "branch": branch,
         "tip": tip,
         "results": {str(cn): st.results[cn] for cn in sorted(st.results)},
-        "pairs": pairs,
-        "pairs_tried": tried,
-        "pair_errors": errors,
     }
+    if focus:
+        out["focus_pairs"] = focus_pairs
+        out["already_conflicting"] = already
+    else:
+        out.update({"pairs": pairs, "pairs_tried": tried, "pair_errors": errors})
     if queue is not None:
         counts = defaultdict(int)
         for res in queue.get("results", {}).values():
@@ -375,7 +582,7 @@ def _link(repo: Repo, st: _State, missing: set[str],
         if p.commit in missing:
             st.results[cn] = {"status": "error", "reason": "commit could not be fetched"}
             continue
-        ps = parents.get(p.commit, [])
+        ps = [p.base] if p.base else parents.get(p.commit, [])
         if len(ps) != 1:
             st.results[cn] = {"status": "skipped",
                               "reason": "merge commit" if ps else "root commit"}
@@ -633,3 +840,228 @@ def _check_pairs(repo: Repo, st: _State, own: dict[int, set[str]],
         if files:
             pairs.append({"a": a, "b": b, "files": sorted(files)})
     return pairs, len(tried), errors
+
+
+def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
+                       hunks: bool | set[int] = False, pair_with: set[int] | None = None,
+                       ) -> tuple[list[dict[str, Any]], list[int]]:
+    """Every candidate (a patch outside `focus`) against the focus stack
+    in both merge orders, as landed and as uploaded: each side's stack
+    part above the common part picked onto the other's uploaded commit.
+    Returns (pairs, candidates whose own stack does not apply on the
+    tip). A pair whose sides' own diffs edit the same function carries
+    same_function. A conflict at a candidate's in-flight
+    ancestor names it in via, one at a target's parent in own_via. With
+    `hunks`, each pair carries the conflict regions of every order that
+    conflicts; a set of candidates limits that to their pairs."""
+    targets = [cn for cn in focus if cn in st.stack
+               and not any(cn in st.stack[o] for o in focus if o != cn)]
+    if not targets:
+        return [], []
+    if len(targets) > 1:
+        raise ConflictCheckError(
+            "focus is not one stack: tops " + ", ".join(map(str, sorted(targets))))
+    target = targets[0]
+    tstack = set(st.stack[target])
+    candidates = sorted(cn for cn in st.patches if cn not in focus
+                        and cn not in tstack and target not in st.stack[cn]
+                        and (pair_with is None or cn in pair_with))
+    already = [cn for cn in candidates
+               if st.results[cn]["status"] in ("conflict", "blocked")]
+    if target not in st.base:
+        return [], already
+    landed = target in st.applied
+    # candidates on one stack share their lower changes' picks
+    memo: dict[int, _Pick] = {}
+    own_files: dict[int, set[str]] = {}
+
+    def own(zs: list[int]) -> set[str]:
+        todo = [z for z in zs if z not in own_files]
+        if todo:
+            found = repo.changed_files({st.patches[z].commit: st.base[z] for z in todo})
+            for z in todo:
+                own_files[z] = found.get(st.patches[z].commit, set())
+        return set().union(*(own_files[z] for z in zs))
+
+    def uploaded(start: str, zs: list[int], both: set[str], dropped: set[str]
+                 ) -> tuple[_Pick, int | None]:
+        """One side's stack part picked onto the other's uploaded commit.
+        A pick also conflicts wherever the branch moved between the two
+        bases; only a file both sides change is theirs, and a pick that
+        conflicts on the others alone goes on with their markers."""
+        cur = start
+        for z in zs:
+            if z not in st.base:
+                return _Pick("error", detail=st.results.get(z, {}).get("reason", "")), z
+            pick = repo.pick(cur, st.patches[z].commit, st.base[z], shared=both)
+            if pick.status == "conflict":
+                dropped.update(f for f in pick.files if f not in both)
+                kept = tuple(f for f in pick.files if f in both)
+                if kept:
+                    return replace(pick, files=kept), z
+                if not pick.commit:
+                    return _Pick("error", detail="could not write the merged tree"), z
+            elif not pick.ok:
+                return pick, z
+            cur = pick.commit
+        return _Pick("clean"), None
+
+    def land(start: str, zs: list[int], cache: dict[int, _Pick] | None) -> tuple[_Pick, int | None]:
+        cur = start
+        for z in zs:
+            pick = cache.get(z) if cache is not None else None
+            if pick is None:
+                pick = repo.pick(cur, st.patches[z].commit, st.base[z])
+                if cache is not None:
+                    cache[z] = pick
+            if not pick.ok:
+                return pick, z
+            cur = pick.commit
+        return _Pick("clean", commit=cur), None
+
+    def regions(into: dict[str, list], pick: _Pick, onto: str, z: int,
+                carried: list[int], order: str) -> None:
+        """Regions of `pick` conflicting at change `z`; `carried` are the
+        changes `onto` holds on top of the branch tip."""
+        if pick.status != "conflict":
+            return
+        from gerrit_cli.conflict_hunks import conflict_regions
+
+        added: dict[str, set[str]] = {}
+        for y in carried:
+            for path, lines in repo.own_added(st.patches[y].commit, st.base[y],
+                                              list(pick.files)).items():
+                added.setdefault(path, set()).update(lines)
+        found = conflict_regions(repo, onto, st.patches[z].commit, st.base[z],
+                                 list(pick.files), added)
+        for path, regs in found.items():
+            into.setdefault(path, []).extend(dict(r, order=order) for r in regs)
+
+    def silent(c: int, merged: _Pick) -> list[dict]:
+        if merged.status != "clean":
+            return []
+        commits = {st.patches[z].commit: st.base[z] for z in st.stack[target] + st.stack[c]}
+        own = repo.changed_files(commits)
+        both = set().union(*(own.get(st.patches[z].commit, set()) for z in st.stack[target])) \
+            & set().union(*(own.get(st.patches[z].commit, set()) for z in st.stack[c]))
+        if not both:
+            return []
+        from gerrit_cli.conflict_hunks import silent_collisions
+
+        texts = {path: (repo.blob(st.applied[target], path) or "",
+                        repo.blob(st.applied[c], path) or "",
+                        repo.blob(merged.commit, path) or "")
+                 for path in sorted(both)}
+        return silent_collisions(texts)
+
+    edited: dict[int, dict[str, set[str]]] = {}
+
+    def functions(zs: list[int]) -> dict[str, set[str]]:
+        out: dict[str, set[str]] = {}
+        for z in zs:
+            if z not in edited:
+                edited[z] = repo.functions(st.patches[z].commit, st.base[z])
+            for path, names in edited[z].items():
+                out.setdefault(path, set()).update(names)
+        return out
+
+    def one(c: int) -> dict[str, Any]:
+        cset = set(st.stack[c])
+        tz = [z for z in st.stack[c] if z not in tstack]
+        cz = [z for z in st.stack[target] if z not in cset]
+        if landed:
+            t_first, at = land(st.applied[target], tz, memo)
+            c_first, cat = land(st.applied[c], cz, None)
+        else:
+            t_first = c_first = _Pick("skipped")
+            at = cat = None
+        files = sorted(set(t_first.files) | set(c_first.files))
+        both = own(cz) & own(tz)
+        dropped: set[str] = set()
+        t_up, tuat = uploaded(st.patches[c].commit, cz, both, dropped)
+        c_up, cuat = uploaded(st.patches[target].commit, tz, both, dropped)
+        # only a conflict names a change; as uploaded only when landing is
+        # clean (or not tried)
+        quiet = not {t_first.status, c_first.status} & {"conflict", "error"}
+        via = at if t_first.status == "conflict" else \
+            cuat if quiet and c_up.status == "conflict" else None
+        own_via = cat if c_first.status == "conflict" else \
+            tuat if quiet and t_up.status == "conflict" else None
+        pair: dict[str, Any] = {
+            "target": target, "other": c,
+            "landing": {"target_first": t_first.status, "candidate_first": c_first.status,
+                        "files": files},
+            "as_uploaded": {"target_on_theirs": t_up.status, "theirs_on_target": c_up.status,
+                            "files": sorted(set(t_up.files) | set(c_up.files))},
+            "via": via if via != c else None,
+            "own_via": own_via if own_via != target else None,
+        }
+        if dropped:
+            pair["base_drift"] = sorted(dropped)
+        pair["silent"] = silent(c, t_first)
+        from gerrit_cli.conflict_functions import shared_functions
+
+        if same := shared_functions(functions(cz), functions(tz)):
+            pair["same_function"] = same
+        if hunks is True or (isinstance(hunks, set) and c in hunks):
+            landing: dict[str, list] = {}
+            as_up: dict[str, list] = {}
+            if at is not None:
+                regions(landing, t_first, t_first.onto, at,
+                        st.stack[target] + tz[:tz.index(at)], "target_first")
+            if cat is not None:
+                regions(landing, c_first, c_first.onto, cat,
+                        st.stack[c] + cz[:cz.index(cat)], "candidate_first")
+            if tuat is not None:
+                regions(as_up, t_up, t_up.onto, tuat,
+                        st.stack[c] + cz[:cz.index(tuat)], "target_on_theirs")
+            if cuat is not None:
+                regions(as_up, c_up, c_up.onto, cuat,
+                        st.stack[target] + tz[:tz.index(cuat)], "theirs_on_target")
+            pair["hunks"] = {"landing": landing, "as_uploaded": as_up}
+            textless = {p for sect in (landing, as_up) for p in sect} \
+                - {p for sect in (landing, as_up) for p, regs in sect.items() if regs}
+            if textless:
+                pair["hunks"]["notes"] = {p: "no text regions" for p in sorted(textless)}
+        return pair
+
+    todo = [c for c in candidates if c in (st.applied if landed else st.base)]
+    with ThreadPoolExecutor(workers) as pool:
+        return list(pool.map(one, todo)), already
+
+
+def base_info(repo: Repo, patches: dict[int, Patch], focus_stack: list[int],
+              tip: str, tiers: dict[int, str]) -> dict:
+    """Whether the target stack sits on the branch and what a rebase
+    would move. The target is the top of focus_stack."""
+    bottom = patches[focus_stack[0]]
+    parents = [bottom.base] if bottom.base else repo.parents([bottom.commit]).get(bottom.commit)
+    base = parents[0] if parents else None
+    on_branch = base is not None and repo.is_ancestor(base, tip)
+    mb = repo.merge_base(base, tip) if base else ""
+    behind = repo.count(f"{mb}..{tip}") if mb else 0
+    below = [{"cn": cn, "tier": tiers.get(cn, "other")} for cn in focus_stack[:-1]]
+    moves = any(p["tier"] in ("frozen", "lands-first") for p in below)
+    return {"on_branch": on_branch, "behind": behind, "parents": below,
+            "rebase": "would move ready/queued parents" if moves else "possible"}
+
+
+def own_stack(result: dict, focus_stack: list[int], children: list[int],
+              old: dict[int, dict] | None = None) -> dict:
+    """How the target's own parents and children fare against the branch.
+    `old`: change -> the older patchset of the change below it that it
+    sits on ({"of", "ps", "current"})."""
+    res = result["results"]
+    old = old or {}
+
+    def entry(cn: int) -> dict:
+        r = res.get(str(cn), {})
+        e: dict[str, Any] = {"cn": cn, "status": r.get("status", "skipped")}
+        if r.get("parent"):
+            e["parent"] = r["parent"]
+        if cn in old:
+            e["on_old_patchset"] = old[cn]
+        return e
+
+    return {"parents": [entry(cn) for cn in focus_stack[:-1]],
+            "children": [entry(cn) for cn in children]}

@@ -1,4 +1,4 @@
-"""Tests for the --conflicts trial merges (graph/conflicts.py).
+"""Tests for the --conflicts trial merges (conflicts.py).
 
 A bare repository stands in for Gerrit: master plus refs/changes/...
 for every patch set. The checked repository starts empty and gets
@@ -15,8 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from gerrit_cli.graph.build import _check_conflicts, build_graph
-from gerrit_cli.graph.conflicts import (
+from gerrit_cli.conflicts import (
     _MIN_GIT,
     ConflictCheckError,
     Patch,
@@ -24,6 +23,7 @@ from gerrit_cli.graph.conflicts import (
     change_ref,
     check_conflicts,
 )
+from gerrit_cli.graph.build import _check_conflicts, build_graph
 
 _ENV = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
             GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
@@ -120,10 +120,10 @@ def local(tmp_path):
 
 
 def _check(gerrit: Gerrit, local: Path, patches: list[Patch], owners=None,
-           lookup=None) -> dict:
+           lookup=None, focus=None) -> dict:
     return check_conflicts(Repo(local), str(gerrit.path), "master", patches,
                            gerrit.owner if owners is None else owners,
-                           lookup=lookup, workers=2)
+                           lookup=lookup, workers=2, focus=focus)
 
 
 def _status(result: dict) -> dict[int, str]:
@@ -544,7 +544,7 @@ class TestBuildStep:
 
     def test_no_temporary_directory_leaves_the_graph(self, gerrit, local, monkeypatch):
         """A sandbox whose /tmp is read-only: no conflicts, but a graph."""
-        from gerrit_cli.graph import conflicts as conflicts_mod
+        from gerrit_cli import conflicts as conflicts_mod
         from gerrit_cli.graph.build import PhaseLogger, _add_conflicts
 
         def no_tmp(*a, **k):

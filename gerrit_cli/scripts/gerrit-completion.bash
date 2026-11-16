@@ -10,7 +10,7 @@ _gerrit_completions() {
     _init_completion || return
 
     local global_opts="--envelope --help --user --version -U -h"
-    local commands="abandon abort ack add-reviewer batch check checkout co comments continue-reintegration delete-comment delete-message describe diff done examples explain extract find-user finish-patch graph hashtag info label maloo message next-patch publish-drafts push rebase related remove-reviewer reply restore review review-series reviewer-candidates reviewers s search series-comments series-info series-status set-topic skip-reintegration stage staged status upload vote watch work-on-patch"
+    local commands="abandon abort ack add-reviewer batch check checkout co comments conflicts continue-reintegration delete-comment delete-message describe diff done examples explain extract find-user finish-patch graph hashtag info label maloo message next-patch publish-drafts push rebase related remove-reviewer reply restore review review-series reviewer-candidates reviewers s search series-comments series-info series-status set-topic skip-reintegration stage staged status upload vote watch work-on-patch"
 
     # The command is the first word that is not a global option.
     local cmd="" i=1
@@ -49,6 +49,7 @@ _gerrit_completions() {
         check) opts="--envelope --help --offline --user -U -h" ;;
         checkout|co) opts="--branch --envelope --help --patchset --pretty --user -U -b -h -p -r" ;;
         comments|extract) opts="--all --context-lines --envelope --fields --help --include-ci --include-lint --include-system --messages --no-context --pretty --since --summary --timeline --user -U -a -c -h -p -s" ;;
+        conflicts) opts="--all --blocker-tag --commit --envelope --full --help --hunks --hunks-for --max-age --pretty --priority-tag --repo --user --with --worktree -U -h -p" ;;
         continue-reintegration) opts="--envelope --help --user -U -h" ;;
         delete-comment) opts="--dry-run --envelope --help --pretty --reason --user -U -h -n -p" ;;
         delete-message) opts="--dry-run --envelope --help --pretty --reason --user -U -h -n -p" ;;
@@ -90,7 +91,7 @@ _gerrit_completions() {
         staged:remove) opts="--envelope --help --user -U -h" ;;
         staged:show) opts="--envelope --help --pretty --user -U -h -p" ;;
         status) opts="--envelope --help --user -U -h" ;;
-        upload) opts="--base --branch --dry-run --envelope --expect-patchset --help --no-amend --no-author-edit --no-ci-reviewers --private --project --public --repo --series --topic --user -C -U -b -h -n -t" ;;
+        upload) opts="--base --branch --dry-run --envelope --expect-patchset --help --max-commits --no-amend --no-author-edit --no-ci-reviewers --private --project --public --repo --series --topic --user -C -U -b -h -n -t" ;;
         watch) opts="--envelope --help --user -U -h" ;;
         work-on-patch) opts="--envelope --help --user -U -h" ;;
     esac

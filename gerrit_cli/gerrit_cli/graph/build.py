@@ -23,7 +23,9 @@ from typing import Any, Callable
 from urllib.parse import quote
 
 from ..client import GerritCommentsClient
-from .conflicts import ConflictCheckError, Patch, Repo, check_conflicts
+from ..conflicts import (
+    ConflictCheckError, Patch, Repo, change_id_lookup, check_conflicts, commit_lookup,
+)
 from .edges import _break_cycles, _collect_revisions
 from .nodes import _make_node, _update_node_meta, subject_ticket
 from .summary import add_timeline, series_summary
@@ -2393,36 +2395,18 @@ def _check_conflicts(ctx: BuildContext, repo: Repo) -> dict[str, Any]:
         elif cn in ctx.external_merged_submitted:
             owners[h] = (cn, "MERGED")
 
-    def lookup(shas: list[str]) -> dict[str, tuple[int, str]]:
-        found = {}
-        for i in range(0, len(shas), _DISCOVERY_BATCH_SIZE):
-            query = " OR ".join(f"commit:{h}" for h in shas[i:i + _DISCOVERY_BATCH_SIZE])
-            for change in ctx.client.rest.get(
-                f"/changes/?q={quote(query, safe=':+ ')}&o=ALL_REVISIONS&n=500"
-            ) or []:
-                for h in change.get("revisions") or {}:
-                    if h in shas:
-                        found[h] = (change.get("_number", 0), change.get("status", ""))
-        return found
-
-    def change_lookup(change_ids: list[str]) -> dict[str, int]:
-        found = {}
-        for i in range(0, len(change_ids), _DISCOVERY_BATCH_SIZE):
-            ids = " OR ".join(f"change:{c}" for c in change_ids[i:i + _DISCOVERY_BATCH_SIZE])
-            query = f"({ids}) project:{ctx.project} branch:{ctx.branch}"
-            for change in ctx.client.rest.get(
-                f"/changes/?q={quote(query, safe=':+ ()')}&n=500"
-            ) or []:
-                found[change.get("change_id", "")] = change.get("_number", 0)
-        return found
+    def get(path: str) -> Any:
+        return ctx.client.rest.get(path)
 
     remote = repo.resolve_remote(ctx.project) or f"{ctx.base_url}/{ctx.project}"
     result = check_conflicts(
         repo, remote, ctx.branch,
         [Patch(cn, n["current_patchset"], n["current_commit"])
          for cn, n in sorted(inflight.items())],
-        owners, lookup=lookup, next_branch=f"{ctx.branch}-next",
-        change_lookup=change_lookup, log=ctx.log,
+        owners, lookup=commit_lookup(get, _DISCOVERY_BATCH_SIZE),
+        next_branch=f"{ctx.branch}-next",
+        change_lookup=change_id_lookup(get, ctx.project, ctx.branch, _DISCOVERY_BATCH_SIZE),
+        log=ctx.log,
     )
     for cn, n in sorted(ctx.nodes.items()):
         if n["status"] == "NEW" and cn not in inflight:

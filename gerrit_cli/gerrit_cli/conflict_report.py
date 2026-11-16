@@ -1,0 +1,349 @@
+"""The JSON `gc conflicts` prints: the engine's result for the focus
+stack and the selected candidates, sorted into what the reader acts on.
+`report` builds the full output (--full); `compact` cuts it down to
+what deciding needs, the default.
+
+Nothing here talks to Gerrit or runs git; the command gathers every
+input first (commands/conflicts.py).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from .conflict_candidates import DEFAULT_RANKS, Ranks, Selection, fix_side, readiness, \
+    release_rank
+from .conflicts import Patch, own_stack
+
+TIER_ORDER = {"frozen": 0, "lands-first": 1, "same-effort": 2, "other": 3}
+
+
+def owner_name(change: dict[str, Any]) -> str:
+    owner = change.get("owner") or {}
+    return owner.get("name") or owner.get("username") or ""
+
+
+def is_mine(change: dict[str, Any], me: str | None) -> bool | None:
+    """Whether account `me` (a username) owns the change; None when no
+    account is known."""
+    if not me:
+        return None
+    return (change.get("owner") or {}).get("username") == me
+
+
+def target_tier(change: dict[str, Any], queued_ids: set[str],
+                ranks: Ranks = DEFAULT_RANKS) -> str:
+    """A target's own tier (the fix_side row)."""
+    if change.get("change_id") in queued_ids:
+        return "frozen"
+    if readiness(change) == "ready" or release_rank(change.get("hashtags") or [], ranks) > 0:
+        return "lands-first"
+    return "pending"
+
+
+@dataclass
+class Checked:
+    """The target as tried, and everything the engine said about it."""
+    target: dict[str, Any]
+    cn: int
+    ps: int
+    uploaded: str  # the target's current patchset commit
+    stack: list[Patch]  # bottom first, the target (or its local commit) last
+    children: list[int]
+    queued_ids: set[str]
+    result: dict[str, Any]  # check_conflicts in focus mode
+    on_branch: dict[str, Any]  # the target's own result on the branch
+    outdated: dict[str, Any] | None  # its parent's newer patchset
+    old: dict[int, dict[str, int]]  # the other stack members on an older parent
+    current_ps: dict[int, int]  # change -> its current patchset
+    base: dict[str, Any]  # base_info
+    hunks: bool | set[int]
+    parents_detail: dict[int, dict[str, Any]] = field(default_factory=dict)
+
+    @property
+    def landed(self) -> bool:
+        return self.on_branch["status"] == "clean"
+
+
+def on_next(result: dict[str, Any], cn: int, next_branch: str) -> dict[str, Any]:
+    nxt = result.get("next")
+    if nxt is None:
+        return {"status": "no-next", "branch": next_branch}
+    if "skipped" in nxt:
+        return {"status": "stale", "branch": next_branch, "reason": nxt["skipped"]}
+    return nxt["results"].get(str(cn)) or {"status": "not-tried"}
+
+
+def _change_info(n: int, change: dict[str, Any], tier: str, ranks: Ranks,
+                 me: str | None = None) -> dict[str, Any]:
+    return {"cn": n, "owner": owner_name(change), "mine": is_mine(change, me), "tier": tier,
+            "readiness": readiness(change),
+            "release_hashtags": sorted(h for h in change.get("hashtags") or []
+                                       if release_rank([h], ranks) > 0)}
+
+
+def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
+               t_rank: int, parents: dict[int, dict[str, Any]] | None = None,
+               queued_ids: set[str] | frozenset[str] = frozenset(),
+               me: str | None = None) -> dict[str, Any]:
+    """One tried candidate, as listed under conflicts / as_uploaded_only.
+    `parents`: the details of the target's in-flight parents."""
+    n = pair["other"]
+    c = sel.every[n]
+    # a collision at via / own_via is that change's: its tier decides
+    # who moves on its side
+    mover = pair["via"] if pair.get("via") in sel.every else n
+    m_tier = sel.tiers.get(mover) or sel.ancestor_tiers.get(mover, "other")
+    ours = (parents or {}).get(pair.get("own_via"))
+    if ours is not None:
+        t_tier = target_tier(ours, queued_ids, sel.ranks)
+        t_rank = release_rank(ours.get("hashtags") or [], sel.ranks)
+    sha = c.get("current_revision") or ""
+    e: dict[str, Any] = {
+        "cn": n, "commit": sha,
+        "ps": ((c.get("revisions") or {}).get(sha) or {}).get("_number", 0),
+        "subject": c.get("subject", ""), "owner": owner_name(c),
+        "owner_username": (c.get("owner") or {}).get("username"), "mine": is_mine(c, me),
+        "tier": sel.tiers[n], "readiness": readiness(c),
+        "hashtags": sorted(c.get("hashtags") or []),
+        "fix_side": fix_side(t_tier, t_rank, m_tier,
+                             release_rank(sel.every[mover].get("hashtags") or [], sel.ranks)),
+        "files": sorted(set(pair["landing"]["files"]) | set(pair["as_uploaded"]["files"])),
+    }
+    if landed:
+        e["landing"] = {k: pair["landing"][k] for k in ("target_first", "candidate_first")}
+    e["as_uploaded"] = {k: pair["as_uploaded"][k]
+                        for k in ("target_on_theirs", "theirs_on_target")}
+    e["via"] = pair["via"]
+    e["own_via"] = pair.get("own_via")
+    if mover != n:
+        e["via_change"] = _change_info(mover, sel.every[mover], m_tier, sel.ranks, me)
+    if ours is not None:
+        e["own_via_change"] = _change_info(pair["own_via"], ours, t_tier, sel.ranks, me)
+    e["silent"] = pair["silent"]
+    if pair.get("base_drift"):
+        e["base_drift"] = pair["base_drift"]
+    if pair.get("same_function"):
+        e["same_function"] = pair["same_function"]
+    if "hunks" in pair:
+        e["hunks"] = pair["hunks"] if landed else \
+            {k: v for k, v in pair["hunks"].items() if k != "landing"}
+    if n in sel.forced:
+        e["forced"] = True
+    return e
+
+
+def _sorted_by_tier(entries: list[dict[str, Any]], sel: Selection) -> list[dict[str, Any]]:
+    return sorted(entries, key=lambda e: (
+        TIER_ORDER[e["tier"]], -release_rank(sel.every[e["cn"]].get("hashtags") or [], sel.ranks),
+        e["cn"]))
+
+
+@dataclass
+class _Buckets:
+    conflicts: list[dict[str, Any]]
+    uploaded_only: list[dict[str, Any]]  # landing clean or not tried
+    silent_only: list[dict[str, Any]]
+    watch: list[dict[str, Any]]  # clean merge, a function edited on both sides
+    clean: list[int]
+    errors: list[dict[str, Any]]
+    skipped: list[dict[str, Any]]
+
+
+def _buckets(chk: Checked, sel: Selection, t_tier: str, t_rank: int,
+             me: str | None = None) -> _Buckets:
+    """Each tried candidate under the one heading that says what to do
+    about it; the ones the engine could not try under errors/skipped."""
+    res = chk.result["results"]
+    b = _Buckets([], [], [], [], [], [], list(sel.skipped))
+    b.errors = [{"cn": n, "reason": res.get(str(n), {}).get("reason", "")}
+                for n in sel.kept if res.get(str(n), {}).get("status") == "error"]
+    b.skipped += [{"cn": n, "reason": res[str(n)].get("reason", "")}
+                  for n in sel.kept if res.get(str(n), {}).get("status") == "skipped"]
+    b.skipped.sort(key=lambda s: s["cn"])
+    for pair in chk.result["focus_pairs"]:
+        e = pair_entry(pair, sel, chk.landed, t_tier, t_rank, chk.parents_detail,
+                       chk.queued_ids, me)
+        landing = list(e.get("landing", {}).values())
+        uploaded = list(e["as_uploaded"].values())
+        if "conflict" in landing:
+            b.conflicts.append(e)
+        elif "error" in landing:
+            b.errors.append({"cn": e["cn"], "reason": "trial merge failed"})
+        elif pair["silent"]:
+            # a landing problem, whatever the as-uploaded merges say
+            keys = ("cn", "commit", "ps", "tier", "fix_side", "silent", "same_function")
+            if "conflict" in uploaded:
+                keys += ("files", "as_uploaded", "via", "own_via")
+            b.silent_only.append({k: e[k] for k in keys if k in e})
+        elif "conflict" in uploaded:
+            b.uploaded_only.append(e)
+        elif "error" in uploaded:
+            b.errors.append({"cn": e["cn"], "reason": "trial merge failed"})
+        elif "same_function" in e:
+            b.watch.append(e)
+        else:
+            b.clean.append(e["cn"])
+    b.conflicts = _sorted_by_tier(b.conflicts, sel)
+    b.uploaded_only = _sorted_by_tier(b.uploaded_only, sel)
+    b.silent_only = _sorted_by_tier(b.silent_only, sel)
+    b.watch = _sorted_by_tier(b.watch, sel)
+    return b
+
+
+def _rebase_info(chk: Checked) -> dict[str, Any]:
+    """Why a target that does not apply needs a rebase, and onto what:
+    a blocked target's `by` is the stack member that does not apply."""
+    res = chk.result["results"]
+    stuck, seen = chk.cn, set()
+    while res.get(str(stuck), {}).get("status") == "blocked" and stuck not in seen:
+        seen.add(stuck)
+        stuck = res[str(stuck)].get("by", stuck)
+    parent = res.get(str(stuck), {}).get("parent")
+    out: dict[str, Any] = {"rebase_cause": "parent" if parent else "branch"}
+    if parent:
+        onto = {"cn": parent["cn"]}
+        if (cur := chk.current_ps.get(parent["cn"])) is not None:
+            onto["ps"] = cur
+        if stuck != chk.cn:
+            onto["for"] = stuck
+        out["rebase_onto"] = onto
+    return out
+
+
+def report(chk: Checked, sel: Selection, next_branch: str, me: str | None) -> dict[str, Any]:
+    target, cn, landed = chk.target, chk.cn, chk.landed
+    hashtags = target.get("hashtags") or []
+    ranks = sel.ranks
+    t_tier, t_rank = target_tier(target, chk.queued_ids, ranks), release_rank(hashtags, ranks)
+    b = _buckets(chk, sel, t_tier, t_rank, me)
+    tried = {pair["other"] for pair in chk.result["focus_pairs"]}
+    notes = [f"hunks-for {n}: not a tried candidate"
+             for n in sorted(chk.hunks - tried)] if isinstance(chk.hunks, set) else []
+    focus_stack = [p.cn for p in chk.stack]
+
+    out: dict[str, Any] = {
+        "change": cn,
+        "patchset": chk.ps,
+        "commit": chk.uploaded,
+        "tested_commit": chk.stack[-1].commit,
+        "subject": target.get("subject", ""),
+        "owner": owner_name(target),
+        "owner_username": (target.get("owner") or {}).get("username"),
+        "me": me,
+        "mine": is_mine(target, me),
+        "readiness": readiness(target),
+        "tier_of_target": t_tier,
+        "release_hashtags": sorted(h for h in hashtags if release_rank([h], ranks) > 0),
+        "ranks": ranks.as_dict(),
+        "project": target["project"],
+        "branch": target["branch"],
+        "tip": chk.result["tip"],
+        "status": "ok" if landed else "needs-rebase",
+    }
+    if not landed:
+        out.update(_rebase_info(chk))
+    if chk.outdated is not None:
+        out["outdated_parent"] = chk.outdated
+    out.update({
+        "base": chk.base,
+        "on_branch": chk.on_branch,
+        "on_next": on_next(chk.result, cn, next_branch),
+        "own_stack": own_stack(chk.result, focus_stack, chk.children, chk.old),
+        "conflicts": b.conflicts if landed else None,
+        "as_uploaded_only": b.uploaded_only,
+    })
+    out.update({
+        "silent_only": b.silent_only,
+        "watch": b.watch,
+        "already_conflicting": sorted(chk.result["already_conflicting"]),
+        "not_tried": {"other": sel.not_tried},
+        "clean": b.clean,
+        "skipped": b.skipped,
+        "errors": b.errors,
+        "counts": {
+            "candidates": len(sel.found),
+            "after_filters": len(sel.kept) + len(sel.not_tried),
+            "tried": len(chk.result["focus_pairs"]),
+            "conflicting": len(b.conflicts) + len(b.silent_only),
+            "as_uploaded_only": len(b.uploaded_only),
+            "watch": len(b.watch),
+        },
+    })
+    if notes:
+        out["notes"] = notes
+    return out
+
+
+SUBJECT_MAX = 70
+ORDERS = {"landing": ("target_first", "candidate_first"),
+          "as_uploaded": ("target_on_theirs", "theirs_on_target")}
+# full-only top-level keys: hashes, and what branch already says
+_FULL_ONLY = ("commit", "tested_commit", "project", "tip")
+_COUNTED = ("already_conflicting", "clean")
+_ENTRY_KEYS = ("cn", "subject", "owner", "mine", "tier", "readiness", "fix_side", "files")
+
+
+def _short(subject: str) -> str:
+    return subject if len(subject) <= SUBJECT_MAX else subject[:SUBJECT_MAX - 3] + "..."
+
+
+def compact_entry(e: dict[str, Any], ranks: Ranks = DEFAULT_RANKS,
+                  same_function: bool = True) -> dict[str, Any]:
+    """One pair of the full output, its per-order results joined in
+    ORDERS order and only the fields that say something. A pair that
+    conflicts anyway drops same_function (`same_function` False)."""
+    out = {k: e[k] for k in _ENTRY_KEYS if k in e and e[k] != []}
+    if "subject" in out:
+        out["subject"] = _short(out["subject"])
+    release = [h for h in e.get("hashtags") or [] if release_rank([h], ranks) > 0]
+    if release:
+        out["release_hashtags"] = release
+    for model, orders in ORDERS.items():
+        if model in e:
+            out[model] = "/".join(e[model][o] for o in orders)
+    for key in ("via", "own_via"):
+        if e.get(key) is not None:
+            out[key] = e[key]
+        if e.get(f"{key}_change"):
+            out[f"{key}_change"] = {k: e[f"{key}_change"][k]
+                                    for k in ("cn", "owner", "mine", "tier")}
+    for key in ("silent", "same_function", "forced", "hunks"):
+        if e.get(key) and (key != "same_function" or same_function):
+            out[key] = e[key]
+    if e.get("base_drift"):
+        out["base_drift"] = len(e["base_drift"])
+    return out
+
+
+def compact(full: dict[str, Any]) -> dict[str, Any]:
+    """The default output: `report`'s with the change lists that are
+    only counted (clean, already_conflicting, not_tried) as numbers,
+    each pair through compact_entry, and no commit hashes."""
+    r = full.get("ranks") or {}
+    ranks = Ranks(tuple(r.get("blocker", DEFAULT_RANKS.blocker)),
+                  tuple(r.get("priority", DEFAULT_RANKS.priority)),
+                  tuple(r.get("ignore", DEFAULT_RANKS.ignore)),
+                  tuple(r.get("ignore_tickets", DEFAULT_RANKS.ignore_tickets)))
+    out: dict[str, Any] = {}
+    for key, value in full.items():
+        if key in _FULL_ONLY:
+            continue
+        if key in _COUNTED:
+            out[key] = len(value)
+        elif key == "not_tried":
+            out[key] = sum(len(v) for v in value.values())
+        elif key in ("conflicts", "as_uploaded_only", "silent_only", "watch") \
+                and value is not None:
+            out[key] = [compact_entry(e, ranks, key in ("silent_only", "watch"))
+                        for e in value]
+        else:
+            out[key] = value
+    if full.get("tested_commit") != full.get("commit"):
+        out["tested_commit"] = full["tested_commit"]
+    out["orders"] = {m: "/".join(o) for m, o in ORDERS.items()}
+    out["full"] = ("--full adds commit hashes (each pair's commit and ps too), every "
+                   "hashtag, base_drift files and the changes behind clean, "
+                   "already_conflicting and not_tried")
+    return out

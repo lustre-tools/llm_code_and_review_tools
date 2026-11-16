@@ -2663,3 +2663,54 @@ class TestReplyByCommentId:
         threads = extracted.to_dict()["threads"]
         assert [(t["index"], t["root_comment"]["id"]) for t in threads] == [
             (0, "t0"), (1, "t1")]
+
+
+_PROJECT_DIR = __import__("pathlib").Path(__file__).resolve().parents[2]
+
+
+def _run_module(*args):
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ, LLM_TOOLS_NO_UPDATE_CHECK="1",
+               GERRIT_URL="https://gerrit.invalid")
+    return subprocess.run([sys.executable, "-m", "gerrit_cli.cli", *args], cwd=_PROJECT_DIR,
+                          env=env, capture_output=True, text=True, timeout=60)
+
+
+def test_python_dash_m_runs_a_command():
+    proc = _run_module("explain", "conflicts")
+    assert proc.returncode == 0, proc.stderr
+    assert "conflicts" in proc.stdout
+
+
+def test_python_dash_m_reaches_the_running_cli_module():
+    # output_error goes through _cli(); --envelope is set on __main__
+    proc = _run_module("--envelope", "conflicts", "1", "--repo", ".", "--max-age", "0")
+    assert proc.returncode == 4, proc.stderr
+    assert json.loads(proc.stdout)["ok"] is False
+
+
+def test_cli_prefers_main_when_it_is_the_cli_module(monkeypatch):
+    import sys
+    import types
+
+    from gerrit_cli.commands._helpers import _cli
+
+    fake = types.ModuleType("__main__")
+    fake.__spec__ = types.SimpleNamespace(name="gerrit_cli.cli")
+    monkeypatch.setitem(sys.modules, "__main__", fake)
+    assert _cli() is fake
+
+
+def test_cli_imports_the_module_when_nothing_loaded_it(monkeypatch):
+    import sys
+
+    import gerrit_cli
+    from gerrit_cli.commands._helpers import _cli
+
+    # the fresh import rebinds the package attribute; put both back
+    monkeypatch.setattr(gerrit_cli, "cli", sys.modules["gerrit_cli.cli"])
+    monkeypatch.delitem(sys.modules, "gerrit_cli.cli")
+    assert _cli().__name__ == "gerrit_cli.cli"

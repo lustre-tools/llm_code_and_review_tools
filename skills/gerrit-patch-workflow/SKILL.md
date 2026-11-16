@@ -1,6 +1,6 @@
 ---
 name: gerrit-patch-workflow
-description: This skill should be used for work on Gerrit changes with the gerrit/gc CLI - "what comments are on this patch", "reply to the review feedback", "address the reviewer comments", "mark that thread done", "shepherd this patch series", "what is the status of my patches", "post a review on this change", "add a reviewer", "check the CI status of my patches", "upload the new patchset", "push this commit to Gerrit", "push this as a private patch", "upload a private change", "rebase and repush the series", "is there already a patch for this", "find the follow-up to this change". Covers comment triage, staged replies, uploading patchsets, multi-patch series sessions, finding related changes, and Lustre commit-message rules.
+description: This skill should be used for work on Gerrit changes with the gerrit/gc CLI - "what comments are on this patch", "reply to the review feedback", "address the reviewer comments", "mark that thread done", "shepherd this patch series", "what is the status of my patches", "post a review on this change", "add a reviewer", "check the CI status of my patches", "upload the new patchset", "push this commit to Gerrit", "push this as a private patch", "upload a private change", "rebase and repush the series", "is there already a patch for this", "find the follow-up to this change", "does this conflict with", "deconflict this patch", "will this land cleanly", "can we avoid the rebase". Covers comment triage, staged replies, uploading patchsets, multi-patch series sessions, finding related changes, deconflicting against other open changes, and Lustre commit-message rules.
 version: 0.1.0
 ---
 
@@ -208,6 +208,16 @@ gc search 'project:fs/lustre-release hashtag:pt_ecro after:2026-08-22'
   config) and `footer:"Fixes=..."` misses Lustre's `Fixes: sha ("...")`
   trailer -- use `message:` for both. `comment:<number>` matches far too
   much to be useful there.
+
+## Deconflicting
+
+"Does this conflict with", "will this land cleanly", "can we avoid the
+rebase": before uploading to a busy area, when Gerrit or a bot reports a
+merge, cherry-pick or -next conflict, after a neighbour lands, or before
+taking a review suggestion on lines another change rewrites. Inside a
+clone of the project run `gc conflicts <cn>`, then read `deconflicting.md`
+in this skill's directory before acting on the result: who moves, which
+fixes need no asking, how to verify an edit.
 
 ## Deleting comments and change messages
 

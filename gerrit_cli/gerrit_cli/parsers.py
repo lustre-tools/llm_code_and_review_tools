@@ -1385,6 +1385,121 @@ def add_graph_parser(subparsers):
     return parser
 
 
+def add_conflicts_parser(subparsers):
+    """Add the 'conflicts' subcommand parser."""
+    parser = subparsers.add_parser(
+        "conflicts",
+        help="Which open changes a change collides with, and which side should move",
+        description="Trial-merge one change (or a local commit standing in "
+                    "for it) against the open changes on its branch that "
+                    "touch its files and are likely to land soon: queued in "
+                    "<branch>-next, ready or release priority, or sharing a "
+                    "hashtag or topic with it. Both merge orders, both as "
+                    "landed on the branch tip and as uploaded; also "
+                    "duplicate tests, fail_loc and connect flag "
+                    "values and test exceptions that merge "
+                    "cleanly, and clean merges editing the same "
+                    "function. 'gc explain conflicts' describes the output.",
+    )
+    parser.add_argument(
+        "change",
+        help="Gerrit change URL, number or Change-Id",
+    )
+    parser.add_argument(
+        "--repo",
+        default=".",
+        metavar="PATH",
+        help="Local clone of the change's project (default: the current "
+             "directory). Only fetched objects are added to it.",
+    )
+    tested = parser.add_mutually_exclusive_group()
+    tested.add_argument(
+        "--commit",
+        default=None,
+        metavar="SHA",
+        help="Test this local commit (and the local commits below it) "
+             "as the change instead of its uploaded patchset",
+    )
+    tested.add_argument(
+        "--worktree",
+        action="store_true",
+        help="Test the uncommitted edits of tracked files in --repo's "
+             "checkout, whose HEAD must be the change (as --commit with a "
+             "throwaway commit of them; the index and branches are left "
+             "alone)",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Every field: commit hashes, all hashtags, per-order results "
+             "as objects, base_drift files and the change lists behind "
+             "clean, already_conflicting and not_tried (default: compact)",
+    )
+    parser.add_argument(
+        "--hunks",
+        action="store_true",
+        help="Include each conflict's marker regions and their kind "
+             "(insert-insert, edit-edit, adjacent, context). Large on a "
+             "busy file; prefer --hunks-for",
+    )
+    parser.add_argument(
+        "--hunks-for",
+        dest="hunks_for",
+        type=int,
+        action="append",
+        metavar="CN",
+        help="Conflict regions only for the pairs with this change "
+             "(repeatable; implies --hunks for those)",
+    )
+    parser.add_argument(
+        "--max-age",
+        type=int,
+        default=30,
+        metavar="DAYS",
+        help="Ignore changes not updated for this many days, unless "
+             "queued, ready or release priority (default: 30)",
+    )
+    parser.add_argument(
+        "--blocker-tag",
+        dest="blocker_tag",
+        action="append",
+        metavar="GLOB",
+        help="Hashtag glob marking a release blocker (repeatable or "
+             "comma-separated; replaces $GERRIT_CONFLICTS_BLOCKER_TAGS and "
+             "the default *_review_blocker)",
+    )
+    parser.add_argument(
+        "--priority-tag",
+        dest="priority_tag",
+        action="append",
+        metavar="GLOB",
+        help="Hashtag glob marking release priority (repeatable or "
+             "comma-separated; replaces $GERRIT_CONFLICTS_PRIORITY_TAGS and "
+             "the default *_review_priority)",
+    )
+    parser.add_argument(
+        "--with",
+        dest="with_",
+        type=int,
+        action="append",
+        metavar="CN",
+        help="Check against this change whatever the filters say "
+             "(repeatable)",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Also trial-merge the 'other' tier (changes with nothing "
+             "pushing them to land soon)",
+    )
+    parser.add_argument(
+        "--pretty", "-p",
+        action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
 def add_describe_parser(subparsers):
     """Add the 'describe' subcommand parser."""
     parser = subparsers.add_parser(
@@ -1872,6 +1987,7 @@ def setup_parsers(subparsers, handlers):
 
     # Visualization
     add_graph_parser(subparsers).set_defaults(func=handlers['graph'])
+    add_conflicts_parser(subparsers).set_defaults(func=handlers['conflicts'])
 
     # Self-description (LLM discoverability)
     add_describe_parser(subparsers).set_defaults(func=handlers['describe'])
