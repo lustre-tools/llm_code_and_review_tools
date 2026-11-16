@@ -21,7 +21,7 @@ jobs:
           git -C tools checkout 22a5534ee45c0989bd50724c2d2aaabaf38ca46e
           git -C tools submodule update --init review-prompts
           pip install ./tools/llm_tool_common ./tools/gerrit_cli ./tools/lreview
-      - run: lreview run --github "$PR_URL" --repo "$GITHUB_WORKSPACE" --post
+      - run: lreview run --github "$PR_URL" --repo "$GITHUB_WORKSPACE" --prompts-dir "$GITHUB_WORKSPACE/tools/review-prompts" --post
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
