@@ -183,7 +183,7 @@ def test_end_to_end_reports_the_ready_collision_as_target_side(setup):
     assert c["as_uploaded"] == {"target_on_theirs": "conflict", "theirs_on_target": "conflict"}
     assert {reg["kind"] for reg in c["hunks"]["landing"]["a.c"]} == {"edit-edit"}
     assert out["counts"] == {"candidates": 1, "after_filters": 1, "tried": 1,
-                             "conflicting": 1}
+                             "conflicting": 1, "watch": 0}
     assert out["base"]["on_branch"] is True and out["base"]["rebase"] == "possible"
 
 
@@ -312,7 +312,7 @@ def test_skipped_lists_reasons(setup):
     ]
     assert out["conflicts"] == []
     assert out["counts"] == {"candidates": 2, "after_filters": 0, "tried": 0,
-                             "conflicting": 0}
+                             "conflicting": 0, "watch": 0}
 
 
 def test_an_old_unready_change_is_not_a_candidate(setup):
@@ -850,3 +850,43 @@ def test_compact_keeps_asked_hunks_and_counts_base_drift():
         "fix_side": "candidate", "files": ["a.c"], "release_hashtags": ["x_review_blocker"],
         "as_uploaded": "clean/conflict", "via": 7, "hunks": {"as_uploaded": {}},
         "base_drift": 2}
+
+
+def test_a_clean_pair_editing_the_same_function_is_in_watch(setup, capsys, monkeypatch):
+    from gerrit_cli.tests.test_conflict_functions import C_FILE, _edit
+
+    gerrit, local, client = setup
+    rest = client.rest
+    base = gerrit.advance({"f.c": C_FILE})
+    t = gerrit.change(100, base, {"f.c": _edit({3: "\tint x = 9;"})})
+    rest.add(100, [t], ["f.c"])
+    w = gerrit.change(200, base, {"f.c": _edit({14: "\treturn -x;"})})
+    rest.add(200, [w], ["f.c"], labels=READY)
+    far = gerrit.change(300, base, {"f.c": _edit({19: "\treturn 1;"})})
+    rest.add(300, [far], ["f.c"], labels=READY)
+    out = run(client, local)
+    assert out["clean"] == [300] and out["conflicts"] == []
+    [e] = out["watch"]
+    assert e["cn"] == 200 and e["landing"]["target_first"] == "clean"
+    assert e["same_function"] == [{"file": "f.c", "functions": ["foo"]}]
+    assert out["counts"]["watch"] == 1 and out["counts"]["conflicting"] == 0
+    compact = _cmd(client, local, monkeypatch, capsys)
+    assert compact["watch"][0]["same_function"] == e["same_function"]
+    assert compact["watch"][0]["landing"] == "clean/clean"
+    assert "files" not in compact["watch"][0]  # nothing conflicts
+
+
+def test_compact_drops_same_function_only_where_the_pair_conflicts():
+    from gerrit_cli.conflict_report import compact
+
+    same = [{"file": "a.c", "functions": ["foo"]}]
+    pair = {"cn": 1, "tier": "other", "fix_side": "candidate", "same_function": same,
+            "as_uploaded": {"target_on_theirs": "clean", "theirs_on_target": "clean"}}
+    full = {"conflicts": [dict(pair)], "watch": [dict(pair)],
+            "silent_only": [{"cn": 1, "tier": "other", "fix_side": "candidate",
+                             "silent": [{"check": "duplicate-test"}], "same_function": same}],
+            "commit": "c", "tested_commit": "c"}
+    out = compact(full)
+    assert "same_function" not in out["conflicts"][0]
+    assert out["watch"][0]["same_function"] == same
+    assert out["silent_only"][0]["same_function"] == same

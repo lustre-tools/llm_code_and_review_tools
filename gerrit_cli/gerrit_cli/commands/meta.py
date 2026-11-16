@@ -1214,7 +1214,11 @@ side changes is the branch moving between their bases, listed in
 base_drift instead. A pair is in conflicts if any of the four conflicts;
 via names the candidate's ancestor the conflict is at. Pairs that merge
 cleanly but define the same test or fail_loc value twice are in
-silent_only. --hunks adds the conflict-marker regions with their kind:
+silent_only. same_function [{file, functions}] names the functions both
+sides' own diffs edit (hunk-header context, C files by git's cpp rule,
+and the definitions and prototypes a hunk adds or removes); a pair that
+merges cleanly and shares one is in watch instead of clean ("clean
+merge, same function edited: build the combination"). --hunks adds the conflict-marker regions with their kind:
 insert-insert, edit-edit, adjacent, context; --hunks-for CN (repeatable)
 only for the pairs with those changes. --hunks is large on a busy file:
 run without it first, then --hunks-for the collisions you will act on (a
@@ -1250,16 +1254,18 @@ themselves. counts: candidates = the open changes the file: queries found
 (they leave out changes older than --max-age that are not ready, queued or
 release-tagged, so those show up nowhere), minus the own stack, plus open
 --with changes; after_filters = those the filters kept (handed to the
-trial merges, plus not_tried); tried = pairs trial-merged; conflicting = entries in conflicts,
-as_uploaded_only and silent_only. Gerrit's mergeable flag and conflicts:
-search are not used. Read-only towards Gerrit; needs git 2.40 or newer.
+trial merges, plus not_tried); tried = pairs trial-merged; conflicting =
+entries in conflicts, as_uploaded_only and silent_only; watch = entries
+in watch. Gerrit's mergeable flag and conflicts: search are not used.
+Read-only towards Gerrit; needs git 2.40 or newer.
 
 The default output is compact; --full prints every field. Compact: per
 pair cn, subject (cut at 70 characters), owner, tier, readiness, fix_side,
 files, release_hashtags (only the release ones), landing and as_uploaded
 as one string each in the order given by orders ("conflict/clean":
 target_first/candidate_first, target_on_theirs/theirs_on_target), and
-only when set: via, silent, base_drift (a count), forced, hunks. clean,
+only when set: via, silent, base_drift (a count), forced, hunks, and
+same_function only in watch and silent_only. clean,
 already_conflicting and not_tried are counts; commit, tested_commit
 (unless --commit tested another commit), project and tip are left out.
 --full adds those, every hashtag, the per-order results as objects, the

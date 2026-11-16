@@ -159,6 +159,7 @@ class Repo:
             raise ConflictRepoError(f"{self.path}: not a git repository")
         self.objects = r.stdout.strip()
         self._scratch: str | None = None
+        self._attributes: str | None = None
         self._trees: dict[str, str] = {}
 
     def _run(self, *args: str, scratch: bool = False, input: str | None = None,
@@ -348,14 +349,33 @@ class Repo:
                          if ln.startswith("+") and not ln.startswith("+++")}
         return out
 
+    def functions(self, commit: str, parent: str) -> dict[str, set[str]]:
+        """The functions commit's own diff against parent edits, per
+        path. C sources take git's cpp hunk-header rule: the default one
+        names a goto label in column 0 instead of the function. Inside
+        `with`, which writes the attributes file saying so."""
+        from gerrit_cli.conflict_functions import edited_functions
+
+        r = self._run("-c", f"core.attributesFile={self._attributes}", "diff", "--no-color",
+                      "--no-ext-diff", "--no-renames", "-U0", parent, commit, binary=True)
+        if r.returncode != 0:
+            return {}
+        return edited_functions(r.stdout.decode(errors="replace"))
+
     def __enter__(self) -> "Repo":
         self._scratch = tempfile.mkdtemp(prefix="gc-conflicts-")
+        fd, self._attributes = tempfile.mkstemp(prefix="gc-conflicts-attr-")
+        with os.fdopen(fd, "w") as f:
+            f.write("*.c diff=cpp\n*.h diff=cpp\n")
         return self
 
     def __exit__(self, *exc: object) -> None:
         if self._scratch:
             shutil.rmtree(self._scratch, ignore_errors=True)
             self._scratch = None
+        if self._attributes:
+            os.unlink(self._attributes)
+            self._attributes = None
         self._trees.clear()
 
 
@@ -748,9 +768,10 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
                        ) -> tuple[list[dict[str, Any]], list[int]]:
     """Every candidate (a patch outside `focus`) against the focus stack
     in both merge orders. Returns (pairs, candidates whose own stack does
-    not apply on the tip). With `hunks`, each pair carries the conflict
-    regions of every order that conflicts; a set of candidates limits
-    that to their pairs."""
+    not apply on the tip). A pair whose sides' own diffs edit the same
+    function carries same_function. With `hunks`, each pair carries the
+    conflict regions of every order that conflicts; a set of candidates
+    limits that to their pairs."""
     targets = [cn for cn in focus if cn in st.stack
                and not any(cn in st.stack[o] for o in focus if o != cn)]
     if not targets:
@@ -835,6 +856,17 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
                  for path in sorted(both)}
         return silent_collisions(texts)
 
+    edited: dict[int, dict[str, set[str]]] = {}
+
+    def functions(zs: list[int]) -> dict[str, set[str]]:
+        out: dict[str, set[str]] = {}
+        for z in zs:
+            if z not in edited:
+                edited[z] = repo.functions(st.patches[z].commit, st.base[z])
+            for path, names in edited[z].items():
+                out.setdefault(path, set()).update(names)
+        return out
+
     def one(c: int) -> dict[str, Any]:
         cset = set(st.stack[c])
         tz = [z for z in st.stack[c] if z not in tstack]
@@ -863,6 +895,10 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
         if dropped:
             pair["base_drift"] = sorted(dropped)
         pair["silent"] = silent(c, t_first)
+        from gerrit_cli.conflict_functions import shared_functions
+
+        if same := shared_functions(functions(cz), functions(tz)):
+            pair["same_function"] = same
         if hunks is True or (isinstance(hunks, set) and c in hunks):
             landing: dict[str, list] = {}
             uploaded: dict[str, list] = {}

@@ -302,7 +302,8 @@ own stack can be the real blocker); `status: needs-rebase`
 conflict as uploaded and `clean` the rest);
 `skipped` (candidates that need a new patchset anyway, not worth planning
 around); `silent_only` (a clean merge that still defines a test or fail_loc
-value twice); `already_conflicting` (conflict without your change, not
+value twice); `watch` (a clean merge, but both edit the function named in
+`same_function`: build the combination and run the covering tests); `already_conflicting` (conflict without your change, not
 yours); `on_next` (a conflict in the queue; `stale` means ignore it).
 
 Check the own stack first: it changes the base the other collisions are
@@ -444,6 +445,10 @@ against, whatever their `fix_side`: none of them in `conflicts`,
 another verdict may remain. Then build. When both sides touch one
 function or change a signature or a struct, build the combination
 (target on candidate) too: a clean merge can still fail to build (65921).
+A pair in `watch` (or any pair with `same_function`) is exactly that
+case: a clean merge, the same function edited on both sides. Build the
+combination and run the tests covering those functions before calling it
+clean.
 Run the tests the changed code is covered by, on the change's own base
 and, if it is queued, on -next. Commit and upload only when the user
 asks. A content change gets a short change-log ("Deconflicted with #A,

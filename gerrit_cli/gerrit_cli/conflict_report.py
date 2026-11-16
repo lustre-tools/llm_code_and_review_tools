@@ -84,6 +84,8 @@ def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
     e["silent"] = pair["silent"]
     if pair.get("base_drift"):
         e["base_drift"] = pair["base_drift"]
+    if pair.get("same_function"):
+        e["same_function"] = pair["same_function"]
     if "hunks" in pair:
         e["hunks"] = pair["hunks"] if landed else \
             {k: v for k, v in pair["hunks"].items() if k != "landing"}
@@ -102,6 +104,7 @@ class _Buckets:
     conflicts: list[dict[str, Any]]
     uploaded_only: list[dict[str, Any]]
     silent_only: list[dict[str, Any]]
+    watch: list[dict[str, Any]]  # clean merge, a function edited on both sides
     clean: list[int]
     errors: list[dict[str, Any]]
     skipped: list[dict[str, Any]]
@@ -111,7 +114,7 @@ def _buckets(chk: Checked, sel: Selection, t_tier: str, t_rank: int) -> _Buckets
     """Each tried candidate under the one heading that says what to do
     about it; the ones the engine could not try under errors/skipped."""
     res = chk.result["results"]
-    b = _Buckets([], [], [], [], [], list(sel.skipped))
+    b = _Buckets([], [], [], [], [], [], list(sel.skipped))
     b.errors = [{"cn": n, "reason": res.get(str(n), {}).get("reason", "")}
                 for n in sel.kept if res.get(str(n), {}).get("status") == "error"]
     b.skipped += [{"cn": n, "reason": res[str(n)].get("reason", "")}
@@ -123,14 +126,18 @@ def _buckets(chk: Checked, sel: Selection, t_tier: str, t_rank: int) -> _Buckets
         if "conflict" in statuses:
             (b.conflicts if chk.landed else b.uploaded_only).append(e)
         elif pair["silent"]:
-            b.silent_only.append({k: e[k] for k in ("cn", "tier", "fix_side", "silent")})
+            b.silent_only.append({k: e[k] for k in ("cn", "tier", "fix_side", "silent",
+                                                    "same_function") if k in e})
         elif "error" in statuses:
             b.errors.append({"cn": e["cn"], "reason": "trial merge failed"})
+        elif "same_function" in e:
+            b.watch.append(e)
         else:
             b.clean.append(e["cn"])
     b.conflicts = _sorted_by_tier(b.conflicts, sel)
     b.uploaded_only = _sorted_by_tier(b.uploaded_only, sel)
     b.silent_only = _sorted_by_tier(b.silent_only, sel)
+    b.watch = _sorted_by_tier(b.watch, sel)
     return b
 
 
@@ -195,6 +202,7 @@ def report(chk: Checked, sel: Selection, next_branch: str, me: str | None) -> di
         out["as_uploaded_only"] = b.uploaded_only
     out.update({
         "silent_only": b.silent_only,
+        "watch": b.watch,
         "already_conflicting": sorted(chk.result["already_conflicting"]),
         "not_tried": {"other": sel.not_tried},
         "clean": b.clean,
@@ -205,6 +213,7 @@ def report(chk: Checked, sel: Selection, next_branch: str, me: str | None) -> di
             "after_filters": len(sel.kept) + len(sel.not_tried),
             "tried": len(chk.result["focus_pairs"]),
             "conflicting": len(b.conflicts) + len(b.silent_only) + len(b.uploaded_only),
+            "watch": len(b.watch),
         },
     })
     if notes:
@@ -225,10 +234,11 @@ def _short(subject: str) -> str:
     return subject if len(subject) <= SUBJECT_MAX else subject[:SUBJECT_MAX - 3] + "..."
 
 
-def compact_entry(e: dict[str, Any]) -> dict[str, Any]:
+def compact_entry(e: dict[str, Any], same_function: bool = True) -> dict[str, Any]:
     """One pair of the full output, its per-order results joined in
-    ORDERS order and only the fields that say something."""
-    out = {k: e[k] for k in _ENTRY_KEYS if k in e}
+    ORDERS order and only the fields that say something. A pair that
+    conflicts anyway drops same_function (`same_function` False)."""
+    out = {k: e[k] for k in _ENTRY_KEYS if k in e and e[k] != []}
     if "subject" in out:
         out["subject"] = _short(out["subject"])
     release = [h for h in e.get("hashtags") or [] if release_rank([h]) > 0]
@@ -239,8 +249,8 @@ def compact_entry(e: dict[str, Any]) -> dict[str, Any]:
             out[model] = "/".join(e[model][o] for o in orders)
     if e.get("via") is not None:
         out["via"] = e["via"]
-    for key in ("silent", "forced", "hunks"):
-        if e.get(key):
+    for key in ("silent", "same_function", "forced", "hunks"):
+        if e.get(key) and (key != "same_function" or same_function):
             out[key] = e[key]
     if e.get("base_drift"):
         out["base_drift"] = len(e["base_drift"])
@@ -259,8 +269,9 @@ def compact(full: dict[str, Any]) -> dict[str, Any]:
             out[key] = len(value)
         elif key == "not_tried":
             out[key] = sum(len(v) for v in value.values())
-        elif key in ("conflicts", "as_uploaded_only", "silent_only") and value is not None:
-            out[key] = [compact_entry(e) for e in value]
+        elif key in ("conflicts", "as_uploaded_only", "silent_only", "watch") \
+                and value is not None:
+            out[key] = [compact_entry(e, key in ("silent_only", "watch")) for e in value]
         else:
             out[key] = value
     if full.get("tested_commit") != full.get("commit"):

@@ -1397,7 +1397,8 @@ def add_conflicts_parser(subparsers):
                     "hashtag or topic with it. Both merge orders, both as "
                     "landed on the branch tip and as uploaded; also "
                     "duplicate tests and fail_loc values that merge "
-                    "cleanly. 'gc explain conflicts' describes the output.",
+                    "cleanly, and clean merges editing the same "
+                    "function. 'gc explain conflicts' describes the output.",
     )
     parser.add_argument(
         "change",

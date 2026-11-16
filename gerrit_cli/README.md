@@ -524,7 +524,9 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   release hashtags (`release_hashtags`) and `landing` / `as_uploaded` as
   one string each, `"conflict/clean"`, in the order `orders` names
   (`target_first/candidate_first`, `target_on_theirs/theirs_on_target`);
-  `via`, `silent`, `forced` and `base_drift` (a count) only when set.
+  `via`, `silent`, `forced` and `base_drift` (a count) only when set,
+  `same_function` only in `watch` and `silent_only` (a pair that
+  conflicts needs a look anyway).
   `clean`, `already_conflicting` and `not_tried` are counts; the commit
   hashes, `project` and `tip` are left out (`tested_commit` stays when
   `--commit` tested another commit). `--full` has every hashtag, the
@@ -556,6 +558,12 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   A pair is in `conflicts` when any of the four conflicts; `via` names the
   candidate's ancestor the conflict is at. Duplicate test definitions or
   fail_loc values that merge cleanly are reported in `silent_only`.
+  `same_function` [{file, functions}] names the functions both sides'
+  own diffs edit (from the `git diff -U0` hunk headers, C files with
+  git's `cpp` rule so a goto label does not hide the function, plus the
+  functions and prototypes a hunk adds or removes); a pair that merges
+  cleanly but shares one is listed in `watch` rather than `clean`:
+  build the combination and run the covering tests.
   `--hunks` adds the conflict regions with their kind (`insert-insert`,
   `edit-edit`, `adjacent`, `context`); `--hunks-for CN` (repeatable)
   adds them only for the pairs with those changes. On a busy file
@@ -610,7 +618,7 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   those not in `skipped` by the filters: the ones handed to the trial
   merges plus `not_tried`; `tried` the pairs actually trial-merged
   (not `already_conflicting`, errors or skipped by the engine); `conflicting` the entries in `conflicts`,
-  `as_uploaded_only` and `silent_only`.
+  `as_uploaded_only` and `silent_only`; `watch` the entries in `watch`.
 
 ## Commands
 
