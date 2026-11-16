@@ -1252,7 +1252,9 @@ or removes; keywords and upper-case macro names are not functions); a
 pair that merges cleanly and shares one is in watch instead of clean
 ("clean merge, same function edited: build the combination"). --hunks
 adds the conflict-marker regions with their kind: insert-insert,
-edit-edit, adjacent, context; --hunks-for CN (repeatable) only for the
+edit-edit, adjacent, context; a region's line is where it starts in the
+merged file as written with its markers (diff3 style, as text shows),
+not a line number of either side; --hunks-for CN (repeatable) only for the
 pairs with those changes. --hunks is large on a busy file: run without it
 first, then --hunks-for the collisions you will act on (a change that was
 not tried is named in notes).
@@ -1286,22 +1288,31 @@ sitting on an older patchset of the change below carry on_old_patchset
 {of, ps, current}, and a child conflicting with the current one parent
 {cn, files}. With --commit, a local commit below the change that is an
 older patchset of its change is replaced by the current patchset; a
-local edit is tested as it is. base says whether rebasing is an option (rebase:
-"would move ready/queued parents" when a parent is frozen or
+local edit is tested as it is. base says whether rebasing is an option
+(rebase: "would move ready/queued parents" when a parent is frozen or
 lands-first); on_branch and on_next are the change against the branch
-and <branch>-next; own_stack how its parents and children fare (the
-parents in both, bottom first, are every in-flight change the stack is
-tried with, including those below a parent's current patchset);
-already_conflicting the candidates that do not apply on the tip by
-themselves. counts: candidates = the open changes the file: queries found
-(they leave out changes older than --max-age that are not ready, queued or
-release-tagged, so those show up nowhere), minus the own stack, plus open
---with changes; after_filters = those the filters kept (handed to the
-trial merges, plus not_tried); tried = pairs trial-merged; conflicting =
-entries in conflicts and silent_only; as_uploaded_only = entries in
-as_uploaded_only; watch = entries in watch. Gerrit's mergeable flag and
-conflicts: search are not used.
-Read-only towards Gerrit; needs git 2.40 or newer.
+and <branch>-next (on_next: clean, conflict with the queued change in
+with, blocked, error, queued when it is in the queue itself, not-tried
+when it does not apply on the branch tip so there is nothing to put on
+-next, stale or no-next); errors [{cn, reason}] the candidates that
+could not be tried: a commit that could not be fetched, or a trial merge
+git failed ("trial merge failed"); own_stack how its parents and
+children fare (the parents in both, bottom first, are every in-flight
+change the stack is tried with, including those below a parent's current
+patchset); already_conflicting the candidates that do not apply on the
+tip by themselves. counts: candidates = the open changes the file:
+queries found (they leave out changes older than --max-age that are not
+ready, queued or release-tagged, so those show up nowhere), minus the
+own stack, plus open --with changes; after_filters = those the filters
+kept (handed to the trial merges, plus not_tried); tried = pairs
+trial-merged; conflicting = entries in conflicts and silent_only;
+as_uploaded_only = entries in as_uploaded_only; watch = entries in
+watch. Gerrit's mergeable flag and conflicts: search are not used. It
+models Gerrit's cherry-pick submit (outdated_parent: clean means the
+change lands as it is only there); the silent checks, the readiness
+voters (jenkins, Maloo, the Code-Review count) and the ignored-ticket
+defaults are Lustre's. Read-only towards Gerrit; needs git 2.40 or
+newer.
 
 The default output is compact; --full prints every field. Compact: per
 pair cn, subject (cut at 70 characters), owner, mine, tier, readiness,

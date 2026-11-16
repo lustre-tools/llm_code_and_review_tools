@@ -507,6 +507,10 @@ includes:
 plausibly land soon does it collide with, on which files and hunks, and
 which side should move? It trial-merges, so it does not rely on Gerrit's
 mergeable flag or `conflicts:` search.
+It models Gerrit's cherry-pick submit: each change lands as its own diff
+picked onto the branch (so `outdated_parent: clean` means it lands as it
+is only there). The silent checks, the readiness voters (jenkins, Maloo,
+the Code-Review count) and the ignored-ticket defaults are Lustre's.
 
 ```bash
 gc conflicts 12345 --repo ~/lustre-release            # the uploaded patchset
@@ -543,55 +547,56 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   need a new patchset anyway: a Code-Review -1/-2 from a human other
   than the owner, a Jenkins -1, or an in-flight change below them with
   either. A change queued in `<branch>-next` is never skipped.
-- **Tiers**: `frozen` (queued in `<branch>-next`, when it is not
-  stale), `lands-first` (ready, or a release blocker / release priority
+- **Tiers**: `frozen` (queued in `<branch>-next`, when it is not stale),
+  `lands-first` (ready, or a release blocker / release priority
   hashtag), `same-effort` (shares a hashtag, the topic or a ticket key
   in the subject, `LU-12345`, `LU-23456`; the ignored and the release
-  hashtags and the ignored tickets do not count) and `other`. `same-effort` and `other` must have been
-  updated within `--max-age` days (default 30). `other` is only listed
-  (`not_tried`) unless `--all`. `--with CN` checks a change whatever the
-  filters say.
+  hashtags and the ignored tickets do not count) and `other`.
+  `same-effort` and `other` must have been updated within `--max-age`
+  days (default 30). `other` is only listed (`not_tried`) unless
+  `--all`. `--with CN` checks a change whatever the filters say.
 - **Two models, both orders**: `landing` picks each side's stack onto
-  the branch tip in turn (what cherry-pick submit does);
-  `as_uploaded` picks each side's stack part (its in-flight changes
-  above what both stacks share, bottom up) onto the other's uploaded
-  commit (what the other owner, or CI on a stale base, sees). An
-  as-uploaded conflict counts only on files both stack parts change;
-  one on a file only one side changes comes from the branch moving
-  between their bases and is listed in `base_drift` instead (the picks
-  above it go on).
-  A pair is in `conflicts` when a landing order conflicts, in
-  `as_uploaded_only` when only an as-uploaded one does (the landing is
-  clean: what the other owner, or CI on a stale base, sees). `via` names the
-  candidate's ancestor the conflict is at, `own_via` the target's
-  in-flight parent it is at (the first change of the target's stack,
-  bottom up, that does not apply on the candidate's): the colliding
-  lines are that parent's, not the change's own. Only a conflicting
-  pick names one: the landing orders, or the as-uploaded ones when both
-  landing orders are clean (or were not tried).
-  Collisions that land cleanly are reported in `silent_only` (with
-  `as_uploaded` and `files` when that conflicts too), by `check`: `duplicate-test` (a test
-  defined twice), `duplicate-value` (an `OBD_FAIL_*` value, or an
-  `OBD_CONNECT_*` / `OBD_CONNECT2_*` flag value, each namespace on its
-  own, used twice), `duplicate-exception` (both sides add the same test
-  to `ALWAYS_EXCEPT`, through `always_except` or an assignment). Only
-  what both sides added counts, not what the base already holds twice.
+  the branch tip in turn (what cherry-pick submit does); `as_uploaded`
+  picks each side's stack part (its in-flight changes above what both
+  stacks share, bottom up) onto the other's uploaded commit (what the
+  other owner, or CI on a stale base, sees). An as-uploaded conflict
+  counts only on files both stack parts change; one on a file only one
+  side changes comes from the branch moving between their bases and is
+  listed in `base_drift` instead (the picks above it go on). A pair is
+  in `conflicts` when a landing order conflicts, in `as_uploaded_only`
+  when only an as-uploaded one does (the landing is clean: what the
+  other owner, or CI on a stale base, sees). `via` names the candidate's
+  ancestor the conflict is at, `own_via` the target's in-flight parent
+  it is at (the first change of the target's stack, bottom up, that does
+  not apply on the candidate's): the colliding lines are that parent's,
+  not the change's own. Only a conflicting pick names one: the landing
+  orders, or the as-uploaded ones when both landing orders are clean (or
+  were not tried). Collisions that land cleanly are reported in
+  `silent_only` (with `as_uploaded` and `files` when that conflicts
+  too), by `check`: `duplicate-test` (a test defined twice),
+  `duplicate-value` (an `OBD_FAIL_*` value, or an `OBD_CONNECT_*` /
+  `OBD_CONNECT2_*` flag value, each namespace on its own, used twice),
+  `duplicate-exception` (both sides add the same test to
+  `ALWAYS_EXCEPT`, through `always_except` or an assignment). Only what
+  both sides added counts, not what the base already holds twice.
   `same_function` [{file, functions}] names the functions both sides'
-  own diffs edit: the function each hunk of `git diff-tree -U0` sits
-  in, looked up in the old text with git's `cpp` funcname rule (a goto
-  label does not hide the function; the user's diff drivers, attributes
-  and `diff.*` settings do not change it), plus the functions and
-  prototypes a hunk adds or removes. Shell keywords (`if (( ... ))`) and
-  upper-case macro names (`LUSTRE_RW_ATTR(...)`) are not functions; a
-  path the repository's attributes mark binary has none; a pair that merges
-  cleanly but shares one is listed in `watch` rather than `clean`:
-  build the combination and run the covering tests.
-  `--hunks` adds the conflict regions with their kind (`insert-insert`,
-  `edit-edit`, `adjacent`, `context`); `--hunks-for CN` (repeatable)
-  adds them only for the pairs with those changes. On a busy file
-  `--hunks` gives megabytes: run without it first, then `--hunks-for`
-  the collisions you will act on (a change that was not tried is named
-  in `notes`).
+  own diffs edit: the function each hunk of `git diff-tree -U0` sits in,
+  looked up in the old text with git's `cpp` funcname rule (a goto label
+  does not hide the function; the user's diff drivers, attributes and
+  `diff.*` settings do not change it), plus the functions and prototypes
+  a hunk adds or removes. Shell keywords (`if (( ... ))`) and upper-case
+  macro names (`LUSTRE_RW_ATTR(...)`) are not functions; a path the
+  repository's attributes mark binary has none; a pair that merges
+  cleanly but shares one is listed in `watch` rather than `clean`: build
+  the combination and run the covering tests. `--hunks` adds the
+  conflict regions with their kind (`insert-insert`, `edit-edit`,
+  `adjacent`, `context`); a region's `line` is where it starts in the
+  merged file as written with its conflict markers (diff3 style, `text`
+  shows it), not a line number of either side; `--hunks-for CN`
+  (repeatable) adds them only for the pairs with those changes. On a
+  busy file `--hunks` gives megabytes: run without it first, then
+  `--hunks-for` the collisions you will act on (a change that was not
+  tried is named in `notes`).
 - **Who moves** (`fix_side`, independent of who runs it):
 
   | target \\ candidate | frozen | lands-first | same-effort | other |
@@ -611,20 +616,26 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   a username; `owner` is the display name, `owner_username` in `--full`
   the owner's username), null when no account is configured.
 - **The change itself**: `on_branch` and `on_next` (against
-  `<branch>-next`, naming the queued change it collides with); `base`
-  (on the branch or not, commits behind, in-flight parents with their
-  tier, and whether a rebase would move ready or queued parents);
+  `<branch>-next`: `clean`, `conflict` naming the queued change it
+  collides with in `with`, `blocked`, `error`, `queued` when it is in
+  the queue itself, `not-tried` when it does not apply on the branch
+  tip, so there is nothing to put on -next, `stale` or `no-next`);
+  `base` (on the branch or not, commits behind, in-flight parents with
+  their tier, and whether a rebase would move ready or queued parents);
   `own_stack` (parents and children: with `--commit`, whether each child
   still applies on the rearranged change). The parents in `base` and
   `own_stack`, bottom first, are every in-flight change the stack is
-  tried with, including those below a parent's current patchset when
-  the change sits on an older one, so `own_via` always names one. When the change does not
-  apply on the tip, `status` is `needs-rebase`, `conflicts` is `null`,
-  `as_uploaded_only` has the pairs that conflict as uploaded and `clean`
-  those that do not; `rebase_cause` says why: `parent` (it, or the
-  stack member it is blocked by, conflicts with the newer patchset of
-  its own parent: `rebase_onto` {cn, ps, for}, `for` naming that
-  member) or `branch`. A merged or abandoned change is refused.
+  tried with, including those below a parent's current patchset when the
+  change sits on an older one, so `own_via` always names one. When the
+  change does not apply on the tip, `status` is `needs-rebase`,
+  `conflicts` is `null`, `as_uploaded_only` has the pairs that conflict
+  as uploaded and `clean` those that do not; `rebase_cause` says why:
+  `parent` (it, or the stack member it is blocked by, conflicts with the
+  newer patchset of its own parent: `rebase_onto` {cn, ps, for}, `for`
+  naming that member) or `branch`. A merged or abandoned change is
+  refused. `errors` [{cn, reason}] lists the candidates that could not
+  be tried: a commit that could not be fetched, or a trial merge git
+  failed (`trial merge failed`).
 - **Older patchsets in the own stack**: `outdated_parent` {cn, ps,
   current, status, files} when the change sits on an older patchset of
   its parent, with whether it applies on the current one (`clean` or
