@@ -40,10 +40,12 @@ for a `truncated` hunk, find the place in both sides' files and read it.
   your edit touches the shared function.
 - `errors`: candidates that were not tried. Name them; they are not clean.
 
-Report each landing and silent collision on its own line. Summarise
-`as_uploaded_only` and `watch` in one line each, counts grouped by
-`own_via`, naming at most about eight: only frozen ones and release
-blockers (configurable, see `ranks`).
+Give each landing and silent collision its own entry (the details are
+under "Everything else" below). Summarise `as_uploaded_only` and `watch`
+in one line each: the count, and by name at most about eight of them,
+only the frozen ones and the release blockers (configurable, see
+`ranks`); if some come from your own parents, count those apart by
+`own_via`.
 
 ## Own stack first
 
@@ -81,31 +83,35 @@ owns it. Never change the hash of a frozen change.
 
 ## Trivial collisions: fix them, then say so
 
-Only when the user asked for the change to land cleanly or to deconflict
-it. The summary never justifies an edit: rerun with `--hunks-for <cn>`
+Only when the user asked for the change to land cleanly, to fix what is
+easy, or to deconflict it; that request covers the trivial fixes below
+and nothing more. The summary never justifies an edit: rerun with `--hunks-for <cn>`
 for exactly the collisions you would act on, landing conflicts with
 `fix_side: target` first. Fix without asking if all of these hold:
 
 - the change being worked on moves, and the lines are its own (no
-  `own_via`);
+  `own_via`); a pair whose `via` is another pair's candidate is fixed
+  with that pair;
 - every hunk of the pair, any model and order, is `insert-insert`,
   `adjacent` or `context`: one `edit-edit` makes the pair non-trivial;
 - the fix only moves lines the change adds, or renumbers a value it adds
   (a fail_loc value, a test number: the define, its tests and the commit
-  message) into a gap no open change uses. Judge it on `git diff HEAD~`,
-  the change's own diff; in `git diff`, moving the change's block below
-  an unchanged line looks like moving that line;
+  message) into a gap no open change uses. `git diff` shows your edit
+  alone; judge the fix on `git diff HEAD~`, the change's own diff with
+  the edit (in `git diff`, moving the change's block below an unchanged
+  line looks like moving that line);
 - behaviour does not change: no condition rewritten, nothing moved across
   ordering or locking, no hunk dropped, no new statement or flag;
 - the diff stays about the size of the conflict, a few lines;
 - Verify shows the fixed collisions gone and nothing new.
 
 Finding the free value is part of the fix; the tool sees only the pairs
-it tried. Grep the diffs of the open changes on the file, and take a gap:
-a free value at the shared append point still conflicts.
+it tried. List the open changes on the file, read the values they add,
+and take a gap: a free value at the shared append point still conflicts.
 
 ```bash
 gc search --all 'status:open project:<project> branch:<branch> file:<path>'
+gc review <cn>          # each one's diff; or fetch its refs/changes ref
 ```
 
 Tell the user in a line or two what moved and what it no longer collides
@@ -124,8 +130,9 @@ other (what it moves, which votes it drops; out when `base.rebase` would
 move frozen or ready parents); wait for the other; leave it to its owner;
 do nothing (it is far from landing). Recommend one. "This cannot be
 deconflicted" is a complete answer. Fix the trivial ones and report the
-rest in the same message. "Go ahead and deconflict it" also covers clean
-rearrangements beyond trivial, never uglier ones. A review suggestion
+rest in the same message. Only an explicit "go ahead and deconflict it"
+also covers clean rearrangements beyond trivial (a larger move of your
+own lines), never uglier ones. A review suggestion
 that edits lines another change rewrites: raise it with the reviewer
 (it will collide with that change) rather than silently declining it.
 
