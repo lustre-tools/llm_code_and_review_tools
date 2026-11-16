@@ -337,7 +337,8 @@ three ordinary runs together, and real defects per review rose by
 roughly 35-50% with unchanged precision. A review costs about 5x an
 ordinary one and takes about twice as long; with the lenses at medium
 (the default) it costs about 2.5x and keeps roughly 70% of the gain.
-`docs/lens-review-evaluation.md` has the measurements.
+`docs/lens-review-evaluation.md` has the measurements and
+`docs/lens-review-benchmark-results.md` the per-bug results.
 
 - claude only, `--mode full` only, and not for `--github` reviews.
 - The lenses run as a custom agent type, `lens`, passed with claude's
