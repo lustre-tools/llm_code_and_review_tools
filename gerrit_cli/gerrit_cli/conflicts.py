@@ -428,8 +428,6 @@ def check_conflicts(
         _link(repo, st, missing, owners)
         _off_branch(repo, st, tip, owners, lookup)
         _check_tip(repo, st, tip, workers)
-        own = repo.changed_files({st.patches[cn].commit: st.base[cn] for cn in st.applied})
-        own_by_cn = {cn: own.get(st.patches[cn].commit, set()) for cn in st.applied}
         pairs, tried, errors = [], 0, 0
         focus_pairs: list[dict[str, Any]] = []
         already: list[int] = []
@@ -437,6 +435,8 @@ def check_conflicts(
             focus_pairs, already = _check_focus_pairs(repo, st, focus, workers, hunks,
                                                       pair_with)
         else:
+            own = repo.changed_files({st.patches[cn].commit: st.base[cn] for cn in st.applied})
+            own_by_cn = {cn: own.get(st.patches[cn].commit, set()) for cn in st.applied}
             pairs, tried, errors = _check_pairs(repo, st, own_by_cn, workers)
         queue = (_check_next(repo, st, branch, tip, next_branch, next_tip, change_lookup, workers)
                  if next_branch and next_tip else None)
