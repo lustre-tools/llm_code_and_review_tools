@@ -637,10 +637,10 @@ def test_needs_rebase_surfaces_as_uploaded_errors(setup, monkeypatch):
     rest.add(200, [r], ["a.c"], labels=READY)
     real = engine.Repo.pick
 
-    def pick(self, onto, commit, parent):
+    def pick(self, onto, commit, parent, **kw):
         if onto == r.commit:
             return engine._Pick("error", detail="boom")
-        return real(self, onto, commit, parent)
+        return real(self, onto, commit, parent, **kw)
 
     monkeypatch.setattr(engine.Repo, "pick", pick)
     out = run(client, local)

@@ -550,16 +550,20 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   filters say.
 - **Two models, both orders**: `landing` picks each side's stack onto
   the branch tip in turn (what cherry-pick submit does);
-  `as_uploaded` picks each change's own diff onto the other's uploaded
+  `as_uploaded` picks each side's stack part (its in-flight changes
+  above what both stacks share, bottom up) onto the other's uploaded
   commit (what the other owner, or CI on a stale base, sees). An
-  as-uploaded conflict counts only on files both sides' own diffs
-  change; one on a file only one side changes comes from the branch
-  moving between their bases and is listed in `base_drift` instead.
+  as-uploaded conflict counts only on files both stack parts change;
+  one on a file only one side changes comes from the branch moving
+  between their bases and is listed in `base_drift` instead (the picks
+  above it go on).
   A pair is in `conflicts` when any of the four conflicts; `via` names the
   candidate's ancestor the conflict is at, `own_via` the target's
   in-flight parent it is at (the first change of the target's stack,
   bottom up, that does not apply on the candidate's): the colliding
-  lines are that parent's, not the change's own. Collisions that merge cleanly are
+  lines are that parent's, not the change's own. The landing orders
+  name them first, the as-uploaded ones when landing is clean.
+  Collisions that merge cleanly are
   reported in `silent_only`, by `check`: `duplicate-test` (a test
   defined twice), `duplicate-value` (an `OBD_FAIL_*` value, or an
   `OBD_CONNECT_*` / `OBD_CONNECT2_*` flag value, each namespace on its

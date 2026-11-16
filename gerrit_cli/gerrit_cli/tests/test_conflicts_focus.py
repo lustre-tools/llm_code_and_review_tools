@@ -209,3 +209,51 @@ def test_conflict_in_the_targets_own_diff_has_no_own_via(gerrit, local):
     p = _pair(_check(gerrit, local, [t1, t2, c], focus={1, 2}), 3)
     assert p["landing"]["candidate_first"] == "conflict"
     assert p["own_via"] is None
+
+
+def test_as_uploaded_picks_the_candidates_unshared_parents_too(gerrit, local):
+    """70145 on 65219: 70145's own diff needs 65219's lines as context;
+    picked alone onto the target it conflicts on lines neither wrote."""
+    p = gerrit.change(300, gerrit.master, {"a.c": _text({5: "P", 6: "P"})})
+    c = gerrit.change(310, p.commit, {"a.c": _text({5: "P", 6: "P", 7: "C"})})
+    t = gerrit.change(1, gerrit.master, {"a.c": _text({15: "T"})})
+    pair = _pair(_check(gerrit, local, [t, p, c], focus={1}), 310)
+    assert pair["as_uploaded"] == {"target_on_theirs": "clean",
+                                   "theirs_on_target": "clean", "files": []}
+
+
+def test_as_uploaded_picks_the_targets_unshared_parents_too(gerrit, local):
+    t1 = gerrit.change(1, gerrit.master, {"a.c": _text({5: "T", 6: "T"})})
+    t2 = gerrit.change(2, t1.commit, {"a.c": _text({5: "T", 6: "T", 7: "T2"})})
+    c = gerrit.change(3, gerrit.master, {"a.c": _text({15: "C"})})
+    pair = _pair(_check(gerrit, local, [t1, t2, c], focus={1, 2}), 3)
+    assert pair["as_uploaded"] == {"target_on_theirs": "clean",
+                                   "theirs_on_target": "clean", "files": []}
+
+
+def test_an_as_uploaded_conflict_at_a_candidates_parent_names_via(gerrit, local):
+    from gerrit_cli.conflicts import Repo, check_conflicts
+    old = gerrit.master
+    gerrit.advance({"a.c": _text({6: "M"})})
+    t = gerrit.change(1, old, {"a.c": _text({15: "T"})})
+    p = gerrit.change(300, gerrit.master, {"a.c": _text({5: "P", 6: "M"})})
+    c = gerrit.change(310, p.commit, {"a.c": _text({5: "P", 6: "M", 18: "C"})})
+    r = check_conflicts(Repo(local), str(gerrit.path), "master", [t, p, c], gerrit.owner,
+                        workers=2, focus={1}, hunks=True)
+    pair = _pair(r, 310)
+    assert pair["landing"]["target_first"] == "clean"
+    assert pair["as_uploaded"]["theirs_on_target"] == "conflict"
+    assert pair["via"] == 300
+    assert pair["hunks"]["as_uploaded"]["a.c"][0]["order"] == "theirs_on_target"
+
+
+def test_an_as_uploaded_parent_pick_failing_on_drift_only_goes_on(gerrit, local):
+    old = gerrit.master
+    gerrit.advance({"b.c": _text({6: "M"})})
+    t = gerrit.change(1, old, {"a.c": _text({5: "T"})})
+    p = gerrit.change(300, gerrit.master, {"b.c": _text({5: "P", 6: "M"})})
+    c = gerrit.change(310, p.commit, {"a.c": _text({5: "C"}), "b.c": _text({5: "P", 6: "M"})})
+    pair = _pair(_check(gerrit, local, [t, p, c], focus={1}), 310)
+    assert pair["as_uploaded"]["theirs_on_target"] == "conflict"
+    assert pair["as_uploaded"]["files"] == ["a.c"]
+    assert pair["base_drift"] == ["b.c"]
