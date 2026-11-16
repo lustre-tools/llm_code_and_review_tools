@@ -5,18 +5,65 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any
+from fnmatch import fnmatchcase
+from typing import Any, Mapping
 from urllib.parse import quote
 
 from .graph.nodes import _LUSTRE_CHANGE_TRAILER_RE
 from .graph.review import _is_bot_account, _parse_labels
 
-_GENERIC_TAG_RE = re.compile(
-    r"^(pw_.*|fortestonly|forbuildonly|.*_review_priority|.*_review_blocker)$"
-)
+BLOCKER_ENV = "GERRIT_CONFLICTS_BLOCKER_TAGS"
+PRIORITY_ENV = "GERRIT_CONFLICTS_PRIORITY_TAGS"
+IGNORE_ENV = "GERRIT_CONFLICTS_IGNORE_TAGS"
 _OPTIONS = ("LABELS", "DETAILED_LABELS", "CURRENT_REVISION",
             "CURRENT_COMMIT", "DETAILED_ACCOUNTS")
 _PATHS_PER_QUERY = 20
+
+
+@dataclass(frozen=True)
+class Ranks:
+    """Which hashtags (fnmatch globs, case-sensitive) make a change a
+    release blocker or release priority, and which never make two
+    changes the same effort (the release ones never do either)."""
+    blocker: tuple[str, ...] = ("*_review_blocker",)
+    priority: tuple[str, ...] = ("*_review_priority",)
+    ignore: tuple[str, ...] = ("pw_*", "fortestonly", "forbuildonly")
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str], blocker: list[str] | None = None,
+                 priority: list[str] | None = None) -> "Ranks":
+        """The defaults, replaced by each of the three environment
+        variables (comma-separated globs) that is set and not blank,
+        and then by the --blocker-tag / --priority-tag globs given."""
+        def globs(name: str, given: list[str] | None, default: tuple[str, ...]
+                  ) -> tuple[str, ...]:
+            if given:
+                return tuple(given)
+            parts = tuple(g.strip() for g in (env.get(name) or "").split(",") if g.strip())
+            return parts or default
+
+        d = cls()
+        return cls(globs(BLOCKER_ENV, blocker, d.blocker),
+                   globs(PRIORITY_ENV, priority, d.priority),
+                   globs(IGNORE_ENV, None, d.ignore))
+
+    def rank(self, hashtags: list[str]) -> int:
+        """2 for a release blocker, 1 for release priority, else 0."""
+        if any(fnmatchcase(t, g) for t in hashtags for g in self.blocker):
+            return 2
+        if any(fnmatchcase(t, g) for t in hashtags for g in self.priority):
+            return 1
+        return 0
+
+    def generic(self, tag: str) -> bool:
+        return self.rank([tag]) > 0 or any(fnmatchcase(tag, g) for g in self.ignore)
+
+    def as_dict(self) -> dict[str, list[str]]:
+        return {"blocker": list(self.blocker), "priority": list(self.priority),
+                "ignore": list(self.ignore)}
+
+
+DEFAULT_RANKS = Ranks()
 
 
 @dataclass
@@ -34,20 +81,16 @@ class Selection:
     not_tried: list[int] = field(default_factory=list)  # "other" tier without --all
     skipped: list[dict[str, Any]] = field(default_factory=list)
     needed: set[int] = field(default_factory=set)  # kept and what they stand on
+    ranks: Ranks = DEFAULT_RANKS
 
 
-def release_rank(hashtags: list[str]) -> int:
-    if any(t.endswith("_review_blocker") for t in hashtags):
-        return 2
-    if any(t.endswith("_review_priority") for t in hashtags):
-        return 1
-    return 0
+def release_rank(hashtags: list[str], ranks: Ranks = DEFAULT_RANKS) -> int:
+    return ranks.rank(hashtags)
 
 
-def shared_hashtags(a: list[str], b: list[str]) -> list[str]:
-    return sorted(
-        t for t in set(a) & set(b) if not _GENERIC_TAG_RE.match(t)
-    )
+def shared_hashtags(a: list[str], b: list[str],
+                    ranks: Ranks = DEFAULT_RANKS) -> list[str]:
+    return sorted(t for t in set(a) & set(b) if not ranks.generic(t))
 
 
 def _is_owner(vote: dict[str, Any], owner: dict[str, Any]) -> bool:
@@ -131,6 +174,7 @@ def classify(
     queued_ids: set[str],
     max_age_days: int,
     now: datetime,
+    ranks: Ranks = DEFAULT_RANKS,
 ) -> tuple[str | None, str | None]:
     if change.get("change_id") in queued_ids:
         return "frozen", None
@@ -140,13 +184,13 @@ def classify(
     if _verified(change, "jenkins") < 0:
         return None, "Jenkins -1"
     if readiness(change) == "ready" \
-            or release_rank(change.get("hashtags") or []) > 0:
+            or release_rank(change.get("hashtags") or [], ranks) > 0:
         return "lands-first", None
     updated = _updated(change)
     if updated is not None and now - updated > timedelta(days=max_age_days):
         return None, f"stale (updated {updated:%Y-%m-%d})"
     same = shared_hashtags(change.get("hashtags") or [],
-                           target.get("hashtags") or [])
+                           target.get("hashtags") or [], ranks)
     topic = change.get("topic")
     if same or (topic and topic == target.get("topic")):
         return "same-effort", None
@@ -213,8 +257,8 @@ def _fetch(client: Any, q: str) -> list[dict[str, Any]]:
 
 def query_candidates(client: Any, project: str, branch: str,
                      paths: list[str], max_age_days: int,
-                     queued_ids: set[str] | frozenset[str] = frozenset()
-                     ) -> list[dict[str, Any]]:
+                     queued_ids: set[str] | frozenset[str] = frozenset(),
+                     ranks: Ranks = DEFAULT_RANKS) -> list[dict[str, Any]]:
     seen: dict[int, dict[str, Any]] = {}
     for i in range(0, len(paths), _PATHS_PER_QUERY):
         batch = paths[i:i + _PATHS_PER_QUERY]
@@ -222,7 +266,7 @@ def query_candidates(client: Any, project: str, branch: str,
             for ch in _fetch(client, _query(project, branch, batch, age)):
                 if age is None and readiness(ch) != "ready" \
                         and ch.get("change_id") not in queued_ids \
-                        and release_rank(ch.get("hashtags") or []) == 0:
+                        and release_rank(ch.get("hashtags") or [], ranks) == 0:
                     continue
                 seen.setdefault(ch["_number"], ch)
     return list(seen.values())

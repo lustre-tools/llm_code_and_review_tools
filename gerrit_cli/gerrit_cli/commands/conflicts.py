@@ -24,7 +24,14 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
-from ..conflict_candidates import Selection, classify, phrase, query_candidates
+from ..conflict_candidates import (
+    DEFAULT_RANKS,
+    Ranks,
+    Selection,
+    classify,
+    phrase,
+    query_candidates,
+)
 from ..conflict_report import Checked, compact, report, target_tier
 from ..conflicts import (
     ConflictCheckError,
@@ -343,7 +350,7 @@ def _query_step(client: Any, br: _Branch, paths: list[str], own: set[int], with_
                 max_age: int, sel: Selection) -> None:
     """The open changes on the target's files, plus the --with ones."""
     sel.found = {c["_number"]: c for c in query_candidates(
-        client, br.project, br.branch, paths, max_age, frozenset(br.queued_ids))
+        client, br.project, br.branch, paths, max_age, frozenset(br.queued_ids), sel.ranks)
         if c["_number"] not in own}
     sel.forced = set(with_ or []) - own
     sel.skipped = [{"cn": n, "reason": "own stack"} for n in sorted(set(with_ or []) & own)]
@@ -362,7 +369,7 @@ def _tier_step(target: dict[str, Any], queued_ids: set[str], max_age: int, now: 
                sel: Selection) -> None:
     """A tier for each found change, or the reason it is dropped."""
     for n in sorted(sel.found):
-        tier, reason = classify(sel.found[n], target, queued_ids, max_age, now)
+        tier, reason = classify(sel.found[n], target, queued_ids, max_age, now, sel.ranks)
         if tier is None and n in sel.forced:
             tier = "other"
         if tier is None:
@@ -398,7 +405,7 @@ def _stacked_step(client: Any, br: _Branch, target: dict[str, Any], own: set[int
         if n not in sel.forced and sel.tiers[n] != "frozen":
             reason = next(((a, r) for a in chain
                            if (r := classify(sel.every[a], target, br.queued_ids,
-                                             _NEVER_STALE, now)[1])),
+                                             _NEVER_STALE, now, sel.ranks)[1])),
                           None)
             if reason:
                 sel.skipped.append({"cn": n, "reason": f"stacked on {reason[0]} ({reason[1]})"})
@@ -412,11 +419,12 @@ def _stacked_step(client: Any, br: _Branch, target: dict[str, Any], own: set[int
 
 
 def _select(client: Any, br: _Branch, target: dict[str, Any], focus: _Focus, ar: _Around,
-            max_age: int, with_: list[int], all_: bool, now: datetime) -> Selection:
+            max_age: int, with_: list[int], all_: bool, now: datetime,
+            ranks: Ranks) -> Selection:
     """query -> drop the own stack -> tier -> drop what stands on a
     change that needs a new patchset -> park "other" without --all."""
     own = set(focus.cns) | {p.cn for p in ar.children}
-    sel = Selection()
+    sel = Selection(ranks=ranks)
     _query_step(client, br, focus.paths, own, with_, max_age, sel)
     _tier_step(target, br.queued_ids, max_age, now, sel)
     _stacked_step(client, br, target, own, ar.owners, all_, now, sel)
@@ -469,20 +477,23 @@ def _older_parents(br: _Branch, focus: _Focus, ar: _Around, cn: int,
 
 def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, max_age: int,
                   with_: list[int], all_: bool, hunks: bool | set[int], now: datetime,
-                  ) -> dict[str, Any]:
+                  ranks: Ranks = DEFAULT_RANKS) -> dict[str, Any]:
     """Check one change, or a local commit standing in for it, against
     the open changes that touch its files. `hunks`: True for every
-    pair's conflict regions, a set of change numbers for those pairs."""
+    pair's conflict regions, a set of change numbers for those pairs;
+    `ranks`: the release hashtags (the command reads them from the
+    environment and the options)."""
     cn, target = _open_target(client, change)
     br = _branch(repo_path, target)
     ar = _around(client.rest.get, cn, target)
     focus = _focus(client, br, target, commit, ar)
-    sel = _select(client, br, target, focus, ar, max_age, with_, all_, now)
+    sel = _select(client, br, target, focus, ar, max_age, with_, all_, now, ranks)
     result = _try(client, br, focus, ar, sel, hunks)
 
     on_branch = _on_branch(result, cn)
     outdated, old = _older_parents(br, focus, ar, cn, on_branch)
-    tiers_of_parents = {n: target_tier(d, br.queued_ids) for n, d in focus.parents_detail.items()}
+    tiers_of_parents = {n: target_tier(d, br.queued_ids, ranks)
+                        for n, d in focus.parents_detail.items()}
     base = base_info(br.repo, result, {p.cn: p for p in focus.stack}, focus.cns, result["tip"],
                      tiers_of_parents)
     uploaded, ps, _ = _current(target)
@@ -504,7 +515,8 @@ def cmd_conflicts(args: Any) -> None:
             _client(), args.repo, args.change, args.commit, args.max_age,
             args.with_ or [], args.all,
             True if args.hunks else set(getattr(args, "hunks_for", None) or []),
-            datetime.now(timezone.utc).replace(tzinfo=None))
+            datetime.now(timezone.utc).replace(tzinfo=None),
+            Ranks.from_env(os.environ, args.blocker_tag, args.priority_tag))
         output_success(result if args.full else compact(result), command, pretty)
     except Exception as e:
         sys.exit(output_error(error_code_for(e), str(e), command, pretty))

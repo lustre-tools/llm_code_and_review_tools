@@ -541,10 +541,9 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   than the owner, a Jenkins -1, or an in-flight change below them with
   either. A change queued in `<branch>-next` is never skipped.
 - **Tiers**: `frozen` (queued in `<branch>-next`, when it is not
-  stale), `lands-first` (ready, or a `*_review_blocker` /
-  `*_review_priority` hashtag), `same-effort` (shares a hashtag or the
-  topic; `pw_*`, `fortestonly`, `forbuildonly` and the release hashtags
-  do not count) and `other`. `same-effort` and `other` must have been
+  stale), `lands-first` (ready, or a release blocker / release priority
+  hashtag), `same-effort` (shares a hashtag or the topic; the ignored
+  and the release hashtags do not count) and `other`. `same-effort` and `other` must have been
   updated within `--max-age` days (default 30). `other` is only listed
   (`not_tried`) unless `--all`. `--with CN` checks a change whatever the
   filters say.
@@ -612,6 +611,16 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   is an older patchset of its change is replaced by the current
   patchset, the commit above it staying on the older one, as on Gerrit;
   a commit that is no patchset (a local edit) is tested as it is.
+- **Release hashtags** are fnmatch globs (case-sensitive), each list
+  replaced by its environment variable (comma-separated; read from the
+  environment or gerrit-cli's `.env`) when that is set and not blank:
+  `GERRIT_CONFLICTS_BLOCKER_TAGS` (default `*_review_blocker`),
+  `GERRIT_CONFLICTS_PRIORITY_TAGS` (default `*_review_priority`) and
+  `GERRIT_CONFLICTS_IGNORE_TAGS`, the hashtags that never make two
+  changes the same effort (default `pw_*,fortestonly,forbuildonly`).
+  `--blocker-tag GLOB` / `--priority-tag GLOB` (repeatable) replace the
+  first two for one run. `ranks` {blocker, priority, ignore} echoes the
+  globs in effect, in both output forms.
 - `--repo` (default `.`) must be a clone whose remote fetches the
   change's project; only objects are fetched into it (see *Sharing a
   clone* above). Needs git 2.40 or newer.

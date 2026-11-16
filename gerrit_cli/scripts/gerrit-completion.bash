@@ -49,7 +49,7 @@ _gerrit_completions() {
         check) opts="--envelope --help --offline --user -U -h" ;;
         checkout|co) opts="--branch --envelope --help --patchset --pretty --user -U -b -h -p -r" ;;
         comments|extract) opts="--all --context-lines --envelope --fields --help --include-ci --include-lint --include-system --messages --no-context --pretty --since --summary --timeline --user -U -a -c -h -p -s" ;;
-        conflicts) opts="--all --commit --envelope --full --help --hunks --hunks-for --max-age --pretty --repo --user --with -U -h -p" ;;
+        conflicts) opts="--all --blocker-tag --commit --envelope --full --help --hunks --hunks-for --max-age --pretty --priority-tag --repo --user --with -U -h -p" ;;
         continue-reintegration) opts="--envelope --help --user -U -h" ;;
         delete-comment) opts="--dry-run --envelope --help --pretty --reason --user -U -h -n -p" ;;
         delete-message) opts="--dry-run --envelope --help --pretty --reason --user -U -h -n -p" ;;

@@ -1198,12 +1198,19 @@ owner, a Jenkins -1, or an in-flight change below them with either. The
 rest are tiered:
   frozen       queued in <branch>-next (only when -next is not stale)
   lands-first  ready (Jenkins +1, Maloo +1, 2 non-owner CR +1, 1 for a
-               backport) or a *_review_blocker/*_review_priority hashtag
-  same-effort  shares a hashtag (not pw_*, fortestonly, forbuildonly or a
-               release one) or the topic with the change
+               backport) or a release blocker/priority hashtag
+  same-effort  shares a hashtag (not an ignored or release one) or the
+               topic with the change
   other        the rest; listed in not_tried unless --all
 same-effort and other are limited to --max-age days (default 30); --with
-CN checks a change whatever the filters say.
+CN checks a change whatever the filters say. These hashtags are fnmatch
+globs (case-sensitive), each list replaced by its environment variable
+(comma-separated, also read from gerrit-cli's .env) when set and not
+blank: GERRIT_CONFLICTS_BLOCKER_TAGS (default *_review_blocker),
+GERRIT_CONFLICTS_PRIORITY_TAGS (default *_review_priority),
+GERRIT_CONFLICTS_IGNORE_TAGS (default pw_*,fortestonly,forbuildonly).
+--blocker-tag GLOB and --priority-tag GLOB (repeatable) replace the first
+two for one run; ranks {blocker, priority, ignore} echoes those in effect.
 
 Each checked pair is tried in both orders as it would land (landing:
 target_first, candidate_first; each change's stack picked onto the branch

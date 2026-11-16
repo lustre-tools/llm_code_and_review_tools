@@ -412,7 +412,11 @@ def test_parser_defaults():
     from gerrit_cli.cli import build_parser
     args = build_parser().parse_args(["conflicts", "100"])
     assert (args.repo, args.commit, args.hunks, args.max_age, args.with_, args.all,
-            args.full) == (".", None, False, 30, None, False, False)
+            args.full, args.blocker_tag, args.priority_tag) == \
+        (".", None, False, 30, None, False, False, None, None)
+    args = build_parser().parse_args(["conflicts", "100", "--blocker-tag", "a_*",
+                                      "--blocker-tag", "b"])
+    assert args.blocker_tag == ["a_*", "b"]
     args = build_parser().parse_args(["conflicts", "100", "--with", "5", "--with", "6"])
     assert args.with_ == [5, 6]
 
@@ -784,11 +788,16 @@ def test_target_blocked_by_a_parent_conflicting_with_the_branch(setup):
     assert out["rebase_cause"] == "branch" and "rebase_onto" not in out
 
 
-def _cmd(client, local, monkeypatch, capsys, *extra):
+def _cmd(client, local, monkeypatch, capsys, *extra, env=None):
+    env = env or {}
     from gerrit_cli.cli import build_parser
     from gerrit_cli.commands import conflicts as mod
 
     monkeypatch.setattr(mod, "_client", lambda: client)
+    for name in ("BLOCKER", "PRIORITY", "IGNORE"):
+        monkeypatch.delenv(f"GERRIT_CONFLICTS_{name}_TAGS", raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
     args = build_parser().parse_args(["conflicts", "100", "--repo", str(local), *extra])
     args.func(args)
     return json.loads(capsys.readouterr().out)
@@ -890,3 +899,25 @@ def test_compact_drops_same_function_only_where_the_pair_conflicts():
     assert "same_function" not in out["conflicts"][0]
     assert out["watch"][0]["same_function"] == same
     assert out["silent_only"][0]["same_function"] == same
+
+
+def test_release_tags_come_from_the_environment_and_the_options(setup, capsys, monkeypatch):
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    r = gerrit.change(200, gerrit.master, {"a.c": _text({5: "R"})})
+    rest.add(200, [r], ["a.c"], hashtags=["rel_hot", "218_review_priority"], age_days=60)
+    out = _cmd(client, local, monkeypatch, capsys)
+    assert out["ranks"]["blocker"] == ["*_review_blocker"]
+    [c] = out["conflicts"]
+    assert c["tier"] == "lands-first" and c["release_hashtags"] == ["218_review_priority"]
+    out = _cmd(client, local, monkeypatch, capsys,
+               env={"GERRIT_CONFLICTS_PRIORITY_TAGS": "rel_*"})
+    assert out["ranks"]["priority"] == ["rel_*"]
+    assert out["conflicts"][0]["release_hashtags"] == ["rel_hot"]
+    # an option replaces the environment; the change is then neither
+    # release-tagged nor recent, so the age-limited query leaves it out
+    out = _cmd(client, local, monkeypatch, capsys, "--priority-tag", "other_*",
+               "--blocker-tag", "none", env={"GERRIT_CONFLICTS_PRIORITY_TAGS": "rel_*"})
+    assert out["ranks"]["priority"] == ["other_*"] and out["ranks"]["blocker"] == ["none"]
+    assert out["conflicts"] == [] and out["counts"]["candidates"] == 0

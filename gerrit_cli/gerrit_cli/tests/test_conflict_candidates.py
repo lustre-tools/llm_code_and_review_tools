@@ -209,3 +209,43 @@ def test_unaged_pass_keeps_queued_changes():
                             queued_ids={"Iq"})
     assert [c["_number"] for c in kept] == [9]
     assert query_candidates(FakeClient(pages), "p", "b", paths, 30) == []
+
+
+def test_ranks_default_to_todays_tags():
+    from gerrit_cli.conflict_candidates import DEFAULT_RANKS, Ranks
+
+    assert Ranks.from_env({}) == DEFAULT_RANKS
+    assert DEFAULT_RANKS.as_dict() == {
+        "blocker": ["*_review_blocker"], "priority": ["*_review_priority"],
+        "ignore": ["pw_*", "fortestonly", "forbuildonly"]}
+    blank = {"GERRIT_CONFLICTS_BLOCKER_TAGS": " , ", "GERRIT_CONFLICTS_IGNORE_TAGS": ""}
+    assert Ranks.from_env(blank) == DEFAULT_RANKS
+
+
+def test_ranks_from_the_environment_and_the_options():
+    from gerrit_cli.conflict_candidates import Ranks
+
+    env = {"GERRIT_CONFLICTS_BLOCKER_TAGS": "rel_blocker, hot_*",
+           "GERRIT_CONFLICTS_PRIORITY_TAGS": "rel_prio",
+           "GERRIT_CONFLICTS_IGNORE_TAGS": "bot_*"}
+    r = Ranks.from_env(env)
+    assert (r.blocker, r.priority, r.ignore) == (("rel_blocker", "hot_*"), ("rel_prio",),
+                                                ("bot_*",))
+    r = Ranks.from_env(env, blocker=["x_*"], priority=None)
+    assert (r.blocker, r.priority) == (("x_*",), ("rel_prio",))
+
+
+def test_custom_ranks_drive_rank_shared_tags_and_tier():
+    from gerrit_cli.conflict_candidates import Ranks
+
+    r = Ranks(blocker=("rel_blocker",), priority=("rel_prio*",), ignore=("bot_*",))
+    assert release_rank(["rel_blocker", "rel_prio2"], r) == 2
+    assert release_rank(["rel_prio2"], r) == 1
+    assert release_rank(["218_review_blocker"], r) == 0
+    # the new release and ignore tags never make same-effort; the old
+    # default ignore tags do once they are no longer ignored
+    assert shared_hashtags(["bot_a", "rel_prio", "pw_own"], ["bot_a", "rel_prio", "pw_own"],
+                           r) == ["pw_own"]
+    c = ch(tags=["rel_prio"], updated="2026-01-01 00:00:00.000000000")
+    assert classify(c, TARGET, set(), 30, NOW, r) == ("lands-first", None)
+    assert classify(c, TARGET, set(), 30, NOW)[0] is None  # stale by default

@@ -502,7 +502,7 @@ def get_tool_description() -> ToolDescription:
             Command(
                 name="conflicts",
                 description="Trial-merge a change (or a local commit standing in for it) against the open changes on its branch that touch its files and are likely to land soon; says per collision which side should move",
-                usage="gc conflicts <CHANGE> [--repo PATH] [--commit SHA] [--full] [--hunks | --hunks-for CN ...] [--max-age DAYS] [--with CN ...] [--all]",
+                usage="gc conflicts <CHANGE> [--repo PATH] [--commit SHA] [--full] [--hunks | --hunks-for CN ...] [--max-age DAYS] [--blocker-tag GLOB ...] [--priority-tag GLOB ...] [--with CN ...] [--all]",
                 arguments=[
                     Argument(name="change", description="Gerrit change URL, number or Change-Id", required=True),
                     Argument(name="--repo", description="Local clone of the change's project", default="."),
@@ -511,6 +511,8 @@ def get_tool_description() -> ToolDescription:
                     Argument(name="--hunks", description="Include conflict-marker regions and their kind for every pair (large on a busy file)", type="boolean", default=False),
                     Argument(name="--hunks-for", description="Conflict-marker regions only for the pairs with this change (repeatable)", type="integer"),
                     Argument(name="--max-age", description="Days without an update after which same-effort and other changes are ignored", type="integer", default=30),
+                    Argument(name="--blocker-tag", description="Hashtag glob marking a release blocker (repeatable; replaces $GERRIT_CONFLICTS_BLOCKER_TAGS, default *_review_blocker)"),
+                    Argument(name="--priority-tag", description="Hashtag glob marking release priority (repeatable; replaces $GERRIT_CONFLICTS_PRIORITY_TAGS, default *_review_priority)"),
                     Argument(name="--with", description="Change to check whatever the filters say (repeatable)", type="integer"),
                     Argument(name="--all", description="Also trial-merge the 'other' tier", type="boolean", default=False),
                 ],
@@ -520,7 +522,7 @@ def get_tool_description() -> ToolDescription:
                 output_fields=[
                     "change", "patchset", "commit", "tested_commit", "subject",
                     "owner", "me", "readiness", "tier_of_target",
-                    "release_hashtags", "project", "branch", "tip", "status",
+                    "release_hashtags", "ranks", "project", "branch", "tip", "status",
                     "rebase_cause", "rebase_onto", "outdated_parent",
                     "base.on_branch", "base.behind", "base.parents[]",
                     "base.rebase", "on_branch", "on_next", "own_stack",

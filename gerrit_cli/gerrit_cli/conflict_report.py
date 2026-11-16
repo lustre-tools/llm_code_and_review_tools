@@ -12,7 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .conflict_candidates import Selection, fix_side, readiness, release_rank
+from .conflict_candidates import DEFAULT_RANKS, Ranks, Selection, fix_side, readiness, \
+    release_rank
 from .conflicts import Patch, own_stack
 
 TIER_ORDER = {"frozen": 0, "lands-first": 1, "same-effort": 2, "other": 3}
@@ -23,11 +24,12 @@ def owner_name(change: dict[str, Any]) -> str:
     return owner.get("name") or owner.get("username") or ""
 
 
-def target_tier(change: dict[str, Any], queued_ids: set[str]) -> str:
+def target_tier(change: dict[str, Any], queued_ids: set[str],
+                ranks: Ranks = DEFAULT_RANKS) -> str:
     """A target's own tier (the fix_side row)."""
     if change.get("change_id") in queued_ids:
         return "frozen"
-    if readiness(change) == "ready" or release_rank(change.get("hashtags") or []) > 0:
+    if readiness(change) == "ready" or release_rank(change.get("hashtags") or [], ranks) > 0:
         return "lands-first"
     return "pending"
 
@@ -73,7 +75,8 @@ def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
         "cn": n, "subject": c.get("subject", ""), "owner": owner_name(c),
         "tier": sel.tiers[n], "readiness": readiness(c),
         "hashtags": sorted(c.get("hashtags") or []),
-        "fix_side": fix_side(t_tier, t_rank, sel.tiers[n], release_rank(c.get("hashtags") or [])),
+        "fix_side": fix_side(t_tier, t_rank, sel.tiers[n],
+                             release_rank(c.get("hashtags") or [], sel.ranks)),
         "files": sorted(set(pair["landing"]["files"]) | set(pair["as_uploaded"]["files"])),
     }
     if landed:
@@ -96,7 +99,8 @@ def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
 
 def _sorted_by_tier(entries: list[dict[str, Any]], sel: Selection) -> list[dict[str, Any]]:
     return sorted(entries, key=lambda e: (
-        TIER_ORDER[e["tier"]], -release_rank(sel.every[e["cn"]].get("hashtags") or []), e["cn"]))
+        TIER_ORDER[e["tier"]], -release_rank(sel.every[e["cn"]].get("hashtags") or [], sel.ranks),
+        e["cn"]))
 
 
 @dataclass
@@ -164,7 +168,8 @@ def _rebase_info(chk: Checked) -> dict[str, Any]:
 def report(chk: Checked, sel: Selection, next_branch: str, me: str | None) -> dict[str, Any]:
     target, cn, landed = chk.target, chk.cn, chk.landed
     hashtags = target.get("hashtags") or []
-    t_tier, t_rank = target_tier(target, chk.queued_ids), release_rank(hashtags)
+    ranks = sel.ranks
+    t_tier, t_rank = target_tier(target, chk.queued_ids, ranks), release_rank(hashtags, ranks)
     b = _buckets(chk, sel, t_tier, t_rank)
     tried = {pair["other"] for pair in chk.result["focus_pairs"]}
     notes = [f"hunks-for {n}: not a tried candidate"
@@ -181,7 +186,8 @@ def report(chk: Checked, sel: Selection, next_branch: str, me: str | None) -> di
         "me": me,
         "readiness": readiness(target),
         "tier_of_target": t_tier,
-        "release_hashtags": sorted(h for h in hashtags if release_rank([h]) > 0),
+        "release_hashtags": sorted(h for h in hashtags if release_rank([h], ranks) > 0),
+        "ranks": ranks.as_dict(),
         "project": target["project"],
         "branch": target["branch"],
         "tip": chk.result["tip"],
@@ -234,14 +240,15 @@ def _short(subject: str) -> str:
     return subject if len(subject) <= SUBJECT_MAX else subject[:SUBJECT_MAX - 3] + "..."
 
 
-def compact_entry(e: dict[str, Any], same_function: bool = True) -> dict[str, Any]:
+def compact_entry(e: dict[str, Any], ranks: Ranks = DEFAULT_RANKS,
+                  same_function: bool = True) -> dict[str, Any]:
     """One pair of the full output, its per-order results joined in
     ORDERS order and only the fields that say something. A pair that
     conflicts anyway drops same_function (`same_function` False)."""
     out = {k: e[k] for k in _ENTRY_KEYS if k in e and e[k] != []}
     if "subject" in out:
         out["subject"] = _short(out["subject"])
-    release = [h for h in e.get("hashtags") or [] if release_rank([h]) > 0]
+    release = [h for h in e.get("hashtags") or [] if release_rank([h], ranks) > 0]
     if release:
         out["release_hashtags"] = release
     for model, orders in ORDERS.items():
@@ -261,6 +268,10 @@ def compact(full: dict[str, Any]) -> dict[str, Any]:
     """The default output: `report`'s with the change lists that are
     only counted (clean, already_conflicting, not_tried) as numbers,
     each pair through compact_entry, and no commit hashes."""
+    r = full.get("ranks") or {}
+    ranks = Ranks(tuple(r.get("blocker", DEFAULT_RANKS.blocker)),
+                  tuple(r.get("priority", DEFAULT_RANKS.priority)),
+                  tuple(r.get("ignore", DEFAULT_RANKS.ignore)))
     out: dict[str, Any] = {}
     for key, value in full.items():
         if key in _FULL_ONLY:
@@ -271,7 +282,8 @@ def compact(full: dict[str, Any]) -> dict[str, Any]:
             out[key] = sum(len(v) for v in value.values())
         elif key in ("conflicts", "as_uploaded_only", "silent_only", "watch") \
                 and value is not None:
-            out[key] = [compact_entry(e, key in ("silent_only", "watch")) for e in value]
+            out[key] = [compact_entry(e, ranks, key in ("silent_only", "watch"))
+                        for e in value]
         else:
             out[key] = value
     if full.get("tested_commit") != full.get("commit"):

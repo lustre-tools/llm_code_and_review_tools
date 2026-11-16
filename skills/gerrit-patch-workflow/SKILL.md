@@ -342,6 +342,11 @@ priority and frozen ones, and fetch no hunks unless the user asks. A
 conflict on a shared file can still be drift elsewhere in that file; the
 hunk kind `context` says so.
 
+Release blocker and priority hashtags are globs (`ranks` in the output
+shows the ones in effect); when a release renames its tags, set
+`GERRIT_CONFLICTS_BLOCKER_TAGS` / `GERRIT_CONFLICTS_PRIORITY_TAGS` or pass
+`--blocker-tag` / `--priority-tag`.
+
 **Who moves.** `fix_side` is the default answer. It encodes this order
 of who goes first: in -next (frozen), release blocker, release priority,
 ready, the rest (blocker over priority over plain ready applies between
