@@ -1696,6 +1696,7 @@ def upload(
     private: bool | None = None,
     ci_reviewers: bool = True,
     author_edit: bool = True,
+    max_commits: int | None = None,
 ) -> dict[str, Any]:
     """Push HEAD to refs/for/<branch> as the client's account.
 
@@ -1801,14 +1802,18 @@ def upload(
                 f"{f'{branch} or {base}' if base else branch}; there is "
                 "nothing to upload.",
             )
-        if len(commits) > MAX_COMMITS:
+        limit = MAX_COMMITS if max_commits is None else max_commits
+        if len(commits) > limit:
             raise UploadError(
                 ErrorCode.TOO_MANY_COMMITS,
                 f"HEAD is {len(commits)} commits ahead of {project} "
-                f"{over}; Gerrit would open a change for each. HEAD is "
+                f"{over}, over the limit of {limit}; Gerrit would open a "
+                "change for each. HEAD is "
                 "probably based on another branch -- check --branch, or "
                 "if HEAD is based on another server branch such as "
-                "master-next, pass --base that-branch.",
+                "master-next, pass --base that-branch. A series that "
+                "really is this long needs --max-commits N, and only "
+                "when the user asked for it to go up.",
             )
 
         known = _with_ancestors(

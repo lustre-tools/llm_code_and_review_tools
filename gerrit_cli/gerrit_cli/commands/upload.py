@@ -30,6 +30,7 @@ def cmd_upload(args):
             private=getattr(args, "private", None),
             ci_reviewers=not getattr(args, "no_ci_reviewers", False),
             author_edit=not getattr(args, "no_author_edit", False),
+            max_commits=getattr(args, "max_commits", None),
         )
     except UploadError as e:
         output_result(

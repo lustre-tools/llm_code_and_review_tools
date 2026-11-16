@@ -374,6 +374,10 @@ is not the working directory.
   the edited commits; `author_edit` lists them, and a warning says if an
   edit failed. This is the default; upload another way, or with
   `--no-author-edit`, only for a stated reason.
+- More than 50 commits between the branch and HEAD is refused as
+  `TOO_MANY_COMMITS`: nearly always HEAD is built on another branch
+  (`--base`). A series that really is longer goes up with
+  `--series --max-commits N`, only when the user asked for it.
 - `--expect-patchset N` refuses unless the change is still at patchset N,
   the one the local commit was written to replace. Without it, a patchset
   someone uploaded while you were working is replaced by yours with no

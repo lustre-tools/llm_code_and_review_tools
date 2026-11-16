@@ -711,6 +711,16 @@ def add_upload_parser(subparsers):
              "the change already has stay",
     )
     parser.add_argument(
+        "--max-commits",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Allow up to N commits between the branch and HEAD (default "
+             "50). The limit catches a HEAD built on the wrong branch; "
+             "raise it only for a series that really is that long and "
+             "that the user asked to upload",
+    )
+    parser.add_argument(
         "--expect-patchset",
         type=int,
         default=None,

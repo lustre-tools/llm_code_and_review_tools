@@ -821,6 +821,23 @@ def test_head_on_master_next_is_refused_without_base(gerrit):
     assert pushed_refs(bare) == {}
 
 
+def test_max_commits_raises_the_limit(gerrit):
+    fake, bare, work = gerrit
+    _on_master_next(work, bare, MAX_COMMITS + 1)
+    commit(work, "LU-1 llite: fix", cid=CID_A, committer=BOT)
+
+    with pytest.raises(UploadError) as err:
+        upload(fake, repo=str(work), change="51164",
+               max_commits=MAX_COMMITS + 1)
+    assert err.value.code == ErrorCode.TOO_MANY_COMMITS
+    assert "--max-commits" in err.value.message
+
+    with pytest.raises(UploadError) as err:
+        upload(fake, repo=str(work), change="51164",
+               max_commits=MAX_COMMITS + 2)
+    assert err.value.code != ErrorCode.TOO_MANY_COMMITS
+
+
 def test_base_counts_from_another_server_branch(gerrit):
     fake, bare, work = gerrit
     _on_master_next(work, bare, MAX_COMMITS + 1)
