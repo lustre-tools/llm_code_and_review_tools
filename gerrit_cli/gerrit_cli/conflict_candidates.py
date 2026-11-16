@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import quote
@@ -16,6 +17,23 @@ _GENERIC_TAG_RE = re.compile(
 _OPTIONS = ("LABELS", "DETAILED_LABELS", "CURRENT_REVISION",
             "CURRENT_COMMIT", "DETAILED_ACCOUNTS")
 _PATHS_PER_QUERY = 20
+
+
+@dataclass
+class Selection:
+    """Which open changes a target is checked against, and why the
+    others are not."""
+    # open changes the queries found plus the --with ones, minus the
+    # target's own stack and children
+    found: dict[int, dict[str, Any]] = field(default_factory=dict)
+    forced: set[int] = field(default_factory=set)  # --with
+    tiers: dict[int, str] = field(default_factory=dict)
+    # the tiered changes and the open changes they stand on
+    every: dict[int, dict[str, Any]] = field(default_factory=dict)
+    kept: list[int] = field(default_factory=list)  # tried against the target
+    not_tried: list[int] = field(default_factory=list)  # "other" tier without --all
+    skipped: list[dict[str, Any]] = field(default_factory=list)
+    needed: set[int] = field(default_factory=set)  # kept and what they stand on
 
 
 def release_rank(hashtags: list[str]) -> int:

@@ -8,18 +8,25 @@ those that need a new patchset anyway are skipped, the rest tiered
 trial-merged against the target in both orders and both models
 (conflicts.py, focus mode), and each collision says which side should
 move (`fix_side`).
+
+run_conflicts runs the steps in order: open target -> branch and -next
+-> related changes -> focus stack -> candidate selection -> engine ->
+older parent patchsets; conflict_report.py turns the result into the
+printed JSON.
 """
 
 from __future__ import annotations
 
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
 from ..client import GerritCommentsClient
-from ..conflict_candidates import classify, fix_side, query_candidates, readiness, release_rank
+from ..conflict_candidates import Selection, classify, query_candidates
+from ..conflict_report import Checked, report, target_tier
 from ..conflicts import (
     ConflictCheckError,
     ConflictRepoError,
@@ -31,7 +38,6 @@ from ..conflicts import (
     changes_by_commit,
     check_conflicts,
     commit_lookup,
-    own_stack,
 )
 from ..errors import ErrorCode
 from ._helpers import _cli, error_code_for, output_error, output_success
@@ -41,7 +47,6 @@ _DETAIL = ("CURRENT_REVISION", "CURRENT_COMMIT", "LABELS", "DETAILED_LABELS",
 _OPTIONS = "".join(f"&o={o}" for o in _DETAIL)
 # with ALL_REVISIONS, which changes_by_commit adds
 _WALK_OPTIONS = "".join(f"&o={o}" for o in _DETAIL[1:])
-_TIER_ORDER = {"frozen": 0, "lands-first": 1, "same-effort": 2, "other": 3}
 _MAX_DEPTH = 100
 # classify with this age only skips for a vote that needs a new patchset
 _NEVER_STALE = 10 ** 6
@@ -93,20 +98,6 @@ class _Patchsets:
         if not ps or not cur or ps == cur or (below is not None and cn != below):
             return None
         return {"of": cn, "ps": ps, "current": cur}
-
-
-def _owner_name(change: dict[str, Any]) -> str:
-    owner = change.get("owner") or {}
-    return owner.get("name") or owner.get("username") or ""
-
-
-def _tier(change: dict[str, Any], queued_ids: set[str]) -> str:
-    """A target's own tier (the fix_side row)."""
-    if change.get("change_id") in queued_ids:
-        return "frozen"
-    if readiness(change) == "ready" or release_rank(change.get("hashtags") or []) > 0:
-        return "lands-first"
-    return "pending"
 
 
 def _fetch(repo: Repo, remote: str, refs: dict[str, str]) -> None:
@@ -240,23 +231,60 @@ def _local_stack(client: Any, repo: Repo, remote: str, change: dict[str, Any], c
     return patches, {g[0]["_number"]: g[0] for g in groups[:-1]}
 
 
-def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, max_age: int,
-                  with_: list[int], all_: bool, hunks: bool | set[int], now: datetime,
-                  ) -> dict[str, Any]:
-    """Check one change, or a local commit standing in for it, against
-    the open changes that touch its files. `hunks`: True for every
-    pair's conflict regions, a set of change numbers for those pairs."""
+@dataclass
+class _Branch:
+    """The checkout and the branch the target lands on."""
+    repo: Repo
+    remote: str
+    project: str
+    branch: str
+    tip: str
+    next_branch: str
+    queued_ids: set[str]  # Change-Ids queued on a current -next
+
+
+@dataclass
+class _Around:
+    """What the target's related list says: who owns each commit seen,
+    and the open children above it."""
+    related: list[dict[str, Any]]
+    owners: dict[str, tuple[int, str]]
+    patchsets: _Patchsets
+    children: list[Patch]
+    child_base: dict[int, str]  # child -> the commit it stands on
+
+
+@dataclass
+class _Focus:
+    """The stack being checked: the target (or its local commit) on top
+    of its in-flight parents."""
+    stack: list[Patch]  # bottom first
+    parents_detail: dict[int, dict[str, Any]]
+    diff_of: dict[str, str]  # commit -> the commit its own diff starts from
+    paths: list[str]  # every file the stack changes
+
+    @property
+    def cns(self) -> list[int]:
+        return [p.cn for p in self.stack]
+
+
+def _open_target(client: Any, change: str) -> tuple[int, dict[str, Any]]:
     _base, cn = GerritCommentsClient.parse_gerrit_url(change)
     target = client.rest.get(f"/changes/{cn}?{_OPTIONS[1:]}")
     if target.get("status") != "NEW":
         raise ConflictRepoError(f"change {cn} is {target.get('status')}; only an open "
                                 "change can be checked")
+    return cn, target
+
+
+def _branch(repo_path: str, target: dict[str, Any]) -> _Branch:
+    """Fetch the branch and its -next; a stale -next holds what already
+    landed, so nothing in it counts as queued."""
     project, branch = target["project"], target["branch"]
     repo = Repo(repo_path)
     remote = repo.resolve_remote(project)
     if remote is None:
         raise ConflictRepoError(f"{repo.path} is not a clone of {project}; pass --repo")
-    get = client.rest.get
     next_branch = f"{branch}-next"
     heads = repo.branch_tips(remote, [branch, next_branch])
     if branch not in heads:
@@ -264,19 +292,20 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     tip, next_tip = heads[branch], heads.get(next_branch)
     _fetch(repo, remote, {sha: f"refs/heads/{b}" for b, sha in heads.items()})
     queued_ids: set[str] = set()
-    # a stale -next holds what already landed; nothing in it counts
     if next_tip and not repo.missing([tip, next_tip]) and repo.is_ancestor(tip, next_tip):
         queue = repo.first_parent_range(tip, next_tip)
         queued_ids = {cid for _subject, cid in repo.messages(queue).values() if cid}
+    return _Branch(repo, remote, project, branch, tip, next_branch, queued_ids)
 
+
+def _around(get: Any, cn: int, target: dict[str, Any]) -> _Around:
     related = (get(f"/changes/{cn}/revisions/current/related") or {}).get("changes") or []
     owners: dict[str, tuple[int, str]] = {}
     patchsets = _Patchsets()
     for e in related:
         owners[e["commit"]["commit"]] = (e["_change_number"], e.get("status", ""))
         patchsets.add_related(e)
-    uploaded, ps, _ = _current(target)
-    owners[uploaded] = (cn, target.get("status", ""))
+    owners[_current(target)[0]] = (cn, target.get("status", ""))
     patchsets.add_change(target)
     at = next((i for i, e in enumerate(related) if e.get("_change_number") == cn), 0)
     above = [e for e in reversed(related[:at]) if e.get("status") == "NEW"]
@@ -292,234 +321,175 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
         patchsets.add_change(c)
     child_base = {e["_change_number"]: (e["commit"].get("parents") or [{}])[0].get("commit", "")
                   for e in above}
+    return _Around(related, owners, patchsets, children, child_base)
 
+
+def _focus(client: Any, br: _Branch, target: dict[str, Any], commit: str | None,
+           ar: _Around) -> _Focus:
     if commit:
-        stack, parents_detail = _local_stack(client, repo, remote, target, commit, tip, owners,
-                                             patchsets)
+        stack, parents_detail = _local_stack(client, br.repo, br.remote, target, commit, br.tip,
+                                             ar.owners, ar.patchsets)
     else:
-        stack, parents_detail = _target_stack(client, repo, remote, target, related, owners,
-                                              patchsets)
-    focus_stack = [p.cn for p in stack]
-    bases = repo.parents([p.commit for p in stack if not p.base])
+        stack, parents_detail = _target_stack(client, br.repo, br.remote, target, ar.related,
+                                              ar.owners, ar.patchsets)
+    bases = br.repo.parents([p.commit for p in stack if not p.base])
     diff_of = {p.commit: p.base or (bases.get(p.commit) or [""])[0] for p in stack}
-    paths = sorted(set().union(*repo.changed_files(
+    paths = sorted(set().union(*br.repo.changed_files(
         {c: b for c, b in diff_of.items() if b}).values()))
+    return _Focus(stack, parents_detail, diff_of, paths)
 
-    own = set(focus_stack) | {p.cn for p in children}
-    found = {c["_number"]: c for c in query_candidates(
-        client, project, branch, paths, max_age, frozenset(queued_ids)) if c["_number"] not in own}
-    forced = set(with_ or []) - own
-    skipped: list[dict[str, Any]] = [{"cn": n, "reason": "own stack"}
-                                     for n in sorted(set(with_ or []) & own)]
-    if forced - set(found):
-        extra = _query(client, " OR ".join(f"change:{n}" for n in sorted(forced - set(found))))
+
+def _query_step(client: Any, br: _Branch, paths: list[str], own: set[int], with_: list[int],
+                max_age: int, sel: Selection) -> None:
+    """The open changes on the target's files, plus the --with ones."""
+    sel.found = {c["_number"]: c for c in query_candidates(
+        client, br.project, br.branch, paths, max_age, frozenset(br.queued_ids))
+        if c["_number"] not in own}
+    sel.forced = set(with_ or []) - own
+    sel.skipped = [{"cn": n, "reason": "own stack"} for n in sorted(set(with_ or []) & own)]
+    if sel.forced - set(sel.found):
+        extra = _query(client, " OR ".join(f"change:{n}"
+                                           for n in sorted(sel.forced - set(sel.found))))
         for c in extra:
-            if c.get("status") == "NEW" and c.get("project") == project \
-                    and c.get("branch") == branch and c["_number"] in forced:
-                found[c["_number"]] = c
-        skipped += [{"cn": n, "reason": f"not open on {project} {branch}"}
-                    for n in sorted(forced - set(found))]
+            if c.get("status") == "NEW" and c.get("project") == br.project \
+                    and c.get("branch") == br.branch and c["_number"] in sel.forced:
+                sel.found[c["_number"]] = c
+        sel.skipped += [{"cn": n, "reason": f"not open on {br.project} {br.branch}"}
+                        for n in sorted(sel.forced - set(sel.found))]
 
-    tiers: dict[int, str] = {}
-    for n in sorted(found):
-        tier, reason = classify(found[n], target, queued_ids, max_age, now)
-        if tier is None and n in forced:
+
+def _tier_step(target: dict[str, Any], queued_ids: set[str], max_age: int, now: datetime,
+               sel: Selection) -> None:
+    """A tier for each found change, or the reason it is dropped."""
+    for n in sorted(sel.found):
+        tier, reason = classify(sel.found[n], target, queued_ids, max_age, now)
+        if tier is None and n in sel.forced:
             tier = "other"
         if tier is None:
-            skipped.append({"cn": n, "reason": reason})
+            sel.skipped.append({"cn": n, "reason": reason})
         else:
-            tiers[n] = tier
+            sel.tiers[n] = tier
 
-    tiered = {n: found[n] for n in tiers}
+
+def _stands_on(n: int, every: dict[int, dict[str, Any]],
+               owners: dict[str, tuple[int, str]]) -> list[int]:
+    """The changes of `every` that change `n` stands on, nearest first."""
+    out, cur = [], n
+    while True:
+        o = owners.get(_current(every[cur])[2])
+        if o is None or o[0] not in every or o[0] in out or o[0] in (n, cur):
+            return out
+        cur = o[0]
+        out.append(cur)
+
+
+def _stacked_step(client: Any, br: _Branch, target: dict[str, Any], own: set[int],
+                  owners: dict[str, tuple[int, str]], all_: bool, now: datetime,
+                  sel: Selection) -> None:
+    """Drop a change standing on one that needs a new patchset; keep an
+    "other" one for --all only."""
+    tiered = {n: sel.found[n] for n in sel.tiers}
     for n, c in tiered.items():
         owners[_current(c)[0]] = (n, "NEW")
-    ancestors = _ancestors(client, project, branch, tiered, own, owners)
-    every = {**ancestors, **tiered}
-
-    def below(n: int) -> list[int]:
-        out, cur = [], n
-        while True:
-            o = owners.get(_current(every[cur])[2])
-            if o is None or o[0] not in every or o[0] in out or o[0] in (n, cur):
-                return out
-            cur = o[0]
-            out.append(cur)
-
-    kept, not_tried = [], []
-    for n in sorted(tiers):
-        chain = below(n)
-        if n not in forced and tiers[n] != "frozen":
+    ancestors = _ancestors(client, br.project, br.branch, tiered, own, owners)
+    sel.every = {**ancestors, **tiered}
+    for n in sorted(sel.tiers):
+        chain = _stands_on(n, sel.every, owners)
+        if n not in sel.forced and sel.tiers[n] != "frozen":
             reason = next(((a, r) for a in chain
-                           if (r := classify(every[a], target, queued_ids, _NEVER_STALE, now)[1])),
+                           if (r := classify(sel.every[a], target, br.queued_ids,
+                                             _NEVER_STALE, now)[1])),
                           None)
             if reason:
-                skipped.append({"cn": n, "reason": f"stacked on {reason[0]} ({reason[1]})"})
+                sel.skipped.append({"cn": n, "reason": f"stacked on {reason[0]} ({reason[1]})"})
                 continue
-        if tiers[n] == "other" and not all_ and n not in forced:
-            not_tried.append(n)
+        if sel.tiers[n] == "other" and not all_ and n not in sel.forced:
+            sel.not_tried.append(n)
         else:
-            kept.append(n)
-    skipped.sort(key=lambda s: s["cn"])
-    needed = {a for n in kept for a in below(n)} | set(kept)
+            sel.kept.append(n)
+    sel.skipped.sort(key=lambda s: s["cn"])
+    sel.needed = {a for n in sel.kept for a in _stands_on(n, sel.every, owners)} | set(sel.kept)
 
-    patches = stack + children + [Patch(n, _current(every[n])[1], _current(every[n])[0])
-                                  for n in sorted(needed)]
-    result = check_conflicts(
-        repo, remote, branch, patches, owners, lookup=commit_lookup(get),
-        next_branch=next_branch, change_lookup=change_id_lookup(get, project, branch),
-        focus=set(focus_stack), hunks=hunks, pair_with=set(kept))
 
-    res = result["results"]
-    on_branch = dict(res.get(str(cn)) or {"status": "error"})
+def _select(client: Any, br: _Branch, target: dict[str, Any], focus: _Focus, ar: _Around,
+            max_age: int, with_: list[int], all_: bool, now: datetime) -> Selection:
+    """query -> drop the own stack -> tier -> drop what stands on a
+    change that needs a new patchset -> park "other" without --all."""
+    own = set(focus.cns) | {p.cn for p in ar.children}
+    sel = Selection()
+    _query_step(client, br, focus.paths, own, with_, max_age, sel)
+    _tier_step(target, br.queued_ids, max_age, now, sel)
+    _stacked_step(client, br, target, own, ar.owners, all_, now, sel)
+    return sel
+
+
+def _try(client: Any, br: _Branch, focus: _Focus, ar: _Around, sel: Selection,
+         hunks: bool | set[int]) -> dict[str, Any]:
+    get = client.rest.get
+    patches = focus.stack + ar.children + [
+        Patch(n, _current(sel.every[n])[1], _current(sel.every[n])[0]) for n in sorted(sel.needed)]
+    return check_conflicts(
+        br.repo, br.remote, br.branch, patches, ar.owners, lookup=commit_lookup(get),
+        next_branch=br.next_branch, change_lookup=change_id_lookup(get, br.project, br.branch),
+        focus=set(focus.cns), hunks=hunks, pair_with=set(sel.kept))
+
+
+def _on_branch(result: dict[str, Any], cn: int) -> dict[str, Any]:
+    on_branch = dict(result["results"].get(str(cn)) or {"status": "error"})
     if on_branch["status"] in ("error", "skipped"):
         raise ConflictCheckError(
             f"change {cn} could not be tried: {on_branch.get('reason', 'unknown')}")
-    landed = on_branch["status"] == "clean"
-    nxt = result.get("next")
-    if nxt is None:
-        on_next = {"status": "no-next", "branch": next_branch}
-    elif "skipped" in nxt:
-        on_next = {"status": "stale", "branch": next_branch, "reason": nxt["skipped"]}
-    else:
-        on_next = nxt["results"].get(str(cn)) or {"status": "not-tried"}
+    return on_branch
 
-    hashtags = target.get("hashtags") or []
-    t_tier, t_rank = _tier(target, queued_ids), release_rank(hashtags)
 
+def _older_parents(br: _Branch, focus: _Focus, ar: _Around, cn: int,
+                   on_branch: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[int, dict]]:
+    """(the target's parent's newer patchset and whether the target
+    applies on it, the other stack members on an older patchset)."""
+    stack = focus.stack
     old = {p.cn: o for below_p, p in zip(stack, stack[1:])
-           if (o := patchsets.older(diff_of[p.commit], below_p.cn))}
-    old.update({n: o for n, sha in child_base.items() if (o := patchsets.older(sha))})
+           if (o := ar.patchsets.older(focus.diff_of[p.commit], below_p.cn))}
+    old.update({n: o for n, sha in ar.child_base.items() if (o := ar.patchsets.older(sha))})
     outdated = old.pop(cn, None)
     if outdated is not None:
         target_p, parent_p = stack[-1], stack[-2]
         if on_branch.get("parent"):
             outdated["status"], files = "conflict", on_branch["parent"]["files"]
         else:
-            with repo:
-                pick = repo.pick(parent_p.commit, target_p.commit, diff_of[target_p.commit])
+            with br.repo:
+                pick = br.repo.pick(parent_p.commit, target_p.commit,
+                                    focus.diff_of[target_p.commit])
             outdated["status"] = "clean" if pick.ok else pick.status
             files = list(pick.files)
         outdated = {"cn": outdated.pop("of"), **outdated}
         if files:
             outdated["files"] = files
+    return outdated, old
 
-    def entry(pair: dict[str, Any]) -> dict[str, Any]:
-        n = pair["other"]
-        c = every[n]
-        e: dict[str, Any] = {
-            "cn": n, "subject": c.get("subject", ""), "owner": _owner_name(c),
-            "tier": tiers[n], "readiness": readiness(c),
-            "hashtags": sorted(c.get("hashtags") or []),
-            "fix_side": fix_side(t_tier, t_rank, tiers[n], release_rank(c.get("hashtags") or [])),
-            "files": sorted(set(pair["landing"]["files"]) | set(pair["as_uploaded"]["files"])),
-        }
-        if landed:
-            e["landing"] = {k: pair["landing"][k] for k in ("target_first", "candidate_first")}
-        e["as_uploaded"] = {k: pair["as_uploaded"][k]
-                            for k in ("target_on_theirs", "theirs_on_target")}
-        e["via"] = pair["via"]
-        e["silent"] = pair["silent"]
-        if pair.get("base_drift"):
-            e["base_drift"] = pair["base_drift"]
-        if "hunks" in pair:
-            e["hunks"] = pair["hunks"] if landed else \
-                {k: v for k, v in pair["hunks"].items() if k != "landing"}
-        if n in forced:
-            e["forced"] = True
-        return e
 
-    def order(e: dict[str, Any]) -> tuple[int, int, int]:
-        return (_TIER_ORDER[e["tier"]],
-                -release_rank(every[e["cn"]].get("hashtags") or []), e["cn"])
+def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, max_age: int,
+                  with_: list[int], all_: bool, hunks: bool | set[int], now: datetime,
+                  ) -> dict[str, Any]:
+    """Check one change, or a local commit standing in for it, against
+    the open changes that touch its files. `hunks`: True for every
+    pair's conflict regions, a set of change numbers for those pairs."""
+    cn, target = _open_target(client, change)
+    br = _branch(repo_path, target)
+    ar = _around(client.rest.get, cn, target)
+    focus = _focus(client, br, target, commit, ar)
+    sel = _select(client, br, target, focus, ar, max_age, with_, all_, now)
+    result = _try(client, br, focus, ar, sel, hunks)
 
-    conflicts: list[dict[str, Any]] = []
-    uploaded_only: list[dict[str, Any]] = []
-    silent_only: list[dict[str, Any]] = []
-    clean: list[int] = []
-    errors = [{"cn": n, "reason": res.get(str(n), {}).get("reason", "")}
-              for n in kept if res.get(str(n), {}).get("status") == "error"]
-    skipped += [{"cn": n, "reason": res[str(n)].get("reason", "")}
-                for n in kept if res.get(str(n), {}).get("status") == "skipped"]
-    skipped.sort(key=lambda s: s["cn"])
-    entries = [(pair, entry(pair)) for pair in result["focus_pairs"]]
-    for pair, e in entries:
-        statuses = [*e.get("landing", {}).values(), *e["as_uploaded"].values()]
-        if "conflict" in statuses:
-            (conflicts if landed else uploaded_only).append(e)
-        elif pair["silent"]:
-            silent_only.append({k: e[k] for k in ("cn", "tier", "fix_side", "silent")})
-        elif "error" in statuses:
-            errors.append({"cn": e["cn"], "reason": "trial merge failed"})
-        else:
-            clean.append(e["cn"])
-    conflicts.sort(key=order)
-    uploaded_only.sort(key=order)
-    silent_only.sort(key=order)
-    tried = {pair["other"] for pair in result["focus_pairs"]}
-    notes = [f"hunks-for {n}: not a tried candidate"
-             for n in sorted(hunks - tried)] if isinstance(hunks, set) else []
-    tiers_of_parents = {n: _tier(d, queued_ids) for n, d in parents_detail.items()}
-
-    out: dict[str, Any] = {
-        "change": cn,
-        "patchset": ps,
-        "commit": uploaded,
-        "tested_commit": stack[-1].commit,
-        "subject": target.get("subject", ""),
-        "owner": _owner_name(target),
-        "me": os.environ.get("GERRIT_USER"),
-        "readiness": readiness(target),
-        "tier_of_target": t_tier,
-        "release_hashtags": sorted(h for h in hashtags if release_rank([h]) > 0),
-        "project": project,
-        "branch": branch,
-        "tip": result["tip"],
-        "status": "ok" if landed else "needs-rebase",
-    }
-    if not landed:
-        # a blocked target: `by` is the stack member that does not apply
-        stuck, seen = cn, set()
-        while res.get(str(stuck), {}).get("status") == "blocked" and stuck not in seen:
-            seen.add(stuck)
-            stuck = res[str(stuck)].get("by", stuck)
-        parent = res.get(str(stuck), {}).get("parent")
-        out["rebase_cause"] = "parent" if parent else "branch"
-        if parent:
-            onto = {"cn": parent["cn"]}
-            if (cur := patchsets.current.get(parent["cn"])) is not None:
-                onto["ps"] = cur
-            if stuck != cn:
-                onto["for"] = stuck
-            out["rebase_onto"] = onto
-    if outdated is not None:
-        out["outdated_parent"] = outdated
-    out.update({
-        "base": base_info(repo, result, {p.cn: p for p in stack}, focus_stack,
-                          result["tip"], tiers_of_parents),
-        "on_branch": on_branch,
-        "on_next": on_next,
-        "own_stack": own_stack(result, focus_stack, [p.cn for p in children], old),
-        "conflicts": conflicts if landed else None,
-    })
-    if not landed:
-        out["as_uploaded_only"] = uploaded_only
-    out.update({
-        "silent_only": silent_only,
-        "already_conflicting": sorted(result["already_conflicting"]),
-        "not_tried": {"other": not_tried},
-        "clean": clean,
-        "skipped": skipped,
-        "errors": errors,
-        "counts": {
-            "candidates": len(found),
-            "after_filters": len(kept) + len(not_tried),
-            "tried": len(result["focus_pairs"]),
-            "conflicting": len(conflicts) + len(silent_only) + len(uploaded_only),
-        },
-    })
-    if notes:
-        out["notes"] = notes
-    return out
+    on_branch = _on_branch(result, cn)
+    outdated, old = _older_parents(br, focus, ar, cn, on_branch)
+    tiers_of_parents = {n: target_tier(d, br.queued_ids) for n, d in focus.parents_detail.items()}
+    base = base_info(br.repo, result, {p.cn: p for p in focus.stack}, focus.cns, result["tip"],
+                     tiers_of_parents)
+    uploaded, ps, _ = _current(target)
+    chk = Checked(target, cn, ps, uploaded, focus.stack, [p.cn for p in ar.children],
+                  br.queued_ids, result, on_branch, outdated, old, ar.patchsets.current, base,
+                  hunks)
+    return report(chk, sel, br.next_branch, os.environ.get("GERRIT_USER"))
 
 
 def cmd_conflicts(args: Any) -> None:
