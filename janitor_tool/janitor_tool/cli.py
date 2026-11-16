@@ -496,6 +496,10 @@ def logs(build_or_change: str, test_name: str, pretty: bool,
               help="Show only last N lines")
 @click.option("--max-bytes", type=int, default=500000,
               help="Max bytes to fetch (default: 500KB)")
+@click.option("--raw", is_flag=True,
+              help="Print the file's content as is, not wrapped in JSON "
+                   "(--grep and --tail still apply; a cut at --max-bytes "
+                   "is noted on stderr)")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON")
 @click.option("--build", "as_build", is_flag=True,
               help="Read the number as a Janitor build number")
@@ -511,6 +515,7 @@ def fetch(
     pretty: bool,
     as_build: bool = False,
     as_change: bool = False,
+    raw: bool = False,
 ) -> None:
     """Fetch a specific log file from a test result.
 
@@ -519,6 +524,7 @@ def fetch(
       janitor fetch 61009 "sanity3@zfs" "oleg243-client-console.txt"
       janitor fetch 61009 "sanity3@zfs" "results.yml"
       janitor fetch 61009 "sanity2@ldiskfs+DNE" "console.txt" --grep "LBUG"
+      janitor fetch 61009 "sanity3@zfs" "results.yml" --raw > results.yml
     """
     pattern = None
     if grep_pattern:
@@ -556,6 +562,15 @@ def fetch(
         lines = [l for l in lines if pattern.search(l)]
     if tail:
         lines = lines[-tail:]
+
+    if raw:
+        if len(content) >= max_bytes:
+            click.echo(f"janitor fetch: cut at --max-bytes {max_bytes}", err=True)
+        if pattern is None and not tail:
+            sys.stdout.write(content)
+        elif lines:
+            sys.stdout.write("\n".join(lines) + "\n")
+        return
 
     result: dict[str, Any] = {
         "build": build,

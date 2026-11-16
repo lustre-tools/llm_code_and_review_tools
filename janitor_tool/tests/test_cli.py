@@ -315,6 +315,41 @@ class TestLogsCommand:
 class TestFetchCommand:
     """Tests for the 'fetch' CLI command."""
 
+    @staticmethod
+    def _client(mock_make, content):
+        client = MagicMock()
+        mock_make.return_value = client
+        client.get_ref.return_value = {"ref": "x"}
+        client.resolve_change.return_value = None
+        client.change_lookup_error = None
+        client.find_test_dir.return_value = "sanity-test"
+        client.fetch_log.return_value = content
+        return client
+
+    @patch("janitor_tool.cli._make_client")
+    def test_fetch_raw_prints_the_file_as_is(self, mock_make):
+        """fb-779f0d155804, fb-1359914d6972: every log needed a JSON
+        unwrap step."""
+        self._client(mock_make, "a: 1\n  b: \"two\"\nno newline at end")
+
+        result = CliRunner().invoke(
+            main, ["fetch", "61009", "sanity@ldiskfs", "results.yml", "--raw"])
+
+        assert result.exit_code == 0
+        assert result.output == "a: 1\n  b: \"two\"\nno newline at end"
+
+    @patch("janitor_tool.cli._make_client")
+    def test_fetch_raw_with_grep_and_tail(self, mock_make):
+        self._client(mock_make, "ok\nLBUG one\nok\nLBUG two\nLBUG three\n")
+
+        result = CliRunner().invoke(main, [
+            "fetch", "61009", "sanity@ldiskfs", "console.txt",
+            "--raw", "--grep", "LBUG", "--tail", "2",
+        ])
+
+        assert result.exit_code == 0
+        assert result.output == "LBUG two\nLBUG three\n"
+
     @patch("janitor_tool.cli._make_client")
     def test_basic_fetch(self, mock_make):
         client = MagicMock()
