@@ -232,7 +232,10 @@ review text.
 Reviews run on **sonnet** by default (`--model opus` / `--model fable`
 or `LREVIEW_MODEL` to change; `--agent codex` defaults to
 **gpt-6.1-sol**). On `lreview bench` Sonnet 5.5 found as many known bugs
-as Opus 5.5 at under half the cost and time (2026-10-09). Posted messages are prefixed
+as Opus 5.5 at under half the cost and time (2026-10-09). Claude reviews
+run at `--effort high` unless told otherwise: left to itself, claude
+takes the effort from the user's settings, where a per-model entry can
+quietly make every review a medium one. Posted messages are prefixed
 `[AI review - <model>]`, stamped with the model that actually ran the
 review and rendered as a bold standalone first line with a blank line
 before the message body:
@@ -804,7 +807,7 @@ opencode's `--model` wants the `provider/model` form.
 | `--keep-worktrees` | off | Keep worktrees after review |
 | `--agent NAME` | `claude` (or `$LREVIEW_AGENT`) | Agent backend: claude, codex, cursor (verified), auggie, gemini, opencode |
 | `--model NAME` | `sonnet` for claude, `gpt-6.1-sol` for codex (or `$LREVIEW_MODEL`); `cursor-grok-4.6-high` for cursor; auggie/gemini/opencode use their own default | Model for the review runs; see `lreview models`, `auggie models list --json` or `agent --list-models` |
-| `--effort LEVEL` | agent's default (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max, plus `ultra` on the codex models that have it — claude (`--effort`), codex (`-c model_reasoning_effort=...`) or auggie (`--reasoning-effort`); ignored for gemini/opencode/cursor (a cursor model slug carries its effort). Known model ladders are checked before the run; Auggie validates its own model/effort support |
+| `--effort LEVEL` | `high` for claude, else the agent's own (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max, plus `ultra` on the codex models that have it — claude (`--effort`), codex (`-c model_reasoning_effort=...`) or auggie (`--reasoning-effort`); ignored for gemini/opencode/cursor (a cursor model slug carries its effort). Known model ladders are checked before the run; Auggie validates its own model/effort support |
 | `--memory, -m` | off | Read/update the per-change review memory document |
 | `--clear-memory, -c` | off | With `-m`: delete the change's memory document first |
 | `--no-resume` | off | With `-m` (claude): start a fresh session from the memory document instead of resuming the recorded review conversation |
@@ -839,7 +842,7 @@ in psN." message, but only when named (`lreview post 69459`, or
 |---|---|
 | `LREVIEW_AGENT` | Default for `--agent` (else `claude`) |
 | `LREVIEW_MODEL` | Default for `--model` (else `sonnet` for claude, `gpt-6.1-sol` for codex); a name from another agent's models, such as `opus` under `--agent codex`, gives way to that agent's default |
-| `LREVIEW_EFFORT` | Default for `--effort` (else the agent's own) |
+| `LREVIEW_EFFORT` | Default for `--effort` (else `high` for claude, the agent's own for the others) |
 | `LREVIEW_DB` | Default for `--db` (memory database directory) |
 | `LREVIEW_LEAN` | `0` turns `--lean` off by default |
 | `LREVIEW_PRELOAD` | `0` turns `--preload` off by default |

@@ -21,7 +21,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .defaults import (  # noqa: F401 (re-exported)
-    CLAUDE_DEFAULT_MODEL, CODEX_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL)
+    CLAUDE_DEFAULT_EFFORT, CLAUDE_DEFAULT_MODEL, CODEX_DEFAULT_MODEL,
+    CURSOR_DEFAULT_MODEL)
 
 # The union of every backend's effort ladder; individual agents and
 # models accept subsets (see CLAUDE_EFFORTS and CodexModel.efforts).
@@ -164,6 +165,14 @@ def model_efforts(agent: str, name: Optional[str]) -> Optional[tuple]:
         model = codex_model(name)
         return model.efforts if model else None
     return None
+
+
+def resolve_effort(agent: str, effort: Optional[str]) -> Optional[str]:
+    """The effort a review runs at: the one asked for, else
+    CLAUDE_DEFAULT_EFFORT for claude, else None (the agent's own)."""
+    if effort:
+        return effort
+    return CLAUDE_DEFAULT_EFFORT if agent == "claude" else None
 
 
 def validate_selection(agent: str, model: Optional[str],

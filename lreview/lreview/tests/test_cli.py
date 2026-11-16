@@ -761,6 +761,7 @@ class TestRunDryRun:
         assert "numbers" not in reviewed  # run_batch never called
         assert freshness == {"allow_update": False}
         assert "model sonnet" in out
+        assert "effort high" in out  # claude's default, not the settings'
         assert "as '[Bot - sonnet]'" in out
         assert "dry run: 3 change(s) would be reviewed" in out
 

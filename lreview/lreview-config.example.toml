@@ -29,7 +29,7 @@
 # --- Options whose default is computed or empty ---
 # The value shown is an example. The comment gives the behavior when
 # the option is not set.
-# effort = "high"                     # the agent's own default effort
+# effort = "high"                     # high for claude, else the agent's own
 # results-dir = "~/lreview-results"   # lreview-results/ in the tools checkout
 # worktrees_dir = "worktrees/agent/lreview"   # <results-dir>/worktrees;
 #                                     # top level only

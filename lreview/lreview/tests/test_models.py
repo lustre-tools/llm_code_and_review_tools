@@ -140,3 +140,21 @@ def test_cursor_model_lines(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k:
                         subprocess.CompletedProcess(a, 1, "", "not logged in"))
     assert "not logged in" in cursor_model_lines()[-1]
+
+
+class TestResolveEffort:
+
+    def test_claude_defaults_to_high(self):
+        from lreview.models import CLAUDE_DEFAULT_EFFORT, resolve_effort
+        assert CLAUDE_DEFAULT_EFFORT == "high"
+        assert resolve_effort("claude", None) == "high"
+
+    def test_an_asked_effort_wins(self):
+        from lreview.models import resolve_effort
+        assert resolve_effort("claude", "medium") == "medium"
+        assert resolve_effort("codex", "xhigh") == "xhigh"
+
+    @pytest.mark.parametrize("agent", ["codex", "cursor", "gemini"])
+    def test_other_agents_keep_their_own(self, agent):
+        from lreview.models import resolve_effort
+        assert resolve_effort(agent, None) is None

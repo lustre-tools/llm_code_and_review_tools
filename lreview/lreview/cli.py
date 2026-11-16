@@ -430,6 +430,8 @@ def cmd_run(args) -> int:
         print(f"note: the '{args.agent}' backend is best-effort and not "
               "yet verified end-to-end; claude, codex and cursor are. Use "
               "--agent-arg to adjust flags if needed.")
+    from .models import resolve_effort
+    args.effort = resolve_effort(args.agent, args.effort)
     if not check_selection(args, resolve_model(args.agent, args.model)):
         return 1
 
@@ -810,6 +812,8 @@ def cmd_bench(args) -> int:
     if prompts_status is None:
         return 2
     model = resolve_model(args.agent, args.model)
+    from .models import resolve_effort
+    args.effort = resolve_effort(args.agent, args.effort)
     if not check_selection(args, model):
         return 1
     label = args.label or bench.default_label(args)
@@ -1188,7 +1192,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("LREVIEW_EFFORT"),
         help="Reasoning effort for claude (--effort) or codex "
              "(-c model_reasoning_effort=...); default: "
-             "$LREVIEW_EFFORT or the agent's own default. Ignored for "
+             "$LREVIEW_EFFORT, else high for claude (whatever the "
+             "user's settings say), else the agent's own. Ignored for "
              "gemini/opencode/cursor (cursor model slugs carry the "
              "effort). The ladder is per model — 'ultra' is "
              "codex-only, and gpt-5.5 / gpt-5.3-codex-spark stop at "

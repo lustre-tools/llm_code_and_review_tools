@@ -210,7 +210,8 @@ writes the whole batch as one plain-text dump -- assessment and
 findings per commit, including the clean and failed ones.
 
 
-Defaults: sonnet model (`--model` / `$LREVIEW_MODEL` for opus/fable),
+Defaults: sonnet model at high effort (`--model` / `$LREVIEW_MODEL`
+for opus/fable, `--effort` / `$LREVIEW_EFFORT`),
 5 parallel reviews (`--jobs`), 2h per-review timeout, a review
 silent for 10 minutes ended as `stalled` after one retry
 (`--stall-timeout`), results in
