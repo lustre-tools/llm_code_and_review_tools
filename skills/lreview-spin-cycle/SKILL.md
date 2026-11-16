@@ -157,6 +157,23 @@ so `lreview agents` decides which second opinion is ready.
 Results go to `$LREVIEW_RESULTS_DIR`, which the run sets to its own
 tmp.
 
+## Lens reviews (only when asked)
+
+`--lenses` has the reviewer start five subagents, one per class of bug
+(concurrency, lifecycle, data, semantics, build), and verify everything
+they find. On the benchmark one lens review found more known bugs than
+three plain rounds together, at about 2.5x the cost of a plain round
+with the default medium-effort lenses, 5x with `--lens-effort high`
+(`lreview/docs/lens-review-evaluation.md`). It needs the claude agent and
+full mode.
+
+The cycle above does not use it. Add `--lenses` to a round only when
+the user asks for a lens review:
+
+```bash
+lreview run --repo <tree> --last 1 --lenses -o /tmp/lreview-lenses.txt
+```
+
 ## The comment-bloat trap
 
 The strong pull during a spin cycle is to answer each finding by adding an
