@@ -71,12 +71,15 @@ def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
     """One tried candidate, as listed under conflicts / as_uploaded_only."""
     n = pair["other"]
     c = sel.every[n]
+    # a collision at via is that change's: its tier decides who moves
+    mover = pair["via"] if pair.get("via") in sel.every else n
+    m_tier = sel.tiers.get(mover) or sel.ancestor_tiers.get(mover, "other")
     e: dict[str, Any] = {
         "cn": n, "subject": c.get("subject", ""), "owner": owner_name(c),
         "tier": sel.tiers[n], "readiness": readiness(c),
         "hashtags": sorted(c.get("hashtags") or []),
-        "fix_side": fix_side(t_tier, t_rank, sel.tiers[n],
-                             release_rank(c.get("hashtags") or [], sel.ranks)),
+        "fix_side": fix_side(t_tier, t_rank, m_tier,
+                             release_rank(sel.every[mover].get("hashtags") or [], sel.ranks)),
         "files": sorted(set(pair["landing"]["files"]) | set(pair["as_uploaded"]["files"])),
     }
     if landed:

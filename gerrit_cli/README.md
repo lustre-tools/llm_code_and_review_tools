@@ -597,8 +597,11 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   | pending | target | target | coordinate | candidate |
 
   Within `lands-first` a release blocker outranks priority, which
-  outranks plain ready. `owner` against `me` (`GERRIT_USER`) tells
-  whose move it is.
+  outranks plain ready. A collision at `via` is that change's, so its
+  tier and hashtags take the candidate's place. With `own_via`,
+  `target` means the target's side moves at that parent, the commit
+  that holds the colliding lines. `owner` against `me` (`GERRIT_USER`)
+  tells whose move it is.
 - **The change itself**: `on_branch` and `on_next` (against
   `<branch>-next`, naming the queued change it collides with); `base`
   (on the branch or not, commits behind, in-flight parents with their

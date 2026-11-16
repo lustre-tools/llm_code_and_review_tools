@@ -86,6 +86,8 @@ class Selection:
     found: dict[int, dict[str, Any]] = field(default_factory=dict)
     forced: set[int] = field(default_factory=set)  # --with
     tiers: dict[int, str] = field(default_factory=dict)
+    # the tier of each change in `every` that has none in `tiers`
+    ancestor_tiers: dict[int, str] = field(default_factory=dict)
     # the tiered changes and the open changes they stand on
     every: dict[int, dict[str, Any]] = field(default_factory=dict)
     kept: list[int] = field(default_factory=list)  # tried against the target

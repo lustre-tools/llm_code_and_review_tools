@@ -1250,7 +1250,10 @@ fix_side says which change should move, whoever runs the command:
   lands-first         target      coordinate   candidate    candidate
   pending             target      target       coordinate   candidate
 Within lands-first a release blocker outranks priority, which outranks
-plain ready. Compare the change's owner with me to see whose move it is.
+plain ready. A collision at via is that change's: its tier and hashtags
+take the candidate's place. With own_via, "target" means the target's
+side moves at that parent, the commit holding the colliding lines.
+Compare the change's owner with me to see whose move it is.
 
 When the change does not apply on the branch tip, status is
 "needs-rebase", conflicts is null, as_uploaded_only has the pairs that

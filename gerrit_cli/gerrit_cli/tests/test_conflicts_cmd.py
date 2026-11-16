@@ -374,7 +374,8 @@ def test_same_effort_and_candidate_stack_land_together(setup):
     out = run(client, local)
     [c] = out["conflicts"]
     assert c["cn"] == 310 and c["tier"] == "same-effort" and c["via"] == 300
-    assert c["fix_side"] == "coordinate"
+    # the collision is 300's, which is not part of the effort
+    assert c["fix_side"] == "candidate"
     assert c["hashtags"] == ["ec_work"]
 
 
@@ -393,6 +394,22 @@ def test_a_collision_in_a_targets_parent_names_it_in_own_via(setup, capsys, monk
     assert c["fix_side"] == "target"
     [c] = _cmd(client, local, monkeypatch, capsys)["conflicts"]
     assert c["own_via"] == 90 and "via" not in c
+
+
+def test_fix_side_of_a_collision_at_via_follows_the_via_change(setup):
+    """A ready change on a pending parent: the parent's lines collide,
+    so the parent's tier decides who moves."""
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    below = gerrit.change(300, gerrit.master, {"a.c": _text({5: "B"})})
+    rest.add(300, [below], ["a.c"])
+    top = gerrit.change(310, below.commit, {"a.c": _text({5: "B"}), "b.c": _text({1: "U"})})
+    rest.add(310, [top], ["b.c"], labels=READY)
+    out = run(client, local, with_=[310])
+    c = next(e for e in out["conflicts"] if e["cn"] == 310)
+    assert c["tier"] == "lands-first" and c["via"] == 300
+    assert c["fix_side"] == "candidate"
 
 
 def test_children_are_reported_in_own_stack(setup):

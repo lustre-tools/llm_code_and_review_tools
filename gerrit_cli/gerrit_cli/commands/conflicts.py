@@ -444,6 +444,10 @@ def _stacked_step(client: Any, br: _Branch, target: dict[str, Any], own: set[int
         owners[_current(c)[0]] = (n, "NEW")
     ancestors = _ancestors(client, br.project, br.branch, tiered, own, owners)
     sel.every = {**ancestors, **tiered}
+    for n in ancestors:
+        if n not in sel.tiers:
+            tier = classify(ancestors[n], target, br.queued_ids, _NEVER_STALE, now, sel.ranks)[0]
+            sel.ancestor_tiers[n] = tier or "other"
     for n in sorted(sel.tiers):
         chain = _stands_on(n, sel.every, owners)
         if n not in sel.forced and sel.tiers[n] != "frozen":
