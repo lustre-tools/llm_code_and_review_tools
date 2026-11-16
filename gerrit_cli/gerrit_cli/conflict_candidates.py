@@ -307,7 +307,7 @@ def query_candidates(client: Any, project: str, branch: str,
 
     def details(chunk: list[int]) -> list[dict[str, Any]]:
         q = " OR ".join(f"change:{n}" for n in chunk)
-        return _fetch(client, f"({q}) status:open")
+        return _fetch(client, f"({q}) status:open -is:wip -is:private")
 
     for page in parallel_map(details, [todo[i:i + _CHANGES_PER_QUERY]
                                        for i in range(0, len(todo), _CHANGES_PER_QUERY)]):

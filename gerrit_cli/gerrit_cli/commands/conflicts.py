@@ -9,8 +9,8 @@ trial-merged against the target in both orders and both models
 (conflicts.py, focus mode), and each collision says which side should
 move (`fix_side`).
 
-run_conflicts runs the steps in order: open target and related changes
--> uploaded focus stack -> branch and -next (fetched with that stack)
+run_conflicts runs the steps in order: open target -> related changes
+and branch tips -> uploaded focus stack -> branch and -next (fetched with that stack)
 -> local focus stack -> candidate selection -> engine -> older parent
 patchsets; conflict_report.py turns the result into the printed JSON.
 """
@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
+
+import requests
 
 from ..conflict_candidates import (
     DEFAULT_RANKS,
@@ -277,16 +279,24 @@ class _Focus:
         return [p.cn for p in self.stack]
 
 
-def _open_target(client: Any, change: str
-                 ) -> tuple[int, dict[str, Any], list[dict[str, Any]]]:
-    """(number, change, related changes), the two read at once."""
+def _open_target(client: Any, change: str) -> tuple[int, dict[str, Any]]:
     _base, cn = _cli().GerritCommentsClient.parse_gerrit_url(change)
-    target, related = parallel_map(client.rest.get, [
-        f"/changes/{cn}?{_OPTIONS[1:]}", f"/changes/{cn}/revisions/current/related"])
+    target = client.rest.get(f"/changes/{cn}?{_OPTIONS[1:]}")
     if target.get("status") != "NEW":
         raise ConflictRepoError(f"change {cn} is {target.get('status')}; only an open "
                                 "change can be checked")
-    return cn, target, (related or {}).get("changes") or []
+    return cn, target
+
+
+def _related_and_tips(client: Any, repo: Repo, remote: str, cn: int, target: dict[str, Any]
+                      ) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """The target's related changes and the branch and -next tips, read
+    at once."""
+    branches = [target["branch"], f"{target['branch']}-next"]
+    related, heads = parallel_map(lambda read: read(), [
+        lambda: client.rest.get(f"/changes/{cn}/revisions/current/related"),
+        lambda: _branch_tips(client, repo, remote, target["project"], branches)])
+    return (related or {}).get("changes") or [], heads
 
 
 def _branch_tips(client: Any, repo: Repo, remote: str, project: str,
@@ -295,7 +305,7 @@ def _branch_tips(client: Any, repo: Repo, remote: str, project: str,
     SSH costs a connection of seconds; it is the fallback."""
     try:
         revs = parallel_map(lambda b: client.get_branch_revision(project, b), branches)
-    except Exception:
+    except (requests.RequestException, OSError):
         return repo.branch_tips(remote, branches)
     return {b: r for b, r in zip(branches, revs) if r}
 
@@ -309,18 +319,25 @@ def _clone(repo_path: str, project: str) -> tuple[Repo, str]:
     return repo, remote
 
 
-def _branch(client: Any, repo: Repo, remote: str, target: dict[str, Any],
+def _branch(repo: Repo, remote: str, target: dict[str, Any], heads: dict[str, str],
             refs: dict[str, str]) -> _Branch:
-    """Fetch the branch and its -next, with `refs` ({commit: ref}) in the
-    same fetch: each fetch is an SSH connection of seconds. A stale -next
-    holds what already landed, so nothing in it counts as queued."""
+    """Fetch the branch and its -next (`heads`, their tips as Gerrit has
+    them), with `refs` ({commit: ref}) in the same fetch: each fetch is
+    an SSH connection of seconds. A tip the remote does not deliver (a
+    mirror behind Gerrit, a -next pushed again since) is read from the
+    remote instead. A stale -next holds what already landed, so nothing
+    in it counts as queued."""
     project, branch = target["project"], target["branch"]
     next_branch = f"{branch}-next"
-    heads = _branch_tips(client, repo, remote, project, [branch, next_branch])
     if branch not in heads:
         raise ConflictCheckError(f"{remote} has no branch {branch}")
-    tip, next_tip = heads[branch], heads.get(next_branch)
     _fetch(repo, remote, {**refs, **{sha: f"refs/heads/{b}" for b, sha in heads.items()}})
+    if repo.missing(list(heads.values())):
+        heads = repo.branch_tips(remote, [branch, next_branch])
+        if branch not in heads:
+            raise ConflictCheckError(f"{remote} has no branch {branch}")
+        _fetch(repo, remote, {sha: f"refs/heads/{b}" for b, sha in heads.items()})
+    tip, next_tip = heads[branch], heads.get(next_branch)
     queued_ids: set[str] = set()
     if next_tip and not repo.missing([tip, next_tip]) and repo.is_ancestor(tip, next_tip):
         queue = repo.first_parent_range(tip, next_tip)
@@ -508,12 +525,13 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     pair's conflict regions, a set of change numbers for those pairs;
     `ranks`: the release hashtags (the command reads them from the
     environment and the options)."""
-    cn, target, related = _open_target(client, change)
+    cn, target = _open_target(client, change)
     repo, remote = _clone(repo_path, target["project"])
+    related, heads = _related_and_tips(client, repo, remote, cn, target)
     ar = _around(client.rest.get, cn, target, related)
     uploaded = None if commit else _target_stack(client, target, ar.related, ar.owners,
                                                  ar.patchsets)
-    br = _branch(client, repo, remote, target,
+    br = _branch(repo, remote, target, heads,
                  {p.commit: change_ref(p.cn, p.ps) for p in uploaded[0]} if uploaded else {})
     focus = _focus(client, br, target, commit, ar, uploaded)
     sel = _select(client, br, target, focus, ar, max_age, with_, all_, now, ranks)

@@ -637,6 +637,7 @@ def test_a_merged_change_is_invalid_input(setup):
     with pytest.raises(ConflictRepoError, match="MERGED") as exc:
         run(client, local)
     assert error_code_for(exc.value) == ErrorCode.INVALID_INPUT
+    assert not any("/related" in c for c in client.rest.calls)
 
 
 def test_hunks_for_a_change_not_tried_is_noted(setup):
@@ -984,3 +985,38 @@ def test_the_branch_and_the_target_stack_come_in_one_fetch(setup, monkeypatch):
     out = run(client, local)
     assert out["on_branch"]["status"] == "clean"
     assert fetches == [["refs/changes/00/100/1", "refs/changes/90/90/1", "refs/heads/master"]]
+
+
+def test_a_tip_the_remote_does_not_have_is_read_from_the_remote(setup):
+    """Gerrit's tip is ahead of what the clone's remote delivers (a
+    mirror behind Gerrit): the remote's own tip is used."""
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    q = gerrit.change(200, gerrit.master, {"a.c": _text({5: "Q"})})
+    rest.add(200, [q], ["a.c"], age_days=90)
+    _queue(gerrit, [(200, {"a.c": _text({5: "Q"})})])
+    ahead = gerrit.change(999, gerrit.master, {"z.c": "z\n"}).commit
+    _git(gerrit.path, "update-ref", "-d", "refs/changes/99/999/1")
+    real = client.get_branch_revision
+
+    def lagging(project, branch):
+        return ahead if branch == "master" else real(project, branch)
+
+    client.get_branch_revision = lagging
+    out = run(client, local)
+    assert out["on_branch"]["status"] == "clean"
+    [c] = out["conflicts"]
+    assert c["cn"] == 200 and c["tier"] == "frozen"
+
+
+def test_a_bug_reading_the_tips_is_not_hidden_by_the_fallback(setup):
+    gerrit, local, client = setup
+    _target(gerrit, client.rest, {5: "T"})
+
+    def broken(project, branch):
+        raise KeyError("bug")
+
+    client.get_branch_revision = broken
+    with pytest.raises(KeyError):
+        run(client, local)

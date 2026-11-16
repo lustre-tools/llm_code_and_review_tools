@@ -167,7 +167,7 @@ def test_query_batches_paths_and_dedupes():
             return [dict(fresh, _more_changes=True)]
         if " age:30d" in url:
             return [ready, pending, prio]
-        assert "change:5 OR change:7) status:open" in url
+        assert "change:5 OR change:7) status:open -is:wip -is:private" in url
         return [ready, prio]
 
     client = FakeClient(pages)
