@@ -1220,12 +1220,14 @@ tip) and as uploaded (as_uploaded: target_on_theirs, theirs_on_target;
 each side's stack part above what both stacks share picked onto the
 other's uploaded commit). An as-uploaded conflict counts only on files
 both stack parts change; one on a file only one side changes is the
-branch moving between their bases, listed in base_drift instead. A pair is in conflicts if any of the four conflicts;
-via names the candidate's ancestor the conflict is at, own_via the
-target's in-flight parent it is at (the colliding lines are that
-parent's, not the change's own); landing names them first, as uploaded
-when landing is clean. Pairs that merge
-cleanly but still collide are in silent_only, check: duplicate-test (a
+branch moving between their bases, listed in base_drift instead. A pair
+is in conflicts if a landing order conflicts, in as_uploaded_only if only
+an as-uploaded one does (what the other owner, or CI on a stale base,
+sees; the landing is clean). via names the candidate's ancestor the
+conflict is at, own_via the target's in-flight parent it is at (the
+colliding lines are that parent's, not the change's own); landing names
+them first, as uploaded when landing is clean. Pairs that merge cleanly
+but still collide are in silent_only, check: duplicate-test (a
 test defined twice), duplicate-value (an OBD_FAIL value, or an
 OBD_CONNECT / OBD_CONNECT2 flag value, used twice), duplicate-exception
 (both add the same test to ALWAYS_EXCEPT); only what both sides added
@@ -1273,8 +1275,8 @@ themselves. counts: candidates = the open changes the file: queries found
 release-tagged, so those show up nowhere), minus the own stack, plus open
 --with changes; after_filters = those the filters kept (handed to the
 trial merges, plus not_tried); tried = pairs trial-merged; conflicting =
-entries in conflicts, as_uploaded_only and silent_only; watch = entries
-in watch. Gerrit's mergeable flag and conflicts: search are not used.
+entries in conflicts and silent_only; as_uploaded_only = entries in
+as_uploaded_only; watch = entries in watch. Gerrit's mergeable flag and conflicts: search are not used.
 Read-only towards Gerrit; needs git 2.40 or newer.
 
 The default output is compact; --full prints every field. Compact: per

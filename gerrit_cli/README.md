@@ -557,7 +557,9 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   one on a file only one side changes comes from the branch moving
   between their bases and is listed in `base_drift` instead (the picks
   above it go on).
-  A pair is in `conflicts` when any of the four conflicts; `via` names the
+  A pair is in `conflicts` when a landing order conflicts, in
+  `as_uploaded_only` when only an as-uploaded one does (the landing is
+  clean: what the other owner, or CI on a stale base, sees). `via` names the
   candidate's ancestor the conflict is at, `own_via` the target's
   in-flight parent it is at (the first change of the target's stack,
   bottom up, that does not apply on the candidate's): the colliding
@@ -645,8 +647,10 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   the `--with` changes that are open on the branch; `after_filters`
   those not in `skipped` by the filters: the ones handed to the trial
   merges plus `not_tried`; `tried` the pairs actually trial-merged
-  (not `already_conflicting`, errors or skipped by the engine); `conflicting` the entries in `conflicts`,
-  `as_uploaded_only` and `silent_only`; `watch` the entries in `watch`.
+  (not `already_conflicting`, errors or skipped by the engine);
+  `conflicting` the entries in `conflicts` and `silent_only`;
+  `as_uploaded_only` the entries in `as_uploaded_only`; `watch` the
+  entries in `watch`.
 
 ## Commands
 

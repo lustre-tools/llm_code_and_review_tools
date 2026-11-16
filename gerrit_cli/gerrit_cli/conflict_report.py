@@ -107,7 +107,7 @@ def _sorted_by_tier(entries: list[dict[str, Any]], sel: Selection) -> list[dict[
 @dataclass
 class _Buckets:
     conflicts: list[dict[str, Any]]
-    uploaded_only: list[dict[str, Any]]
+    uploaded_only: list[dict[str, Any]]  # landing clean or not tried
     silent_only: list[dict[str, Any]]
     watch: list[dict[str, Any]]  # clean merge, a function edited on both sides
     clean: list[int]
@@ -128,8 +128,10 @@ def _buckets(chk: Checked, sel: Selection, t_tier: str, t_rank: int) -> _Buckets
     for pair in chk.result["focus_pairs"]:
         e = pair_entry(pair, sel, chk.landed, t_tier, t_rank)
         statuses = [*e.get("landing", {}).values(), *e["as_uploaded"].values()]
-        if "conflict" in statuses:
-            (b.conflicts if chk.landed else b.uploaded_only).append(e)
+        if "conflict" in e.get("landing", {}).values():
+            b.conflicts.append(e)
+        elif "conflict" in statuses:
+            b.uploaded_only.append(e)
         elif pair["silent"]:
             b.silent_only.append({k: e[k] for k in ("cn", "tier", "fix_side", "silent",
                                                     "same_function") if k in e})
@@ -204,9 +206,8 @@ def report(chk: Checked, sel: Selection, next_branch: str, me: str | None) -> di
         "on_next": on_next(chk.result, cn, next_branch),
         "own_stack": own_stack(chk.result, focus_stack, chk.children, chk.old),
         "conflicts": b.conflicts if landed else None,
+        "as_uploaded_only": b.uploaded_only,
     })
-    if not landed:
-        out["as_uploaded_only"] = b.uploaded_only
     out.update({
         "silent_only": b.silent_only,
         "watch": b.watch,
@@ -219,7 +220,8 @@ def report(chk: Checked, sel: Selection, next_branch: str, me: str | None) -> di
             "candidates": len(sel.found),
             "after_filters": len(sel.kept) + len(sel.not_tried),
             "tried": len(chk.result["focus_pairs"]),
-            "conflicting": len(b.conflicts) + len(b.silent_only) + len(b.uploaded_only),
+            "conflicting": len(b.conflicts) + len(b.silent_only),
+            "as_uploaded_only": len(b.uploaded_only),
             "watch": len(b.watch),
         },
     })

@@ -192,7 +192,7 @@ def test_end_to_end_reports_the_ready_collision_as_target_side(setup):
     assert c["as_uploaded"] == {"target_on_theirs": "conflict", "theirs_on_target": "conflict"}
     assert {reg["kind"] for reg in c["hunks"]["landing"]["a.c"]} == {"edit-edit"}
     assert out["counts"] == {"candidates": 1, "after_filters": 1, "tried": 1,
-                             "conflicting": 1, "watch": 0}
+                             "conflicting": 1, "as_uploaded_only": 0, "watch": 0}
     assert out["base"]["on_branch"] is True and out["base"]["rebase"] == "possible"
 
 
@@ -321,7 +321,7 @@ def test_skipped_lists_reasons(setup):
     ]
     assert out["conflicts"] == []
     assert out["counts"] == {"candidates": 2, "after_filters": 0, "tried": 0,
-                             "conflicting": 0, "watch": 0}
+                             "conflicting": 0, "as_uploaded_only": 0, "watch": 0}
 
 
 def test_an_old_unready_change_is_not_a_candidate(setup):
@@ -606,6 +606,28 @@ def test_a_stale_target_reports_base_drift_not_a_collision(setup):
     assert out["counts"]["conflicting"] == 0
 
 
+def test_a_landed_pair_conflicting_only_as_uploaded_is_in_as_uploaded_only(setup):
+    """70145: 16 of its 19 conflicts landed cleanly in both orders."""
+    gerrit, local, client = setup
+    rest = client.rest
+    old = gerrit.master
+    gerrit.advance({"a.c": _text({6: "M"})})
+    stale = gerrit.change(200, old, {"a.c": _text({4: "S"})})
+    rest.add(200, [stale], ["a.c"], labels=READY)
+    hit = gerrit.change(300, gerrit.master, {"a.c": _text({6: "M", 7: "H"})})
+    rest.add(300, [hit], ["a.c"], labels=READY)
+    t = gerrit.change(100, gerrit.master, {"a.c": _text({6: "M", 7: "T"})})
+    rest.add(100, [t], ["a.c"])
+    out = run(client, local)
+    assert out["status"] == "ok"
+    assert [e["cn"] for e in out["conflicts"]] == [300]
+    [e] = out["as_uploaded_only"]
+    assert e["cn"] == 200 and e["landing"] == {"target_first": "clean",
+                                               "candidate_first": "clean"}
+    assert e["as_uploaded"]["target_on_theirs"] == "conflict"
+    assert out["counts"]["conflicting"] == 1 and out["counts"]["as_uploaded_only"] == 1
+
+
 def test_needs_rebase_lists_clean_pairs_in_clean(setup):
     gerrit, local, client = setup
     rest = client.rest
@@ -621,7 +643,7 @@ def test_needs_rebase_lists_clean_pairs_in_clean(setup):
     assert out["status"] == "needs-rebase"
     assert [e["cn"] for e in out["as_uploaded_only"]] == [200]
     assert out["clean"] == [300]
-    assert out["counts"]["conflicting"] == 1
+    assert out["counts"]["conflicting"] == 0 and out["counts"]["as_uploaded_only"] == 1
 
 
 def test_needs_rebase_surfaces_as_uploaded_errors(setup, monkeypatch):
