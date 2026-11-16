@@ -165,7 +165,10 @@ def test_query_batches_paths_and_dedupes():
             if "&S=1" in url:
                 return [fresh]
             return [dict(fresh, _more_changes=True)]
-        return [ready, pending, prio]
+        if " age:30d" in url:
+            return [ready, pending, prio]
+        assert "change:5 OR change:7) status:open" in url
+        return [ready, prio]
 
     client = FakeClient(pages)
     paths = [f"lustre/a{i}.c" for i in range(25)] + ["lustre/b+c.h"]
@@ -178,12 +181,37 @@ def test_query_batches_paths_and_dedupes():
     first = urls[0]
     assert first.count("file:") == 20 and " OR " in first
     assert all('project:"fs/lustre-release" branch:"master" status:open -is:wip -is:private'
-               in u for u in urls)
+               in u for u in urls if "file:" in u)
     assert any("&S=1" in u for u in urls)
     for o in ("LABELS", "DETAILED_LABELS", "CURRENT_REVISION",
               "CURRENT_COMMIT", "DETAILED_ACCOUNTS"):
         assert f"o={o}" in first
     assert "&n=500" in first
+    # the old changes are read with their votes only, then in full
+    stale = [u for u in urls if " age:30d" in u]
+    assert len(stale) == 2 and all("CURRENT_COMMIT" not in u for u in stale)
+    assert sum("change:" in u for u in urls) == 1
+
+
+def test_old_changes_that_may_land_are_read_in_full():
+    two = [vote(1, "A"), vote(1, "B")]
+    backport = ch(cr=[vote(1, "A")], ver=[JEN_OK, MAL_OK], number=5, msg=BACKPORT_MSG)
+    one_plus = ch(cr=[vote(1, "A")], ver=[JEN_OK, MAL_OK], number=6)
+    no_maloo = ch(cr=two, ver=[JEN_OK], number=7)
+    asked = []
+
+    def pages(url):
+        if "-age:30d" in url:
+            return []
+        if " age:30d" in url:
+            # no commit message: whether 5 is a backport is unknown
+            return [dict(c, revisions={}) for c in (backport, one_plus, no_maloo)]
+        asked.append(url)
+        return [backport, one_plus]
+
+    out = query_candidates(FakeClient(pages), "p", "b", ["lustre/a.c"], 30)
+    assert [c["_number"] for c in out] == [5]
+    assert "change:5 OR change:6)" in asked[0] and "change:7" not in asked[0]
 
 
 def test_query_quotes_a_quote_in_a_path():
@@ -198,7 +226,7 @@ def test_empty_paths_no_request():
     assert client.rest.urls == []
 
 
-def test_unaged_pass_keeps_queued_changes():
+def test_old_queued_change_is_kept():
     old = ch(number=9, cid="Iq", updated="2020-01-01 00:00:00.000000000")
 
     def pages(url):
@@ -208,7 +236,9 @@ def test_unaged_pass_keeps_queued_changes():
     kept = query_candidates(FakeClient(pages), "p", "b", paths, 30,
                             queued_ids={"Iq"})
     assert [c["_number"] for c in kept] == [9]
-    assert query_candidates(FakeClient(pages), "p", "b", paths, 30) == []
+    client = FakeClient(pages)
+    assert query_candidates(client, "p", "b", paths, 30) == []
+    assert not any("change:" in unquote(u) for u in client.rest.urls)
 
 
 def test_ranks_default_to_todays_tags():

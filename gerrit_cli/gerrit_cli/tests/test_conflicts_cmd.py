@@ -85,9 +85,9 @@ class FakeRest:
             m = re.search(rf'\b{key}:(?:"([^"]*)"|(\S+))', q)
             if m and c[key] != (m[1] if m[1] is not None else m[2]):
                 return False
-        if m := re.search(r"-age:(\d+)d", q):
+        if m := re.search(r"(-?)age:(\d+)d", q):
             updated = datetime.strptime(c["updated"][:19], "%Y-%m-%d %H:%M:%S")
-            if NOW - updated > timedelta(days=int(m[1])):
+            if (NOW - updated > timedelta(days=int(m[2]))) == bool(m[1]):
                 return False
         # one backslash each for the query parser and the regex
         files = {re.sub(r"\\(.)", r"\1", re.sub(r"\\(.)", r"\1", f))

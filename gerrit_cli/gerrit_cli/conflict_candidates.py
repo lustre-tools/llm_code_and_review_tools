@@ -20,7 +20,11 @@ PRIORITY_ENV = "GERRIT_CONFLICTS_PRIORITY_TAGS"
 IGNORE_ENV = "GERRIT_CONFLICTS_IGNORE_TAGS"
 _OPTIONS = ("LABELS", "DETAILED_LABELS", "CURRENT_REVISION",
             "CURRENT_COMMIT", "DETAILED_ACCOUNTS")
+# enough for readiness() bar the backport check; all five options cost
+# the server about three times as much per change
+_VOTE_OPTIONS = ("LABELS", "DETAILED_LABELS", "DETAILED_ACCOUNTS")
 _PATHS_PER_QUERY = 20
+_CHANGES_PER_QUERY = 100
 
 
 @dataclass(frozen=True)
@@ -144,7 +148,9 @@ def is_backport(change: dict[str, Any]) -> bool:
     return bool(_LUSTRE_CHANGE_TRAILER_RE.search(message))
 
 
-def readiness(change: dict[str, Any]) -> str:
+def readiness(change: dict[str, Any], need: int | None = None) -> str:
+    """`need`: the non-owner Code-Review +1s wanted, by default 1 for a
+    backport (which takes the commit message) and 2 otherwise."""
     if _blocking_reviewer(change):
         return "cr-1"
     jenkins = _verified(change, "jenkins")
@@ -159,7 +165,8 @@ def readiness(change: dict[str, Any]) -> str:
         if v["value"] > 0 and not _is_owner(v, owner)
     )
     parsed = _parse_labels(change.get("labels") or {})
-    need = 1 if is_backport(change) else 2
+    if need is None:
+        need = 1 if is_backport(change) else 2
     if jenkins > 0 and maloo > 0 and plus >= need \
             and not parsed["verified_fail"]:
         return "ready"
@@ -242,15 +249,17 @@ def _path_regex(path: str) -> str:
 
 
 def _query(project: str, branch: str, paths: list[str],
-           age: int | None) -> str:
+           age: int | None, stale: bool = False) -> str:
+    """The open changes on `paths`: updated within `age` days, or with
+    `stale` the others."""
     files = " OR ".join(f"file:{phrase(_path_regex(p))}" for p in paths)
     q = (f"project:{phrase(project)} branch:{phrase(branch)} status:open -is:wip "
          f"-is:private ({files})")
-    return q + (f" -age:{age}d" if age is not None else "")
+    return q + (f" {'' if stale else '-'}age:{age}d" if age is not None else "")
 
 
-def _fetch(client: Any, q: str) -> list[dict[str, Any]]:
-    opts = "".join(f"&o={o}" for o in _OPTIONS)
+def _fetch(client: Any, q: str, options: tuple[str, ...] = _OPTIONS) -> list[dict[str, Any]]:
+    opts = "".join(f"&o={o}" for o in options)
     out: list[dict[str, Any]] = []
     while True:
         start = f"&S={len(out)}" if out else ""
@@ -261,18 +270,37 @@ def _fetch(client: Any, q: str) -> list[dict[str, Any]]:
             return out
 
 
+def _lands_anyway(change: dict[str, Any], queued_ids: set[str] | frozenset[str],
+                  ranks: Ranks, need: int | None = None) -> bool:
+    """Ready, queued or release-tagged: a candidate however old."""
+    return readiness(change, need) == "ready" \
+        or change.get("change_id") in queued_ids \
+        or release_rank(change.get("hashtags") or [], ranks) > 0
+
+
 def query_candidates(client: Any, project: str, branch: str,
                      paths: list[str], max_age_days: int,
                      queued_ids: set[str] | frozenset[str] = frozenset(),
                      ranks: Ranks = DEFAULT_RANKS) -> list[dict[str, Any]]:
+    """The open changes on `paths` updated within max_age_days, and the
+    older ones that land anyway. The older ones are read with the votes
+    only, then the few that may land in full."""
     seen: dict[int, dict[str, Any]] = {}
+    maybe: list[int] = []
     for i in range(0, len(paths), _PATHS_PER_QUERY):
         batch = paths[i:i + _PATHS_PER_QUERY]
-        for age in (max_age_days, None):
-            for ch in _fetch(client, _query(project, branch, batch, age)):
-                if age is None and readiness(ch) != "ready" \
-                        and ch.get("change_id") not in queued_ids \
-                        and release_rank(ch.get("hashtags") or [], ranks) == 0:
-                    continue
+        for ch in _fetch(client, _query(project, branch, batch, max_age_days)):
+            seen.setdefault(ch["_number"], ch)
+        for ch in _fetch(client, _query(project, branch, batch, max_age_days, stale=True),
+                         _VOTE_OPTIONS):
+            # a backport needs one +1 fewer; whether it is one takes the
+            # commit message
+            if _lands_anyway(ch, queued_ids, ranks, need=1) and ch["_number"] not in maybe:
+                maybe.append(ch["_number"])
+    todo = [n for n in maybe if n not in seen]
+    for i in range(0, len(todo), _CHANGES_PER_QUERY):
+        q = " OR ".join(f"change:{n}" for n in todo[i:i + _CHANGES_PER_QUERY])
+        for ch in _fetch(client, f"({q}) status:open"):
+            if _lands_anyway(ch, queued_ids, ranks):
                 seen.setdefault(ch["_number"], ch)
     return list(seen.values())
