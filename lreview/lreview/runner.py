@@ -214,6 +214,19 @@ _PROVIDER_REFUSAL_RE = re.compile(
     r"unable to respond to this request", re.IGNORECASE)
 
 
+# The agent cannot sign in, or its plan's usage limit is reached. Every
+# later review would fail the same way, some after billing for the work
+# done before the check, so once one review fails like this no further
+# review starts in this process.
+_LOGIN_FAILURE_RE = re.compile(
+    r"failed to authenticate|oauth session expired|"
+    r"invalid api key|please run /login|not logged in", re.IGNORECASE)
+_USAGE_LIMIT_RE = re.compile(
+    r"hit your (\S+ )?limit|usage limit|limit will reset|"
+    r"out of extra usage", re.IGNORECASE)
+_LOGIN_FAILED = threading.Event()
+
+
 def agent_error(log_path: Path) -> Optional[str]:
     """The error the agent's event stream ended on, or None.
 
@@ -1304,6 +1317,17 @@ def _run_review(config, change, worktree_dir, log_path, session,
                     error += (" (the model provider refused the review; "
                               "lreview cannot change that, but a rerun "
                               "or another --agent may get through)")
+                if _LOGIN_FAILURE_RE.search(reason):
+                    if not _LOGIN_FAILED.is_set():
+                        _log(f"{config.agent} cannot sign in; no further "
+                             "review will start (log in again and rerun)")
+                    _LOGIN_FAILED.set()
+                elif _USAGE_LIMIT_RE.search(reason):
+                    if not _LOGIN_FAILED.is_set():
+                        _log(f"{config.agent} reached its usage limit; no "
+                             "further review will start (rerun after the "
+                             "reset)")
+                    _LOGIN_FAILED.set()
             _log(f"[{change.slug}] {console.color('red', 'FAILED')} "
                  f"({error}), see {log_path}")
             return ReviewResult(
@@ -1418,6 +1442,12 @@ def _review_and_cleanup(
     cleanup: bool = True,
 ) -> ReviewResult:
     """Worker wrapper: never lets an exception escape into the pool."""
+    if _LOGIN_FAILED.is_set():
+        return ReviewResult(change, STATUS_FAILED, mode=config.mode,
+                            agent=config.agent, effort=config.effort,
+                            error="not started: the agent could not sign "
+                                  "in, or reached its usage limit, earlier "
+                                  "in this run")
     log_path = run_log_path(config, change)
     if tracker:
         tracker.start(change.slug, log_path)

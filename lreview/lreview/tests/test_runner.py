@@ -1690,3 +1690,35 @@ class TestPluginsOff:
             "enabledPlugins": {"sp@m": False}}
         assert plugin_settings(_config(tmp_path, tmp_path,
                                        lean=False)) is None
+
+
+class TestLoginFailure:
+    """Once the agent cannot sign in, no further review starts."""
+
+    def test_the_seen_messages_count(self):
+        from lreview.runner import _LOGIN_FAILURE_RE
+        assert _LOGIN_FAILURE_RE.search(
+            "Failed to authenticate: OAuth session expired and could not "
+            "be refreshed")
+        assert not _LOGIN_FAILURE_RE.search("API Error: overloaded")
+
+    def test_a_usage_limit_counts(self):
+        from lreview.runner import _USAGE_LIMIT_RE
+        assert _USAGE_LIMIT_RE.search(
+            "You've hit your 5-hour limit \u00b7 resets 7:40pm (Europe/Berlin)")
+        assert _USAGE_LIMIT_RE.search("Claude AI usage limit reached")
+        assert not _USAGE_LIMIT_RE.search("rate_limit_event")
+
+    def test_later_reviews_do_not_start(self, tmp_path):
+        from lreview import runner
+        runner._LOGIN_FAILED.set()
+        try:
+            result = runner._review_and_cleanup(
+                _config(tmp_path, tmp_path), _change(5, "e" * 40),
+                tmp_path / "wt", cleanup=False)
+        finally:
+            runner._LOGIN_FAILED.clear()
+        assert result.status == runner.STATUS_FAILED
+        assert "could not sign in" in result.error
+        assert not (tmp_path / "results").exists() or not list(
+            (tmp_path / "results").glob("kreview-*.log"))
