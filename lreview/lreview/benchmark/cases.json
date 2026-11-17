@@ -680,31 +680,9 @@
       "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
      },
      "difficulty": "medium"
-    },
-    {
-     "id": "test238-setup-rc-unchecked",
-     "fix_sha": null,
-     "fix_subject": null,
-     "summary": "test_238 ignores setup_router_test's return code, unlike test_237, so an LNet setup failure on a node goes undetected and the test fails later with a confusing error. Minor test-script robustness issue, not fixed on master.",
-     "locations": [],
-     "match": [
-      [
-       "setup_router_test",
-       "return \\$\\?|not checked|half-configured|drops"
-      ]
-     ],
-     "source": "verified-finding",
-     "severity": "low",
-     "note": "No later fix; confirmed by a high-effort verifier reading the code and later history.",
-     "calibration": {
-      "found": 0,
-      "reviews": 2,
-      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
-     },
-     "difficulty": "hard"
     }
    ],
-   "notes": "Chosen as a clean control (no later fix names it); a high-effort review of every finding the benchmark runs raised on it showed real issues: The kernel code is clean. lnet_mr_forwarding_allowed() (lib-move.c:3008-3032) checks the source peer's MR status, fixing the src/dst mix-up, and restores the health criterion exactly as it was at the default sensitivity. The src_lpni reference is dropped correctly, the lock behaviour is the same as the old inline code (lnet_peerni_by_nid_locked may drop the net lock when creating the peer, but tha",
+   "notes": "Chosen as a clean control (no later fix names it); a high-effort review of every finding the benchmark runs raised on it showed real issues: The kernel code is clean. lnet_mr_forwarding_allowed() (lib-move.c:3008-3032) checks the source peer's MR status, fixing the src/dst mix-up, and restores the health criterion exactly as it was at the default sensitivity. The src_lpni reference is dropped correctly, the lock behaviour is the same as the old inline code (lnet_peerni_by_nid_locked may drop the net lock when creating the peer, but tha test238-setup-rc-unchecked was dropped (2026-11-17): setup_router_test can return non-zero only through init_router_test_vars and do_net_add, and both end in error()/skip() (which exit) or return 0, so the missing '|| return $?' after it never matters.",
    "sets": [
     "eval"
    ]
