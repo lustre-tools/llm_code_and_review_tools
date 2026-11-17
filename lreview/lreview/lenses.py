@@ -39,7 +39,8 @@ def task_text(prompts_dir: Path) -> str:
     return f"""### TASK 1D: Specialist lenses (mandatory when the Agent tool is available)
 
 One reviewer carrying every check through every change misses bugs that a
-focused pass finds.  After TASK 1C, launch five specialist subagents **in a
+focused pass finds.  Do this for every change, however small: the size of
+a change says little about its bugs.  After TASK 1C, launch five specialist subagents **in a
 single message** (five Agent tool calls, so they run in parallel), one per
 lens: {names}.  Use
 `subagent_type: "{LENS_AGENT}"` when that agent type exists, else the default.  Each
