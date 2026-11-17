@@ -1225,22 +1225,17 @@ with other release globs configured. --blocker-tag GLOB and
 for one run; ranks {blocker, priority, ignore, ignore_tickets} echoes
 those in effect.
 
-Each checked pair is tried in both orders as it would land (landing:
-target_first, candidate_first; each change's stack picked onto the branch
-tip) and as uploaded (as_uploaded: target_on_theirs, theirs_on_target;
-each side's stack part above what both stacks share picked onto the
-other's uploaded commit). An as-uploaded conflict counts only on files
-both stack parts change; one on a file only one side changes is the
-branch moving between their bases, listed in base_drift instead. A pair
-is in conflicts if a landing order conflicts, in as_uploaded_only if only
-an as-uploaded one does (what the other owner, or CI on a stale base,
-sees; the landing is clean). via names the candidate's ancestor the
-conflict is at, own_via the target's in-flight parent it is at (the
-colliding lines are that parent's, not the change's own); only a
-conflicting pick names one, as uploaded only when both landing orders
-are clean or were not tried. Pairs that land cleanly
-but still collide are in silent_only (with as_uploaded and files when
-that conflicts too), check: duplicate-test (a
+Two changes collide only when they do not land together: each checked
+pair is tried in both orders as cherry-pick submit lands it (landing:
+target_first, candidate_first), one change's stack picked onto the
+branch tip and the other's stack part above what both share picked on
+top. Where a change sits (its old base) does not matter; one that only
+conflicts when picked onto the other's uploaded commit is clean. A pair
+is in conflicts if a landing order conflicts. via names the candidate's
+ancestor the conflict is at, own_via the target's in-flight parent it is
+at (the colliding lines are that parent's, not the change's own); only a
+conflicting pick names one. Pairs that land cleanly but still collide
+are in silent_only, check: duplicate-test (a
 test defined twice), duplicate-value (an OBD_FAIL value, or an
 OBD_CONNECT / OBD_CONNECT2 flag value, used twice), duplicate-exception
 (both add the same test to ALWAYS_EXCEPT); only what both sides added
@@ -1276,9 +1271,9 @@ in use (me, a username; owner is the display name, owner_username in
 target, each pair and via_change / own_via_change carry it.
 
 When the change does not apply on the branch tip, status is
-"needs-rebase", conflicts is null, as_uploaded_only has the pairs that
-conflict as uploaded, and clean those that do not; rebase_cause is
-"parent" when it, or the stack member it is blocked by, conflicts with
+"needs-rebase", conflicts is null and no pair is tried (counts.tried is
+0): where it collides is only known once it lands. Rebase it locally and
+rerun with --commit or --worktree. rebase_cause is "parent" when it, or the stack member it is blocked by, conflicts with
 the newer patchset of its own parent (rebase_onto {cn, ps, for}: rebase
 onto that; for names the blocking member), "branch" otherwise. Only an
 open change can be checked. outdated_parent {cn, ps, current, status,
@@ -1306,28 +1301,26 @@ ready, queued or release-tagged, so those show up nowhere), minus the
 own stack, plus open --with changes; after_filters = those the filters
 kept (handed to the trial merges, plus not_tried); tried = pairs
 trial-merged; conflicting = entries in conflicts and silent_only;
-as_uploaded_only = entries in as_uploaded_only; watch = entries in
-watch. Gerrit's mergeable flag and conflicts: search are not used. It
-models Gerrit's cherry-pick submit (outdated_parent: clean means the
-change lands as it is only there); the silent checks, the readiness
+watch = entries in watch. Gerrit's mergeable flag and conflicts: search
+are not used. It models Gerrit's cherry-pick submit (outdated_parent:
+clean means the change lands as it is only there); the silent checks,
+the readiness
 voters (jenkins, Maloo, the Code-Review count) and the ignored-ticket
 defaults are Lustre's. Read-only towards Gerrit; needs git 2.40 or
 newer.
 
 The default output is compact; --full prints every field. Compact: per
 pair cn, subject (cut at 70 characters), owner, mine, tier, readiness,
-fix_side, files, release_hashtags (only the release ones), landing and
-as_uploaded as one string each in the order given by orders
-("conflict/clean": target_first/candidate_first,
-target_on_theirs/theirs_on_target), and only when set: via, own_via,
-via_change / own_via_change (cn, owner, mine, tier), silent, base_drift
-(a count), forced, hunks, and same_function only in watch and
+fix_side, files, release_hashtags (only the release ones), landing as
+one string in the order given by orders ("conflict/clean":
+target_first/candidate_first), and only when set: via, own_via,
+via_change / own_via_change (cn, owner, mine, tier), silent, forced,
+hunks, and same_function only in watch and
 silent_only. clean, already_conflicting and not_tried are counts;
 commit, tested_commit (unless --commit tested another commit), project
 and tip are left out. --full adds those, each pair's commit and ps (the
 candidate's current patchset, to fetch it), every hashtag, the per-order
-results as objects, the base_drift files and the change lists behind the
-counts. Hunks appear only with --hunks or --hunks-for, in either form.
+results as objects and the change lists behind the counts. Hunks appear only with --hunks or --hunks-for, in either form.
 """,
         "examples": [
             {

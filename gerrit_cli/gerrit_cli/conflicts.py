@@ -45,7 +45,7 @@ import subprocess
 import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
@@ -97,7 +97,7 @@ class Patch:
 
 @dataclass(frozen=True)
 class _Pick:
-    status: str  # "clean" | "empty" | "conflict" | "error" | "skipped"
+    status: str  # "clean" | "empty" | "conflict" | "error"
     commit: str = ""
     files: tuple[str, ...] = ()
     detail: str = ""
@@ -316,11 +316,7 @@ class Repo:
             self._trees[commit] = r.stdout.strip()
         return self._trees[commit]
 
-    def pick(self, onto: str, commit: str, parent: str,
-             shared: set[str] | None = None) -> _Pick:
-        """`shared`: a conflict on none of these files also gets a commit
-        of the merged tree, its conflicted files holding the markers, to
-        pick further onto."""
+    def pick(self, onto: str, commit: str, parent: str) -> _Pick:
         r = self._run("merge-tree", "--write-tree", "--name-only", "--no-messages",
                       f"--merge-base={parent}", onto, commit, scratch=True)
         lines = r.stdout.splitlines()
@@ -329,11 +325,7 @@ class Repo:
         tree = lines[0] if lines and _OID_RE.match(lines[0]) else ""
         if r.returncode == 1 and tree:
             files = tuple(dict.fromkeys(x for x in lines[1:] if x))
-            kept = ""
-            if shared is not None and not shared.intersection(files):
-                c = self._run("commit-tree", tree, "-p", onto, "-m", commit, scratch=True)
-                kept = c.stdout.strip() if c.returncode == 0 else ""
-            return _Pick("conflict", commit=kept, onto=onto, files=files)
+            return _Pick("conflict", onto=onto, files=files)
         if r.returncode != 0 or not tree:
             return _Pick("error", detail=r.stderr.strip() or f"exit {r.returncode}")
         if tree == self.tree_of(onto):
@@ -490,7 +482,7 @@ def check_conflicts(
     both merge orders ("focus_pairs") instead of the graph's pairs;
     `pair_with` limits that to the candidates in it (the other patches
     are there for the stacks they hold up). A target that does not apply
-    on the tip is still tried as uploaded, its landing orders "skipped".
+    on the tip is paired with nothing.
 
     `owners` maps known patch set commits to (change, status): a parent
     owned by one of `patches` is the change a patch stands on. `lookup`
@@ -846,14 +838,16 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
                        hunks: bool | set[int] = False, pair_with: set[int] | None = None,
                        ) -> tuple[list[dict[str, Any]], list[int]]:
     """Every candidate (a patch outside `focus`) against the focus stack
-    in both merge orders, as landed and as uploaded: each side's stack
-    part above the common part picked onto the other's uploaded commit.
-    Returns (pairs, candidates whose own stack does not apply on the
-    tip). A pair whose sides' own diffs edit the same function carries
-    same_function. A conflict at a candidate's in-flight
-    ancestor names it in via, one at a target's parent in own_via. With
-    `hunks`, each pair carries the conflict regions of every order that
-    conflicts; a set of candidates limits that to their pairs."""
+    in both landing orders: each side's stack part above the common part
+    picked onto the other's stack applied on the tip. Returns (pairs,
+    candidates whose own stack does not apply on the tip). A target that
+    does not apply on the tip has no pairs: where it collides is only
+    known once it lands. A pair whose sides' own diffs edit the same
+    function carries same_function. A conflict at a candidate's
+    in-flight ancestor names it in via, one at a target's parent in
+    own_via. With `hunks`, each pair carries the conflict regions of
+    every order that conflicts; a set of candidates limits that to their
+    pairs."""
     targets = [cn for cn in focus if cn in st.stack
                and not any(cn in st.stack[o] for o in focus if o != cn)]
     if not targets:
@@ -868,43 +862,10 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
                         and (pair_with is None or cn in pair_with))
     already = [cn for cn in candidates
                if st.results[cn]["status"] in ("conflict", "blocked")]
-    if target not in st.base:
+    if target not in st.applied:
         return [], already
-    landed = target in st.applied
     # candidates on one stack share their lower changes' picks
     memo: dict[int, _Pick] = {}
-    own_files: dict[int, set[str]] = {}
-
-    def own(zs: list[int]) -> set[str]:
-        todo = [z for z in zs if z not in own_files]
-        if todo:
-            found = repo.changed_files({st.patches[z].commit: st.base[z] for z in todo})
-            for z in todo:
-                own_files[z] = found.get(st.patches[z].commit, set())
-        return set().union(*(own_files[z] for z in zs))
-
-    def uploaded(start: str, zs: list[int], both: set[str], dropped: set[str]
-                 ) -> tuple[_Pick, int | None]:
-        """One side's stack part picked onto the other's uploaded commit.
-        A pick also conflicts wherever the branch moved between the two
-        bases; only a file both sides change is theirs, and a pick that
-        conflicts on the others alone goes on with their markers."""
-        cur = start
-        for z in zs:
-            if z not in st.base:
-                return _Pick("error", detail=st.results.get(z, {}).get("reason", "")), z
-            pick = repo.pick(cur, st.patches[z].commit, st.base[z], shared=both)
-            if pick.status == "conflict":
-                dropped.update(f for f in pick.files if f not in both)
-                kept = tuple(f for f in pick.files if f in both)
-                if kept:
-                    return replace(pick, files=kept), z
-                if not pick.commit:
-                    return _Pick("error", detail="could not write the merged tree"), z
-            elif not pick.ok:
-                return pick, z
-            cur = pick.commit
-        return _Pick("clean"), None
 
     def land(start: str, zs: list[int], cache: dict[int, _Pick] | None) -> tuple[_Pick, int | None]:
         cur = start
@@ -969,35 +930,17 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
         cset = set(st.stack[c])
         tz = [z for z in st.stack[c] if z not in tstack]
         cz = [z for z in st.stack[target] if z not in cset]
-        if landed:
-            t_first, at = land(st.applied[target], tz, memo)
-            c_first, cat = land(st.applied[c], cz, None)
-        else:
-            t_first = c_first = _Pick("skipped")
-            at = cat = None
-        files = sorted(set(t_first.files) | set(c_first.files))
-        both = own(cz) & own(tz)
-        dropped: set[str] = set()
-        t_up, tuat = uploaded(st.patches[c].commit, cz, both, dropped)
-        c_up, cuat = uploaded(st.patches[target].commit, tz, both, dropped)
-        # only a conflict names a change; as uploaded only when landing is
-        # clean (or not tried)
-        quiet = not {t_first.status, c_first.status} & {"conflict", "error"}
-        via = at if t_first.status == "conflict" else \
-            cuat if quiet and c_up.status == "conflict" else None
-        own_via = cat if c_first.status == "conflict" else \
-            tuat if quiet and t_up.status == "conflict" else None
+        t_first, at = land(st.applied[target], tz, memo)
+        c_first, cat = land(st.applied[c], cz, None)
+        via = at if t_first.status == "conflict" else None
+        own_via = cat if c_first.status == "conflict" else None
         pair: dict[str, Any] = {
             "target": target, "other": c,
             "landing": {"target_first": t_first.status, "candidate_first": c_first.status,
-                        "files": files},
-            "as_uploaded": {"target_on_theirs": t_up.status, "theirs_on_target": c_up.status,
-                            "files": sorted(set(t_up.files) | set(c_up.files))},
+                        "files": sorted(set(t_first.files) | set(c_first.files))},
             "via": via if via != c else None,
             "own_via": own_via if own_via != target else None,
         }
-        if dropped:
-            pair["base_drift"] = sorted(dropped)
         pair["silent"] = silent(c, t_first)
         from gerrit_cli.conflict_functions import shared_functions
 
@@ -1005,27 +948,19 @@ def _check_focus_pairs(repo: Repo, st: _State, focus: set[int], workers: int,
             pair["same_function"] = same
         if hunks is True or (isinstance(hunks, set) and c in hunks):
             landing: dict[str, list] = {}
-            as_up: dict[str, list] = {}
             if at is not None:
                 regions(landing, t_first, t_first.onto, at,
                         st.stack[target] + tz[:tz.index(at)], "target_first")
             if cat is not None:
                 regions(landing, c_first, c_first.onto, cat,
                         st.stack[c] + cz[:cz.index(cat)], "candidate_first")
-            if tuat is not None:
-                regions(as_up, t_up, t_up.onto, tuat,
-                        st.stack[c] + cz[:cz.index(tuat)], "target_on_theirs")
-            if cuat is not None:
-                regions(as_up, c_up, c_up.onto, cuat,
-                        st.stack[target] + tz[:tz.index(cuat)], "theirs_on_target")
-            pair["hunks"] = {"landing": landing, "as_uploaded": as_up}
-            textless = {p for sect in (landing, as_up) for p in sect} \
-                - {p for sect in (landing, as_up) for p, regs in sect.items() if regs}
+            pair["hunks"] = {"landing": landing}
+            textless = {p for p, regs in landing.items() if not regs}
             if textless:
                 pair["hunks"]["notes"] = {p: "no text regions" for p in sorted(textless)}
         return pair
 
-    todo = [c for c in candidates if c in (st.applied if landed else st.base)]
+    todo = [c for c in candidates if c in st.applied]
     with ThreadPoolExecutor(workers) as pool:
         return list(pool.map(one, todo)), already
 

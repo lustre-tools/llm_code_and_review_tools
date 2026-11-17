@@ -1394,8 +1394,8 @@ def add_conflicts_parser(subparsers):
                     "for it) against the open changes on its branch that "
                     "touch its files and are likely to land soon: queued in "
                     "<branch>-next, ready or release priority, or sharing a "
-                    "hashtag or topic with it. Both merge orders, both as "
-                    "landed on the branch tip and as uploaded; also "
+                    "hashtag or topic with it. Both landing orders, each "
+                    "change's stack cherry-picked onto the branch tip; also "
                     "duplicate tests, fail_loc and connect flag "
                     "values and test exceptions that merge "
                     "cleanly, and clean merges editing the same "
@@ -1432,8 +1432,8 @@ def add_conflicts_parser(subparsers):
         "--full",
         action="store_true",
         help="Every field: commit hashes, all hashtags, per-order results "
-             "as objects, base_drift files and the change lists behind "
-             "clean, already_conflicting and not_tried (default: compact)",
+             "as objects and the change lists behind clean, "
+             "already_conflicting and not_tried (default: compact)",
     )
     parser.add_argument(
         "--hunks",

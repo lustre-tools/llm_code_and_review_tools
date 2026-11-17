@@ -189,14 +189,13 @@ def test_end_to_end_reports_the_ready_collision_as_target_side(setup):
     assert c["fix_side"] == "target"
     assert c["files"] == ["a.c"]
     assert c["landing"] == {"target_first": "conflict", "candidate_first": "conflict"}
-    assert c["as_uploaded"] == {"target_on_theirs": "conflict", "theirs_on_target": "conflict"}
     assert {reg["kind"] for reg in c["hunks"]["landing"]["a.c"]} == {"edit-edit"}
     assert out["counts"] == {"candidates": 1, "after_filters": 1, "tried": 1,
-                             "conflicting": 1, "as_uploaded_only": 0, "watch": 0}
+                             "conflicting": 1, "watch": 0}
     assert out["base"]["on_branch"] is True and out["base"]["rebase"] == "possible"
 
 
-def test_needs_rebase_gives_null_conflicts(setup):
+def test_needs_rebase_tries_no_pair(setup):
     gerrit, local, client = setup
     rest = client.rest
     base = gerrit.master
@@ -205,14 +204,15 @@ def test_needs_rebase_gives_null_conflicts(setup):
     rest.add(100, [t], ["a.c"])
     r = gerrit.change(200, gerrit.master, {"a.c": _text({5: "master", 6: "R"})})
     rest.add(200, [r], ["a.c"], labels=READY)
+    far = gerrit.change(300, base, {"a.c": _text({15: "F"})})
+    rest.add(300, [far], ["a.c"], labels=READY)
     out = run(client, local)
-    assert out["status"] == "needs-rebase"
+    assert out["status"] == "needs-rebase" and out["rebase_cause"] == "branch"
+    assert out["on_branch"] == {"status": "conflict", "files": ["a.c"]}
     assert out["conflicts"] is None
-    assert out["on_branch"]["status"] == "conflict"
-    [p] = out["as_uploaded_only"]
-    assert p["cn"] == 200 and p["fix_side"] == "target"
-    assert p["as_uploaded"]["target_on_theirs"] == "conflict"
-    assert "landing" not in p
+    assert out["silent_only"] == [] and out["watch"] == [] and out["clean"] == []
+    assert out["counts"]["tried"] == 0 and out["counts"]["after_filters"] == 2
+    assert "as_uploaded_only" not in out
 
 
 def test_commit_option_tests_the_local_rearrangement(setup):
@@ -377,7 +377,7 @@ def test_skipped_lists_reasons(setup):
     ]
     assert out["conflicts"] == []
     assert out["counts"] == {"candidates": 2, "after_filters": 0, "tried": 0,
-                             "conflicting": 0, "as_uploaded_only": 0, "watch": 0}
+                             "conflicting": 0, "watch": 0}
 
 
 def test_an_old_unready_change_is_not_a_candidate(setup):
@@ -727,24 +727,10 @@ def test_hunks_for_implies_hunks_on_the_command_line(setup, capsys, monkeypatch)
     assert "hunks" in by_cn[200] and "hunks" not in by_cn[300]
 
 
-def test_a_stale_target_reports_base_drift_not_a_collision(setup):
-    gerrit, local, client = setup
-    rest = client.rest
-    base = gerrit.master
-    gerrit.advance({"a.c": _text({5: "master"})})
-    t = gerrit.change(100, base, {"a.c": _text({5: "T"}), "b.c": _text({2: "T"})})
-    rest.add(100, [t], ["a.c", "b.c"])
-    c = gerrit.change(200, gerrit.master, {"a.c": _text({5: "master"}),
-                                           "b.c": _text({15: "C"})})
-    rest.add(200, [c], ["b.c"], labels=READY)
-    out = run(client, local)
-    assert out["status"] == "needs-rebase"
-    assert out["as_uploaded_only"] == [] and out["clean"] == [200]
-    assert out["counts"]["conflicting"] == 0
-
-
-def test_a_landed_pair_conflicting_only_as_uploaded_is_in_as_uploaded_only(setup):
-    """70145: 16 of its 19 conflicts landed cleanly in both orders."""
+def test_a_candidate_on_an_old_base_that_lands_with_the_target_is_clean(setup):
+    """70437 and 69688: 69688's own commit sits 402 commits behind master
+    and conflicts with 70437 picked onto it; on master they land together
+    in either order."""
     gerrit, local, client = setup
     rest = client.rest
     old = gerrit.master
@@ -755,19 +741,22 @@ def test_a_landed_pair_conflicting_only_as_uploaded_is_in_as_uploaded_only(setup
     rest.add(300, [hit], ["a.c"], labels=READY)
     t = gerrit.change(100, gerrit.master, {"a.c": _text({6: "M", 7: "T"})})
     rest.add(100, [t], ["a.c"])
+    with Repo(local) as repo:
+        _git(local, "fetch", "-q", "origin", "refs/changes/00/200/1", "refs/changes/00/100/1")
+        assert repo.pick(stale.commit, t.commit, gerrit.master).status == "conflict"
     out = run(client, local)
     assert out["status"] == "ok"
     assert [e["cn"] for e in out["conflicts"]] == [300]
-    [e] = out["as_uploaded_only"]
-    assert e["cn"] == 200 and e["landing"] == {"target_first": "clean",
-                                               "candidate_first": "clean"}
-    assert e["as_uploaded"]["target_on_theirs"] == "conflict"
-    assert out["counts"]["conflicting"] == 1 and out["counts"]["as_uploaded_only"] == 1
+    assert out["clean"] == [200]
+    assert out["counts"]["conflicting"] == 1
+    from gerrit_cli.conflict_report import compact
+    short = compact(out)
+    assert [e["cn"] for e in short["conflicts"]] == [300] and short["clean"] == 1
 
 
 def _stale_and_target(gerrit, rest, stale_h, target_h):
-    """A ready candidate on an old base that conflicts with the target only
-    as uploaded; each side also adds `*_h` to obd_support.h."""
+    """A ready candidate on an old base; each side also adds `*_h` to
+    obd_support.h."""
     gerrit.advance({"inc/obd_support.h": _text({})})
     old = gerrit.master
     gerrit.advance({"a.c": _text({6: "M"})})
@@ -779,78 +768,33 @@ def _stale_and_target(gerrit, rest, stale_h, target_h):
     return stale, t
 
 
-def test_a_silent_collision_is_not_hidden_by_an_as_uploaded_conflict(setup):
-    """A duplicate fail_loc on a stale ready candidate is a landing problem."""
+def test_a_silent_collision_with_a_candidate_on_an_old_base(setup):
     gerrit, local, client = setup
     _stale_and_target(gerrit, client.rest, _text({17: "#define OBD_FAIL_Y 0x1234"}),
                       _text({3: "#define OBD_FAIL_X 0x1234"}))
     out = run(client, local)
-    assert out["as_uploaded_only"] == []
     [e] = out["silent_only"]
     assert e["cn"] == 200 and e["silent"][0]["check"] == "duplicate-value"
-    assert e["as_uploaded"] == {"target_on_theirs": "conflict", "theirs_on_target": "clean"}
-    assert out["counts"]["conflicting"] == 1 and out["counts"]["as_uploaded_only"] == 0
+    assert set(e) == {"cn", "commit", "ps", "tier", "fix_side", "silent"}
+    assert out["counts"]["conflicting"] == 1
 
 
-def test_a_landing_error_is_an_error_whatever_as_uploaded_says(setup, monkeypatch):
+def test_a_landing_error_is_an_error(setup, monkeypatch):
     from gerrit_cli import conflicts as engine
 
     gerrit, local, client = setup
     stale, t = _stale_and_target(gerrit, client.rest, _text({17: "S"}), _text({3: "T"}))
     real = engine.Repo.pick
 
-    def pick(self, onto, commit, parent, **kw):
-        if (commit, onto) not in ((stale.commit, t.commit), (t.commit, stale.commit)) \
-                and commit in (stale.commit, t.commit) and onto != gerrit.master:
+    def pick(self, onto, commit, parent):
+        if commit in (stale.commit, t.commit) and onto != gerrit.master:
             return engine._Pick("error", detail="boom")
-        return real(self, onto, commit, parent, **kw)
+        return real(self, onto, commit, parent)
 
     monkeypatch.setattr(engine.Repo, "pick", pick)
     out = run(client, local)
     assert out["errors"] == [{"cn": 200, "reason": "trial merge failed"}]
-    assert out["as_uploaded_only"] == [] and out["conflicts"] == []
-
-
-def test_needs_rebase_lists_clean_pairs_in_clean(setup):
-    gerrit, local, client = setup
-    rest = client.rest
-    base = gerrit.master
-    gerrit.advance({"a.c": _text({5: "master"})})
-    t = gerrit.change(100, base, {"a.c": _text({5: "T"})})
-    rest.add(100, [t], ["a.c"])
-    hit = gerrit.change(200, gerrit.master, {"a.c": _text({5: "master", 6: "R"})})
-    rest.add(200, [hit], ["a.c"], labels=READY)
-    far = gerrit.change(300, base, {"a.c": _text({15: "F"})})
-    rest.add(300, [far], ["a.c"], labels=READY)
-    out = run(client, local)
-    assert out["status"] == "needs-rebase"
-    assert [e["cn"] for e in out["as_uploaded_only"]] == [200]
-    assert out["clean"] == [300]
-    assert out["counts"]["conflicting"] == 0 and out["counts"]["as_uploaded_only"] == 1
-
-
-def test_needs_rebase_surfaces_as_uploaded_errors(setup, monkeypatch):
-    from gerrit_cli import conflicts as engine
-
-    gerrit, local, client = setup
-    rest = client.rest
-    base = gerrit.master
-    gerrit.advance({"a.c": _text({5: "master"})})
-    t = gerrit.change(100, base, {"a.c": _text({5: "T"})})
-    rest.add(100, [t], ["a.c"])
-    r = gerrit.change(200, base, {"a.c": _text({15: "R"})})
-    rest.add(200, [r], ["a.c"], labels=READY)
-    real = engine.Repo.pick
-
-    def pick(self, onto, commit, parent, **kw):
-        if onto == r.commit:
-            return engine._Pick("error", detail="boom")
-        return real(self, onto, commit, parent, **kw)
-
-    monkeypatch.setattr(engine.Repo, "pick", pick)
-    out = run(client, local)
-    assert out["errors"] == [{"cn": 200, "reason": "trial merge failed"}]
-    assert out["clean"] == [] and out["as_uploaded_only"] == []
+    assert out["conflicts"] == [] and out["clean"] == []
 
 
 def test_a_merged_change_is_invalid_input(setup):
@@ -1081,10 +1025,9 @@ def test_default_output_is_compact(setup, capsys, monkeypatch):
     assert c == {"cn": 200, "subject": long[:67] + "...", "owner": "Olive Owner",
                  "mine": False, "tier": "lands-first", "readiness": "ready", "fix_side": "target",
                  "files": ["a.c"], "release_hashtags": ["218_review_priority"],
-                 "landing": "conflict/conflict", "as_uploaded": "conflict/conflict"}
+                 "landing": "conflict/conflict"}
     assert out["clean"] == 1 and out["not_tried"] == 1 and out["already_conflicting"] == 0
-    assert out["orders"] == {"landing": "target_first/candidate_first",
-                             "as_uploaded": "target_on_theirs/theirs_on_target"}
+    assert out["orders"] == {"landing": "target_first/candidate_first"}
     for key in ("commit", "tested_commit", "tip", "project"):
         assert key not in out
     for key in ("status", "base", "on_branch", "on_next", "own_stack", "skipped",
@@ -1116,19 +1059,18 @@ def test_full_names_each_pairs_commit_and_patchset(setup, capsys, monkeypatch):
     assert "commit" not in c and "ps" not in c
 
 
-def test_compact_keeps_asked_hunks_and_counts_base_drift():
+def test_compact_keeps_asked_hunks():
     from gerrit_cli.conflict_report import compact_entry
 
     e = {"cn": 1, "subject": "s", "owner": "o", "tier": "other", "readiness": "pending",
          "hashtags": ["x_review_blocker", "pw_halt"], "fix_side": "candidate",
          "files": ["a.c"],
-         "as_uploaded": {"target_on_theirs": "clean", "theirs_on_target": "conflict"},
-         "via": 7, "silent": [], "base_drift": ["b.c", "c.c"], "hunks": {"as_uploaded": {}}}
+         "landing": {"target_first": "clean", "candidate_first": "conflict"},
+         "via": 7, "silent": [], "hunks": {"landing": {}}}
     assert compact_entry(e) == {
         "cn": 1, "subject": "s", "owner": "o", "tier": "other", "readiness": "pending",
         "fix_side": "candidate", "files": ["a.c"], "release_hashtags": ["x_review_blocker"],
-        "as_uploaded": "clean/conflict", "via": 7, "hunks": {"as_uploaded": {}},
-        "base_drift": 2}
+        "landing": "clean/conflict", "via": 7, "hunks": {"landing": {}}}
 
 
 def test_a_clean_pair_editing_the_same_function_is_in_watch(setup, capsys, monkeypatch):
@@ -1160,7 +1102,7 @@ def test_compact_drops_same_function_only_where_the_pair_conflicts():
 
     same = [{"file": "a.c", "functions": ["foo"]}]
     pair = {"cn": 1, "tier": "other", "fix_side": "candidate", "same_function": same,
-            "as_uploaded": {"target_on_theirs": "clean", "theirs_on_target": "clean"}}
+            "landing": {"target_first": "clean", "candidate_first": "clean"}}
     full = {"conflicts": [dict(pair)], "watch": [dict(pair)],
             "silent_only": [{"cn": 1, "tier": "other", "fix_side": "candidate",
                              "silent": [{"check": "duplicate-test"}], "same_function": same}],

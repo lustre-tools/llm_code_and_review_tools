@@ -1,16 +1,17 @@
 # Deconflicting
 
 What to do with the result of `gc conflicts`; `gc explain conflicts`
-says what each field means. The tool models cherry-pick submit: each
-change lands as its own diff picked onto the branch. Queued changes (in
-`<branch>-next`) are called frozen here.
+says what each field means. The tool models cherry-pick submit: two
+changes collide only when they do not both land on the branch tip (or
+-next), each with its in-flight parents, in either order; where either
+sits now does not matter. Queued changes (in `<branch>-next`) are called
+frozen here.
 
 ```bash
 gc conflicts <cn>                        # summary first; --repo defaults to .
 gc conflicts <cn> --hunks-for <other>    # conflict regions of one pair, repeatable
-gc conflicts <cn> | jq -r '.status, (((.conflicts // []) | map(.b = "landing"))
-    + ((.as_uploaded_only // []) | map(.b = "uploaded")) | .[] | [.b, .cn, .tier,
-    .fix_side, (.via // "-"), (.own_via // "-"), (.landing // "-"), .as_uploaded,
+gc conflicts <cn> | jq -r '.status, ((.conflicts // [])[] | [.cn, .tier,
+    .fix_side, (.via // "-"), (.own_via // "-"), .landing,
     (.files | join(","))] | @tsv)'       # one line per collision
 ```
 
@@ -23,10 +24,8 @@ for a `truncated` hunk, find the place in both sides' files and read it.
 
 - `conflicts` (a landing order conflicts) and `silent_only` (lands
   cleanly but defines a test or value twice): the collisions to act on.
-- `as_uploaded_only` never blocks landing, frozen or not: the second
-  change is cherry-picked onto the first. Act on it only when the user
-  rebases onto that change or its stack; a new patchset on the same base
-  is not a rebase.
+  Nothing else is a collision, whatever a merge onto another change's
+  uploaded commit or a bot comment says.
 - `via` / `own_via`: the lines are in that ancestor of the candidate /
   parent of the change, and `fix_side` is computed for it
   (`via_change`/`own_via_change` name the owner). Never change a parent
@@ -41,13 +40,16 @@ for a `truncated` hunk, find the place in both sides' files and read it.
 - `errors`: candidates that were not tried. Name them; they are not clean.
 
 Give each landing and silent collision its own entry (the details are
-under "Everything else" below). Summarise `as_uploaded_only` and `watch`
-in one line each: the count, and by name at most about eight of them,
-only the frozen ones and the release blockers (configurable, see
-`ranks`); if some come from your own parents, count those apart by
-`own_via`.
+under "Everything else" below). Summarise `watch` in one line: the
+count, and by name at most about eight of them, only the frozen ones and
+the release blockers (configurable, see `ranks`); if some come from your
+own parents, count those apart by `own_via`.
 
 ## Own stack first
+
+`status: needs-rebase` has no pairs: where the change collides is only
+known once it lands. Rebase it locally as below, then rerun with
+`--commit` (or `--worktree`) and judge the collisions on that result.
 
 - `outdated_parent.status: clean`, or `on_old_patchset` without a
   `parent` conflict: it sits on an older patchset of its parent but
@@ -92,7 +94,7 @@ for exactly the collisions you would act on, landing conflicts with
 - the change being worked on moves, and the lines are its own (no
   `own_via`); a pair whose `via` is another pair's candidate is fixed
   with that pair;
-- every hunk of the pair, any model and order, is `insert-insert`,
+- every hunk of the pair, either order, is `insert-insert`,
   `adjacent` or `context`: one `edit-edit` makes the pair non-trivial;
 - the fix only moves lines the change adds, or renumbers a value it adds
   (a fail_loc value, a test number: the define, its tests and the commit
@@ -169,16 +171,16 @@ mid-stack change out first (`git checkout <commit>`, `gc checkout <cn>`):
 D=$(mktemp -d)
 gc conflicts <cn> --commit HEAD --with <other> > "$D/before.json"
 gc conflicts <cn> --worktree --with <other> > "$D/after.json"
-for f in before after; do jq -r '((.conflicts // [])[] | "landing \(.cn) \(.landing) \(.as_uploaded)"),
-    (.as_uploaded_only[] | "uploaded \(.cn) \(.as_uploaded)"),
-    (.silent_only[] | "silent \(.cn)"), (.watch[] | "watch \(.cn)")' "$D/$f.json" > "$D/$f.txt"; done
+for f in before after; do jq -r '((.conflicts // [])[] | "landing \(.cn) \(.landing)"),
+    ((.silent_only // [])[] | "silent \(.cn)"),
+    ((.watch // [])[] | "watch \(.cn)")' "$D/$f.json" > "$D/$f.txt"; done
 diff "$D/before.txt" "$D/after.txt"
 ```
 
 Pass `--with` for every change you deconflicted against (the filters may
 drop one once it merges cleanly); an untracked file counts once added.
-The fixed collisions must be gone and nothing new may appear; unrelated
-as-uploaded entries may stay. A fixed pair still listed: `--hunks-for`
+The fixed collisions must be gone and nothing new may appear. A fixed
+pair still listed: `--hunks-for`
 it in both runs; no remaining hunk may involve the change's own lines.
 Then build, and run the covering tests on the change's base and, if
 frozen, on -next, where the project allows (for Lustre a test VM, never

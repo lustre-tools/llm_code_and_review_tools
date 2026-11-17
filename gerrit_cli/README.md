@@ -508,8 +508,9 @@ plausibly land soon does it collide with, on which files and hunks, and
 which side should move? It trial-merges, so it does not rely on Gerrit's
 mergeable flag or `conflicts:` search.
 It models Gerrit's cherry-pick submit: each change lands as its own diff
-picked onto the branch (so `outdated_parent: clean` means it lands as it
-is only there). The silent checks, the readiness voters (jenkins, Maloo,
+picked onto the branch, so two changes collide only when they do not land
+together on the branch tip (or on `<branch>-next`), in either order.
+Where a change happens to sit, its old base, does not matter. The silent checks, the readiness voters (jenkins, Maloo,
 the Code-Review count) and the ignored-ticket defaults are Lustre's.
 
 ```bash
@@ -526,19 +527,18 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
 - **Output**: compact by default, enough to decide what to do; `--full`
   prints every field. Compact pairs keep `cn`, `subject` (cut at 70
   characters), `owner`, `mine`, `tier`, `readiness`, `fix_side`,
-  `files`, the release hashtags (`release_hashtags`) and `landing` /
-  `as_uploaded` as one string each, `"conflict/clean"`, in the order
-  `orders` names (`target_first/candidate_first`,
-  `target_on_theirs/theirs_on_target`); `via`, `own_via`, `via_change` /
-  `own_via_change` (cn, owner, mine, tier), `silent`, `forced` and
-  `base_drift` (a count) only when set, `same_function` only in `watch`
-  and `silent_only` (a pair that conflicts needs a look anyway).
+  `files`, the release hashtags (`release_hashtags`) and `landing` as
+  one string, `"conflict/clean"`, in the order `orders` names
+  (`target_first/candidate_first`); `via`, `own_via`, `via_change` /
+  `own_via_change` (cn, owner, mine, tier), `silent` and `forced` only
+  when set, `same_function` only in `watch` and `silent_only` (a pair
+  that conflicts needs a look anyway).
   `clean`, `already_conflicting` and `not_tried` are counts; the commit
   hashes, `project` and `tip` are left out (`tested_commit` stays when
   `--commit` tested another commit). `--full` has them, each pair's
   `commit` and `ps` (the candidate's current patchset, to fetch it),
-  every hashtag, the per-order results as objects, the `base_drift`
-  files and the change lists behind the counts. Hunks appear only with
+  every hashtag, the per-order results as objects and the change lists
+  behind the counts. Hunks appear only with
   `--hunks` / `--hunks-for`, in either form.
 
 - **Candidates**: open changes on the same project and branch whose
@@ -555,25 +555,19 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   `same-effort` and `other` must have been updated within `--max-age`
   days (default 30). `other` is only listed (`not_tried`) unless
   `--all`. `--with CN` checks a change whatever the filters say.
-- **Two models, both orders**: `landing` picks each side's stack onto
-  the branch tip in turn (what cherry-pick submit does); `as_uploaded`
-  picks each side's stack part (its in-flight changes above what both
-  stacks share, bottom up) onto the other's uploaded commit (what the
-  other owner, or CI on a stale base, sees). An as-uploaded conflict
-  counts only on files both stack parts change; one on a file only one
-  side changes comes from the branch moving between their bases and is
-  listed in `base_drift` instead (the picks above it go on). A pair is
-  in `conflicts` when a landing order conflicts, in `as_uploaded_only`
-  when only an as-uploaded one does (the landing is clean: what the
-  other owner, or CI on a stale base, sees). `via` names the candidate's
-  ancestor the conflict is at, `own_via` the target's in-flight parent
-  it is at (the first change of the target's stack, bottom up, that does
-  not apply on the candidate's): the colliding lines are that parent's,
-  not the change's own. Only a conflicting pick names one: the landing
-  orders, or the as-uploaded ones when both landing orders are clean (or
-  were not tried). Collisions that land cleanly are reported in
-  `silent_only` (with `as_uploaded` and `files` when that conflicts
-  too), by `check`: `duplicate-test` (a test defined twice),
+- **Both landing orders**: `landing` picks one side's stack onto the
+  branch tip, then the other side's stack part (its in-flight changes
+  above what both stacks share, bottom up) on top, each way round: what
+  cherry-pick submit does when either lands first. A change picked onto
+  the other's uploaded commit is not a landing, so a conflict seen only
+  there (a candidate on an old base, say) is no collision. A pair is in
+  `conflicts` when a landing order conflicts. `via` names the
+  candidate's ancestor the conflict is at, `own_via` the target's
+  in-flight parent it is at (the first change of the target's stack,
+  bottom up, that does not apply on the candidate's): the colliding
+  lines are that parent's, not the change's own. Only a conflicting
+  pick names one. Collisions that land cleanly are reported in
+  `silent_only`, by `check`: `duplicate-test` (a test defined twice),
   `duplicate-value` (an `OBD_FAIL_*` value, or an `OBD_CONNECT_*` /
   `OBD_CONNECT2_*` flag value, each namespace on its own, used twice),
   `duplicate-exception` (both sides add the same test to
@@ -628,8 +622,9 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   tried with, including those below a parent's current patchset when the
   change sits on an older one, so `own_via` always names one. When the
   change does not apply on the tip, `status` is `needs-rebase`,
-  `conflicts` is `null`, `as_uploaded_only` has the pairs that conflict
-  as uploaded and `clean` those that do not; `rebase_cause` says why:
+  `conflicts` is `null` and no pair is tried (`counts.tried` 0): where
+  it collides is only known once it lands, so rebase it locally and
+  rerun with `--commit` or `--worktree`; `rebase_cause` says why:
   `parent` (it, or the stack member it is blocked by, conflicts with the
   newer patchset of its own parent: `rebase_onto` {cn, ps, for}, `for`
   naming that member) or `branch`. A merged or abandoned change is
@@ -684,9 +679,8 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   those not in `skipped` by the filters: the ones handed to the trial
   merges plus `not_tried`; `tried` the pairs actually trial-merged
   (not `already_conflicting`, errors or skipped by the engine);
-  `conflicting` the entries in `conflicts` and `silent_only`;
-  `as_uploaded_only` the entries in `as_uploaded_only`; `watch` the
-  entries in `watch`.
+  `conflicting` the entries in `conflicts` and `silent_only`; `watch`
+  the entries in `watch`.
 
 ## Commands
 

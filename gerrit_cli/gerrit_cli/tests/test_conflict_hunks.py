@@ -81,21 +81,23 @@ def test_focus_hunks_are_attached_to_conflicting_pairs_only(gerrit, local):
     h = _hunks(r, 2)["hunks"]
     assert [x["kind"] for x in h["landing"]["a.c"]] == ["edit-edit", "edit-edit"]
     assert {x["order"] for x in h["landing"]["a.c"]} == {"target_first", "candidate_first"}
-    assert [x["line"] for x in h["as_uploaded"]["a.c"]] == [5, 5]
-    assert _hunks(r, 3)["hunks"] == {"landing": {}, "as_uploaded": {}}
+    assert _hunks(r, 3)["hunks"] == {"landing": {}}
     r = _check(gerrit, local, [t, c, d], focus={1})
     assert all("hunks" not in p for p in r["focus_pairs"])
 
 
 def test_branch_moved_under_the_candidate_is_context(gerrit, local):
+    """The target only deletes line 5; what meets the candidate's line 4
+    is master's line 6, which moved since the candidate's base."""
     old = gerrit.master
     gerrit.advance({"a.c": _text({6: "M"})})
     c = gerrit.change(2, old, {"a.c": _text({4: "C"})})
-    t = gerrit.change(1, gerrit.master, {"a.c": _text({6: "M", 7: "T"})})
+    deleted = [line for i, line in enumerate(_text({6: "M"}).splitlines()) if i != 4]
+    t = gerrit.change(1, gerrit.master, {"a.c": "\n".join(deleted) + "\n"})
     r = check_conflicts(Repo(local), str(gerrit.path), "master", [t, c],
                         gerrit.owner, workers=2, focus={1}, hunks=True)
-    kinds = {x["order"]: x["kind"] for x in _hunks(r, 2)["hunks"]["as_uploaded"]["a.c"]}
-    assert kinds == {"target_on_theirs": "context"}
+    kinds = {x["order"]: x["kind"] for x in _hunks(r, 2)["hunks"]["landing"]["a.c"]}
+    assert kinds == {"target_first": "context", "candidate_first": "adjacent"}
 
 
 def _raw_change(gerrit, cn, parent, content: bytes):

@@ -83,11 +83,11 @@ def _change_info(n: int, change: dict[str, Any], tier: str, ranks: Ranks,
                                        if release_rank([h], ranks) > 0)}
 
 
-def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
+def pair_entry(pair: dict[str, Any], sel: Selection, t_tier: str,
                t_rank: int, parents: dict[int, dict[str, Any]] | None = None,
                queued_ids: set[str] | frozenset[str] = frozenset(),
                me: str | None = None) -> dict[str, Any]:
-    """One tried candidate, as listed under conflicts / as_uploaded_only.
+    """One tried candidate, as listed under conflicts.
     `parents`: the details of the target's in-flight parents."""
     n = pair["other"]
     c = sel.every[n]
@@ -109,12 +109,9 @@ def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
         "hashtags": sorted(c.get("hashtags") or []),
         "fix_side": fix_side(t_tier, t_rank, m_tier,
                              release_rank(sel.every[mover].get("hashtags") or [], sel.ranks)),
-        "files": sorted(set(pair["landing"]["files"]) | set(pair["as_uploaded"]["files"])),
+        "files": pair["landing"]["files"],
+        "landing": {k: pair["landing"][k] for k in ("target_first", "candidate_first")},
     }
-    if landed:
-        e["landing"] = {k: pair["landing"][k] for k in ("target_first", "candidate_first")}
-    e["as_uploaded"] = {k: pair["as_uploaded"][k]
-                        for k in ("target_on_theirs", "theirs_on_target")}
     e["via"] = pair["via"]
     e["own_via"] = pair.get("own_via")
     if mover != n:
@@ -122,13 +119,10 @@ def pair_entry(pair: dict[str, Any], sel: Selection, landed: bool, t_tier: str,
     if ours is not None:
         e["own_via_change"] = _change_info(pair["own_via"], ours, t_tier, sel.ranks, me)
     e["silent"] = pair["silent"]
-    if pair.get("base_drift"):
-        e["base_drift"] = pair["base_drift"]
     if pair.get("same_function"):
         e["same_function"] = pair["same_function"]
     if "hunks" in pair:
-        e["hunks"] = pair["hunks"] if landed else \
-            {k: v for k, v in pair["hunks"].items() if k != "landing"}
+        e["hunks"] = pair["hunks"]
     if n in sel.forced:
         e["forced"] = True
     return e
@@ -143,7 +137,6 @@ def _sorted_by_tier(entries: list[dict[str, Any]], sel: Selection) -> list[dict[
 @dataclass
 class _Buckets:
     conflicts: list[dict[str, Any]]
-    uploaded_only: list[dict[str, Any]]  # landing clean or not tried
     silent_only: list[dict[str, Any]]
     watch: list[dict[str, Any]]  # clean merge, a function edited on both sides
     clean: list[int]
@@ -156,37 +149,27 @@ def _buckets(chk: Checked, sel: Selection, t_tier: str, t_rank: int,
     """Each tried candidate under the one heading that says what to do
     about it; the ones the engine could not try under errors/skipped."""
     res = chk.result["results"]
-    b = _Buckets([], [], [], [], [], [], list(sel.skipped))
+    b = _Buckets([], [], [], [], [], list(sel.skipped))
     b.errors = [{"cn": n, "reason": res.get(str(n), {}).get("reason", "")}
                 for n in sel.kept if res.get(str(n), {}).get("status") == "error"]
     b.skipped += [{"cn": n, "reason": res[str(n)].get("reason", "")}
                   for n in sel.kept if res.get(str(n), {}).get("status") == "skipped"]
     b.skipped.sort(key=lambda s: s["cn"])
     for pair in chk.result["focus_pairs"]:
-        e = pair_entry(pair, sel, chk.landed, t_tier, t_rank, chk.parents_detail,
-                       chk.queued_ids, me)
-        landing = list(e.get("landing", {}).values())
-        uploaded = list(e["as_uploaded"].values())
+        e = pair_entry(pair, sel, t_tier, t_rank, chk.parents_detail, chk.queued_ids, me)
+        landing = list(e["landing"].values())
         if "conflict" in landing:
             b.conflicts.append(e)
         elif "error" in landing:
             b.errors.append({"cn": e["cn"], "reason": "trial merge failed"})
         elif pair["silent"]:
-            # a landing problem, whatever the as-uploaded merges say
             keys = ("cn", "commit", "ps", "tier", "fix_side", "silent", "same_function")
-            if "conflict" in uploaded:
-                keys += ("files", "as_uploaded", "via", "own_via")
             b.silent_only.append({k: e[k] for k in keys if k in e})
-        elif "conflict" in uploaded:
-            b.uploaded_only.append(e)
-        elif "error" in uploaded:
-            b.errors.append({"cn": e["cn"], "reason": "trial merge failed"})
         elif "same_function" in e:
             b.watch.append(e)
         else:
             b.clean.append(e["cn"])
     b.conflicts = _sorted_by_tier(b.conflicts, sel)
-    b.uploaded_only = _sorted_by_tier(b.uploaded_only, sel)
     b.silent_only = _sorted_by_tier(b.silent_only, sel)
     b.watch = _sorted_by_tier(b.watch, sel)
     return b
@@ -252,7 +235,6 @@ def report(chk: Checked, sel: Selection, next_branch: str, me: str | None) -> di
         "on_next": on_next(chk.result, cn, next_branch),
         "own_stack": own_stack(chk.result, focus_stack, chk.children, chk.old),
         "conflicts": b.conflicts if landed else None,
-        "as_uploaded_only": b.uploaded_only,
     })
     out.update({
         "silent_only": b.silent_only,
@@ -267,7 +249,6 @@ def report(chk: Checked, sel: Selection, next_branch: str, me: str | None) -> di
             "after_filters": len(sel.kept) + len(sel.not_tried),
             "tried": len(chk.result["focus_pairs"]),
             "conflicting": len(b.conflicts) + len(b.silent_only),
-            "as_uploaded_only": len(b.uploaded_only),
             "watch": len(b.watch),
         },
     })
@@ -277,8 +258,7 @@ def report(chk: Checked, sel: Selection, next_branch: str, me: str | None) -> di
 
 
 SUBJECT_MAX = 70
-ORDERS = {"landing": ("target_first", "candidate_first"),
-          "as_uploaded": ("target_on_theirs", "theirs_on_target")}
+ORDERS = {"landing": ("target_first", "candidate_first")}
 # full-only top-level keys: hashes, and what branch already says
 _FULL_ONLY = ("commit", "tested_commit", "project", "tip")
 _COUNTED = ("already_conflicting", "clean")
@@ -312,8 +292,6 @@ def compact_entry(e: dict[str, Any], ranks: Ranks = DEFAULT_RANKS,
     for key in ("silent", "same_function", "forced", "hunks"):
         if e.get(key) and (key != "same_function" or same_function):
             out[key] = e[key]
-    if e.get("base_drift"):
-        out["base_drift"] = len(e["base_drift"])
     return out
 
 
@@ -334,8 +312,7 @@ def compact(full: dict[str, Any]) -> dict[str, Any]:
             out[key] = len(value)
         elif key == "not_tried":
             out[key] = sum(len(v) for v in value.values())
-        elif key in ("conflicts", "as_uploaded_only", "silent_only", "watch") \
-                and value is not None:
+        elif key in ("conflicts", "silent_only", "watch") and value is not None:
             out[key] = [compact_entry(e, ranks, key in ("silent_only", "watch"))
                         for e in value]
         else:
@@ -344,6 +321,6 @@ def compact(full: dict[str, Any]) -> dict[str, Any]:
         out["tested_commit"] = full["tested_commit"]
     out["orders"] = {m: "/".join(o) for m, o in ORDERS.items()}
     out["full"] = ("--full adds commit hashes (each pair's commit and ps too), every "
-                   "hashtag, base_drift files and the changes behind clean, "
-                   "already_conflicting and not_tried")
+                   "hashtag and the changes behind clean, already_conflicting and "
+                   "not_tried")
     return out

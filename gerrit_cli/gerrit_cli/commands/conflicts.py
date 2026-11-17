@@ -5,9 +5,12 @@ The target (a change, or a local commit standing in for it with
 changes on the same branch that touch its files are the candidates:
 those that need a new patchset anyway are skipped, the rest tiered
 (conflict_candidates.py). Each candidate in a checked tier is
-trial-merged against the target in both orders and both models
-(conflicts.py, focus mode), and each collision says which side should
-move (`fix_side`).
+trial-merged against the target in both landing orders, both stacks on
+the branch tip as cherry-pick submit lands them (conflicts.py, focus
+mode), and each collision says which side should move (`fix_side`).
+Where a change sits does not matter: two changes collide only when they
+do not land together. A target that does not land on the tip is paired
+with nothing until it is rebased.
 
 run_conflicts runs the steps in order: open target -> related changes
 and branch tips -> uploaded focus stack -> branch and -next (fetched with that stack)
