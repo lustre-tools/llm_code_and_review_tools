@@ -224,7 +224,7 @@ class TestRunChat:
         against, as `run --model sol` does, not the bare alias."""
         chat, record = self._codex_chat(repo, tmp_path, monkeypatch)
         assert chat("--model", "sol") == 0
-        assert json.loads(record.read_text())[:2] == ["-m", "gpt-6.1-sol"]
+        assert json.loads(record.read_text())[:2] == ["-m", "gpt-6.2-sol"]
 
     def test_cli_checks_effort_against_the_session_model(
             self, repo, tmp_path, monkeypatch):

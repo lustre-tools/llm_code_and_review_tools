@@ -18,10 +18,10 @@ class TestCatalog:
 
     def test_families_present(self):
         families = {m.family for m in CODEX_MODELS}
-        assert {"GPT-6", "GPT-5.6"} <= families
+        assert {"GPT-6.2", "GPT-6", "GPT-5.6"} <= families
         slugs = {m.slug for m in CODEX_MODELS}
-        assert {"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra",
-                "gpt-5.6-luna"} <= slugs
+        assert {"gpt-6.2-astra", "gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-sol",
+                "gpt-5.6-terra", "gpt-5.6-luna"} <= slugs
 
     def test_default_is_a_catalog_model(self):
         assert codex_model(CODEX_DEFAULT_MODEL) is not None
@@ -48,14 +48,17 @@ class TestCatalog:
 class TestCanonicalModel:
 
     @pytest.mark.parametrize("alias,slug", [
-        ("sol", "gpt-6.1-sol"),
-        ("SOL", "gpt-6.1-sol"),
+        ("sol", "gpt-6.2-sol"),
+        ("SOL", "gpt-6.2-sol"),
+        ("gpt-6.2", "gpt-6.2-sol"),
+        ("sol6.1", "gpt-6.1-sol"),
         ("gpt-6.1", "gpt-6.1-sol"),
         ("sol6", "gpt-6-sol"),
         ("sol5.6", "gpt-5.6-sol"),
         ("terra", "gpt-5.6-terra"),
         ("luna", "gpt-5.6-luna"),
-        ("astra", "gpt-6-astra"),
+        ("astra", "gpt-6.2-astra"),
+        ("astra6.2", "gpt-6.2-astra"),
         ("gpt-6", "gpt-6-astra"),
         ("gpt-5.6", "gpt-5.6-terra"),
         ("spark", "gpt-5.3-codex-spark"),
