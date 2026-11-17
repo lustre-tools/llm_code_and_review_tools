@@ -5,6 +5,9 @@ from pathlib import Path
 import pytest
 
 from lreview.cli import build_parser, default_worktrees_dir
+from lreview.models import (
+    CLAUDE_DEFAULT_MODEL, CODEX_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL,
+    codex_model)
 
 
 class TestParser:
@@ -74,10 +77,10 @@ class TestParser:
     def test_resolve_model(self, monkeypatch):
         from lreview.cli import resolve_model
         monkeypatch.delenv("LREVIEW_MODEL", raising=False)
-        assert resolve_model("claude") == "sonnet"
-        assert resolve_model("codex") == "gpt-6.2-sol"
+        assert resolve_model("claude") == CLAUDE_DEFAULT_MODEL
+        assert resolve_model("codex") == CODEX_DEFAULT_MODEL
         assert resolve_model("gemini") is None
-        assert resolve_model("cursor") == "cursor-grok-4.6-high"
+        assert resolve_model("cursor") == CURSOR_DEFAULT_MODEL
         assert resolve_model("claude", "fable") == "fable"
         monkeypatch.setenv("LREVIEW_MODEL", "opus")
         assert resolve_model("claude") == "opus"
@@ -86,8 +89,8 @@ class TestParser:
     def test_resolve_model_expands_codex_aliases(self, monkeypatch):
         from lreview.cli import resolve_model
         monkeypatch.delenv("LREVIEW_MODEL", raising=False)
-        assert resolve_model("codex", "sol") == "gpt-6.2-sol"
-        assert resolve_model("codex", "astra") == "gpt-6.2-astra"
+        assert resolve_model("codex", "sol") == codex_model("sol").slug
+        assert resolve_model("codex", "astra") == codex_model("astra").slug
         assert resolve_model("codex", "gpt-6") == "gpt-6-astra"
         # unknown names reach the CLI untouched
         assert resolve_model("codex", "gpt-7-nova") == "gpt-7-nova"
@@ -99,13 +102,13 @@ class TestParser:
         agent's catalog lists falls back to this agent's default."""
         from lreview.cli import resolve_model
         monkeypatch.setenv("LREVIEW_MODEL", "opus")
-        assert resolve_model("codex") == "gpt-6.2-sol"
+        assert resolve_model("codex") == CODEX_DEFAULT_MODEL
         assert resolve_model("gemini") is None
         assert resolve_model("claude") == "opus"
         monkeypatch.setenv("LREVIEW_MODEL", "sol")
-        assert resolve_model("claude") == "sonnet"
+        assert resolve_model("claude") == CLAUDE_DEFAULT_MODEL
         assert resolve_model("opencode") is None
-        assert resolve_model("codex") == "gpt-6.2-sol"
+        assert resolve_model("codex") == codex_model("sol").slug
         # names in no catalog reach every agent untouched
         monkeypatch.setenv("LREVIEW_MODEL", "gpt-7-nova")
         assert resolve_model("codex") == "gpt-7-nova"

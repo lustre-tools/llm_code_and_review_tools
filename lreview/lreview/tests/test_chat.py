@@ -15,6 +15,7 @@ from lreview.chat import (
     run_chat,
 )
 from lreview.gerrit import ResolvedChange, change_ref
+from lreview.models import codex_model
 
 
 def _change(number=64616, patchset=27, sha="a" * 40):
@@ -224,7 +225,8 @@ class TestRunChat:
         against, as `run --model sol` does, not the bare alias."""
         chat, record = self._codex_chat(repo, tmp_path, monkeypatch)
         assert chat("--model", "sol") == 0
-        assert json.loads(record.read_text())[:2] == ["-m", "gpt-6.2-sol"]
+        assert json.loads(record.read_text())[:2] == [
+            "-m", codex_model("sol").slug]
 
     def test_cli_checks_effort_against_the_session_model(
             self, repo, tmp_path, monkeypatch):

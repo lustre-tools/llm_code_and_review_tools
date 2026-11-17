@@ -193,8 +193,8 @@ lreview run --agent codex --model luna --effort ultra 64086
 #        (accepts: low, medium, high, xhigh, max)
 ```
 
-Aliases are expanded before the review runs. For example, `--model sol`
-uses `gpt-6.2-sol` in review results and posted messages. Unlisted model
+Aliases are expanded before the review runs, so review results and
+posted messages name the model's slug, not the alias. Unlisted model
 names pass through to the CLI without effort validation.
 
 ## Quick start
@@ -236,8 +236,8 @@ to read, e.g. `jq -r '.result // empty' kreview-*.log` for the final
 review text.
 
 Reviews run on **sonnet** by default (`--model opus` / `--model fable`
-or `LREVIEW_MODEL` to change). With `--agent codex`, the default model
-is **gpt-6.2-sol**. On `lreview bench` Sonnet 5.5 found as many known bugs
+or `LREVIEW_MODEL` to change; for `--agent codex` see
+[Codex models and effort](#codex-models-and-effort)). On `lreview bench` Sonnet 5.5 found as many known bugs
 as Opus 5.5 at under half the cost and time (2026-10-09). Claude reviews
 run at `--effort high` unless told otherwise: left to itself, claude
 takes the effort from the user's settings, where a per-model entry can
@@ -862,7 +862,7 @@ opencode's `--model` wants the `provider/model` form.
 | `--worktrees-dir DIR` | auto | Where worktrees are created |
 | `--keep-worktrees` | off | Keep worktrees after review |
 | `--agent NAME` | `claude` (or `$LREVIEW_AGENT`) | Agent backend: claude, codex, cursor (verified), auggie, gemini, opencode |
-| `--model NAME` | `$LREVIEW_MODEL` or the backend default (`sonnet` for Claude, `gpt-6.2-sol` for Codex, `cursor-grok-4.6-high` for Cursor). Other backends use their CLI default. | Model for the review runs. See `lreview models`, `auggie models list --json` or `agent --list-models`. |
+| `--model NAME` | `$LREVIEW_MODEL`, else the backend's default (marked in `lreview models`); auggie, gemini and opencode use their CLI's own | Model for the review runs. See `lreview models`, `auggie models list --json` or `agent --list-models`. |
 | `--effort LEVEL` | `high` for claude, else the agent's own (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max, plus `ultra` on the codex models that have it — claude (`--effort`), codex (`-c model_reasoning_effort=...`) or auggie (`--reasoning-effort`); ignored for gemini/opencode/cursor (a cursor model slug carries its effort). Known model ladders are checked before the run; Auggie validates its own model/effort support |
 | `--lenses` | off | Five lens subagents feed the reviewer (claude, full mode); see "Lens reviews" |
 | `--lens-model M` | the review's model | Model for the `--lenses` subagents |
@@ -900,7 +900,7 @@ in psN." message, but only when named (`lreview post 69459`, or
 | Variable | Effect |
 |---|---|
 | `LREVIEW_AGENT` | Default for `--agent` (else `claude`) |
-| `LREVIEW_MODEL` | Default for `--model` (otherwise `sonnet` for Claude or `gpt-6.2-sol` for Codex). A name from another agent's catalog, such as `opus` under `--agent codex`, gives way to the selected backend's default. |
+| `LREVIEW_MODEL` | Default for `--model` (else the backend's default, as for `--model`). A name from another agent's catalog, such as `opus` under `--agent codex`, gives way to the selected backend's default. |
 | `LREVIEW_EFFORT` | Default for `--effort` (else `high` for claude, the agent's own for the others) |
 | `LREVIEW_DB` | Default for `--db` (memory database directory) |
 | `LREVIEW_LEAN` | `0` turns `--lean` off by default |
