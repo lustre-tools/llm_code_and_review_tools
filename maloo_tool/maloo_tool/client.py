@@ -16,7 +16,13 @@ import requests
 from llm_tool_common.config import parse_env_file, resolve_env_file
 
 from .config import MalooConfig
-from .errors import ErrorCode, InvalidInputError, NotFoundError, ToolError
+from .errors import (
+    AuthError,
+    ErrorCode,
+    InvalidInputError,
+    NotFoundError,
+    ToolError,
+)
 
 CSRF_RE = re.compile(
     r'<meta\s+name="csrf-token"\s+content="([^"]+)"'
@@ -1188,7 +1194,7 @@ class MalooClient:
         )
         action = action_m.group(1) if action_m else "/sessions"
 
-        self._retried(
+        resp = self._retried(
             web.post,
             f"{self.config.base_url}{action}",
             data={
@@ -1202,6 +1208,19 @@ class MalooClient:
             # fetches the whole test session list, some 850 KB.
             allow_redirects=False,
         )
+
+        # A good sign-in redirects (302) to the session list; a bad
+        # password re-renders the form (200). Catch that here, so it
+        # surfaces as a clear credentials error rather than later as an
+        # opaque "Log download returned HTML" from download_logs.
+        if resp.status_code not in (301, 302, 303, 307, 308):
+            raise AuthError(
+                "Maloo web sign-in failed: check MALOO_USER/MALOO_PASS for "
+                f"{self.config.username!r} (set in environment or "
+                "~/.config/maloo-tool/.env). The web password is your "
+                "testing.whamcloud.com login and can expire separately "
+                "from the REST API."
+            )
 
         # Also merge cookies into the main session for download_logs
         self.session.cookies.update(web.cookies)

@@ -324,6 +324,18 @@ class TestWebRetry:
         assert web.get.call_count == 2
         assert web.post.call_args.kwargs["allow_redirects"] is False
 
+    def test_bad_password_is_a_clear_auth_error(self):
+        # A wrong/expired web password re-renders the sign-in form (200)
+        # instead of redirecting; the login must fail loudly here, not
+        # cache a dead session that later returns login HTML.
+        from maloo_tool.errors import AuthError
+        c = _client()
+        web = self._web(c, [_page(SIGNIN_PAGE)],
+                        posts=[_page(SIGNIN_PAGE, status=200)])
+        with patch("maloo_tool.client.requests.Session", return_value=web):
+            with pytest.raises(AuthError, match="sign-in failed"):
+                c._web_login()
+
     def test_download_is_retried(self):
         c = _client()
         c._web_session = MagicMock()

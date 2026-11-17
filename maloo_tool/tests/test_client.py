@@ -669,7 +669,7 @@ class TestWebLogin:
             '</form>'
         )
         get_resp = _mock_response(text=signin_html)
-        post_resp = _mock_response(text="logged in")
+        post_resp = _mock_response(text="logged in", status_code=302)
 
         # client.session needs a cookies attribute for the update call
         client.session.cookies = MagicMock()
@@ -722,7 +722,7 @@ class TestWebLogin:
             web_session = MagicMock()
             MockSession.return_value = web_session
             web_session.get.return_value = _mock_response(text=signin_html)
-            web_session.post.return_value = _mock_response(text="ok")
+            web_session.post.return_value = _mock_response(text="ok", status_code=302)
             client._web_session = None
 
             client._web_login()
