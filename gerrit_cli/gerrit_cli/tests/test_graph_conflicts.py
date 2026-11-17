@@ -282,6 +282,31 @@ class TestParentMovedOn:
         res = _check(gerrit, local, [y2, x])["results"]["30"]
         assert res == {"status": "conflict", "files": ["a.c"], "under": 20}
 
+    def test_a_change_that_fails_with_the_old_patch_set_too_is_the_branchs(self, gerrit,
+                                                                           local):
+        y2, x = self._stack(gerrit, {3: "x", 9: "x"})
+        gerrit.advance({"a.c": _text({9: "master"})})
+        res = _check(gerrit, local, [y2, x])["results"]["30"]
+        assert res == {"status": "conflict", "files": ["a.c"], "under": 20}
+
+    def test_an_old_patch_set_that_does_not_land_is_not_the_cause(self, gerrit, local):
+        y1 = gerrit.change(20, gerrit.master, {"a.c": _text({2: "y1"})})
+        gerrit.advance({"a.c": _text({2: "master"})})
+        y2 = gerrit.change(20, gerrit.master, {"a.c": _text({2: "y2"})}, ps=2)
+        x = gerrit.change(30, y1.commit, {"a.c": _text({2: "y1", 3: "x"})})
+        res = _check(gerrit, local, [y2, x])["results"]["30"]
+        assert res == {"status": "conflict", "files": ["a.c"], "under": 20}
+
+    def test_the_old_patch_set_lands_on_the_change_below_the_parent(self, gerrit, local):
+        g = gerrit.change(10, gerrit.master, {"b.c": _text({4: "g"})})
+        y1 = gerrit.change(20, g.commit, {"a.c": _text({2: "y1"}), "b.c": _text({4: "g"})})
+        y2 = gerrit.change(20, g.commit, {"a.c": _text({2: "y2"}), "b.c": _text({4: "g"})},
+                           ps=2)
+        x = gerrit.change(30, y1.commit, {"a.c": _text({2: "y1", 3: "x"}),
+                                          "b.c": _text({4: "g", 5: "x"})})
+        res = _check(gerrit, local, [g, y2, x])["results"]["30"]
+        assert res["parent"] == {"cn": 20, "files": ["a.c"]}
+
     def test_on_the_current_patch_set_no_extra_pick(self, gerrit, local):
         y = gerrit.change(20, gerrit.master, {"a.c": _text({2: "y"})})
         x = gerrit.change(30, y.commit, {"a.c": _text({2: "y", 9: "x"})})

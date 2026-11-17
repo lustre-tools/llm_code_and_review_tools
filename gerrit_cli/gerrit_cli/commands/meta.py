@@ -1273,9 +1273,11 @@ target, each pair and via_change / own_via_change carry it.
 When the change does not apply on the branch tip, status is
 "needs-rebase", conflicts is null and no pair is tried (counts.tried is
 0): where it collides is only known once it lands. Rebase it locally and
-rerun with --commit or --worktree. rebase_cause is "parent" when it, or the stack member it is blocked by, conflicts with
-the newer patchset of its own parent (rebase_onto {cn, ps, for}: rebase
-onto that; for names the blocking member), "branch" otherwise. Only an
+rerun with --commit or --worktree. rebase_cause is "parent" when it, or
+the stack member it is blocked by, conflicts with the newer patchset of
+its own parent and lands on the tip with the older one it sits on
+(rebase_onto {cn, ps, for}: rebase onto that; for names the blocking
+member), "branch" otherwise. Only an
 open change can be checked. outdated_parent {cn, ps, current, status,
 files} is set when the change sits on an older patchset of its parent,
 status saying whether it applies on the current one; own_stack entries

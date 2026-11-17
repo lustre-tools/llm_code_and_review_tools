@@ -14,9 +14,11 @@ changes it stands on. Every pick is `git merge-tree --merge-base=<parent>
    (an abandoned change, a change outside the graph, a stray commit) is
    tried with its own diff alone, so its result says that ("base"). A
    change on an older patchset of the change below it that does not
-   apply is also tried on that change's current patchset alone; when it
-   conflicts there too, the cause is the parent's new patchset
-   ("parent"), not the branch.
+   apply is also tried with that older patchset in the stack instead:
+   its own diff picked where the current one went, then the change.
+   When the change lands that way, the cause is the parent's new
+   patchset ("parent"); when it fails both ways, or the older patchset
+   does not land itself, it is the branch.
 2. Against <branch>-next (master-next: the patches queued to land, on
    top of the branch tip), when it exists: each change that applies on
    the branch and is not queued itself lands the same way on the
@@ -642,22 +644,31 @@ def _check_tip(repo: Repo, st: _State, tip: str, workers: int) -> None:
         if cn not in st.results:
             levels[len(st.stack[cn])].append(cn)
 
-    def one(cn: int) -> tuple[int, _Pick | None, _Pick | None]:
+    def on_old_parent(cn: int, below: int) -> bool:
+        """Does cn land with the older patchset of `below` it sits on in
+        place of the current one?"""
+        old = st.base[cn]
+        old_base = repo.parents([old]).get(old) or []
+        if len(old_base) != 1:
+            return False
+        under = st.under.get(below)
+        parent = repo.pick(st.applied[under] if under is not None else tip, old, old_base[0])
+        return parent.ok and repo.pick(parent.commit, st.patches[cn].commit, old).ok
+
+    def one(cn: int) -> tuple[int, _Pick | None, bool]:
         below = st.under.get(cn)
         if below is not None and below not in st.applied:
-            return cn, None, None
+            return cn, None, False
         onto = st.applied[below] if below is not None else tip
         commit, base = st.patches[cn].commit, st.base[cn]
         pick = repo.pick(onto, commit, base)
-        on_parent = None
-        if (pick.status == "conflict" and below is not None
-                and base != st.patches[below].commit):
-            on_parent = repo.pick(st.patches[below].commit, commit, base)
-        return cn, pick, on_parent
+        by_parent = (pick.status == "conflict" and below is not None
+                     and base != st.patches[below].commit and on_old_parent(cn, below))
+        return cn, pick, by_parent
 
     with ThreadPoolExecutor(workers) as pool:
         for depth in sorted(levels):
-            for cn, pick, on_parent in pool.map(one, sorted(levels[depth])):
+            for cn, pick, by_parent in pool.map(one, sorted(levels[depth])):
                 if pick is None:
                     res = st.results[st.under[cn]]
                     by = res.get("by", st.under[cn]) if res["status"] == "blocked" else st.under[cn]
@@ -669,9 +680,9 @@ def _check_tip(repo: Repo, st: _State, tip: str, workers: int) -> None:
                         st.results[cn]["empty"] = True
                 elif pick.status == "conflict":
                     st.results[cn] = {"status": "conflict", "files": list(pick.files)}
-                    if on_parent is not None and on_parent.status == "conflict":
+                    if by_parent:
                         st.results[cn]["parent"] = {"cn": st.under[cn],
-                                                    "files": list(on_parent.files)}
+                                                    "files": list(pick.files)}
                 else:
                     st.results[cn] = {"status": "error", "reason": pick.detail[:300]}
 

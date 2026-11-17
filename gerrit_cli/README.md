@@ -453,9 +453,10 @@ includes:
   applies, does not apply (with the conflicting files) or is blocked by
   a change below it that does not apply. A change that does not apply
   is not blamed on the branch when the cause is elsewhere: when it sits
-  on an older patchset of the change below it and conflicts with that
-  change's current patchset too, it says "conflicts with #N" (it needs
-  a rebase onto it); when the bottom of its stack sits on something
+  on an older patchset of the change below it and lands on the tip with
+  that older patchset (its own diff in the current one's place), the
+  current patchset is the cause, and it says "conflicts with #N" (it
+  needs a rebase onto it); when the bottom of its stack sits on something
   that is not on the branch (an abandoned change, a change outside the
   graph or another branch, a commit no change owns), only its own diff
   could be tried, and it says "base not on master". Then every two changes that
@@ -626,8 +627,9 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   it collides is only known once it lands, so rebase it locally and
   rerun with `--commit` or `--worktree`; `rebase_cause` says why:
   `parent` (it, or the stack member it is blocked by, conflicts with the
-  newer patchset of its own parent: `rebase_onto` {cn, ps, for}, `for`
-  naming that member) or `branch`. A merged or abandoned change is
+  newer patchset of its own parent and lands on the tip with the older
+  one it sits on: `rebase_onto` {cn, ps, for}, `for` naming that
+  member) or `branch`. A merged or abandoned change is
   refused. `errors` [{cn, reason}] lists the candidates that could not
   be tried: a commit that could not be fetched, or a trial merge git
   failed (`trial merge failed`).
