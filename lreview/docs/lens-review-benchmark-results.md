@@ -3,15 +3,17 @@
 Which known bug each review variant found, and in how many of its runs.
 These are the per-bug numbers behind `lens-review-evaluation.md`, which
 explains the variants, the case sets and how the runs were made: Sonnet 5.5
-reviewer at `--effort high`, `--lean`, `--preload`, offline, judged by
-`lreview bench report --judge`, November 2026.
+reviewer at `--effort high` unless a column says otherwise, `--lean`,
+`--preload`, offline, judged by `lreview bench report --judge`, November 2026.
 
 A cell is *runs that found the bug / runs that completed*; a run that read
 the later fix is left out, and `-` means the variant did not review that
-case. "Lenses at high" is the full lens review (`--lenses --lens-effort
-high`); "lenses at medium" is the `--lenses` default. The bugs are the
-known bugs of `lreview/benchmark/cases.json`; the appendix says what each
-one is.
+case. "Lenses at high" is `--lenses --lens-effort high`; "lenses at
+medium" is the `--lenses` default. "Strict verification" is the way the
+reviewer settles lens candidates since 2026-11-17. The bugs are the known
+bugs of `lreview/benchmark/cases.json` as it is now: `test238-setup-rc-unchecked`
+was dropped on 2026-11-17 (not a bug), so totals here are one or two lower
+than in tables measured before that. The appendix says what each bug is.
 
 ## Pilot round
 
@@ -65,7 +67,6 @@ The 32 `eval` cases, two runs each. One ordinary run of `o2iblnd-rtnl` read the 
 | osc-kswapd-deadlock ([64397](https://review.whamcloud.com/c/fs/lustre-release/+/64397/2)) | oe-memalloc-never-set-dead-check | 2/2 | 2/2 |
 | osc-kswapd-deadlock ([64397](https://review.whamcloud.com/c/fs/lustre-release/+/64397/2)) | comment-cites-removed-osc-flush-async-page | 2/2 | 2/2 |
 | lnet-mr-forwarding ([63582](https://review.whamcloud.com/c/fs/lustre-release/+/63582/5)) | test237-238-no-interop-version-gate | 0/2 | 1/2 |
-| lnet-mr-forwarding ([63582](https://review.whamcloud.com/c/fs/lustre-release/+/63582/5)) | test238-setup-rc-unchecked | 1/2 | 2/2 |
 | mount-large-nids ([57560](https://review.whamcloud.com/c/fs/lustre-release/+/57560/10)) | append-param-nul | 2/2 | 2/2 |
 | fsinfo-long-nids ([59421](https://review.whamcloud.com/c/fs/lustre-release/+/59421/5)) | root-path-want | 2/2 | 2/2 |
 | lu-env-add-errors ([57272](https://review.whamcloud.com/c/fs/lustre-release/+/57272/12)) | osp-thread-args-leak | 2/2 | 2/2 |
@@ -88,24 +89,42 @@ The 32 `eval` cases, two runs each. One ordinary run of `o2iblnd-rtnl` read the 
 | gds-support-for-kfilnd ([61824](https://review.whamcloud.com/c/fs/lustre-release/+/61824/2)) | fix-error-handling-in-dma-mapp | 1/2 | 2/2 |
 | replace-client-lock-lru-with ([60162](https://review.whamcloud.com/c/fs/lustre-release/+/60162/28)) | fix-lfru-priv-ratio-limit-over | 2/2 | 2/2 |
 | specify-total-count-for-mirr ([55867](https://review.whamcloud.com/c/fs/lustre-release/+/55867/11)) | fix-issues-with-llapi-get-lmm | 2/2 | 2/2 |
-| **total** | | **65/78 (83%)** | **74/80 (92%)** |
+| **total** | | **64/76 (84%)** | **72/78 (92%)** |
 
 ## Cost round
 
-7 cases where the lens review had beaten the ordinary one, two runs each. "Ordinary" pools the pilot and eval runs of these cases; "lenses at high" was run again here so that the cheaper variants are compared with fresh runs, not with the runs that selected these cases.
+7 cases where the lens review had beaten the ordinary one, two runs each. "Ordinary" pools the pilot and eval runs of these cases; "lenses at high" was run again here, so the cheaper variants are compared with fresh runs.
 
 | case (change) | bug | ordinary | lenses at high | lenses at medium | 3 lenses, high | Haiku lenses |
 |---|---|---|---|---|---|---|
 | mgc-new-registration ([59212](https://review.whamcloud.com/c/fs/lustre-release/+/59212/8)) | legacy-nid-oob | 0/2 | 2/2 | 1/2 | 1/2 | 1/2 |
 | lnet-mr-forwarding ([63582](https://review.whamcloud.com/c/fs/lustre-release/+/63582/5)) | test237-238-no-interop-version-gate | 0/2 | 1/2 | 1/2 | 0/2 | 0/2 |
-| lnet-mr-forwarding ([63582](https://review.whamcloud.com/c/fs/lustre-release/+/63582/5)) | test238-setup-rc-unchecked | 1/2 | 2/2 | 2/2 | 2/2 | 2/2 |
 | nodemap-ban-default ([60074](https://review.whamcloud.com/c/fs/lustre-release/+/60074/15)) | ban-search-unlocked | 0/3 | 0/2 | 0/2 | 0/2 | 0/2 |
 | dne-migrate-layout ([58585](https://review.whamcloud.com/c/fs/lustre-release/+/58585/8)) | fld-range-uninit | 1/3 | 2/2 | 2/2 | 2/2 | 2/2 |
 | changelog-enc-names ([55916](https://review.whamcloud.com/c/fs/lustre-release/+/55916/8)) | ns-store-null-target | 1/2 | 2/2 | 2/2 | 2/2 | 2/2 |
 | mgs-buffer-checks ([64953](https://review.whamcloud.com/c/fs/lustre-release/+/64953/4)) | skip-ipv6-uninit | 0/5 | 2/2 | 0/2 | 1/2 | 2/2 |
 | gds-support-for-kfilnd ([61824](https://review.whamcloud.com/c/fs/lustre-release/+/61824/2)) | fix-sg-table-free-after-orig-n | 2/2 | 2/2 | 2/2 | 2/2 | 1/2 |
 | gds-support-for-kfilnd ([61824](https://review.whamcloud.com/c/fs/lustre-release/+/61824/2)) | fix-error-handling-in-dma-mapp | 1/2 | 2/2 | 2/2 | 2/2 | 1/2 |
-| **total** | | **6/23 (26%)** | **15/18 (83%)** | **12/18 (67%)** | **12/18 (67%)** | **11/18 (61%)** |
+| **total** | | **5/21 (24%)** | **13/16 (81%)** | **10/16 (62%)** | **10/16 (62%)** | **9/16 (56%)** |
+
+## Verification round
+
+8 cases where lens reviews had dropped bugs that a lens had found, two runs each (one for the last column). All lens columns: lenses at medium. "Ordinary" pools the pilot and eval runs of these cases.
+
+| case (change) | bug | ordinary | lenses, settled as before | strict verification | strict, reviewer at medium |
+|---|---|---|---|---|---|
+| mgc-new-registration ([59212](https://review.whamcloud.com/c/fs/lustre-release/+/59212/8)) | legacy-nid-oob | 0/2 | 0/2 | 2/2 | 1/1 |
+| memcg-balance-dirty ([59223](https://review.whamcloud.com/c/fs/lustre-release/+/59223/11)) | unlocked-tree-dump | 0/3 | 0/2 | 0/2 | 0/1 |
+| lnet-mr-forwarding ([63582](https://review.whamcloud.com/c/fs/lustre-release/+/63582/5)) | test237-238-no-interop-version-gate | 0/2 | 0/2 | 2/2 | 1/1 |
+| nodemap-ban-default ([60074](https://review.whamcloud.com/c/fs/lustre-release/+/60074/15)) | ban-search-unlocked | 0/3 | 0/2 | 0/2 | 0/1 |
+| lnetctl-import ([65055](https://review.whamcloud.com/c/fs/lustre-release/+/65055/8)) | import-fgets-overflow | 0/3 | 0/2 | 0/2 | 0/1 |
+| pm-qos-latency ([57039](https://review.whamcloud.com/c/fs/lustre-release/+/57039/12)) | delayed-work-not-stopped | 2/2 | 2/2 | 2/2 | 1/1 |
+| pm-qos-latency ([57039](https://review.whamcloud.com/c/fs/lustre-release/+/57039/12)) | svc-stats-unprotected | 0/2 | 0/2 | 0/2 | 0/1 |
+| pm-qos-latency ([57039](https://review.whamcloud.com/c/fs/lustre-release/+/57039/12)) | cpu-index-math | 2/2 | 2/2 | 2/2 | 1/1 |
+| relate-qmt-lvbo-free-wq-and ([56661](https://review.whamcloud.com/c/fs/lustre-release/+/56661/3)) | fix-the-order-of-freeing-qmt-l | 0/3 | 0/2 | 1/2 | 0/1 |
+| gds-support-for-kfilnd ([61824](https://review.whamcloud.com/c/fs/lustre-release/+/61824/2)) | fix-sg-table-free-after-orig-n | 2/2 | 2/2 | 2/2 | 1/1 |
+| gds-support-for-kfilnd ([61824](https://review.whamcloud.com/c/fs/lustre-release/+/61824/2)) | fix-error-handling-in-dma-mapp | 1/2 | 2/2 | 2/2 | 1/1 |
+| **total** | | **7/26 (27%)** | **8/22 (36%)** | **13/22 (59%)** | **6/11 (55%)** |
 
 ## Appendix: the known bugs
 
@@ -129,7 +148,6 @@ The 32 `eval` cases, two runs each. One ordinary run of `o2iblnd-rtnl` read the 
 | osc-kswapd-deadlock | oe-memalloc-never-set-dead-check | [64397](https://review.whamcloud.com/c/fs/lustre-release/+/64397/2) | The patch adds `\|\| ext->oe_memalloc` checks to osc_extent_find(), but on master nothing sets oe_memalloc: its only setter lived in osc_flush_async_page(), removed with ll_writepage() by LU-18675 (6e83069d98), an ancestor of this commit. Both checks are therefore always false, the 'fix' is dead ... | confirmed by review, not fixed |
 | osc-kswapd-deadlock | comment-cites-removed-osc-flush-async-page | [64397](https://review.whamcloud.com/c/fs/lustre-release/+/64397/2) | The comments added in osc_extent_find() describe a kswapd -> osc_flush_async_page() -> cl_page_prep() path that was deleted by LU-18675 before this patch landed, so they document behaviour master cannot have and will mislead readers. Part of the same no-op-on-master problem. | confirmed by review, not fixed |
 | lnet-mr-forwarding | test237-238-no-interop-version-gate | [63582](https://review.whamcloud.com/c/fs/lustre-release/+/63582/5) | The new sanity-lnet tests 237/238 need the router node to run this patch's code (the fix and the new fail_loc 0xe004), but they have no version check. In interop runs where the router is a b2_15/b2_16 server, test_237 fails every time ('Expected N-N >= 50'), and test_238 fails too, because old ... | confirmed by review, not fixed |
-| lnet-mr-forwarding | test238-setup-rc-unchecked | [63582](https://review.whamcloud.com/c/fs/lustre-release/+/63582/5) | test_238 ignores setup_router_test's return code, unlike test_237, so an LNet setup failure on a node goes undetected and the test fails later with a confusing error. Minor test-script robustness issue, not fixed on master. | confirmed by review, not fixed |
 | nodemap-ban-default | ban-search-unlocked | [60074](https://review.whamcloud.com/c/fs/lustre-release/+/60074/15) | nodemap_add_range_helper() calls ban_range_search() on the ban range tree without taking nmc_ban_range_tree_lock, so the search can race with ban-range insertion or deletion. | fixed by 5a3722af08 "LU-19157 nodemap: read semaphore for ban_range_search" |
 | mount-large-nids | append-param-nul | [57560](https://review.whamcloud.com/c/fs/lustre-release/+/57560/10) | append_param() moves the tail of the parameter buffer when replacing a parameter, but when there is no tail (the parameter is the last one) the move skips the NUL terminator, leaving the buffer unterminated. | fixed by 53ae11aa46 "LU-18896 utils: don't miss null-terminator in append_param" |
 | fsinfo-long-nids | root-path-want | [59421](https://review.whamcloud.com/c/fs/lustre-release/+/59421/5) | get_root_path() calls the new get_root_path_fast() even when WANT_INDEX or WANT_NID is requested; the fast path cannot supply those, so the condition choosing it is wrong. | fixed by 50a2634695 "LU-19050 utils: fix get_root_path WANT condition" |

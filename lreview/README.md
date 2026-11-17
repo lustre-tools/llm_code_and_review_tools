@@ -332,7 +332,7 @@ lreview run --lenses --lens-model opus 64086    # lenses on another model
 ```
 
 On `lreview bench`, with the lenses at high, known-bug recall went from
-59% to 70% and from 83% to 92.5% on two case sets, one run beat two or
+59% to 70% and from 84% to 92% on two case sets, one run beat two or
 three ordinary runs together, and real defects per review rose by
 roughly 35-50% with unchanged precision. A review costs about 5x an
 ordinary one and takes about twice as long; with the lenses at medium
@@ -346,6 +346,12 @@ ordinary one and takes about twice as long; with the lenses at medium
   effort (`--lens-effort`, default `medium`) are set apart from the
   reviewer's. A lean review adds the Agent tool to its tools, and an
   `--allow-tool` review adds it to the allowlist.
+- The reviewer settles every lens candidate: it drops one only with the
+  code that prevents the bug, checks "pre-existing" against the parent
+  commit, reports what it cannot settle as a `(minor)` question, and also
+  reports tests that can give a wrong result. Before this, it dropped
+  much of what the lenses found; see the evaluation.
+- The lenses run for every change, however small.
 - lreview puts TASK 1D, the lens step, into the preloaded
   review-core.md in front of Task 2 (into the first message without
   `--preload`); the prompts checkout is not changed.

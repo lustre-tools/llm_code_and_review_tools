@@ -6,7 +6,9 @@ Lustre master, 51 known bugs, 47 of them fixed by a later commit). Claude
 Code 2.1.306 (2.1.325 for the last control runs and the check of the
 merged option), Sonnet 5.5 reviewer at `--effort high`, `--lean`,
 `--preload`, offline, scored with `lreview bench report --judge`. About
-$540 of reviews at list price.
+$540 of reviews at list price. Updated 2026-11-17 with how the reviewer
+settles lens candidates ("Lens finds that do not reach the review") and
+what a lens review costs ("Where the cost goes"), about $90 more.
 
 Which bug each variant found, run by run, is in
 `lens-review-benchmark-results.md`.
@@ -29,8 +31,17 @@ Which bug each variant found, run by run, is in
 - **Not worth doing:** adding the TodoWrite tool, a "recall first" line in
   the protocol, more effort, more repeats, or carrying notes between runs
   (`--memory`).
-- **Where it still loses bugs:** the reviewer drops some of what the
-  lenses find (see "Lens finds that do not reach the review").
+- **The reviewer used to drop much of what the lenses found:** of the known
+  bugs a lens review missed, a lens had written 43% down. Making the
+  reviewer settle every candidate with evidence raised known bugs found
+  from 8/22 to 13/22 on the cases where this happened, at the same cost
+  ($1.64 vs $1.67 a review) and a minute faster; defect precision held,
+  `(minor)` precision fell (11/12 to 8/12 in a blind check).
+- **Where a lens review's cost goes:** the reviewer's work after the lenses
+  return (settling candidates on a ~100K context) is the largest part;
+  each lens costs about 9% of a review, needed or not. The reviewer at
+  `--effort medium` cut the cost by 22% and the time by 30% at the same
+  recall, once it is told to run the lenses on every change.
 
 ## Why one run misses bugs
 
@@ -94,6 +105,15 @@ variant is compared with an ordinary review of the same code.
 - **Cost round**: 7 cases where the lens review had beaten the ordinary review
   (9 bugs), two runs each: cheaper lens variants against the full lens review
   run again on the same cases.
+
+On 2026-11-17 `test238-setup-rc-unchecked` (eval set, lnet-mr-forwarding)
+was dropped from the benchmark: it is not a bug (`setup_router_test` can
+only fail through calls that end in `error()` or `skip()`). The tables
+below were measured with it. Without it, eval is 64/76 (84%) ordinary
+against 72/78 (92%) for the lens review, and the cost round is 5/21
+ordinary, 13/16 lenses at high, 10/16 at medium, 10/16 with three lenses,
+9/16 with Haiku lenses. `lens-review-benchmark-results.md` has the
+corrected per-bug tables.
 
 ## Results
 
@@ -182,29 +202,103 @@ build lens); `--lens-effort high` is the full variant.
 
 ### Never found
 
-`lnetctl-import` fgets overflow (see below), qmt workqueue teardown order,
-lfs mirror nosync+stale verify, root project-quota force flag, nodemap
-fileset parent check; nodemap ban search without the lock in 1 of 6
-lens reviews.
+`lnetctl-import` fgets overflow (see below), lfs mirror nosync+stale
+verify, root project-quota force flag, nodemap fileset parent check;
+nodemap ban search without the lock in 1 of 6 lens reviews. The qmt
+workqueue teardown order was first reported with strict verification
+(below).
 
 ## Lens finds that do not reach the review
 
-- `lnetctl-import`: in two of three pilot lens reviews the **data** lens
-  wrote the known fgets overflow precisely (`len -= strlen(buf)` subtracts
-  0 after `buf +=`; the NUL lands one past `malloc(st_size)`), and the
-  final review reported it in none. The lens called the loop
-  "pre-existing code"; the benchmark records that this change introduced
-  it, and the reviewer took the lens's word instead of checking the diff.
-- `lnet-mr-forwarding`, with `--lenses` as merged (lenses at medium): four
-  lenses flagged test_238's unchecked `setup_router_test` return code and
-  two the missing interop version gate, both known bugs; the review
-  reported neither, because review-core.md's exclusions tell it not to
-  report bugs inside `lustre/tests/*.sh` unless they can crash or hang the
-  system.
+For every known bug a lens review missed, an LLM judge read the candidates
+the lenses had written. Across all lens reviews the final review missed 47
+(review, bug) pairs, and a lens had written the bug down in **20 of them
+(43%)**. The qmt workqueue teardown order, which no review ever reported,
+was in the lifecycle lens's candidates in all three pilot runs. In the
+other direction, of 179 known bugs that lens reviews did report, only 3
+(under 2%) came from the reviewer's own analysis rather than a lens.
 
-How often the reviewer drops lens finds in general was not measured: the
-cases' regex patterns cannot attribute a bug to a lens (many are function
-names every lens cites), so it needs a judged pass over the LENS files.
+The reviewer's own words show why it dropped them:
+
+| dropped bug | the reviewer's reason | |
+|---|---|---|
+| qmt workqueue order | "the old global was set to NULL at the same point, so this behaviour is unchanged" | the patch moved it; never checked against the parent |
+| unlocked tree dump | "debug-only, and the unlocked dump is an existing pattern" | a new call on a new path |
+| svc stats read | "mirrors the existing `lprocfs_counter_add()`" | not checked |
+| fgets overflow, dma map errors | "pre-existing", "predate the patch" | the patch introduced both |
+| interop version gate | "test-only" (review-core.md's exclusion) | a real interop failure |
+| legacy NID over-read | "real MGS versions grant both flags together" | an assumption the code does not enforce |
+| (several) | "the eliminated ones were mostly low-confidence" | dropped in bulk, unexamined |
+
+**The fix (strict verification, TASK 1D in `lreview/lenses.py`).** The
+reviewer settles every candidate on its own: it eliminates one only by
+pointing at what prevents it (a lock, a check, an ordering, or code that
+shows the claim wrong); "pre-existing" needs `git show HEAD^:<file>`, and
+code the patch adds, moves, reorders or newly calls is the patch's; an
+assumption about usage counts only when the code enforces it; a candidate
+it can neither confirm nor eliminate is reported as `(minor)`, saying what
+could not be settled; a test that can give a wrong result (passes without
+exercising the change, fails in a configuration the suite runs, carries on
+after its setup failed) is reportable in a lens review despite
+review-core.md's test-script exclusion; and it lists every candidate's
+disposition. The lenses read the parent before calling code pre-existing.
+
+On the 8 cases where drops had happened, two runs each, lenses at medium:
+
+| | ordinary review | lenses, settled as before | strict verification |
+|---|---|---|---|
+| $/review | 0.52 | 1.64 | 1.67 |
+| minutes | 2.6 | 5.1 | 4.1 |
+| known bugs per run | 7/26 (27%) | 8/22 (36%) | **13/22 (59%)** |
+| found in at least one run | 4/11 | 4/11 | **7/11** |
+| lens finds dropped (of the misses) | -- | 12 of 15 | 3 of 9 |
+| `(defect)` precision, blind check | -- | 10/12 | 11/12 |
+| `(minor)` precision, blind check | -- | 11/12 | 8/12 |
+
+The gains are `legacy-nid-oob` (0/2 to 2/2, the usage-assumption rule),
+the interop version gate (0/2 to 2/2, the test rule) and the qmt
+workqueue order (0/2 to 1/2, the first review ever to report it). All
+three arrived as `(minor)` questions, and three of the four `(minor)`
+findings the blind check called wrong are such questions -- one of them
+the qmt comment itself, a bug a later commit on master fixed, so the
+checker is fallible on exactly the cases nobody can settle quickly.
+Still dropped: the svc stats read. Not written by any lens in these runs:
+the fgets overflow, the unlocked tree dump, the unlocked ban search.
+
+## Where the cost goes
+
+Measured from lreview's telemetry (per-call cost, the fan-out point taken
+at the reviewer call that starts the lenses), 46 lens reviews at medium
+against 30 ordinary reviews of the same changes:
+
+| | $/review | calls |
+|---|---|---|
+| ordinary review | 0.56 | 16, peak context 112K |
+| lens review: reviewer before the lenses (diff, context, categories) | 0.26 | 6 |
+| lens review: five lenses | 0.73 | |
+| lens review: reviewer after the lenses (own analysis, settling candidates, report) | 0.68 | 17, mean context 112K |
+
+About 70% of the after-phase is re-reading the cached context on every
+call. There is no separate judge: the reviewer that runs the protocol also
+settles the candidates.
+
+- **Is an unneeded lens free?** No. On changes that touch no `HAVE_*`,
+  `CONFIG_*`, `#if`, configure or test file, the build lens still cost
+  $0.13, 9% of the review -- the same as where it has work. Skipping it on
+  those changes (11 of 43 benchmark cases; one run each) kept recall on
+  their known bugs (10/12, the two misses not build-lens bugs) and saved
+  0-13% there, about 2% across all reviews: not worth a rule yet.
+- **A lean reviewer** that does not re-hunt the lenses' classes (no
+  callstack.md; keeps reachability, commit message, Fixes:, cross-lens
+  questions) kept recall on the 8 cases (6/11) but saved only 7%: it still
+  made 17 calls after the lenses, settling candidates.
+- **The reviewer at `--effort medium`** (lenses at medium too): 6/11 on
+  the 8 cases, $1.30 (-22%) and 2.9 minutes (-30%), its after-phase down
+  to 9 calls. Its one miss is the qmt bug, in the run where it skipped the
+  lenses on the ten-line change ("the change is about ten lines in three
+  files, so I did the Task 2 analysis myself"); TASK 1D now says to run
+  them for every change, however small. That rerun was cut short by a
+  usage limit, so medium is not yet the default.
 
 ## Setup notes
 
@@ -225,14 +319,14 @@ names every lens cites), so it needs a judged pass over the LENS files.
 
 ## Known issues in lreview bench found on the way
 
-- Two `bench run`s started together race in `prepare_repos()` (`git init`
-  exits 128 on the same case repository).
-- A failed judge call is cached as `found: null` and counted as a miss, for
-  good. The judge sometimes prints two JSON objects (it corrects itself)
-  and `re.search(r"\{.*\}")` takes both, so that verdict fails every time;
-  the last object is the verdict.
-- An expired login fails every review ("OAuth session expired and could not
-  be refreshed"), and the batch keeps starting reviews into it.
+Fixed since: two `bench run`s started together raced in `prepare_repos()`
+(now locked); a failed judge call was cached and counted as a miss (now
+asked again and left out of the counts), and the judge's self-correction
+broke the parser (the last JSON object now counts); an expired login or a
+usage limit ("You've hit your 5-hour limit") failed every later review,
+several after billing partial work (no further review starts now); and
+`test238-setup-rc-unchecked` was not a bug (dropped). Still open:
+
 - The `eval` set is saturated by construction (bugs the default finds at
   least sometimes); the `hard` labels are stale (Sonnet at high now finds
   three of them every time); regex scoring overcounts (37 judged against 46
@@ -243,4 +337,5 @@ names every lens cites), so it needs a judged pass over the LENS files.
 Opus as the reviewer with Sonnet lenses; the upstream per-file
 orchestrator (`kernel/agent/orc.md`); a union of Claude and another model;
 effort levels for the ordinary review; spin-cycle rounds whose code
-changes between rounds.
+changes between rounds; strict verification on the full pilot and eval
+sets; the reviewer at medium with the "every change" wording.
