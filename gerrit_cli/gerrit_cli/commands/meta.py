@@ -1280,7 +1280,10 @@ its own parent and lands on the tip with the older one it sits on
 member), "branch" otherwise. Only an
 open change can be checked. outdated_parent {cn, ps, current, status,
 files} is set when the change sits on an older patchset of its parent,
-status saying whether it applies on the current one; own_stack entries
+status read from the landing on the tip: clean (it lands on its parents'
+current patchsets), conflict with files (the parent's new patchset is
+the cause, as for rebase_cause parent) or unknown (it does not land for
+another reason); own_stack entries
 sitting on an older patchset of the change below carry on_old_patchset
 {of, ps, current}, and a child conflicting with the current one parent
 {cn, files}. With --commit, a local commit below the change that is an

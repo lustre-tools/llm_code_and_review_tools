@@ -521,28 +521,28 @@ def _on_branch(result: dict[str, Any], cn: int) -> dict[str, Any]:
     return on_branch
 
 
-def _older_parents(br: _Branch, focus: _Focus, ar: _Around, cn: int,
-                   on_branch: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[int, dict]]:
+def _older_parents(focus: _Focus, ar: _Around, cn: int, on_branch: dict[str, Any]
+                   ) -> tuple[dict[str, Any] | None, dict[int, dict]]:
     """(the target's parent's newer patchset and whether the target
-    applies on it, the other stack members on an older patchset)."""
+    lands with it, the other stack members on an older patchset). Its
+    status comes from the landing on the tip: clean when the target
+    landed on its parents' current patchsets, conflict when the engine
+    found the parent's new patchset to be the cause, unknown when the
+    target does not land for another reason."""
     stack = focus.stack
     old = {p.cn: o for below_p, p in zip(stack, stack[1:])
            if (o := ar.patchsets.older(focus.diff_of[p.commit], below_p.cn))}
     old.update({n: o for n, sha in ar.child_base.items() if (o := ar.patchsets.older(sha))})
     outdated = old.pop(cn, None)
     if outdated is not None:
-        target_p, parent_p = stack[-1], stack[-2]
-        if on_branch.get("parent"):
-            outdated["status"], files = "conflict", on_branch["parent"]["files"]
-        else:
-            with br.repo:
-                pick = br.repo.pick(parent_p.commit, target_p.commit,
-                                    focus.diff_of[target_p.commit])
-            outdated["status"] = "clean" if pick.ok else pick.status
-            files = list(pick.files)
         outdated = {"cn": outdated.pop("of"), **outdated}
-        if files:
-            outdated["files"] = files
+        if on_branch["status"] == "clean":
+            outdated["status"] = "clean"
+        elif on_branch.get("parent"):
+            outdated["status"] = "conflict"
+            outdated["files"] = on_branch["parent"]["files"]
+        else:
+            outdated["status"] = "unknown"
     return outdated, old
 
 
@@ -583,7 +583,7 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
     result = _try(client, br, focus, ar, sel, hunks)
 
     on_branch = _on_branch(result, cn)
-    outdated, old = _older_parents(br, focus, ar, cn, on_branch)
+    outdated, old = _older_parents(focus, ar, cn, on_branch)
     tiers_of_parents = {n: target_tier(d, br.queued_ids, ranks)
                         for n, d in focus.parents_detail.items()}
     base = base_info(br.repo, {p.cn: p for p in focus.stack}, focus.cns, result["tip"],

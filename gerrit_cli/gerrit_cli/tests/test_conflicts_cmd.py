@@ -839,6 +839,38 @@ def test_target_on_an_older_parent_patchset_that_still_applies(setup):
     assert out["own_stack"]["parents"] == [{"cn": 90, "status": "clean"}]
 
 
+def test_outdated_parent_is_clean_when_the_target_lands_on_the_current_one(setup):
+    """Picked onto the parent's current commit, which sits on an older
+    branch commit, the target conflicts; on the tip it lands."""
+    gerrit, local, client = setup
+    rest = client.rest
+    old = gerrit.master
+    gerrit.advance({"a.c": _text({6: "M"})})
+    p1 = gerrit.change(90, gerrit.master, {"a.c": _text({6: "M"}), "b.c": _text({2: "P1"})})
+    p2 = gerrit.change(90, old, {"b.c": _text({2: "P2"})}, ps=2)
+    rest.add(90, [p1, p2], ["b.c"])
+    t = gerrit.change(100, p1.commit, {"a.c": _text({6: "M", 7: "T"}), "b.c": _text({2: "P1"})})
+    rest.add(100, [t], ["a.c"])
+    with Repo(local) as repo:
+        _git(local, "fetch", "-q", "origin", "refs/changes/00/100/1", "refs/changes/90/90/2")
+        assert repo.pick(p2.commit, t.commit, p1.commit).status == "conflict"
+    out = run(client, local)
+    assert out["status"] == "ok"
+    assert out["outdated_parent"] == {"cn": 90, "ps": 1, "current": 2, "status": "clean"}
+
+
+def test_outdated_parent_is_unknown_when_the_branch_stops_the_target(setup):
+    gerrit, local, client = setup
+    rest = client.rest
+    p1, _p2 = _old_parent(gerrit, rest, {"b.c": _text({2: "P2"})})
+    t = gerrit.change(100, p1.commit, {"a.c": _text({9: "T"}), "b.c": _text({2: "P1"})})
+    rest.add(100, [t], ["a.c"])
+    gerrit.advance({"a.c": _text({9: "master"})})
+    out = run(client, local)
+    assert out["status"] == "needs-rebase" and out["rebase_cause"] == "branch"
+    assert out["outdated_parent"] == {"cn": 90, "ps": 1, "current": 2, "status": "unknown"}
+
+
 def test_parents_below_the_parents_newer_patchset_are_the_targets_too(setup):
     """70145 on 65219 PS38; 65219's current PS sits on 69702, which the
     related list of 70145 does not name."""

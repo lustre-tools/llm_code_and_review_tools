@@ -51,9 +51,9 @@ own parents, count those apart by `own_via`.
 known once it lands. Rebase it locally as below, then rerun with
 `--commit` (or `--worktree`) and judge the collisions on that result.
 
-- `outdated_parent.status: clean`, or `on_old_patchset` without a
-  `parent` conflict: it sits on an older patchset of its parent but
-  applies on the current one. Under cherry-pick submit it lands as it
+- `outdated_parent.status: clean`, or a clean `on_old_patchset` entry:
+  it sits on an older patchset of its parent but lands on the tip with
+  the current one. Under cherry-pick submit it lands as it
   is: leave it (a rebase would only cost votes); mention it in a line.
 - `rebase_cause: parent`, or `outdated_parent.status: conflict`: the
   change (or `rebase_onto.for`) conflicts with its parent's current
@@ -61,7 +61,8 @@ known once it lands. Rebase it locally as below, then rerun with
   locally onto `rebase_onto` (the parent's current patchset, unchanged),
   resolve it like any collision below, and rerun `gc conflicts --commit`
   on the result before judging the rest.
-- `rebase_cause: branch`: if a rebase would move frozen or ready parents
+- `rebase_cause: branch` (`outdated_parent.status` is then `unknown`):
+  if a rebase would move frozen or ready parents
   (`base.rebase`), wait for them to land and rebase once; otherwise a
   rebase onto the tip fixes it but drops votes, and the user decides.
 

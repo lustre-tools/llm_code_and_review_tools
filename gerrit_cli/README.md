@@ -635,8 +635,10 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
   failed (`trial merge failed`).
 - **Older patchsets in the own stack**: `outdated_parent` {cn, ps,
   current, status, files} when the change sits on an older patchset of
-  its parent, with whether it applies on the current one (`clean` or
-  `conflict`); a parent or child sitting on an older patchset of the
+  its parent, `status` read from the landing on the tip: `clean` (it
+  lands on its parents' current patchsets), `conflict` with `files`
+  (the parent's new patchset is the cause, as for `rebase_cause:
+  parent`) or `unknown` (it does not land for another reason); a parent or child sitting on an older patchset of the
   change below it carries `on_old_patchset` {of, ps, current} in
   `own_stack`, and a child conflicting with the current one `parent`
   {cn, files}.
