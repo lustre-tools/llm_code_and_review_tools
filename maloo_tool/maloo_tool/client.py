@@ -1214,12 +1214,21 @@ class MalooClient:
         # surfaces as a clear credentials error rather than later as an
         # opaque "Log download returned HTML" from download_logs.
         if resp.status_code not in (301, 302, 303, 307, 308):
+            flash = _re.search(
+                r'class="[^"]*(?:flash|alert|notice|error)[^"]*"[^>]*>'
+                r"\s*([^<]+)",
+                resp.text,
+            )
+            said = f" Maloo said: {flash.group(1).strip()}." if flash else ""
             raise AuthError(
-                "Maloo web sign-in failed: check MALOO_USER/MALOO_PASS for "
-                f"{self.config.username!r} (set in environment or "
-                "~/.config/maloo-tool/.env). The web password is your "
-                "testing.whamcloud.com login and can expire separately "
-                "from the REST API."
+                "Maloo web sign-in failed for "
+                f"{self.config.username!r}: the sign-in form was rejected "
+                "instead of signing in." + said + " This path (log downloads "
+                "and retest) needs the account's web-login password. If the "
+                "REST API works but this does not, the stored MALOO_PASS is "
+                "valid for the API but is not the web password (Maloo can "
+                "issue a separate API token). Set the web-login password in "
+                "MALOO_PASS (environment or ~/.config/maloo-tool/.env)."
             )
 
         # Also merge cookies into the main session for download_logs
