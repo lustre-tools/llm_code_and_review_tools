@@ -112,14 +112,11 @@ def resolve_model(agent: str, model: str = None) -> str:
     """Model to run reviews with.
 
     Explicit --model wins, then $LREVIEW_MODEL unless another agent's
-    catalog lists that name: the variable is shared by every agent,
-    and `codex -m opus` only fails. claude defaults to
-    sonnet, codex to gpt-6.1-sol and cursor to cursor-grok-4.6-high,
-    the others to whatever their own CLI defaults to.
+    catalog lists that name. Use the backend's default in DEFAULT_MODELS
+    when available. Otherwise, the agent CLI picks its own default.
 
-    codex aliases are expanded to the slug the CLI expects, so
-    `--model sol` runs — and is posted and recorded as —
-    gpt-6.1-sol. An unrecognized name is passed through untouched.
+    Codex aliases are expanded to the slug used to run, record and post
+    reviews. An unrecognized name is passed through untouched.
     """
     from .models import DEFAULT_MODELS, canonical_model, catalog_agent
     if not model:
@@ -1208,14 +1205,10 @@ def build_parser() -> argparse.ArgumentParser:
              "backends, auggie, gemini and opencode are best-effort)")
     run_p.add_argument(
         "--model", default=None,
-        help="Model for the review runs — claude: sonnet (default), opus, "
-             "fable, haiku; codex: gpt-6.1-sol (default), "
-             "gpt-6-sol, gpt-6-astra, gpt-5.6-sol/-terra/-luna, gpt-5.5, "
-             "gpt-5.3-codex-spark, or their aliases (sol, astra, terra, "
-             "luna, spark); cursor: cursor-grok-4.6-high (default) or any "
-             "'agent --list-models' slug. "
-             "$LREVIEW_MODEL sets the default; 'lreview models' "
-             "prints the codex table")
+        help=f"Model for the review runs. Defaults to {CLAUDE_DEFAULT_MODEL} "
+             f"for claude, {CODEX_DEFAULT_MODEL} for codex, and "
+             f"{CURSOR_DEFAULT_MODEL} for cursor. $LREVIEW_MODEL overrides "
+             "the default. Run 'lreview models' for available models and aliases.")
     run_p.add_argument(
         "--effort", choices=list(EFFORT_LEVELS),
         default=os.environ.get("LREVIEW_EFFORT"),

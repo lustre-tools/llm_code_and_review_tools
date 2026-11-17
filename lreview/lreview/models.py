@@ -1,9 +1,8 @@
 """Model catalogs for the review backends.
 
 Claude takes short model names (opus, sonnet, fable, haiku) and one
-reasoning-effort ladder that every model shares. Codex does not: it
-fronts several model families -- GPT-6 and GPT-5.6 are the current
-ones -- and the effort ladder is *per model*. Only some models accept
+reasoning-effort ladder that every model shares. Codex supports several
+model families, and the effort ladder is *per model*. Only some models accept
 "ultra", and the older gpt-5.5 / gpt-5.3-codex-spark stop at "xhigh".
 
 Asking codex for an effort its model cannot do fails inside the agent
@@ -11,10 +10,8 @@ seconds into the run, after lreview has already fetched the change and
 built a worktree, and the batch records it as a failed review. So the
 pair is validated up front, before anything expensive happens.
 
-The table is a snapshot of codex's own model list (codex-cli 0.159.1,
-2026-10-03). A name that is not in it is passed through to the agent
-untouched and not effort-checked, so a model released after this table
-was written still works -- the table constrains only what it knows.
+The table is based on Codex's model catalog. Unlisted model names pass
+through to the agent without effort validation.
 """
 
 from dataclasses import dataclass
@@ -48,12 +45,28 @@ class CodexModel:
 
 CODEX_MODELS = (
     CodexModel(
+        slug="gpt-6.2-sol",
+        family="GPT-6.2",
+        summary="fast model for coding and everyday work",
+        efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
+        default_effort="low",
+        aliases=("sol", "sol6.2", "gpt-6.2", "gpt6.2"),
+    ),
+    CodexModel(
+        slug="gpt-6.2-astra",
+        family="GPT-6.2",
+        summary="most capable model for complex coding and professional work",
+        efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
+        default_effort="low",
+        aliases=("astra", "astra6.2"),
+    ),
+    CodexModel(
         slug="gpt-6.1-sol",
         family="GPT-6.1",
-        summary="default: GPT-6-class work at several times less than astra",
+        summary="previous generation model for coding and everyday work",
         efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
         default_effort="medium",
-        aliases=("sol", "sol6.1", "gpt-6.1", "gpt6.1"),
+        aliases=("sol6.1", "gpt-6.1", "gpt6.1"),
     ),
     CodexModel(
         slug="gpt-6-sol",
@@ -66,10 +79,10 @@ CODEX_MODELS = (
     CodexModel(
         slug="gpt-6-astra",
         family="GPT-6",
-        summary="most capable; complex, demanding work",
+        summary="previous generation Astra for complex, demanding work",
         efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
         default_effort="medium",
-        aliases=("astra", "gpt-6", "gpt6"),
+        aliases=("gpt-6", "gpt6"),
     ),
     CodexModel(
         slug="gpt-5.6-sol",

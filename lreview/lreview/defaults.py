@@ -26,9 +26,8 @@ DEFAULT_BACKPORT = True
 # Placeholder <model> is replaced with the model that ran the review.
 DEFAULT_PREFIX = "[AI review - <model>]"
 
-# Codex reviews default to gpt-6.1-sol: astra's capability at several
-# times less of the plan. Override with --model / $LREVIEW_MODEL.
-CODEX_DEFAULT_MODEL = "gpt-6.1-sol"
+# Override the Codex review model with --model or $LREVIEW_MODEL.
+CODEX_DEFAULT_MODEL = "gpt-6.2-sol"
 
 # Sonnet 5.5 found as many known bugs as Opus 5.5 on lreview bench at
 # under half the cost and time (2026-10-09). --model opus for the rest.
