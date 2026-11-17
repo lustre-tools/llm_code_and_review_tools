@@ -25,8 +25,14 @@ from .defaults import (  # noqa: F401 (re-exported)
 # models accept subsets (see CLAUDE_EFFORTS and CodexModel.efforts).
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max", "ultra")
 
+# The ladders: up to "ultra", up to "max", and up to "xhigh" for the
+# older codex models.
+ULTRA_EFFORTS = EFFORT_LEVELS
+MAX_EFFORTS = EFFORT_LEVELS[:-1]
+XHIGH_EFFORTS = EFFORT_LEVELS[:-2]
+
 # claude --effort; "ultra" is codex-only
-CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+CLAUDE_EFFORTS = MAX_EFFORTS
 
 # Agents that take a reasoning effort at all
 EFFORT_AGENTS = ("claude", "codex", "auggie")
@@ -48,7 +54,7 @@ CODEX_MODELS = (
         slug="gpt-6.2-sol",
         family="GPT-6.2",
         summary="fast model for coding and everyday work",
-        efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
+        efforts=ULTRA_EFFORTS,
         default_effort="low",
         aliases=("sol", "sol6.2", "gpt-6.2", "gpt6.2"),
     ),
@@ -56,7 +62,7 @@ CODEX_MODELS = (
         slug="gpt-6.2-astra",
         family="GPT-6.2",
         summary="most capable model for complex coding and professional work",
-        efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
+        efforts=ULTRA_EFFORTS,
         default_effort="low",
         aliases=("astra", "astra6.2"),
     ),
@@ -64,7 +70,7 @@ CODEX_MODELS = (
         slug="gpt-6.1-sol",
         family="GPT-6.1",
         summary="previous generation model for coding and everyday work",
-        efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
+        efforts=ULTRA_EFFORTS,
         default_effort="medium",
         aliases=("sol6.1", "gpt-6.1", "gpt6.1"),
     ),
@@ -72,7 +78,7 @@ CODEX_MODELS = (
         slug="gpt-6-sol",
         family="GPT-6",
         summary="previous Sol",
-        efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
+        efforts=ULTRA_EFFORTS,
         default_effort="medium",
         aliases=("sol6",),
     ),
@@ -80,7 +86,7 @@ CODEX_MODELS = (
         slug="gpt-6-astra",
         family="GPT-6",
         summary="previous generation Astra for complex, demanding work",
-        efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
+        efforts=ULTRA_EFFORTS,
         default_effort="medium",
         aliases=("gpt-6", "gpt6"),
     ),
@@ -88,7 +94,7 @@ CODEX_MODELS = (
         slug="gpt-5.6-sol",
         family="GPT-5.6",
         summary="reliable agentic workhorse for everyday tasks",
-        efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
+        efforts=ULTRA_EFFORTS,
         default_effort="low",
         aliases=("sol5.6",),
     ),
@@ -96,7 +102,7 @@ CODEX_MODELS = (
         slug="gpt-5.6-terra",
         family="GPT-5.6",
         summary="balanced agentic coding model for everyday work",
-        efforts=("low", "medium", "high", "xhigh", "max", "ultra"),
+        efforts=ULTRA_EFFORTS,
         default_effort="medium",
         # bare "gpt-5.6" means the balanced member of the family
         aliases=("terra", "gpt-5.6", "gpt5.6"),
@@ -105,7 +111,7 @@ CODEX_MODELS = (
         slug="gpt-5.6-luna",
         family="GPT-5.6",
         summary="fast and affordable agentic coding",
-        efforts=("low", "medium", "high", "xhigh", "max"),
+        efforts=MAX_EFFORTS,
         default_effort="medium",
         aliases=("luna",),
     ),
@@ -113,7 +119,7 @@ CODEX_MODELS = (
         slug="gpt-5.5",
         family="GPT-5.5",
         summary="previous generation, coding and general work",
-        efforts=("low", "medium", "high", "xhigh"),
+        efforts=XHIGH_EFFORTS,
         default_effort="medium",
         aliases=("gpt5.5",),
     ),
@@ -121,7 +127,7 @@ CODEX_MODELS = (
         slug="gpt-5.3-codex-spark",
         family="GPT-5.3",
         summary="ultra-fast coding model",
-        efforts=("low", "medium", "high", "xhigh"),
+        efforts=XHIGH_EFFORTS,
         default_effort="high",
         aliases=("spark", "codex-spark"),
     ),
