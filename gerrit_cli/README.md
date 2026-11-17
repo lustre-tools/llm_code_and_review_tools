@@ -510,9 +510,10 @@ which side should move? It trial-merges, so it does not rely on Gerrit's
 mergeable flag or `conflicts:` search.
 It models Gerrit's cherry-pick submit: each change lands as its own diff
 picked onto the branch, so two changes collide only when they do not land
-together on the branch tip (or on `<branch>-next`), in either order.
-Where a change happens to sit, its old base, does not matter. The silent checks, the readiness voters (jenkins, Maloo,
-the Code-Review count) and the ignored-ticket defaults are Lustre's.
+together on the branch tip (or on `<branch>-next`), in either order. Where
+a change happens to sit, its old base, does not matter. The silent checks,
+the readiness voters (jenkins, Maloo, the Code-Review count) and the
+ignored-ticket defaults are Lustre's.
 
 ```bash
 gc conflicts 12345 --repo ~/lustre-release            # the uploaded patchset
@@ -636,12 +637,12 @@ gc conflicts 12345 --repo ~/lustre-release --full     # every field
 - **Older patchsets in the own stack**: `outdated_parent` {cn, ps,
   current, status, files} when the change sits on an older patchset of
   its parent, `status` read from the landing on the tip: `clean` (it
-  lands on its parents' current patchsets), `conflict` with `files`
-  (the parent's new patchset is the cause, as for `rebase_cause:
-  parent`) or `unknown` (it does not land for another reason); a parent or child sitting on an older patchset of the
-  change below it carries `on_old_patchset` {of, ps, current} in
-  `own_stack`, and a child conflicting with the current one `parent`
-  {cn, files}.
+  lands on its parents' current patchsets), `conflict` with `files` (the
+  parent's new patchset is the cause, as for `rebase_cause: parent`) or
+  `unknown` (it does not land for another reason); a parent or child
+  sitting on an older patchset of the change below it carries
+  `on_old_patchset` {of, ps, current} in `own_stack`, and a child
+  conflicting with the current one `parent` {cn, files}.
 - `--commit SHA`: the local commit and the local commits below it down
   to the branch; each commit's last Change-Id names its change, and a
   commit without an open change belongs to the change above it. The

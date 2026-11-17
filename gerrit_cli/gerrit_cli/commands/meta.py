@@ -1325,7 +1325,8 @@ silent_only. clean, already_conflicting and not_tried are counts;
 commit, tested_commit (unless --commit tested another commit), project
 and tip are left out. --full adds those, each pair's commit and ps (the
 candidate's current patchset, to fetch it), every hashtag, the per-order
-results as objects and the change lists behind the counts. Hunks appear only with --hunks or --hunks-for, in either form.
+results as objects and the change lists behind the counts. Hunks appear
+only with --hunks or --hunks-for, in either form.
 """,
         "examples": [
             {
