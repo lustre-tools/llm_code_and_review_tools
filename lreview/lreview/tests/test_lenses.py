@@ -58,6 +58,20 @@ class TestLensPrompt:
         assert "Output directory: <current directory>/review-context" in text
         assert "absolute paths" in text
 
+    def test_task_sets_how_candidates_are_settled(self, tmp_path):
+        text = task_text(tmp_path / "p")
+        assert "Eliminate a candidate only by pointing at what prevents it" in text
+        assert "git show HEAD^:<file>" in text
+        assert "report it as `(minor)`" in text
+        assert "`lustre/tests/`" in text
+        assert "LENS DISPOSITIONS:" in text
+        assert text.index("LENS DISPOSITIONS:") < text.index("LENSES: <N>")
+
+    def test_lens_says_whether_the_patch_introduced_it(self):
+        text = LENS_PROMPT_PATH.read_text()
+        assert "git show HEAD^:<file>" in text
+        assert '"introduced"' in text
+
     def test_task_goes_in_front_of_task_2(self, tmp_path):
         out = with_task(PROTOCOL, tmp_path)
         assert out.index("### TASK 1D") < out.index(TASK_2_HEADING)

@@ -55,10 +55,43 @@ prompt says:
 Give both directories as absolute paths.  While they run you have nothing
 to wait on: when they return, read every
 `./{LENS_OUTPUT_DIR}/LENS-*.json`.  Every candidate is a suspect bug for Task
-2; treat it like one you found yourself, verify it against the code in Task
-2 and Task 3, and report it or eliminate it with a reason.  A lens
-candidate is not evidence by itself and a lens's silence proves nothing;
-still do your own Task 2 analysis.  Output:
+2; treat it like one you found yourself and verify it against the code in
+Task 2 and Task 3.  A lens candidate is not evidence by itself and a lens's
+silence proves nothing; still do your own Task 2 analysis.
+
+Lens candidates are lost far more often by being dismissed than by being
+wrong.  Settle each one on its own:
+
+- Eliminate a candidate only by pointing at what prevents it: the lock
+  that is held, the check that runs first, the ordering that guarantees
+  it, or the code that shows the claim is wrong.  "Low confidence",
+  "speculative", "debug only", "unlikely" and "an existing pattern" are
+  not reasons on their own.
+- "Pre-existing" or "unchanged" needs the parent commit: read the code in
+  `git show HEAD^:<file>` and compare it with what the patch does.  Code
+  the patch adds, moves, reorders or calls from a new place is the
+  patch's, even where similar code existed before; so is an old bug the
+  patch makes reachable or more likely.
+- An assumption about how the code is used ("no caller does that", "that
+  configuration is not deployed") eliminates a candidate only when the
+  code enforces it.
+- A candidate you can neither confirm nor eliminate this way is not
+  dropped: report it as `(minor)`, saying what the possible bug is and
+  what you could not settle.
+- In this review a lens candidate about a test script under
+  `lustre/tests/` is reportable when the test can give a wrong result: it
+  passes without exercising the change, fails in a configuration the test
+  suite runs (interop with older servers or routers, for one), or carries
+  on after its own setup failed.  The EXCLUSIONS rule on test scripts does
+  not cover these.
+
+Before Task 3, list every candidate with its disposition:
+
+    LENS DISPOSITIONS:
+    - <lens> <n>: CONFIRMED | ELIMINATED (<file:line that prevents it>) |
+      NOT THE PATCH'S (<HEAD^ file:line, same behaviour>) | UNSETTLED
+
+then output:
 
     LENSES: <N> candidates from <M> lenses; <K> confirmed, <E> eliminated
 

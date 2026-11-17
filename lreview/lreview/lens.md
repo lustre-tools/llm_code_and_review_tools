@@ -20,7 +20,10 @@ output directory.
    (other users of the same lock, field, flag or macro).
 3. Assume the patch has bugs.  A function you did not open is a function
    you did not check: say so in `unchecked` rather than guessing.
-4. Do not look forward in git history and do not use the network.
+4. Do not call something pre-existing without reading the parent:
+   `git show HEAD^:<file>`.  Code the patch adds, moves, reorders or calls
+   from a new place belongs to the patch.  Say which in `introduced`.
+5. Do not look forward in git history and do not use the network.
 
 ## Lenses
 
@@ -86,7 +89,8 @@ resolves wherever your shell last changed directory to:
       "function": "foo",
       "claim": "one sentence: what goes wrong",
       "evidence": "the code path, with the lines that prove it",
-      "confidence": "high|medium|low"
+      "confidence": "high|medium|low",
+      "introduced": "added|moved|newly reachable|pre-existing (HEAD^ file:line)"
     }
   ],
   "unchecked": ["functions or areas you could not verify"]
