@@ -71,6 +71,17 @@ def _has(repo: Path, sha: str) -> bool:
 
 def prepare_repos(bench_dir: Path, cases: list,
                   source: Optional[Path] = None) -> dict:
+    """_prepare_repos() under a lock: two bench runs started together
+    would otherwise create the same case repository at once."""
+    import fcntl
+    bench_dir.mkdir(parents=True, exist_ok=True)
+    with open(bench_dir / ".prepare.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _prepare_repos(bench_dir, cases, source)
+
+
+def _prepare_repos(bench_dir: Path, cases: list,
+                   source: Optional[Path] = None) -> dict:
     """One repository per case, holding that case's commit and its
     history and nothing later; returns {case id: repository}.
 
@@ -329,11 +340,15 @@ def llm_found(case: dict, bug: dict, findings: list,
         stdin=subprocess.DEVNULL)
     try:
         text = json.loads(result.stdout).get("result", "")
-        verdict = json.loads(re.search(r"\{.*\}", text, re.S).group(0))
+        # The judge sometimes corrects itself and prints a second JSON
+        # object; the last one is its verdict.
+        objects = re.findall(r"\{[^{}]*\"found\"[^{}]*\}", text)
+        verdict = json.loads(objects[-1] if objects else
+                             re.search(r"\{.*\}", text, re.S).group(0))
         return {"found": bool(verdict.get("found")),
                 "finding": verdict.get("finding"),
                 "why": verdict.get("why", "")}
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, IndexError):
         return {"found": None, "finding": None,
                 "why": f"judge failed: {result.stderr[-200:]}"}
 
@@ -392,9 +407,15 @@ def score(label_dir: Path, cases: list, judge: bool = False,
         if asks:
             with ThreadPoolExecutor(judge_jobs) as pool:
                 answers = pool.map(lambda a: llm_found(a[1], a[2], a[3]), asks)
+                failed = {}
                 for (key, *_), answer in zip(asks, answers):
-                    cache[key] = answer
+                    # A failed call is asked again next time, not kept.
+                    if answer.get("found") is None:
+                        failed[key] = answer
+                    else:
+                        cache[key] = answer
             cache_path.write_text(json.dumps(cache, indent=1))
+            cache = {**cache, **failed}
         for row in rows:
             for verdict in row["bugs"].values():
                 key = verdict.pop("key", None)
@@ -418,6 +439,9 @@ def summarize(scored: dict, judge: bool = False) -> dict:
     bugs = [(r["case"], b, v) for r in rows
             if r["complete"] and not r.get("leaked")
             for b, v in r["bugs"].items()]
+    # A verdict the judge failed to give is not a miss: leave it out.
+    unjudged = [x for x in bugs if judge and x[2].get("judge") is None]
+    bugs = [x for x in bugs if x not in unjudged]
     union = defaultdict(bool)
     for case, bug, verdict in bugs:
         union[(case, bug)] |= _found(verdict, judge)
@@ -442,6 +466,7 @@ def summarize(scored: dict, judge: bool = False) -> dict:
         "bugs_found_any_rep": sum(union.values()),
         "bugs_known": len(union),
         "leaked": sum(1 for r in rows if r.get("leaked")),
+        "unjudged": len(unjudged),
     }
 
 
@@ -463,6 +488,8 @@ def bug_rates(scoreds: list, judge: bool = False) -> dict:
                 if not row["complete"] or row.get("leaked"):
                     continue
                 for bug, verdict in row["bugs"].items():
+                    if judge and verdict.get("judge") is None:
+                        continue
                     cell = rates.setdefault((row["case"], bug), {}).setdefault(
                         scored["label"], [0, 0])
                     cell[0] += _found(verdict, judge)
@@ -514,6 +541,10 @@ def render(scoreds: list, judge: bool = False) -> str:
         lines.append("Reviews in " + ", ".join(leaky) + " saw a case's "
                      "later fix (marked LEAKED below); their bugs are left "
                      "out of the counts.")
+    unjudged = sum(summarize(sc, judge)["unjudged"] for sc in scoreds)
+    if unjudged:
+        lines.append(f"{unjudged} verdict(s) failed and are left out of the "
+                     "counts; run the report again to ask for them.")
     lines.append("$/review is Claude's list-price figure; for codex, N%p is an "
                  "upper bound on the share of the weekly plan a review used.  "
                  "Mtok: tokens processed per review.")

@@ -247,3 +247,47 @@ def test_fix_reusing_the_subject_is_no_leak(tmp_path):
     case["bugs"][0].update(fix_sha="abcdef1234567",
                            fix_subject="LU-1 llite: the change")
     assert bench.summarize(bench.score(label, [case]))["leaked"] == 0
+
+
+def test_a_failed_verdict_is_asked_again_not_counted(tmp_path, monkeypatch):
+    label = tmp_path / "arm"
+    _rep(label, 1, "c1", ["something else"])
+    answers = [{"found": None, "finding": None, "why": "judge failed: "},
+               {"found": True, "finding": 0, "why": "same bug"}]
+    monkeypatch.setattr(bench, "llm_found",
+                        lambda case, bug, findings, model=None: answers.pop(0))
+    cases = [_case("0" * 40)]
+    s = bench.summarize(bench.score(label, cases, judge=True), judge=True)
+    assert (s["bugs_found"], s["bug_chances"], s["unjudged"]) == (0, 0, 1)
+    assert json.loads((label / "rep1" / "judge.json").read_text()) == {}
+    s = bench.summarize(bench.score(label, cases, judge=True), judge=True)
+    assert (s["bugs_found"], s["bug_chances"], s["unjudged"]) == (1, 1, 0)
+
+
+def test_the_judges_last_verdict_counts(monkeypatch):
+    text = ('{"found": true, "finding": 3, "why": "first"}\n\nCorrection: '
+            '{"found": false, "finding": null, "why": "second"}')
+
+    class Done:
+        stdout = json.dumps({"result": text})
+        stderr = ""
+    monkeypatch.setattr(bench.subprocess, "run", lambda *a, **k: Done())
+    v = bench.llm_found(_case("0" * 40), _case("0" * 40)["bugs"][0], ["x"])
+    assert v == {"found": False, "finding": None, "why": "second"}
+
+
+def test_prepare_repos_takes_a_lock(tmp_path, source):
+    repo, sha = source
+    repos = bench.prepare_repos(tmp_path / "bench", [_case(sha)], repo)
+    assert (tmp_path / "bench" / ".prepare.lock").exists()
+    assert set(repos) == {"c1"}
+
+
+def test_render_says_when_verdicts_failed(tmp_path, monkeypatch):
+    label = tmp_path / "arm"
+    _rep(label, 1, "c1", ["something else"])
+    monkeypatch.setattr(bench, "llm_found", lambda *a, **k: {
+        "found": None, "finding": None, "why": "judge failed: "})
+    text = bench.render([bench.score(label, [_case("0" * 40)], judge=True)],
+                        judge=True)
+    assert "1 verdict(s) failed" in text
