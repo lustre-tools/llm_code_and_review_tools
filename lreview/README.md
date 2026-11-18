@@ -439,8 +439,8 @@ is not thereby a false positive. The sets:
   separate configurations with easy ones as regression guards. For cost
   checks and quick verification.
 - `eval`: every case whose bugs the default setup finds at least some
-  of the time (32 cases). For real comparisons; expensive.
-- `hard`: cases whose bugs the default setup never found (11). Where a
+  of the time (37 cases). For real comparisons; expensive.
+- `hard`: cases whose bugs the default setup never found (15). Where a
   better model or setting would show.
 - `all`: everything. Use it before
 and after changing lreview, its defaults, the review prompts, or the
