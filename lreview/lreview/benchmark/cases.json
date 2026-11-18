@@ -2010,6 +2010,404 @@
     "eval"
    ],
    "notes": "Found without a Fixes: tag (szz), vetted by an LLM reading both commits."
+  },
+  {
+   "id": "lmv-disconnect-uaf",
+   "change": 64317,
+   "patchset": 23,
+   "sha": "cf66759599a1402eb80d5befc3c1410eba07e48c",
+   "subject": "LU-19921 llite: add OBD_NOTIFY_GSSIAM upcall",
+   "change_id": "Ia6d8ac6c8730ab4676be2afbd0b56b12388da12d",
+   "merged": "2026-07-10",
+   "lines": 153,
+   "subsystem": "lmv/llite",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "upcall-clear-after-disconnect",
+     "fix_sha": "deacfcca45b8a9caeb7b002fa71ac9534ff4d941",
+     "fix_subject": "LU-20700 lmv: fix use-after-free in lmv_disconnect_mdc()",
+     "summary": "lmv_disconnect_mdc() and the lmv_check_connect() error path clear tgt->ltd_exp->exp_obd->obd_upcall (onu_owner/onu_upcall) after obd_disconnect(tgt->ltd_exp). obd_disconnect() drops the export reference, so the export can already be freed: use-after-free (sanity-sec test_27e crash). The upcall must be cleared before obd_disconnect().",
+     "locations": [
+      "lustre/lmv/lmv_obd.c:lmv_disconnect_mdc",
+      "lustre/lmv/lmv_obd.c:lmv_check_connect"
+     ],
+     "match": [
+      [
+       "obd_disconnect",
+       "use.after.free|UAF|freed|dangling|after (the )?(export|reference)|drop(s|ped)? the (last )?ref"
+      ],
+      [
+       "use.after.free|UAF",
+       "ltd_exp|exp_obd|obd_upcall|onu_upcall|onu_owner"
+      ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-11-18"
+     },
+     "difficulty": "easy"
+    }
+   ],
+   "notes": "Found by a survey of master commits whose Fixes: trailer names a change that aireview reviewed. aireview reviewed the change and did not flag it. sonnet (high effort), lean, preload on 2026-11-18 found: upcall-clear-after-disconnect 2/2.",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "ec-parity-km-zero",
+   "change": 62906,
+   "patchset": 42,
+   "sha": "8c5f5d3ec9b1defeaf597e5def39438c6d6086d0",
+   "subject": "LU-12668 lod: bind ec mirror to data mirror during creation",
+   "change_id": "I97c7586b4ee02a569f618bd6a8e124671b6dc067",
+   "merged": "2026-07-10",
+   "lines": 234,
+   "subsystem": "lod EC",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "ec-k-zero-divide",
+     "fix_sha": "fed89412bfb4866ded582b9c2984e533b5353e7a",
+     "fix_subject": "LU-19548 lfs: mirror extend support for EC",
+     "summary": "lod_qos_prep_create() sizes a parity component with ec_split_stripes(data stripe count, llc_dstripe_count). llc_dstripe_count (k) comes unchecked from the client layout; lod_verify_striping() bounds only k+m. k == 0 divides by zero in ec_split_stripes() ('total % suggested') on the MDS.",
+     "locations": [
+      "lustre/lod/lod_qos.c:lod_qos_prep_create",
+      "lustre/lod/lod_lov.c:lod_verify_striping"
+     ],
+     "match": [
+      [
+       "divi\\w*.by.zero|div.?by.?zero|modulo (by )?zero|zero divisor|% ?0\\b|suggested ?== ?0",
+       "dstripe|\\bk\\b|ec_split_stripes"
+      ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-11-18"
+     },
+     "difficulty": "easy"
+    },
+    {
+     "id": "ec-m-zero-lassert",
+     "fix_sha": "fed89412bfb4866ded582b9c2984e533b5353e7a",
+     "fix_subject": "LU-19548 lfs: mirror extend support for EC",
+     "summary": "llc_cstripe_count (m) is also copied unchecked from the client layout. m == 0 makes the parity component's llc_stripe_count = (n0 + n1) * 0 = 0, which trips LASSERT(lod_comp->llc_stripe_count) on the MDS. lod_verify_striping() must reject k == 0 or m == 0.",
+     "locations": [
+      "lustre/lod/lod_qos.c:lod_qos_prep_create",
+      "lustre/lod/lod_lov.c:lod_verify_striping"
+     ],
+     "match": [
+      [
+       "cstripe|\\bm ?(==|=|is) ?0|zero parity|parity count",
+       "LASSERT|stripe_count (of |is |becomes |= ?)?(0|zero)|zero stripes"
+      ],
+      [
+       "lod_verify_striping",
+       "cstripe|\\bm\\b.{0,20}(0|zero)"
+      ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-11-18"
+     },
+     "difficulty": "easy"
+    }
+   ],
+   "notes": "Found by a survey of master commits whose Fixes: trailer names a change that aireview reviewed. aireview missed it on this change and found it later while reviewing 65921 (PS10 k == 0, PS14 m == 0). sonnet (high effort), lean, preload on 2026-11-18 found: ec-k-zero-divide 2/2, ec-m-zero-lassert 2/2.",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "gssiam-modprobe-loop",
+   "change": 65062,
+   "patchset": 78,
+   "sha": "7c7f10e48354b83e790e562cfc42e6f0583485ea",
+   "subject": "LU-19921 sec: add GSSIAM nodemap integration and export setup",
+   "change_id": "I6b16504892da86e9026f4e0a4792fac7a6728b91",
+   "merged": "2026-09-06",
+   "lines": 814,
+   "subsystem": "ptlrpc sec",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "wireflavor2policy-loop",
+     "fix_sha": "201f039a1be5a99992c682621eca7e03bffb623e",
+     "fix_subject": "LU-20984 ptlrpc: bound ptlrpc_gss load in policy lookup",
+     "summary": "sptlrpc_wireflavor2policy() now retries request_module(\"ptlrpc_gss\") in while(1) until policies[SPTLRPC_POLICY_GSSIAM] is set, but nothing registers a GSSIAM policy. Any RPC with a GSSIAM wire flavor pins the calling thread (a ptlrpc service thread for an incoming request) in a loop that runs modprobe forever.",
+     "locations": [
+      "lustre/ptlrpc/sec.c:sptlrpc_wireflavor2policy"
+     ],
+     "match": [
+      [
+       "loop|while ?\\(1\\)|forever|never (terminat|return|exit|break)|spin|livelock|hang",
+       "request_module|modprobe|ptlrpc_gss"
+      ],
+      [
+       "GSSIAM",
+       "(no(thing)?|never) (one )?regist|unregistered|not registered|no policy",
+       "polic"
+      ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-11-18"
+     },
+     "difficulty": "easy"
+    }
+   ],
+   "notes": "Found by a survey of master commits whose Fixes: trailer names a change that aireview reviewed. aireview flagged it (PS55, sec.c:114); the author disputed it and it landed. sonnet (high effort), lean, preload on 2026-11-18 found: wireflavor2policy-loop 0/2.",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "p2pdma-per-stripe",
+   "change": 66987,
+   "patchset": 30,
+   "sha": "83142c39b0873896f2b0aa8a92e442e06bb334b6",
+   "subject": "LU-20438 clio: Enable P2P DMA in client Direct I/O path",
+   "change_id": "I771b555817394c28cf0fddb8ae35794f4ce9e0cd",
+   "merged": "2026-09-06",
+   "lines": 137,
+   "subsystem": "clio/osc/mdc",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "p2p-decided-per-chunk",
+     "fix_sha": "3ace9a1d38c73bdfb1fb0161296bd0f71c29b866",
+     "fix_subject": "LU-20438 clio: eagerly evaluate P2P DMA capability via layout",
+     "summary": "P2P DMA capability is evaluated in osc_io_init()/mdc_io_init(), but lov_io_rw_iter_init() limits each cl_io_loop() pass to one stripe chunk and creates the sub-IO only in that pass. A direct I/O whose first stripe supports P2P pins and sends P2P pages before a later non-capable stripe sets ci_p2pdma_unsupported, so the I/O fails partway.",
+     "locations": [
+      "lustre/osc/osc_io.c:osc_io_init",
+      "lustre/mdc/mdc_dev.c:mdc_io_init"
+     ],
+     "match": [
+      [
+       "p2p",
+       "stripe|chunk|sub.?io|osc_io_init|mdc_io_init|cl_io_loop",
+       "partial|partway|part of the|midway|already (been )?(pinned|submitted|sent|transferred)|too late|before.{0,60}(later|next|other) (stripe|osc|chunk)|short (write|read|i/?o)|first (chunk|stripe).{0,80}(go(es)? out|sent|submitted|written)"
+      ]
+     ],
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-11-18"
+     },
+     "difficulty": "hard"
+    }
+   ],
+   "notes": "Found by a survey of master commits whose Fixes: trailer names a change that aireview reviewed. aireview flagged it (PS20 and merged PS29, osc_io.c:1514); the author fixed it in a follow-up. sonnet (high effort), lean, preload on 2026-11-18 found: p2p-decided-per-chunk 2/2.",
+   "sets": [
+    "hard"
+   ]
+  },
+  {
+   "id": "osc-encrypt-unused-index",
+   "change": 69505,
+   "patchset": 9,
+   "sha": "659a80fa8361dc1ac41c81d014fbcfe880422b72",
+   "subject": "LU-20896 osc: encrypt direct IO pages at their own file index",
+   "change_id": "Iadf612e70368b8eff91f85c6acaf4865613ebbe5",
+   "merged": "2026-10-28",
+   "lines": 123,
+   "subsystem": "osc crypto build",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "fallback-macro-drops-index",
+     "fix_sha": "6f724612d9eb9e66767370adaeec68292e29d58a",
+     "fix_subject": "LU-20896 osc: fix unused variable in non-llcrypt build",
+     "summary": "Without embedded llcrypt (CONFIG_LL_ENCRYPTION unset) the fallback osc_encrypt_pagecache_blocks() macro drops its inode, index and directio arguments, so the new 'index' variable in osc_brw_prep_request() is set but never used and a clang -Werror build fails (-Wunused-but-set-variable).",
+     "locations": [
+      "lustre/osc/osc_request.c:osc_encrypt_pagecache_blocks",
+      "lustre/osc/osc_request.c:osc_brw_prep_request"
+     ],
+     "match": [
+      [
+       "index",
+       "set but (not|never) used|unused.?(but.?set|variable)|Wunused"
+      ],
+      [
+       "CONFIG_LL_ENCRYPTION|llcrypt|fallback|macro",
+       "index",
+       "unused|warn|Werror|drop|discard|ignor"
+      ]
+     ],
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-11-18"
+     },
+     "difficulty": "hard"
+    }
+   ],
+   "notes": "Found by a survey of master commits whose Fixes: trailer names a change that aireview reviewed. aireview did not flag it. sonnet (high effort), lean, preload on 2026-11-18 found: fallback-macro-drops-index 0/2.",
+   "sets": [
+    "hard"
+   ]
+  },
+  {
+   "id": "debug-vlen-always-inline",
+   "change": 69231,
+   "patchset": 10,
+   "sha": "dbaef8ffa680db9d366e6b001ab8edba8633b933",
+   "subject": "LU-20837 libcfs: add tracepoints for Lustre debug messages",
+   "change_id": "I1b02e89d04ffdca6b1fdac3f87d4b82697346db8",
+   "merged": "2026-10-13",
+   "lines": 501,
+   "subsystem": "libcfs build",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "va-list-in-static-inline",
+     "fix_sha": "657e3f656c0dc3793639bd740a4dfabb61cafe0c",
+     "fix_subject": "LU-20837 libcfs: move lustre_debug_vlen() out of line",
+     "summary": "lustre_debug_vlen() is a static inline in include/trace/events/lustre_debug.h that uses va_copy()/va_list. On older kernels built without CONFIG_OPTIMIZE_INLINING (el8 4.18, every aarch64 build) 'inline' means always_inline, and gcc refuses: 'function can never be inlined because it uses variable argument lists'. libcfs does not build.",
+     "locations": [
+      "include/trace/events/lustre_debug.h:lustre_debug_vlen"
+     ],
+     "match": [
+      [
+       "inline",
+       "va_list|va_copy|vari(adic|able argument)|stdarg"
+      ]
+     ],
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-11-18"
+     },
+     "difficulty": "hard"
+    }
+   ],
+   "notes": "Found by a survey of master commits whose Fixes: trailer names a change that aireview reviewed. aireview did not flag it; CI builds el8 only with CONFIG_OPTIMIZE_INLINING=y. sonnet (high effort), lean, preload on 2026-11-18 found: va-list-in-static-inline 0/2.",
+   "sets": [
+    "hard"
+   ]
+  },
+  {
+   "id": "ofd-failure-domain-race",
+   "change": 65184,
+   "patchset": 18,
+   "sha": "4c6c6f684f6d34c20d85d8b34d47477032f0e83e",
+   "subject": "LU-19066 ofd: add os_failure_domain to struct obd_statfs",
+   "change_id": "Ic5bcc66b7570ad74886a550b77d91a235e72756d",
+   "merged": "2026-08-23",
+   "lines": 166,
+   "subsystem": "ofd",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "failure-domain-unlocked-read",
+     "fix_sha": "76b710dde69b14f6b4c4cc7994eb4ca40c2f5dcb",
+     "fix_subject": "LU-17000 ofd: Fix data race when accessing ofd_failure_domain",
+     "summary": "ofd_statfs() copies ofd->ofd_failure_domain into os_failure_domain without ofd_flags_lock, while failure_domain_store() writes it under that lock (Coverity CID 506107 data race).",
+     "locations": [
+      "lustre/ofd/ofd_obd.c:ofd_statfs",
+      "lustre/ofd/lproc_ofd.c:failure_domain_store"
+     ],
+     "match": [
+      [
+       "failure_domain",
+       "lock|race|READ_ONCE|unprotected|unsynchroni|concurrent"
+      ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-11-18"
+     },
+     "difficulty": "easy"
+    }
+   ],
+   "notes": "Found by a survey of master commits whose Fixes: trailer names a change that aireview reviewed. aireview did not flag it. Low severity; tests whether the reviewer reports a lock-discipline race. sonnet (high effort), lean, preload on 2026-11-18 found: failure-domain-unlocked-read 0/2.",
+   "sets": [
+    "eval"
+   ]
+  },
+  {
+   "id": "o2iblnd-fastreg-gaps",
+   "change": 66689,
+   "patchset": 3,
+   "sha": "b42c175949ce8b38e251de9e2e10cbf376b9560c",
+   "subject": "LU-20399 o2iblnd: determine FastReg gaps correctly",
+   "change_id": "I70a6a92a4428a93a1bfac979a3c7d822e7973bad",
+   "merged": "2026-07-10",
+   "lines": 22,
+   "subsystem": "o2iblnd",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "mid-page-split-counted-as-gap",
+     "fix_sha": "073c739a0d57eac3a46fa59f5abab1195676c34c",
+     "fix_subject": "LU-20886 o2iblnd: use the FastReg key for immediate payload",
+     "summary": "kiblnd_setup_rd_kiov() flags tx_gaps when a non-first kiov fragment starts mid-page or a non-last one ends mid-page. ib_sg_to_pages() coalesces fragments that meet inside a page (end of one == start of the next), so a contiguous payload split mid-page is not a gap; the check needlessly requires optional FastReg GAPS support (-EPROTONOSUPPORT without it). Gaps must be found from DMA addresses.",
+     "locations": [
+      "lnet/klnds/o2iblnd/o2iblnd_cb.c:kiblnd_setup_rd_kiov"
+     ],
+     "match": [
+      [
+       "gap",
+       "same page|within (a|the same) page|inside (a|the) page|mid.?page|coalesc|contiguous|adjacent|ib_sg_to_pages",
+       "false|spurious|wrong|incorrect|unnecess|needless|over.?(report|count)|EPROTONOSUPPORT|not (really )?a gap"
+      ]
+     ],
+     "calibration": {
+      "found": 0,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-11-18"
+     },
+     "difficulty": "hard"
+    }
+   ],
+   "notes": "Found by a survey of master commits whose Fixes: trailer names a change that aireview reviewed. aireview did not review it. Hard: needs ib_sg_to_pages() behavior from the kernel. sonnet (high effort), lean, preload on 2026-11-18 found: mid-page-split-counted-as-gap 0/2.",
+   "sets": [
+    "hard"
+   ]
+  },
+  {
+   "id": "llog-skip-plain-client",
+   "change": 60240,
+   "patchset": 27,
+   "sha": "2ed9e1bcf7620208e5f817209bc087387bab4167",
+   "subject": "LU-14291 obdclass: unwind server code out of llog cat code",
+   "change_id": "Ibbff48cd6a55974ed5cdaf2cfc34e81dc41794d3",
+   "merged": "2026-07-10",
+   "lines": 1999,
+   "subsystem": "obdclass llog",
+   "kind": "bug",
+   "bugs": [
+    {
+     "id": "skip-plain-server-only",
+     "fix_sha": "af770d08d0bf3d4fd8af33100f07084f13aa81d0",
+     "fix_subject": "LU-16489 obdclass: handle LLOG_SKIP_PLAIN on client builds",
+     "summary": "The patch moves the LLOG_SKIP_PLAIN -> 0 conversion in llog_cat_process_cb() inside #ifdef CONFIG_LUSTRE_FS_SERVER. On a client-only build a plain-llog skip (chlg_read_cat_process_cb() via llog_is_plain_skipable()) stops the whole catalog walk, so a client changelog reader (lustre_rsync) silently gets no records.",
+     "locations": [
+      "lustre/obdclass/llog_cat.c:llog_cat_process_cb"
+     ],
+     "match": [
+      [
+       "LLOG_SKIP_PLAIN",
+       "client|CONFIG_LUSTRE_FS_SERVER|ifdef|server.only|compiled out|server build"
+      ]
+     ],
+     "calibration": {
+      "found": 2,
+      "reviews": 2,
+      "config": "opus-5.5 (medium effort), lean, preload; 2026-11-18"
+     },
+     "difficulty": "easy"
+    }
+   ],
+   "notes": "Found by a survey of master commits whose Fixes: trailer names a change that aireview reviewed. aireview said the move was build-safe for client-only configs (PS26). Large (about 2000 lines, mostly moved code): cost case. sonnet (high effort), lean, preload on 2026-11-18 found: skip-plain-server-only 2/2.",
+   "sets": [
+    "eval"
+   ]
   }
  ]
 }
