@@ -1,0 +1,298 @@
+{
+  "change": 70663,
+  "patchset": 3,
+  "subject": "LU-20797 llite: keep the I/O scope stable during an operation",
+  "owner": "Keguang Xu",
+  "owner_username": "kxu",
+  "me": "someone",
+  "mine": false,
+  "readiness": "pending",
+  "tier_of_target": "pending",
+  "release_hashtags": [],
+  "ranks": {
+    "blocker": [
+      "*_review_blocker"
+    ],
+    "priority": [
+      "*_review_priority"
+    ],
+    "ignore": [
+      "pw_*",
+      "fortestonly",
+      "forbuildonly"
+    ],
+    "ignore_tickets": [
+      "LU-6142",
+      "LU-17000"
+    ]
+  },
+  "branch": "master",
+  "status": "ok",
+  "base": {
+    "on_branch": true,
+    "behind": 171,
+    "parents": [],
+    "rebase": "possible"
+  },
+  "on_branch": {
+    "status": "clean"
+  },
+  "on_next": {
+    "status": "conflict",
+    "files": [
+      "Documentation/man3/llapi_io_scope_set.3",
+      "lustre/tests/io_scope.c"
+    ],
+    "with": {
+      "cn": 69517,
+      "subject": "LU-20690 ec: implement STRIPE I/O scope",
+      "commit": "f4e519c49a69ad4b504fc522601d8543f1174b92",
+      "position": 3
+    }
+  },
+  "own_stack": {
+    "parents": [],
+    "children": [
+      {
+        "cn": 69511,
+        "status": "clean"
+      },
+      {
+        "cn": 70629,
+        "status": "conflict",
+        "on_old_patchset": {
+          "of": 69511,
+          "ps": 5,
+          "current": 9
+        }
+      }
+    ]
+  },
+  "conflicts": [
+    {
+      "cn": 69517,
+      "subject": "LU-20690 ec: implement STRIPE I/O scope",
+      "owner": "Keguang Xu",
+      "mine": false,
+      "tier": "frozen",
+      "readiness": "ready",
+      "fix_side": "target",
+      "files": [
+        "Documentation/man3/llapi_io_scope_set.3",
+        "lustre/tests/io_scope.c"
+      ],
+      "release_hashtags": [
+        "218_review_blocker",
+        "218_review_priority"
+      ],
+      "landing": "conflict/conflict"
+    },
+    {
+      "cn": 68361,
+      "subject": "LU-20690 ec: store EC parity like RAID10",
+      "owner": "Keguang Xu",
+      "mine": false,
+      "tier": "frozen",
+      "readiness": "ready",
+      "fix_side": "target",
+      "files": [
+        "Documentation/man3/llapi_io_scope_set.3",
+        "lustre/tests/io_scope.c"
+      ],
+      "release_hashtags": [
+        "218_review_priority"
+      ],
+      "landing": "conflict/conflict",
+      "via": 69517,
+      "via_change": {
+        "cn": 69517,
+        "owner": "Keguang Xu",
+        "mine": false,
+        "tier": "frozen"
+      }
+    },
+    {
+      "cn": 69703,
+      "subject": "LU-20690 ec: verify parity against data, allow p > k",
+      "owner": "Keguang Xu",
+      "mine": false,
+      "tier": "frozen",
+      "readiness": "maloo-1",
+      "fix_side": "target",
+      "files": [
+        "Documentation/man3/llapi_io_scope_set.3",
+        "lustre/tests/io_scope.c"
+      ],
+      "release_hashtags": [
+        "218_review_priority"
+      ],
+      "landing": "conflict/conflict",
+      "via": 69517,
+      "via_change": {
+        "cn": 69517,
+        "owner": "Keguang Xu",
+        "mine": false,
+        "tier": "frozen"
+      }
+    },
+    {
+      "cn": 70067,
+      "subject": "LU-20690 ec: copy parity in 1+N recovery reads",
+      "owner": "Zhenyu Xu",
+      "mine": false,
+      "tier": "frozen",
+      "readiness": "ready",
+      "fix_side": "target",
+      "files": [
+        "Documentation/man3/llapi_io_scope_set.3",
+        "lustre/tests/io_scope.c"
+      ],
+      "release_hashtags": [
+        "218_review_priority"
+      ],
+      "landing": "conflict/conflict",
+      "via": 69517,
+      "via_change": {
+        "cn": 69517,
+        "owner": "Keguang Xu",
+        "mine": false,
+        "tier": "frozen"
+      }
+    },
+    {
+      "cn": 70571,
+      "subject": "LU-20690 tests: read one parity stripe in sanity-ec 312",
+      "owner": "Andreas Dilger",
+      "mine": false,
+      "tier": "frozen",
+      "readiness": "ready",
+      "fix_side": "target",
+      "files": [
+        "Documentation/man3/llapi_io_scope_set.3",
+        "lustre/tests/io_scope.c"
+      ],
+      "release_hashtags": [
+        "218_review_priority"
+      ],
+      "landing": "conflict/conflict",
+      "via": 69517,
+      "via_change": {
+        "cn": 69517,
+        "owner": "Keguang Xu",
+        "mine": false,
+        "tier": "frozen"
+      }
+    },
+    {
+      "cn": 64441,
+      "subject": "LU-12187 lov: add MDS layout pattern negotiation",
+      "owner": "Maximilian Dilger",
+      "mine": false,
+      "tier": "lands-first",
+      "readiness": "maloo-1",
+      "fix_side": "target",
+      "files": [
+        "Documentation/man3/llapi_io_scope_set.3",
+        "lustre/tests/io_scope.c"
+      ],
+      "release_hashtags": [
+        "218_review_blocker"
+      ],
+      "landing": "conflict/conflict",
+      "via": 69517,
+      "via_change": {
+        "cn": 69517,
+        "owner": "Keguang Xu",
+        "mine": false,
+        "tier": "frozen"
+      }
+    },
+    {
+      "cn": 64919,
+      "subject": "LU-12669 lov: slow and dead OST detection for degraded reads",
+      "owner": "Maximilian Dilger",
+      "mine": false,
+      "tier": "lands-first",
+      "readiness": "ready",
+      "fix_side": "target",
+      "files": [
+        "lustre/llite/file.c"
+      ],
+      "release_hashtags": [
+        "218_review_priority"
+      ],
+      "landing": "conflict/conflict"
+    }
+  ],
+  "silent_only": [],
+  "watch": [
+    {
+      "cn": 69762,
+      "subject": "LU-20287 lov: don't block setattr on unavailable OST",
+      "owner": "Keguang Xu",
+      "mine": false,
+      "tier": "frozen",
+      "readiness": "pending",
+      "fix_side": "target",
+      "release_hashtags": [
+        "218_review_priority"
+      ],
+      "landing": "clean/clean",
+      "same_function": [
+        {
+          "file": "lustre/llite/lcommon_cl.c",
+          "functions": [
+            "cl_setattr_ost"
+          ]
+        }
+      ]
+    },
+    {
+      "cn": 70519,
+      "subject": "LU-20923 llite: harden setattr against absent cl_object",
+      "owner": "Andreas Dilger",
+      "mine": false,
+      "tier": "lands-first",
+      "readiness": "ready",
+      "fix_side": "target",
+      "landing": "clean/clean",
+      "same_function": [
+        {
+          "file": "lustre/llite/lcommon_cl.c",
+          "functions": [
+            "cl_setattr_ost"
+          ]
+        }
+      ]
+    }
+  ],
+  "already_conflicting": 4,
+  "not_tried": 75,
+  "clean": 26,
+  "skipped": [
+    {
+      "cn": 50871,
+      "reason": "Code-Review -1 (Andreas Dilger)"
+    },
+    {
+      "cn": 52668,
+      "reason": "stacked on 52391 (Code-Review -1 (Alexey Lyashkov))"
+    },
+    {
+      "cn": 58492,
+      "reason": "stacked on 70488 (Jenkins -1)"
+    }
+  ],
+  "errors": [],
+  "counts": {
+    "candidates": 138,
+    "after_filters": 114,
+    "tried": 35,
+    "conflicting": 7,
+    "watch": 2
+  },
+  "orders": {
+    "landing": "target_first/candidate_first"
+  },
+  "full": "--full adds commit hashes (each pair's commit and ps too), every hashtag and the changes behind clean, already_conflicting and not_tried"
+}

@@ -1,0 +1,225 @@
+{
+  "change": 70735,
+  "patchset": 2,
+  "subject": "LU-12669 lov: wait for OST to reread cached EC stripe",
+  "owner": "Andreas Dilger",
+  "owner_username": "adilger",
+  "me": "someone",
+  "mine": false,
+  "readiness": "pending",
+  "tier_of_target": "lands-first",
+  "release_hashtags": [
+    "218_review_priority"
+  ],
+  "ranks": {
+    "blocker": [
+      "*_review_blocker"
+    ],
+    "priority": [
+      "*_review_priority"
+    ],
+    "ignore": [
+      "pw_*",
+      "fortestonly",
+      "forbuildonly"
+    ],
+    "ignore_tickets": [
+      "LU-6142",
+      "LU-17000"
+    ]
+  },
+  "branch": "master",
+  "status": "ok",
+  "base": {
+    "on_branch": true,
+    "behind": 35,
+    "parents": [],
+    "rebase": "possible"
+  },
+  "on_branch": {
+    "status": "clean"
+  },
+  "on_next": {
+    "status": "clean"
+  },
+  "own_stack": {
+    "parents": [],
+    "children": []
+  },
+  "conflicts": [
+    {
+      "cn": 64919,
+      "subject": "LU-12669 lov: slow and dead OST detection for degraded reads",
+      "owner": "Maximilian Dilger",
+      "mine": false,
+      "tier": "lands-first",
+      "readiness": "ready",
+      "fix_side": "coordinate",
+      "files": [
+        "lustre/include/obd.h"
+      ],
+      "release_hashtags": [
+        "218_review_priority"
+      ],
+      "landing": "conflict/conflict",
+      "hunks": {
+        "landing": {
+          "lustre/include/obd.h": [
+            {
+              "line": 852,
+              "kind": "insert-insert",
+              "text": "\tunsigned int\t\t\tobd_ldlm_enqueue_min;\n};\n\n<<<<<<< e27702eb923d5126eb57bba57c39bab6b1391a35\n/* the import is disconnected, and is expected to reconnect by itself */\nstatic inline bool obd_import_reconnecting(struct obd_import *imp)\n{\n\tenum lustre_imp_state state = READ_ONCE(imp->imp_state);\n\n\treturn state != LUSTRE_IMP_FULL && state != LUSTRE_IMP_CLOSED &&\n\t       !test_bit(IMPF_INVALID, imp->imp_flags) &&\n\t       !test_bit(IMPF_DEACTIVE, imp->imp_flags) &&\n\t       !test_bit(OBDF_NO_RECOV, imp->imp_obd->obd_flags);\n}\n\n||||||| 037571b3ef838674f1ff7012db07dd2d402ab25a\n=======\n/* slow_read_min_ms, or its default for the kind of OST */\nstatic inline unsigned int osc_slow_read_min_ms(struct client_obd *cli)\n{\n\tstruct obd_device *obd = container_of(cli, struct obd_device, u.cli);\n\n\tif (cli->cl_slow_read_min_ms)\n\t\treturn cli->cl_slow_read_min_ms;\n\n\treturn obd->obd_osfs.os_state & OS_STATFS_NONROT ?\n\t       OSC_SLOW_READ_MIN_NONROT_MS : OSC_SLOW_READ_MIN_ROT_MS;\n}\n\n>>>>>>> d9aa1bfed282d4bf278ea096e5c59a6f13cd8ed6\n#define obd_get_at_min(obd) ({ \\\n\tstruct obd_device *_obd = obd; \\\n\t_obd && _obd->obd_at_min ? _obd->obd_at_min : at_min; \\",
+              "truncated": false,
+              "order": "target_first"
+            },
+            {
+              "line": 852,
+              "kind": "insert-insert",
+              "text": "\tunsigned int\t\t\tobd_ldlm_enqueue_min;\n};\n\n<<<<<<< 664ca54fd9e53b51dc5ebff9584bcc0385d00f4f\n/* slow_read_min_ms, or its default for the kind of OST */\nstatic inline unsigned int osc_slow_read_min_ms(struct client_obd *cli)\n{\n\tstruct obd_device *obd = container_of(cli, struct obd_device, u.cli);\n\n\tif (cli->cl_slow_read_min_ms)\n\t\treturn cli->cl_slow_read_min_ms;\n\n\treturn obd->obd_osfs.os_state & OS_STATFS_NONROT ?\n\t       OSC_SLOW_READ_MIN_NONROT_MS : OSC_SLOW_READ_MIN_ROT_MS;\n}\n\n||||||| 7c3c9f8814bbf0d4fb9016f718d4a70332343058\n=======\n/* the import is disconnected, and is expected to reconnect by itself */\nstatic inline bool obd_import_reconnecting(struct obd_import *imp)\n{\n\tenum lustre_imp_state state = READ_ONCE(imp->imp_state);\n\n\treturn state != LUSTRE_IMP_FULL && state != LUSTRE_IMP_CLOSED &&\n\t       !test_bit(IMPF_INVALID, imp->imp_flags) &&\n\t       !test_bit(IMPF_DEACTIVE, imp->imp_flags) &&\n\t       !test_bit(OBDF_NO_RECOV, imp->imp_obd->obd_flags);\n}\n\n>>>>>>> 4b5a70c3d7d25fbd0dc181187cb6abcd41c2b46c\n#define obd_get_at_min(obd) ({ \\\n\tstruct obd_device *_obd = obd; \\\n\t_obd && _obd->obd_at_min ? _obd->obd_at_min : at_min; \\",
+              "truncated": false,
+              "order": "candidate_first"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "silent_only": [],
+  "watch": [
+    {
+      "cn": 68361,
+      "subject": "LU-20690 ec: store EC parity like RAID10",
+      "owner": "Keguang Xu",
+      "mine": false,
+      "tier": "frozen",
+      "readiness": "ready",
+      "fix_side": "target",
+      "release_hashtags": [
+        "218_review_priority"
+      ],
+      "landing": "clean/clean",
+      "same_function": [
+        {
+          "file": "lustre/lov/lov_io.c",
+          "functions": [
+            "lov_io_ec_rd_start"
+          ]
+        }
+      ]
+    },
+    {
+      "cn": 69703,
+      "subject": "LU-20690 ec: verify parity against data, allow p > k",
+      "owner": "Keguang Xu",
+      "mine": false,
+      "tier": "frozen",
+      "readiness": "maloo-1",
+      "fix_side": "target",
+      "release_hashtags": [
+        "218_review_priority"
+      ],
+      "landing": "clean/clean",
+      "same_function": [
+        {
+          "file": "lustre/lov/lov_io.c",
+          "functions": [
+            "lov_io_ec_rd_start"
+          ]
+        }
+      ]
+    },
+    {
+      "cn": 70067,
+      "subject": "LU-20690 ec: copy parity in 1+N recovery reads",
+      "owner": "Zhenyu Xu",
+      "mine": false,
+      "tier": "frozen",
+      "readiness": "ready",
+      "fix_side": "target",
+      "release_hashtags": [
+        "218_review_priority"
+      ],
+      "landing": "clean/clean",
+      "same_function": [
+        {
+          "file": "lustre/lov/lov_io.c",
+          "functions": [
+            "lov_io_ec_rd_start"
+          ]
+        }
+      ]
+    },
+    {
+      "cn": 64441,
+      "subject": "LU-12187 lov: add MDS layout pattern negotiation",
+      "owner": "Maximilian Dilger",
+      "mine": false,
+      "tier": "lands-first",
+      "readiness": "maloo-1",
+      "fix_side": "target",
+      "release_hashtags": [
+        "218_review_blocker"
+      ],
+      "landing": "clean/clean",
+      "same_function": [
+        {
+          "file": "lustre/lov/lov_io.c",
+          "functions": [
+            "lov_io_ec_rd_start"
+          ]
+        }
+      ]
+    },
+    {
+      "cn": 69392,
+      "subject": "LU-12669 ec: wait for stripes that parity cannot rebuild",
+      "owner": "Andreas Dilger",
+      "mine": false,
+      "tier": "lands-first",
+      "readiness": "ready",
+      "fix_side": "target",
+      "release_hashtags": [
+        "218_review_blocker",
+        "218_review_priority"
+      ],
+      "landing": "clean/clean",
+      "same_function": [
+        {
+          "file": "lustre/lov/lov_io.c",
+          "functions": [
+            "lov_io_ec_rd_start"
+          ]
+        }
+      ]
+    }
+  ],
+  "already_conflicting": 9,
+  "not_tried": 43,
+  "clean": 28,
+  "skipped": [
+    {
+      "cn": 50871,
+      "reason": "Code-Review -1 (Andreas Dilger)"
+    },
+    {
+      "cn": 54267,
+      "reason": "Code-Review -1 (Andrew Perepechko)"
+    },
+    {
+      "cn": 62868,
+      "reason": "Code-Review -1 (Marc Vef)"
+    }
+  ],
+  "errors": [],
+  "counts": {
+    "candidates": 106,
+    "after_filters": 88,
+    "tried": 36,
+    "conflicting": 3,
+    "watch": 5
+  },
+  "orders": {
+    "landing": "target_first/candidate_first"
+  },
+  "full": "--full adds commit hashes (each pair's commit and ps too), every hashtag and the changes behind clean, already_conflicting and not_tried"
+}
