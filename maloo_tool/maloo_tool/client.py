@@ -1236,6 +1236,81 @@ class MalooClient:
         self._web_session = web
         return web
 
+    def _reset_web_session(self) -> None:
+        """Forget the cached web cookie so the next call signs in fresh.
+
+        Drops the per-request web session and the web cookies merged into
+        the main (API) session, leaving the main session's basic-auth
+        header untouched.
+        """
+        old = self._web_session
+        self._web_session = None
+        if old is None:
+            return
+        try:
+            for cookie in list(old.cookies):
+                self.session.cookies.clear(
+                    cookie.domain, cookie.path, cookie.name
+                )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _looks_like_signin(resp: requests.Response) -> bool:
+        """True when a web response is really the sign-in page.
+
+        A long-lived client's web cookie expires with no warning; Maloo
+        then redirects the request to /signin instead of serving the
+        page.  Detect that by the final URL or any redirect in the chain
+        landing on the sign-in path, so a stale cookie can be renewed.
+        """
+        url = getattr(resp, "url", None)
+        if isinstance(url, str) and SIGNIN_PATH in urlsplit(url).path:
+            return True
+        history = getattr(resp, "history", None)
+        if isinstance(history, (list, tuple)):
+            for prev in history:
+                loc = getattr(prev, "headers", {}).get("Location", "")
+                if isinstance(loc, str) and SIGNIN_PATH in loc:
+                    return True
+        return False
+
+    def _web_fetch(
+        self,
+        url: str,
+        *,
+        timeout: int,
+        session: requests.Session | None = None,
+        expect_html: bool = False,
+    ) -> requests.Response:
+        """GET a cookie-authenticated web URL, renewing the session once
+        if the cached sign-in cookie has gone stale.
+
+        Maloo redirects an unauthenticated request to the sign-in page;
+        for a binary download it may instead answer 200 with the HTML
+        sign-in form.  Either way, drop the cached web cookie, sign in
+        afresh and retry the GET a single time.  ``expect_html`` is set
+        by callers (list_test_logs) whose own payload is HTML, so only a
+        sign-in redirect, not any HTML body, counts as stale for them.
+        """
+        resp = None
+        for renewed in (False, True):
+            web = self._web_login()
+            getter = (session if session is not None else web).get
+            resp = self._retried(
+                getter, url, timeout=timeout, allow_redirects=True
+            )
+            stale = self._looks_like_signin(resp)
+            if not stale and not expect_html:
+                content_type = resp.headers.get("Content-Type", "")
+                if "text/html" in content_type:
+                    stale = True
+            if stale and not renewed:
+                self._reset_web_session()
+                continue
+            break
+        return resp
+
     # -- Retest (web form, not REST API) --
 
     def _get_csrf_token(
@@ -1270,14 +1345,11 @@ class MalooClient:
         Returns:
             Raw bytes of the log archive (zip format).
         """
-        self._web_login()
         url = (
             f"{self.config.base_url}"
             f"/test_sets/{test_set_id}/download_logs"
         )
-        resp = self._retried(
-            self.session.get, url, timeout=timeout, allow_redirects=True
-        )
+        resp = self._web_fetch(url, timeout=timeout, session=self.session)
         resp.raise_for_status()
         content_type = resp.headers.get("Content-Type", "")
         if "text/html" in content_type:
@@ -1298,11 +1370,10 @@ class MalooClient:
         Returns:
             A list of {"name": file name, "id": test_log UUID}.
         """
-        web = self._web_login()
-        resp = self._retried(
-            web.get,
+        resp = self._web_fetch(
             f"{self.config.base_url}/test_sets/{test_set_id}",
             timeout=timeout,
+            expect_html=True,
         )
         resp.raise_for_status()
         return [
@@ -1318,9 +1389,7 @@ class MalooClient:
         self, test_log_id: str, timeout: int = 120
     ) -> bytes:
         """Download one file from /test_logs/<id>/download."""
-        web = self._web_login()
-        resp = self._retried(
-            web.get,
+        resp = self._web_fetch(
             f"{self.config.base_url}/test_logs/{test_log_id}/download",
             timeout=timeout,
         )

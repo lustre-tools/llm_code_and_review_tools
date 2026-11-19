@@ -36,13 +36,18 @@ def client(config):
 
 
 def _mock_response(json_data=None, status_code=200, text="", content=b"",
-                   headers=None, raise_for_status=None):
+                   headers=None, raise_for_status=None, url=None,
+                   history=None):
     """Create a mock requests.Response."""
     resp = MagicMock(spec=requests.Response)
     resp.status_code = status_code
     resp.text = text
     resp.content = content
     resp.headers = headers or {}
+    if url is not None:
+        resp.url = url
+    if history is not None:
+        resp.history = history
     if json_data is not None:
         resp.json.return_value = json_data
     if raise_for_status:
@@ -793,6 +798,125 @@ class TestDownloadLogs:
         )
         with pytest.raises(requests.exceptions.HTTPError):
             client.download_logs("ts1")
+
+
+# ---------------------------------------------------------------------------
+# web-session renewal on a stale sign-in cookie
+# ---------------------------------------------------------------------------
+
+class TestWebSessionRenewal:
+    """A long-lived client's web cookie expires with no warning; the
+    download paths must detect the sign-in response, renew the session
+    and retry once (regression: pr-2026-11-17, Maloo fetches via
+    rainshadow failing until restart)."""
+
+    def test_looks_like_signin_detects_final_url(self):
+        resp = _mock_response(url="https://testing.example.com/signin")
+        assert MalooClient._looks_like_signin(resp) is True
+
+    def test_looks_like_signin_detects_redirect_history(self):
+        prev = Mock(headers={"Location": "https://testing.example.com/signin"})
+        resp = _mock_response(
+            url="https://testing.example.com/test_sets/1", history=[prev]
+        )
+        assert MalooClient._looks_like_signin(resp) is True
+
+    def test_looks_like_signin_false_for_a_normal_page(self):
+        resp = _mock_response(
+            url="https://testing.example.com/test_sets/1", history=[]
+        )
+        assert MalooClient._looks_like_signin(resp) is False
+
+    def test_download_logs_renews_on_stale_html(self, client):
+        """A binary download that comes back as HTML means the cookie
+        went stale: renew and retry, then return the real archive."""
+        client._web_login = MagicMock()
+        stale = _mock_response(
+            content=b"<html>sign in</html>",
+            headers={"Content-Type": "text/html; charset=utf-8"},
+        )
+        good = _mock_response(
+            content=b"PK\x03\x04real-zip",
+            headers={"Content-Type": "application/zip"},
+        )
+        client.session.get.side_effect = [stale, good]
+        assert client.download_logs("ts1") == b"PK\x03\x04real-zip"
+        assert client.session.get.call_count == 2
+        assert client._web_login.call_count == 2
+
+    def test_download_logs_gives_up_after_one_renew(self, client):
+        """Still HTML after a single renewal: surface the clear error,
+        do not loop."""
+        client._web_login = MagicMock()
+        stale = _mock_response(
+            content=b"<html></html>",
+            headers={"Content-Type": "text/html"},
+        )
+        client.session.get.return_value = stale
+        with pytest.raises(RuntimeError, match="auth"):
+            client.download_logs("ts1")
+        assert client.session.get.call_count == 2
+        assert client._web_login.call_count == 2
+
+    def test_download_logs_healthy_does_not_renew(self, client):
+        client._web_login = MagicMock()
+        client.session.get.return_value = _mock_response(
+            content=b"PK\x03\x04zip",
+            headers={"Content-Type": "application/zip"},
+        )
+        assert client.download_logs("ts1") == b"PK\x03\x04zip"
+        assert client.session.get.call_count == 1
+        assert client._web_login.call_count == 1
+
+    def test_list_test_logs_renews_on_signin_redirect(self, client):
+        """list_test_logs serves HTML, so only a sign-in redirect (not
+        any HTML body) is treated as stale."""
+        client._web_login = MagicMock()
+        web = client._web_login.return_value
+        stale = _mock_response(
+            text="<html>sign in form</html>",
+            headers={"Content-Type": "text/html"},
+            url="https://testing.example.com/signin",
+        )
+        page = _mock_response(
+            text=('<p>debug_log</p> [ <a '
+                  'href="/test_logs/aaaa-bbbb/download"'),
+            headers={"Content-Type": "text/html"},
+            url="https://testing.example.com/test_sets/ts1",
+        )
+        web.get.side_effect = [stale, page]
+        assert client.list_test_logs("ts1") == [
+            {"name": "debug_log", "id": "aaaa-bbbb"}
+        ]
+        assert web.get.call_count == 2
+        assert client._web_login.call_count == 2
+
+    def test_download_test_log_renews_on_signin_redirect(self, client):
+        client._web_login = MagicMock()
+        web = client._web_login.return_value
+        stale = _mock_response(
+            content=b"<html>sign in</html>",
+            headers={"Content-Type": "text/html"},
+            url="https://testing.example.com/signin",
+        )
+        good = _mock_response(content=b"raw-log-bytes")
+        web.get.side_effect = [stale, good]
+        assert client.download_test_log("log1") == b"raw-log-bytes"
+        assert web.get.call_count == 2
+        assert client._web_login.call_count == 2
+
+    def test_reset_web_session_clears_merged_cookies(self, config):
+        c = MalooClient(config)
+        web = requests.Session()
+        web.cookies.set(
+            "_maloo_session", "abc",
+            domain="testing.example.com", path="/",
+        )
+        c._web_session = web
+        c.session.cookies.update(web.cookies)
+        c._reset_web_session()
+        assert c._web_session is None
+        assert "_maloo_session" not in c.session.cookies
 
 
 # ---------------------------------------------------------------------------
