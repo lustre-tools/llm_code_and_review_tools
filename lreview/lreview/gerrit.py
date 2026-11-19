@@ -24,6 +24,7 @@ class ResolvedChange:
     ref: str
     base_url: str
     change_id: Optional[str] = None
+    branch: Optional[str] = None
     provider: str = "gerrit"
     status: Optional[str] = None  # NEW, MERGED or ABANDONED
     backport: Optional[list] = None  # backport.Upstream, set by run_batch
@@ -111,6 +112,7 @@ def resolve_change(url_or_number: str, client: Optional[Any] = None) -> Resolved
         ref=ref,
         base_url=base_url,
         change_id=detail.get("change_id"),
+        branch=detail.get("branch"),
         status=detail.get("status"),
     )
 

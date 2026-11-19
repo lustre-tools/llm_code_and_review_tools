@@ -8,8 +8,9 @@ import pytest
 from lreview import backport
 from lreview.backport import (AI_REVIEW_TAG, GerritFacts, ReviewThread,
                               Trailer, Upstream, backport_prompt, detect,
-                              open_ai_threads, parse_trailers)
-from lreview.gerrit import LocalChange
+                              change_id_taken, find_unmarked, open_ai_threads,
+                              parse_trailers, subject_tail)
+from lreview.gerrit import LocalChange, ResolvedChange
 from lreview.runner import (BatchConfig, attach_backport, build_agent_cmd,
                             compaction_settings, count_findings, preload_file,
                             review_prompt)
@@ -176,6 +177,160 @@ class TestDetect:
                           side_effect=OSError("offline")):
             found = detect(repo, sha)
         assert found == [Upstream("https://r/1", None, True)]
+
+
+ID_PORT = "I" + "c" * 40
+ID_UP = "I" + "d" * 40
+SUBJECT = "osd-ldiskfs: flag overwrite of committed blocks"
+MASTER = "project:fs/lustre-release branch:master"
+
+
+def branch_change(sha, project="fs/lustre-release", branch="b2_17"):
+    return ResolvedChange(1, project, "s", sha, 1, "r", "https://r",
+                          branch=branch)
+
+
+class FakeClient:
+    """search_changes answers by scope (master or not) and operator."""
+
+    def __init__(self, master_id=(), master_subject=(), other_subject=(),
+                 taken=()):
+        self.answers = {("master", "id"): list(master_id),
+                        ("master", "subject"): list(master_subject),
+                        ("other", "subject"): list(other_subject),
+                        ("other", "id"): list(taken)}
+        self.queries = []
+
+    def search_changes(self, query, limit=25, options=None):
+        self.queries.append(query)
+        scope = "master" if query.startswith(MASTER) else "other"
+        return self.answers[(scope, "id" if " change:" in query
+                             else "subject")]
+
+    def format_change_url(self, project, number):
+        return f"https://r/c/{project}/+/{number}"
+
+
+def hit(number, subject, project="fs/lustre-release", branch="master"):
+    return {"_number": number, "project": project, "branch": branch,
+            "subject": subject}
+
+
+def facts_for(sha, subject=f"LU-2 {SUBJECT}"):
+    return GerritFacts(sha=sha, patchset=2, status="NEW", change_id=ID_UP,
+                       subject=subject, patchsets={sha: 2})
+
+
+class TestUnmarkedPort:
+
+    def test_subject_tail(self):
+        assert subject_tail(f"ABC-1 {SUBJECT}") == SUBJECT
+        assert subject_tail(SUBJECT) == SUBJECT
+
+    def test_master_subject_match(self, repo):
+        current = git(repo, "rev-parse", "HEAD")
+        client = FakeClient(master_subject=[hit(7, f"LU-2 {SUBJECT}"),
+                                            hit(8, f"LU-3 {SUBJECT} more")])
+        with patch.object(backport, "gerrit_facts",
+                          return_value=facts_for(current)):
+            found = find_unmarked(repo, branch_change(SHA_A),
+                                  f"ABC-1 {SUBJECT}", ID_PORT, client)
+        assert [(u.name, u.unmarked, u.branch) for u in found] == [
+            ("https://r/c/fs/lustre-release/+/7", "subject", None)]
+        assert all("-change:1" in q for q in client.queries)
+        text = backport_prompt(found)
+        assert "no Lustre-change:/Lustre-commit:" in text
+        assert "Found on master by its subject" in text
+        assert f"The port's Change-Id is {ID_PORT}: it differs." in text
+        assert "## Ports without trailers" in text
+
+    def test_master_change_id_match(self, repo):
+        client = FakeClient(master_id=[hit(9, "LU-2 x")])
+        with patch.object(backport, "gerrit_facts", side_effect=OSError):
+            found = find_unmarked(repo, branch_change(SHA_A), "ABC-1 x",
+                                  ID_UP, client)
+        assert found[0].unmarked == "Change-Id"
+        assert "it differs" not in backport_prompt(found)
+
+    def test_other_branch_when_master_has_none(self, repo):
+        current = git(repo, "rev-parse", "HEAD")
+        client = FakeClient(other_subject=[
+            hit(5, f"ABC-1 {SUBJECT}", "other/project", "b_x"),
+            hit(6, f"ABC-1 {SUBJECT}", "fs/lustre-release", "b2_17")])
+        with patch.object(backport, "gerrit_facts",
+                          return_value=facts_for(current)):
+            found = find_unmarked(repo, branch_change(SHA_A),
+                                  f"ABC-1 {SUBJECT}", ID_PORT, client)
+        assert [(u.name, u.branch) for u in found] == [
+            ("https://r/c/other/project/+/5", "other/project b_x")]
+        text = backport_prompt(found)
+        assert "Found on other/project b_x" in text
+        assert "needs no Lustre-change" in text
+        assert "it differs" in text
+
+    def test_master_match_skips_other_branches(self, repo):
+        client = FakeClient(master_subject=[hit(7, f"LU-2 {SUBJECT}")],
+                            other_subject=[hit(5, f"ABC-1 {SUBJECT}",
+                                               "other/project", "b_x")])
+        with patch.object(backport, "gerrit_facts", side_effect=OSError):
+            found = find_unmarked(repo, branch_change(SHA_A),
+                                  f"ABC-1 {SUBJECT}", None, client)
+        assert [u.branch for u in found] == [None]
+
+    def test_short_subject_is_not_searched(self, repo):
+        client = FakeClient(master_subject=[hit(7, "LU-2 tests: fix typo")])
+        assert find_unmarked(repo, branch_change(SHA_A),
+                             "ABC-1 tests: fix typo", None, client) == []
+        assert client.queries == []
+
+    def test_taken_change_id_is_reported(self):
+        client = FakeClient(taken=[hit(4, "x", branch="b2_17")])
+        assert change_id_taken(branch_change(SHA_A), ID_UP, client) == (
+            "https://r/c/fs/lustre-release/+/4")
+        assert "branch:b2_17" in client.queries[0]
+        text = backport_prompt([Upstream(
+            "u", SHA_B, False, change_id=ID_UP, port_change_id=ID_PORT,
+            change_id_taken_by="https://r/c/fs/lustre-release/+/4")])
+        assert "already used on the port's branch" in text
+
+    def test_master_change_is_not_searched(self, repo):
+        sha = commit(repo, f"LU-1 {SUBJECT}")
+        with patch.object(backport, "find_unmarked") as search:
+            assert detect(repo, sha, branch_change(
+                sha, "fs/lustre-release", "master")) is None
+        search.assert_not_called()
+
+    def test_detect_searches_a_branch_change(self, repo):
+        sha = commit(repo, f"ABC-1 {SUBJECT}\n\nChange-Id: {ID_PORT}\n")
+        port = Upstream("u", SHA_B, False, unmarked="subject")
+        with patch.object(backport, "find_unmarked",
+                          return_value=[port]) as search:
+            assert detect(repo, sha, branch_change(sha)) == [port]
+        assert search.call_args.args[2:] == (f"ABC-1 {SUBJECT}", ID_PORT)
+
+    def test_detect_checks_a_differing_change_id(self, repo):
+        sha = commit(repo, f"ABC-1 {SUBJECT}\n\nChange-Id: {ID_PORT}\n")
+        port = Upstream("u", SHA_B, False, change_id=ID_UP,
+                        unmarked="subject", port_change_id=ID_PORT)
+        with patch.object(backport, "find_unmarked", return_value=[port]), \
+                patch.object(backport, "change_id_taken",
+                             return_value="https://t") as taken:
+            found = detect(repo, sha, branch_change(sha))
+        taken.assert_called_once()
+        assert found[0].change_id_taken_by == "https://t"
+
+    def test_local_change_is_not_searched(self, repo):
+        sha = commit(repo, f"ABC-1 {SUBJECT}")
+        assert detect(repo, sha, LocalChange("HEAD", sha, "s")) is None
+
+    def test_trailered_port_gets_its_change_id_checked(self, repo):
+        upstream = git(repo, "rev-parse", "HEAD")
+        sha = commit(repo, "port\n\nLustre-change: https://r/1\n"
+                           f"Lustre-commit: {upstream}\n"
+                           f"Change-Id: {ID_PORT}\n")
+        found = detect(repo, sha)
+        assert found[0].port_change_id == ID_PORT
+        assert found[0].unmarked is None
 
 
 class TestPrompt:
