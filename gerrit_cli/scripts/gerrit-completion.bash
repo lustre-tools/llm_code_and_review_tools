@@ -60,7 +60,7 @@ _gerrit_completions() {
         explain) opts="--envelope --help --user -U -h" ;;
         find-user) opts="--envelope --help --limit --pretty --user -U -h -n -p" ;;
         finish-patch) opts="--envelope --help --stay --user -U -h" ;;
-        graph) opts="--branch --comments --conflicts --cross-project --envelope --help --include-hashtag --include-topic --name --no-open --output --pretty --skip-ci-details --skip-hashtag --skip-topic --ticket --user -U -h -o -p" ;;
+        graph) opts="--branch --comments --conflicts --cross-project --envelope --help --include-hashtag --include-private --include-topic --name --no-open --output --pretty --skip-ci-details --skip-hashtag --skip-topic --ticket --user -U -h -o -p" ;;
         hashtag) opts="--add --envelope --help --pretty --remove --user -U -a -h -p -r" ;;
         info) opts="--envelope --help --pretty --show-bots --user -U -h -p" ;;
         label|vote) opts="--envelope --help --message --no-thread --pretty --user -U -h -m -p" ;;

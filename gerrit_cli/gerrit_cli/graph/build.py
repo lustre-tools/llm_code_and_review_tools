@@ -228,6 +228,9 @@ class BuildContext:
     # The page opens showing only the tracked changes (hashtag/topic
     # mode: they are what was asked for, there is no anchor of one's own).
     focus_on_by_default: bool = False
+    # Off: the page is served to people the credentials' owner did not
+    # share private changes with (see _drop_private).
+    include_private: bool = False
 
     # Resolved from the anchor change during step 1.
     project: str = _DEFAULT_PROJECT
@@ -1278,6 +1281,12 @@ def _build_separate_chains(ctx: BuildContext) -> list[list[int]]:
     return chains
 
 
+def _public(query: str, include_private: bool) -> str:
+    """The query without private changes; parenthesized, since a bare
+    `-is:private` would bind to the last OR term only."""
+    return query if include_private else f"({query}) -is:private"
+
+
 def _expand_separate_series(ctx: BuildContext) -> None:
     """Run topic/hashtag expansion and build one separate group per
     matching series. Search results are filtered to the anchor's
@@ -1288,7 +1297,7 @@ def _expand_separate_series(ctx: BuildContext) -> None:
     for query, label in search_labels:
         try:
             result = ctx.client.rest.get(
-                f"/changes/?q={quote(query, safe=':+ ')}&n=500"
+                f"/changes/?q={quote(_public(query, ctx.include_private), safe=':+ ')}&n=500"
             )
         except Exception:
             result = []
@@ -2012,6 +2021,9 @@ def _stack_context(
                 if pcn == child:
                     break
                 in_graph = pcn in ctx.nodes
+                if (not in_graph and change and change.get("is_private")
+                        and not ctx.include_private):
+                    break
                 if not in_graph and pcn not in context:
                     context[pcn] = _context_node(ctx, change)
                 parent = node_of(pcn)
@@ -2229,9 +2241,39 @@ def _break_late_cycles(edges: list[dict[str, Any]]) -> int:
     return removed
 
 
+def _drop_private(ctx: BuildContext) -> int:
+    """Remove private changes, however they were found (/related and
+    parent lookups cannot exclude them), unless include_private. A change
+    on top of one then stands on nothing and is hooked to the trunk like
+    any other root. Returns the number removed; a private anchor is an
+    error."""
+    if ctx.include_private:
+        return 0
+    private = {cn for cn, n in ctx.nodes.items() if n.get("is_private")}
+    if not private:
+        return 0
+    if ctx.change_number in private:
+        raise ValueError(
+            f"change {ctx.change_number} is private; --include-private graphs it")
+    for cn in private:
+        del ctx.nodes[cn]
+    ctx.raw_entries = [e for e in ctx.raw_entries if e.get("cn") not in private]
+    ctx.edges = [e for e in ctx.edges
+                 if e["from"] not in private and e["to"] not in private]
+    ctx.seen_edges = {p for p in ctx.seen_edges
+                      if p[0] not in private and p[1] not in private}
+    for g in ctx.separate_groups:
+        g["node_ids"] = [cn for cn in g["node_ids"] if cn not in private]
+    ctx.separate_groups = [g for g in ctx.separate_groups if g["node_ids"]]
+    return len(private)
+
+
 def _assemble_payload(ctx: BuildContext) -> dict[str, Any]:
     """Flatten the accumulated build state into the final dict shape
     consumed by `render.generate_html`."""
+    dropped = _drop_private(ctx)
+    if dropped and ctx.logger is not None:
+        ctx.logger.note(f"{dropped} private change(s) left out")
     # Merged-trunk promotion runs BEFORE the separate-chain builder
     # so chains are constructed over the in-flight pool only —
     # nodes promoted into the main series no longer appear as
@@ -2447,6 +2489,7 @@ def resolve_ticket_anchor(
     client: GerritCommentsClient,
     ticket: str,
     branch: str = "master",
+    include_private: bool = False,
 ) -> int:
     """Pick the anchor change for a ticket-mode graph.
 
@@ -2473,6 +2516,7 @@ def resolve_ticket_anchor(
     explicitly via --branch.
     """
     q = f'message:"{ticket}" branch:{branch}'
+    q = _public(q, include_private)
     try:
         result = client.rest.get(
             f"/changes/?q={quote(q, safe=':+ ')}&n=200"
@@ -2544,6 +2588,7 @@ def resolve_search_anchor(
     kind: str,
     value: str,
     branch: str = "master",
+    include_private: bool = False,
 ) -> int:
     """Pick the anchor change for a hashtag- or topic-mode graph
     (`kind` is "hashtag" or "topic"): the in-flight change carrying it
@@ -2553,6 +2598,7 @@ def resolve_search_anchor(
     in around the tagged changes small. The branch is constrained in the
     query and re-checked on every candidate, as for a ticket."""
     q = f'{kind}:"{value}" branch:{branch}'
+    q = _public(q, include_private)
     try:
         result = client.rest.get(
             f"/changes/?q={quote(q, safe=':+ ')}&n=500"
@@ -2599,6 +2645,7 @@ def build_graph(
     name: str | None = None,
     conflicts_repo: str | None = None,
     focus_on_by_default: bool = False,
+    include_private: bool = False,
 ) -> dict[str, Any]:
     """Build the full series graph with stale branch information.
 
@@ -2625,6 +2672,8 @@ def build_graph(
             branch and the in-flight changes are fetched into it and
             trial-merged against the branch tip and against each other
             (payload key "conflicts").
+        include_private: Keep private changes the credentials can see;
+            by default they are left out (_drop_private).
 
     Returns a dict ready to be embedded as JSON in the HTML template.
     """
@@ -2646,6 +2695,7 @@ def build_graph(
         cross_project_branch=cross_project_branch,
         logger=logger,
         focus_on_by_default=focus_on_by_default,
+        include_private=include_private,
     )
 
     logger.header(f"gerrit-cli graph / #{change_number}")

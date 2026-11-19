@@ -1327,6 +1327,13 @@ def add_graph_parser(subparsers):
              "--include-topic",
     )
     parser.add_argument(
+        "--include-private",
+        action="store_true",
+        help="Also show private changes the credentials can see. By "
+             "default they are left out, so a page served to others "
+             "does not show them",
+    )
+    parser.add_argument(
         "--ticket",
         default="",
         metavar="TICKETS",

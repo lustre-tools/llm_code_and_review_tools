@@ -304,6 +304,11 @@ gc graph 61965 --include-hashtag pt_ecro
 # Trial-merge the in-flight changes against master and each other,
 # in a local clone of the project (see "Conflicts" below)
 gc graph 61962 --conflicts ~/lustre-release
+
+# Private changes the credentials can see are left out by default, so
+# a page served to others does not show them; this keeps them, marked
+# PRIVATE in the panel (a private anchor needs it)
+gc graph 61962 --include-private
 ```
 
 The generated HTML is a single file (all app CSS/JS inlined) but loads

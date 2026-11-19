@@ -134,6 +134,7 @@ def _update_node_meta(node: dict[str, Any], change: dict[str, Any]) -> None:
     node["hashtags"] = change.get("hashtags", [])
     node["updated"] = change.get("updated", "")
     node["is_wip"] = bool(change.get("work_in_progress", False))
+    node["is_private"] = bool(change.get("is_private", False))
     owner_name = change.get("owner", {}).get("name", "")
     if owner_name:
         node["owner"] = owner_name

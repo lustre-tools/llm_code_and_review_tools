@@ -2732,6 +2732,7 @@ function showNodeInfo(id) {
                 <a class="pnum" href="${node.url}" target="_blank">#${node.id}</a>
                 <span class="sbadge sbadge-${node.status}">${node.status}</span>
                 ${node.is_wip ? '<span class="stale-tag" style="background:#7a1a1a;color:#f85149;border-color:#f85149">WIP</span>' : ''}
+                ${node.is_private ? '<span class="stale-tag" style="background:#484f58;color:#fff">PRIVATE</span>' : ''}
                 ${staleTag}
                 ${node.is_backport ? '<span class="stale-tag" style="background:#1f6f6f;color:#fff" title="one reviewer +1 is enough">BACKPORT</span>' : ''}
                 <span class="pps">ps${node.current_patchset}</span>

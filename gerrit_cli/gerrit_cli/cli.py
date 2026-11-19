@@ -242,6 +242,7 @@ def cmd_graph(args):
         skip_topic = getattr(args, "skip_topic", False)
         skip_hashtag = getattr(args, "skip_hashtag", False)
         focus_on_by_default = False
+        include_private = getattr(args, "include_private", False)
         search = _re.fullmatch(r"(?:(hashtag|topic):|#)(\S+)", ticket_arg)
         if search:
             # Hashtag/topic mode: like ticket mode, the anchor is picked
@@ -252,7 +253,8 @@ def cmd_graph(args):
             focus_on_by_default = True
             kind, value = search.group(1) or "hashtag", search.group(2)
             branch = getattr(args, "branch", None) or "master"
-            change_number = resolve_search_anchor(client, kind, value, branch=branch)
+            change_number = resolve_search_anchor(client, kind, value, branch=branch,
+                                                  include_private=include_private)
             base_url = client.url.rstrip("/")
             wanted = extra_hashtags if kind == "hashtag" else extra_topics
             if value not in wanted:
@@ -265,7 +267,7 @@ def cmd_graph(args):
             # as fallback) and expand by the ticket itself.
             branch = getattr(args, "branch", None) or "master"
             change_number = resolve_ticket_anchor(
-                client, ticket_arg, branch=branch,
+                client, ticket_arg, branch=branch, include_private=include_private,
             )
             base_url = client.url.rstrip("/")
             extra_tickets = [ticket_arg] + [
@@ -291,6 +293,7 @@ def cmd_graph(args):
             name=name,
             conflicts_repo=getattr(args, "conflicts", None),
             focus_on_by_default=focus_on_by_default,
+            include_private=include_private,
         )
         if search and graph_data["merged_trunk"]:
             # The picked change only chose what to fetch. Centred on the

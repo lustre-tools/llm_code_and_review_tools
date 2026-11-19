@@ -192,6 +192,7 @@ def _walk_ctx(nodes, gerrit, revision_parents, commit_to_change_ps):
         client=SimpleNamespace(rest=gerrit), project="fs/lustre-release",
         branch="master", cross_project_branch=False, base_url="https://gerrit.invalid",
         labels_by_cn={}, comment_count_by_cn={}, log=lambda *a, **k: None,
+        include_private=False,
     )
 
 
