@@ -110,3 +110,88 @@ def test_no_color_when_not_a_tty(monkeypatch):
     assert use_color(_Tty()) is True
     monkeypatch.setenv("NO_COLOR", "1")
     assert use_color(_Tty()) is False
+
+
+def _kid(cn, via, **kw):
+    e = {"cn": cn, "subject": f"LU-{cn} x: kid", "owner": "KidOwner", "tier": "frozen",
+         "readiness": "ready", "fix_side": "candidate", "files": ["k.c"],
+         "landing": "conflict/conflict", "via": via,
+         "via_change": {"cn": via, "owner": "ViaOwner", "mine": False, "tier": "frozen"}}
+    e.update(kw)
+    return e
+
+
+def test_built_root_who_moves_names_the_via_owner(r70663):
+    r = copy.deepcopy(r70663)
+    r["conflicts"] = [_kid(300, 200)]
+    text = render(r, color=False)
+    assert "who moves: 200 (ViaOwner)" in text
+    assert "KidOwner" not in text.split("who moves:")[1].splitlines()[0]
+
+
+def test_kid_hunks_render_under_the_root(r70663):
+    hunk = {"line": 3, "kind": "edit-edit", "order": "target_first", "truncated": False,
+            "text": "<<<<<<< aaa\nx\n||||||| bbb\n=======\ny\n>>>>>>> ccc"}
+    r = copy.deepcopy(r70663)
+    r["conflicts"] = [_kid(300, 200, hunks={"landing": {"k.c": [hunk]}})]
+    text = render(r, color=False)
+    assert "k.c:3  edit-edit" in text
+    assert ">>>>>>> 300" in text
+
+
+def test_next_hint_names_a_tried_change(r70663):
+    r = copy.deepcopy(r70663)
+    r["conflicts"] = [_kid(300, 200), _kid(301, 200)]
+    assert f"--hunks-for 300" in render(r, color=False)
+
+
+def test_outdated_parent_unknown_is_not_called_a_conflict(r70663):
+    r = copy.deepcopy(r70663)
+    r["outdated_parent"] = {"cn": 90, "ps": 2, "current": 4, "status": "unknown"}
+    text = render(r, color=False)
+    assert "conflicts with the current one" not in text
+    assert "older patchset of parent 90" in text
+    r["outdated_parent"] = {"cn": 90, "ps": 2, "current": 4, "status": "conflict",
+                            "files": ["p.c"]}
+    assert "p.c" in render(r, color=False)
+
+
+def test_silent_entry_without_subject_or_owner(r70663):
+    r = copy.deepcopy(r70663)
+    r["silent_only"] = [{"cn": 500, "tier": "lands-first", "fix_side": "candidate",
+                         "silent": [{"check": "duplicate-test", "file": "t.sh",
+                                     "what": "test_5"}]}]
+    text = render(r, color=False)
+    assert "?" not in text.split("SILENT")[1].split("\n\n")[0]
+    assert "who moves: 500" in text
+    assert "duplicate-test in t.sh: test_5" in text
+
+
+def test_on_next_blocked_names_the_blocker(r70663):
+    r = copy.deepcopy(r70663)
+    r["on_next"] = {"status": "blocked", "by": 69511}
+    text = render(r, color=False)
+    assert "not checked" not in text
+    assert "blocked by 69511" in text.lower()
+    r["on_next"] = {"status": "stale", "branch": "master-next", "reason": "behind master"}
+    assert "behind master" in render(r, color=False)
+
+
+def test_on_branch_error_shows_the_reason(r70663):
+    r = copy.deepcopy(r70663)
+    r["on_branch"] = {"status": "error", "reason": "commit could not be fetched"}
+    text = render(r, color=False)
+    assert "commit could not be fetched" in text
+
+
+def test_failed_trial_merges_are_not_called_not_tried(r70663):
+    r = copy.deepcopy(r70663)
+    r["errors"] = [{"cn": 777, "reason": "trial merge failed"}]
+    text = render(r, color=False)
+    assert "NOT TRIED" not in text
+    assert "777: trial merge failed" in text
+
+
+def test_skipped_reasons_are_summarized(r70663):
+    text = render(r70663, color=False)
+    assert "skipped: 1 Code-Review -1, 2 stacked on a skipped change" in text

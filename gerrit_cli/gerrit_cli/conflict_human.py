@@ -74,7 +74,7 @@ def _landing(landing: str | None, cn: int) -> str:
             "clean/clean": "merges cleanly in both orders"}.get(landing or "", landing or "?")
 
 
-def _who_moves(e: dict[str, Any], cn: int, target: int) -> str:
+def _who_moves(e: dict[str, Any], cn: int, target: int, owner: str | None = None) -> str:
     side = e.get("fix_side")
     if e.get("own_via"):
         parent = e["own_via"]
@@ -83,7 +83,8 @@ def _who_moves(e: dict[str, Any], cn: int, target: int) -> str:
     if side == "target":
         return f"this change ({target})"
     if side == "candidate":
-        return f"{cn} ({e.get('owner', '?')})"
+        owner = owner if owner is not None else e.get("owner")
+        return f"{cn} ({owner})" if owner else str(cn)
     if side == "coordinate":
         return "either side: agree on an order"
     return side or "?"
@@ -129,6 +130,21 @@ def _hunk_lines(e: dict[str, Any], cn: int, target: int, s: _Style) -> list[str]
     return out
 
 
+def _status(res: dict[str, Any]) -> str:
+    """A non-clean trial-merge result of the change itself, in words."""
+    st = res.get("status", "?")
+    if st == "blocked":
+        return f"BLOCKED by {res.get('by', '?')} (a change below it does not apply)"
+    if st == "error":
+        return f"ERROR: {res.get('reason', 'unknown')}"
+    line = st.upper()
+    if res.get("by"):
+        line += f" (blocked by {res['by']})"
+    elif res.get("under"):
+        line += f" (on top of its parent {res['under']})"
+    return line
+
+
 def _header(r: dict[str, Any], s: _Style) -> list[str]:
     cn, branch = r.get("change"), r.get("branch", "master")
     out = [s(f"{cn} PS{r.get('patchset', '?')}", "bold") + f"  {r.get('subject', '')}"]
@@ -145,8 +161,7 @@ def _header(r: dict[str, Any], s: _Style) -> list[str]:
     if ob.get("status") == "clean":
         out.append(f"{branch}: " + s("lands cleanly", "green"))
     elif ob:
-        detail = f" (blocked by {ob['by']})" if ob.get("by") else ""
-        out.append(f"{branch}: " + s(f"{ob.get('status', '?').upper()}{detail}", "red"))
+        out.append(f"{branch}: " + s(_status(ob), "red"))
     nx = r.get("on_next") or {}
     if nx.get("status") == "clean":
         out.append(f"{branch}-next: " + s("lands cleanly", "green"))
@@ -154,8 +169,13 @@ def _header(r: dict[str, Any], s: _Style) -> list[str]:
         w = nx.get("with") or {}
         out.append(f"{branch}-next: " + s(f"CONFLICTS with {w.get('cn', '?')}", "red")
                    + (f"  {w['subject']}" if w.get("subject") else ""))
+    elif nx.get("status") == "queued":
+        out.append(f"{branch}-next: " + s("queued in it already", "green"))
+    elif nx.get("status") in ("blocked", "error"):
+        out.append(f"{branch}-next: " + s(_status(nx), "red"))
     elif nx:
-        out.append(s(f"{branch}-next: not checked ({nx.get('status')})", "dim"))
+        why = nx.get("status", "?") + (f": {nx['reason']}" if nx.get("reason") else "")
+        out.append(s(f"{branch}-next: not checked ({why})", "dim"))
     return out
 
 
@@ -178,9 +198,14 @@ def _own_stack(r: dict[str, Any], s: _Style) -> list[str]:
         if op.get("status") == "clean":
             out.append(s(f"on an older patchset of parent {op.get('cn')}, "
                          "but lands with the current one: leave it", "dim"))
-        else:
+        elif op.get("status") == "conflict":
+            files = f" ({', '.join(op['files'])})" if op.get("files") else ""
             out.append(s(f"on an older patchset of parent {op.get('cn')}, "
-                         "and conflicts with the current one", "red"))
+                         f"and conflicts with the current one{files}", "red"))
+        else:
+            out.append(s(f"on an older patchset of parent {op.get('cn')}; does not land "
+                         f"with the current one for another reason ({op.get('status')})",
+                         "yellow"))
     stack = r.get("own_stack") or {}
     for kind in ("parents", "children"):
         for m in stack.get(kind) or []:
@@ -217,10 +242,14 @@ def _collisions(r: dict[str, Any], s: _Style) -> list[str]:
         if root.get("own_via"):
             oc = root.get("own_via_change") or {}
             out.append(f"    in this change's parent {root['own_via']} ({oc.get('owner', '?')})")
-        out.append(f"    who moves: {_who_moves(ref, cn, target)}")
+        out.append(f"    who moves: {_who_moves(ref, cn, target, root.get('owner'))}")
         if kids:
             out.append(s(f"    stacked on it, same conflict: {_join_by_tier(kids, branch)}", "dim"))
         out.extend(_hunk_lines(root, cn, target, s))
+        for k in kids:
+            if k.get("hunks"):
+                out.append(s(f"    trial merge with {k['cn']}, stacked on {cn}:", "dim"))
+                out.extend(_hunk_lines(k, k["cn"], target, s))
     return out
 
 
@@ -231,8 +260,9 @@ def _silent(r: dict[str, Any], s: _Style) -> list[str]:
     target, branch = r.get("change"), r.get("branch", "master")
     out = ["", s("SILENT  merge cleanly but define the same thing twice", "bold")]
     for e in entries:
-        out.append(s("! ", "yellow") + s(str(e["cn"]), "bold") + f"  {e.get('subject', '')}"
-                   + s(f"  {e.get('owner', '?')}", "dim"))
+        out.append(s("! ", "yellow") + s(str(e["cn"]), "bold")
+                   + (f"  {e['subject']}" if e.get("subject") else "")
+                   + (s(f"  {e['owner']}", "dim") if e.get("owner") else ""))
         out.append(f"    {_tier(e.get('tier'), branch)}{_tags(e)}")
         for x in e.get("silent") or []:
             out.append(f"    {x.get('check')} in {x.get('file')}: {x.get('what')}")
@@ -258,7 +288,7 @@ def _counts(r: dict[str, Any], s: _Style) -> list[str]:
     out: list[str] = []
     errors = r.get("errors") or []
     if errors:
-        out += ["", s("NOT TRIED (not clean either)", "bold")]
+        out += ["", s("TRIAL MERGE FAILED  not known to be clean", "bold")]
         out += [f"  {e.get('cn')}: {e.get('reason', '')}" for e in errors]
 
     def n(key: str) -> int:
@@ -267,6 +297,16 @@ def _counts(r: dict[str, Any], s: _Style) -> list[str]:
 
     out += ["", s(f"{n('clean')} clean · {n('already_conflicting')} already conflicting · "
                   f"{n('not_tried')} not tried · {n('skipped')} skipped", "dim")]
+    reasons: dict[str, int] = {}
+    for sk in r.get("skipped") or []:
+        reason = sk.get("reason") or "?"
+        if reason.startswith("stacked on "):
+            reason = "stacked on a skipped change"
+        else:
+            reason = reason.split(" (", 1)[0]
+        reasons[reason] = reasons.get(reason, 0) + 1
+    if reasons:
+        out.append(s("skipped: " + ", ".join(f"{n} {k}" for k, n in reasons.items()), "dim"))
     out += [s(f"note: {x}", "dim") for x in r.get("notes") or []]
     return out
 
@@ -282,6 +322,8 @@ def render(result: dict[str, Any], color: bool) -> str:
     lines += body + _counts(result, s)
     roots = group_by_root(result.get("conflicts") or [])
     if roots and not any(e.get("hunks") for e in result.get("conflicts") or []):
+        root, kids = roots[0]
+        tried = kids[0]["cn"] if root.get("synthesized") else root["cn"]
         lines.append(s(f"next: gerrit conflicts {result.get('change')} "
-                       f"--hunks-for {roots[0][0]['cn']}", "dim"))
+                       f"--hunks-for {tried}", "dim"))
     return "\n".join(lines)

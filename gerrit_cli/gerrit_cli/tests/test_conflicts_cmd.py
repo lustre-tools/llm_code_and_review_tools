@@ -1318,8 +1318,9 @@ def test_human_prints_text_not_json(setup, capsys, monkeypatch):
 def test_human_excludes_pretty_and_full(other, capsys):
     from gerrit_cli.cli import build_parser
 
+    args = build_parser().parse_args(["conflicts", "100", "--human", other])
     with pytest.raises(SystemExit) as exc:
-        build_parser().parse_args(["conflicts", "100", "--human", other])
+        args.func(args)
     assert exc.value.code == 4
     assert "not allowed with argument" in capsys.readouterr().out
 
@@ -1353,3 +1354,21 @@ def test_human_error_is_one_line_on_stderr(setup, tmp_path, capsys, monkeypatch)
     cap = capsys.readouterr()
     assert cap.out == ""
     assert cap.err.startswith("gerrit conflicts: ") and cap.err.count("\n") == 1
+
+
+def test_full_and_pretty_still_combine():
+    from gerrit_cli.cli import build_parser
+
+    args = build_parser().parse_args(["conflicts", "100", "--full", "--pretty"])
+    assert args.full and args.pretty
+
+
+def test_human_max_age_error_on_stderr(capsys):
+    from gerrit_cli.cli import build_parser
+
+    args = build_parser().parse_args(["conflicts", "100", "--max-age", "0", "--human"])
+    with pytest.raises(SystemExit) as exc:
+        args.func(args)
+    assert exc.value.code == 4
+    cap = capsys.readouterr()
+    assert cap.out == "" and cap.err.startswith("gerrit conflicts: ")

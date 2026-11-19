@@ -602,10 +602,18 @@ def cmd_conflicts(args: Any) -> None:
     command = "conflicts"
     pretty = getattr(args, "pretty", False)
     human = getattr(args, "human", False)
-    if human and getattr(args, "envelope", False):
-        sys.exit(output_error(ErrorCode.INVALID_INPUT, "--human has no envelope",
-                              command, pretty))
+    if human:
+        clash = [flag for flag, on in (("--pretty", pretty), ("--full", args.full),
+                                       ("--envelope", getattr(args, "envelope", False)))
+                 if on]
+        if clash:
+            sys.exit(output_error(ErrorCode.INVALID_INPUT,
+                                  f"argument {clash[0]}: not allowed with argument --human",
+                                  command, False))
     if args.max_age <= 0:
+        if human:
+            print("gerrit conflicts: --max-age must be positive", file=sys.stderr)
+            sys.exit(exit_code_for(ErrorCode.INVALID_INPUT))
         sys.exit(output_error(ErrorCode.INVALID_INPUT, "--max-age must be positive",
                               command, pretty))
     try:

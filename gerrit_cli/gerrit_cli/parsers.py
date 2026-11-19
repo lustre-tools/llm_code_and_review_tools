@@ -1428,8 +1428,7 @@ def add_conflicts_parser(subparsers):
              "throwaway commit of them; the index and branches are left "
              "alone)",
     )
-    output = parser.add_mutually_exclusive_group()
-    output.add_argument(
+    parser.add_argument(
         "--human",
         action="store_true",
         help="A readable, coloured report for a person instead of JSON: "
@@ -1437,7 +1436,7 @@ def add_conflicts_parser(subparsers):
              "tier, landing order and who moves in words (not with "
              "--pretty, --full or --envelope)",
     )
-    output.add_argument(
+    parser.add_argument(
         "--full",
         action="store_true",
         help="Every field: commit hashes, all hashtags, per-order results "
@@ -1501,7 +1500,7 @@ def add_conflicts_parser(subparsers):
         help="Also trial-merge the 'other' tier (changes with nothing "
              "pushing them to land soon)",
     )
-    output.add_argument(
+    parser.add_argument(
         "--pretty", "-p",
         action="store_true",
         help="Pretty-print JSON output",
