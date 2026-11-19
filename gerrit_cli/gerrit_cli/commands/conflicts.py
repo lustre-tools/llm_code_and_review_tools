@@ -597,6 +597,32 @@ def run_conflicts(client: Any, repo_path: str, change: str, commit: str | None, 
                   getattr(client, "username", None) or os.environ.get("GERRIT_USER"))
 
 
+def _rerun(args: Any) -> list[str]:
+    """The command line of this --human run, minus --hunks/--hunks-for."""
+    argv = ["gerrit"]
+    if getattr(args, "user", None):
+        argv += ["--user", args.user]
+    argv.append("conflicts")
+    if args.repo != ".":
+        argv += ["--repo", args.repo]
+    argv.append(args.change)
+    if args.commit:
+        argv += ["--commit", args.commit]
+    if getattr(args, "worktree", False):
+        argv.append("--worktree")
+    for cn in args.with_ or []:
+        argv += ["--with", str(cn)]
+    if args.all:
+        argv.append("--all")
+    if args.max_age != 30:
+        argv += ["--max-age", str(args.max_age)]
+    for flag, values in (("--blocker-tag", args.blocker_tag),
+                         ("--priority-tag", args.priority_tag)):
+        for v in values or []:
+            argv += [flag, v]
+    return [*argv, "--human"]
+
+
 def cmd_conflicts(args: Any) -> None:
     """Which open changes the given change collides with, and who moves."""
     command = "conflicts"
@@ -625,7 +651,7 @@ def cmd_conflicts(args: Any) -> None:
             Ranks.from_env(os.environ, args.blocker_tag, args.priority_tag),
             worktree=getattr(args, "worktree", False))
         if human:
-            print(render_human(compact(result), use_color(sys.stdout)))
+            print(render_human(compact(result), use_color(sys.stdout), _rerun(args)))
         else:
             output_success(result if args.full else compact(result), command, pretty)
     except Exception as e:

@@ -8,6 +8,7 @@ actually conflict.
 from __future__ import annotations
 
 import os
+import shlex
 from typing import Any, TextIO
 
 _CODES = {"red": "31", "green": "32", "yellow": "33", "magenta": "35",
@@ -311,8 +312,10 @@ def _counts(r: dict[str, Any], s: _Style) -> list[str]:
     return out
 
 
-def render(result: dict[str, Any], color: bool) -> str:
-    """The --human report for one `gc conflicts` result (compact form)."""
+def render(result: dict[str, Any], color: bool, rerun: list[str] | None = None) -> str:
+    """The --human report for one `gc conflicts` result (compact form).
+    `rerun` is the command line that produced it, which the hint repeats
+    with --hunks-for so it can be pasted as is."""
     s = _Style(color)
     lines = _header(result, s) + _own_stack(result, s)
     body = _collisions(result, s) + _silent(result, s) + _watch(result, s)
@@ -324,6 +327,7 @@ def render(result: dict[str, Any], color: bool) -> str:
     if roots and not any(e.get("hunks") for e in result.get("conflicts") or []):
         root, kids = roots[0]
         tried = kids[0]["cn"] if root.get("synthesized") else root["cn"]
-        lines.append(s(f"next: gerrit conflicts {result.get('change')} "
-                       f"--hunks-for {tried}", "dim"))
+        argv = rerun or ["gerrit", "conflicts", str(result.get("change")), "--human"]
+        lines.append(s("to see the conflicting lines: "
+                       + shlex.join([*argv, "--hunks-for", str(tried)]), "dim"))
     return "\n".join(lines)

@@ -1372,3 +1372,22 @@ def test_human_max_age_error_on_stderr(capsys):
     assert exc.value.code == 4
     cap = capsys.readouterr()
     assert cap.out == "" and cap.err.startswith("gerrit conflicts: ")
+
+
+def test_human_hint_carries_repo_and_options(setup, capsys, monkeypatch):
+    from gerrit_cli.cli import build_parser
+    from gerrit_cli.commands import conflicts as mod
+
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    r = gerrit.change(200, gerrit.master, {"a.c": _text({5: "R"})})
+    rest.add(200, [r], ["a.c"], labels=READY)
+    monkeypatch.setattr(mod, "_client", lambda: client)
+    args = build_parser().parse_args(["conflicts", "100", "--repo", str(local), "--human",
+                                      "--all", "--with", "200", "--max-age", "10"])
+    args.func(args)
+    hint = next(line for line in capsys.readouterr().out.splitlines()
+                if "to see the conflicting lines:" in line)
+    assert hint.split(": ", 1)[1] == (f"gerrit conflicts --repo {local} 100 --with 200 "
+                                      "--all --max-age 10 --human --hunks-for 200")

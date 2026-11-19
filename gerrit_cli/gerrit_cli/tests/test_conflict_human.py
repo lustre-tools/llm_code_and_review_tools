@@ -195,3 +195,16 @@ def test_failed_trial_merges_are_not_called_not_tried(r70663):
 def test_skipped_reasons_are_summarized(r70663):
     text = render(r70663, color=False)
     assert "skipped: 1 Code-Review -1, 2 stacked on a skipped change" in text
+
+
+def test_hint_repeats_the_command_that_was_run(r70663):
+    text = render(r70663, color=False,
+                  rerun=["gerrit", "conflicts", "--repo", "./lustre-release", "70663", "--human"])
+    assert ("to see the conflicting lines: gerrit conflicts --repo ./lustre-release 70663 "
+            "--human --hunks-for 69517") in text
+
+
+def test_hint_quotes_paths_with_spaces(r70663):
+    text = render(r70663, color=False,
+                  rerun=["gerrit", "conflicts", "--repo", "/a b/lustre", "70663", "--human"])
+    assert "--repo '/a b/lustre' 70663" in text
