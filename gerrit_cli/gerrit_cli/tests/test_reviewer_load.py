@@ -30,10 +30,13 @@ class LoadClient:
         self.counts = counts          # {(account_id, "waiting"|"reviewed"): n}
         self.queries = []
 
-    def search_accounts(self, name=None, email=None, limit=10):
+    def search_accounts(self, name=None, email=None, username=None, limit=10):
         if email:
             return [{"_account_id": a["_account_id"]} for a in self.accounts
                     if a["email"] == email]
+        if username:
+            return [{"_account_id": a["_account_id"]} for a in self.accounts
+                    if a.get("username") == username]
         wanted = name.strip('"').lower()
         return [a for a in self.accounts if wanted in a["name"].lower()]
 
@@ -60,6 +63,21 @@ def test_account_by_alias_email_then_by_exact_name():
     assert resolve_account(client, {"name": "Jian Yu",
                                     "email": "jian.yu@other.org"}) == 5
     assert resolve_account(client, {"name": "Nobody", "email": ""}) is None
+
+
+def test_account_by_username_from_an_old_email_local_part():
+    # Alex Zhuravlev: the history has bzzz@whamcloud.com, not a registered
+    # email, and his Gerrit name does not match the history's; the username
+    # bzzz (the old email's local part) still finds the account.
+    client = LoadClient(
+        [{"_account_id": 119, "name": "Alex Zhuravlev", "username": "bzzz",
+          "email": "azhuravlev@thelustrecollective.com"}],
+        {})
+    assert resolve_account(client, {
+        "name": "Alexey Zhuravlev", "email": "bzzz@whamcloud.com"}) == 119
+    # A local part matching no username still resolves to nobody.
+    assert resolve_account(client, {
+        "name": "Alexey Zhuravlev", "email": "nobody@whamcloud.com"}) is None
 
 
 def test_gerrit_load_counts_queue_and_votes_and_survives_one_failure():

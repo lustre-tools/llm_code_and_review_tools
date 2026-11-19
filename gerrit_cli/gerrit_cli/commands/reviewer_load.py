@@ -81,6 +81,18 @@ def resolve_account(client, candidate):
                  if normalize_name(a.get("name", "")) == normalize_name(name)]
         if len(exact) == 1 and exact[0].get("_account_id"):
             return exact[0]["_account_id"]
+    # Last, by the username an old history email suggests (its local part):
+    # an @whamcloud.com address often survives as the Gerrit username though
+    # the registered email has moved on (Alex Zhuravlev: bzzz@whamcloud.com ->
+    # username bzzz, now azhuravlev@thelustrecollective.com).  username: is an
+    # exact match in Gerrit, so a single hit is unambiguous.
+    for email in emails:
+        local = email.split("@", 1)[0] if "@" in email else ""
+        if not local:
+            continue
+        found = client.search_accounts(username=local, limit=2) or []
+        if len(found) == 1 and found[0].get("_account_id"):
+            return found[0]["_account_id"]
     return None
 
 
