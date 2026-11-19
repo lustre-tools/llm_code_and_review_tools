@@ -74,6 +74,22 @@ class TestGerritCommentsClient:
         assert base_url == "https://gerrit.example.com"
         assert change_number == 12345
 
+    def test_parse_gerrit_url_without_c_segment(self):
+        """A project/+/number link with no '/c/' still parses."""
+        url = "https://review.whamcloud.com/fs/lustre-release/+/71062"
+        base_url, change_number = GerritCommentsClient.parse_gerrit_url(url)
+
+        assert base_url == "https://review.whamcloud.com"
+        assert change_number == 71062
+
+    def test_parse_gerrit_url_without_c_segment_with_patchset(self):
+        """The no-'/c/' form keeps parsing when a patchset is tacked on."""
+        url = "https://review.whamcloud.com/fs/lustre-release/+/71062/3"
+        base_url, change_number = GerritCommentsClient.parse_gerrit_url(url)
+
+        assert base_url == "https://review.whamcloud.com"
+        assert change_number == 71062
+
     def test_parse_gerrit_url_invalid(self):
         """Test parsing invalid URL."""
         url = "https://example.com/not-a-gerrit-url"

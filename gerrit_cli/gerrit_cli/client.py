@@ -273,6 +273,7 @@ class GerritCommentsClient:
 
         Supports:
         - https://review.whamcloud.com/c/fs/lustre-release/+/61965
+        - https://review.whamcloud.com/fs/lustre-release/+/61965 (no "/c/")
         - https://review.whamcloud.com/61965
         - https://review.whamcloud.com/c/fs/lustre-release/+/61965/3 (with patchset)
         - 61965 (just the change number, uses default base URL)
@@ -299,8 +300,9 @@ class GerritCommentsClient:
                 )
             return base, int(url)
 
-        # Pattern for /c/project/+/number style URLs
-        match = re.match(r"(https?://[^/]+)/c/[^/]+(?:/[^/]+)*/\+/(\d+)(?:/\d+)?", url)
+        # Pattern for project/+/number style URLs, with or without the "/c/":
+        # .../c/fs/lustre-release/+/61965 and the bare .../fs/lustre-release/+/61965
+        match = re.match(r"(https?://[^/]+)/(?:[^/]+/)*\+/(\d+)(?:/\d+)?", url)
         if match:
             return match.group(1), int(match.group(2))
 
