@@ -37,6 +37,7 @@ from ..conflict_candidates import (
     phrase,
     query_candidates,
 )
+from ..conflict_human import render as render_human, use_color
 from ..conflict_report import Checked, compact, report, target_tier
 from ..conflicts import (
     ConflictCheckError,
@@ -52,7 +53,7 @@ from ..conflicts import (
 )
 from ..errors import ErrorCode
 from ..parallel import parallel_map
-from ._helpers import _cli, error_code_for, output_error, output_success
+from ._helpers import _cli, error_code_for, exit_code_for, output_error, output_success
 
 _DETAIL = ("CURRENT_REVISION", "CURRENT_COMMIT", "LABELS", "DETAILED_LABELS",
            "DETAILED_ACCOUNTS")
@@ -600,6 +601,10 @@ def cmd_conflicts(args: Any) -> None:
     """Which open changes the given change collides with, and who moves."""
     command = "conflicts"
     pretty = getattr(args, "pretty", False)
+    human = getattr(args, "human", False)
+    if human and getattr(args, "envelope", False):
+        sys.exit(output_error(ErrorCode.INVALID_INPUT, "--human has no envelope",
+                              command, pretty))
     if args.max_age <= 0:
         sys.exit(output_error(ErrorCode.INVALID_INPUT, "--max-age must be positive",
                               command, pretty))
@@ -611,6 +616,12 @@ def cmd_conflicts(args: Any) -> None:
             datetime.now(timezone.utc).replace(tzinfo=None),
             Ranks.from_env(os.environ, args.blocker_tag, args.priority_tag),
             worktree=getattr(args, "worktree", False))
-        output_success(result if args.full else compact(result), command, pretty)
+        if human:
+            print(render_human(compact(result), use_color(sys.stdout)))
+        else:
+            output_success(result if args.full else compact(result), command, pretty)
     except Exception as e:
+        if human:
+            print(f"gerrit conflicts: {e}", file=sys.stderr)
+            sys.exit(exit_code_for(error_code_for(e)))
         sys.exit(output_error(error_code_for(e), str(e), command, pretty))

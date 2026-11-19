@@ -1293,3 +1293,63 @@ def test_a_bug_reading_the_tips_is_not_hidden_by_the_fallback(setup):
     client.get_branch_revision = broken
     with pytest.raises(KeyError):
         run(client, local)
+
+
+def test_human_prints_text_not_json(setup, capsys, monkeypatch):
+    from gerrit_cli.cli import build_parser
+    from gerrit_cli.commands import conflicts as mod
+
+    gerrit, local, client = setup
+    rest = client.rest
+    _target(gerrit, rest, {5: "T"})
+    r = gerrit.change(200, gerrit.master, {"a.c": _text({5: "R"})})
+    rest.add(200, [r], ["a.c"], labels=READY)
+    monkeypatch.setattr(mod, "_client", lambda: client)
+    args = build_parser().parse_args(["conflicts", "100", "--repo", str(local), "--human"])
+    args.func(args)
+    out = capsys.readouterr().out
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(out)
+    assert "COLLISIONS" in out and "200" in out
+    assert "\x1b[" not in out
+
+
+@pytest.mark.parametrize("other", ["--pretty", "-p", "--full"])
+def test_human_excludes_pretty_and_full(other, capsys):
+    from gerrit_cli.cli import build_parser
+
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["conflicts", "100", "--human", other])
+    assert exc.value.code == 4
+    assert "not allowed with argument" in capsys.readouterr().out
+
+
+def test_human_with_envelope_is_invalid_input(setup, capsys, monkeypatch):
+    from gerrit_cli.cli import build_parser
+    from gerrit_cli.commands import conflicts as mod
+
+    gerrit, local, client = setup
+    _target(gerrit, client.rest, {5: "T"})
+    monkeypatch.setattr(mod, "_client", lambda: client)
+    args = build_parser().parse_args(["--envelope", "conflicts", "100", "--repo", str(local),
+                                      "--human"])
+    with pytest.raises(SystemExit) as exc:
+        args.func(args)
+    assert exc.value.code == 4
+
+
+def test_human_error_is_one_line_on_stderr(setup, tmp_path, capsys, monkeypatch):
+    from gerrit_cli.cli import build_parser
+    from gerrit_cli.commands import conflicts as mod
+
+    gerrit, _local, client = setup
+    _target(gerrit, client.rest, {5: "T"})
+    monkeypatch.setattr(mod, "_client", lambda: client)
+    args = build_parser().parse_args(["conflicts", "100", "--repo", str(tmp_path / "x"),
+                                      "--human"])
+    with pytest.raises(SystemExit) as exc:
+        args.func(args)
+    assert exc.value.code == 4
+    cap = capsys.readouterr()
+    assert cap.out == ""
+    assert cap.err.startswith("gerrit conflicts: ") and cap.err.count("\n") == 1

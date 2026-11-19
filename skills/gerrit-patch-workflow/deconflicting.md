@@ -16,6 +16,8 @@ gc conflicts <cn> | jq -r '.status, ((.conflicts // [])[] | [.cn, .tier,
 ```
 
 The jq lines need jq and the default compact output, not `--full`.
+`--human` prints the same result as a readable report grouped by the
+change whose lines conflict: for showing a person, not for parsing.
 Never start with `--hunks`: on a busy file it runs to megabytes. A hunk's
 `line` counts the merged file with its conflict markers, not either side;
 for a `truncated` hunk, find the place in both sides' files and read it.

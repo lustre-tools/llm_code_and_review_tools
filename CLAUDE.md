@@ -135,7 +135,8 @@ owner sets this variable; agents must not set, unset, or override it.
   --worktree] [--hunks-for CN]` trial-merges a change (or a local commit,
   or the checkout's uncommitted edits, standing in for it) against the open changes likely to land soon, in both
   orders, both stacks cherry-picked onto the branch tip as submit lands
-  them, and says per collision which side should move (`fix_side`)
+  them, and says per collision which side should move (`fix_side`);
+  `--human` prints a readable report for a person instead of JSON
 - **CI:** `gc maloo <url>`, `gc watch <file>`
 - **Search:** `gc search <query>`, `gc s <query>` (`--all` follows the
   pages; `gc explain search` lists the operators that find related changes)

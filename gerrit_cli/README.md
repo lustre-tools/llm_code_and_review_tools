@@ -524,7 +524,16 @@ gc conflicts 12345 --repo ~/lustre-release --commit HEAD
 gc conflicts 12345 --repo ~/lustre-release --worktree # uncommitted edits of 12345
 gc conflicts 12345 --with 23456 --all                 # force one in, try every tier
 gc conflicts 12345 --repo ~/lustre-release --full     # every field
+gc conflicts 12345 --repo ~/lustre-release --human    # readable report for a person
 ```
+
+- **`--human`**: a coloured report instead of JSON, for reading in a
+  terminal. Collisions are grouped under the change whose lines conflict;
+  the pairs that collide only because they are stacked on it (`via`) are
+  listed under it. Tier, landing order and who moves are in words, and
+  with `--hunks-for` the conflict markers are labelled with change
+  numbers. No colour when piped or with `NO_COLOR`. Not with `--pretty`,
+  `--full` or `--envelope`; agents keep the JSON.
 
 - **Output**: compact by default, enough to decide what to do; `--full`
   prints every field. Compact pairs keep `cn`, `subject` (cut at 70

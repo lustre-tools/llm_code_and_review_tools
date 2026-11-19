@@ -1327,6 +1327,14 @@ and tip are left out. --full adds those, each pair's commit and ps (the
 candidate's current patchset, to fetch it), every hashtag, the per-order
 results as objects and the change lists behind the counts. Hunks appear
 only with --hunks or --hunks-for, in either form.
+
+--human prints a coloured report for a person instead of JSON, from the
+same compact result: collisions grouped under the change whose lines
+conflict (pairs that collide only through it, via, listed under it),
+tier, landing order and fix_side in words, then silent, watch and the
+counts. Colour only on a terminal without NO_COLOR. Not with --pretty,
+--full or --envelope; errors go to stderr as one line. Agents keep the
+JSON.
 """,
         "examples": [
             {
@@ -1336,6 +1344,10 @@ only with --hunks or --hunks-for, in either form.
             {
                 "command": "gc conflicts 12345 --repo ~/lustre-release --hunks-for 23456",
                 "description": "Conflict regions of the collision with 23456 only",
+            },
+            {
+                "command": "gc conflicts 12345 --repo ~/lustre-release --human",
+                "description": "Readable report for a person, grouped by the conflicting change",
             },
             {
                 "command": "gc conflicts 12345 --repo ~/lustre-release --worktree",
