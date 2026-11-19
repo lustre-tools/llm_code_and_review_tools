@@ -14,15 +14,49 @@ Classify every finding.
 - The upstream change does not depend on a commit that this branch lacks.
 - Code that exists only on this branch gets the same change where it needs it.
 - Trailers, `Fixes:` targets and test version gates suit this branch.
-- The `Change-Id:` is the same as the upstream Change-Id. A wrong Change-Id
-  needs a new Gerrit change, because Gerrit cannot change the Change-Id of an
-  existing change. Say so in the comment.
+- The `Change-Id:` is the same as the upstream Change-Id, except as "Change-Id
+  exceptions" allows. A wrong Change-Id needs a new Gerrit change, because
+  Gerrit cannot change the Change-Id of an existing change. Say so in the
+  comment.
 - Each `Lustre-change:` names the right upstream change: its subject and
   Change-Id match the port.
 - The port is not stale. It matches the landed commit, or the current patch
   set of an upstream change that has not landed. A port of an older patch set
   is a `BACKPORT` defect.
 - A landed upstream change has its landed hash in `Lustre-commit:`, not TBD.
+
+## Ports without trailers
+
+When the facts above say that the port has no trailers, lreview found the
+same patch by its Change-Id or its subject, on master or, when master has
+none, on another branch. First compare the diffs. If the commit does not
+port that change (the subjects match by chance), say so in one sentence in
+the top-level `message`, ignore this file, and review the commit as a change
+of this branch.
+
+If the commit ports the change, report on the commit message:
+- When the change is on master: `(defect) BACKPORT:` the `Lustre-change:`
+  and `Lustre-commit:` trailers are missing. They name the master change,
+  never another branch: for example `Lustre-change: <master URL>` and
+  `Lustre-commit: TBD (from <current master commit>)` for a change that has
+  not landed. A port between two branches of a patch that master does not
+  have needs no trailers.
+- `(defect) BACKPORT:` the `Change-Id:` differs from the Change-Id of the
+  change it ports, unless one of the exceptions below applies. Gerrit cannot
+  change it: the change must be abandoned and the port pushed again as a new
+  change with the original Change-Id.
+
+These defects block landing. The top-level `message` must not say that the
+change is fine to land. Then run every check below.
+
+## Change-Id exceptions
+
+The same patch has the same Change-Id on every branch. A different Change-Id
+is correct only when the original cannot be used: the facts say that another
+change on this branch already has it, or the commit message gives the reason
+(for example, the original change was abandoned, or a partly landed series
+needs a new one with the old Change-Id in `Was-Change-Id:`). Then report it as
+a note with `unresolved: false`, not a defect.
 
 ## Squashed ports
 

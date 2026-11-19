@@ -358,7 +358,8 @@ class BatchConfig:
     # claude, full mode: put the protocol and the files it always loads
     # in the system prompt and the commit in the first message
     preload: bool = False
-    # Review a commit with Lustre-change: trailers as a backport
+    # Review a commit with Lustre-change: trailers, or a change off
+    # upstream master that matches one on master, as a backport
     backport: bool = False
     # claude, full mode: five lens subagents feed the reviewer
     # (lenses.py); lens_model None means the review's own model
@@ -692,14 +693,16 @@ def attach_backport(config: BatchConfig, change: ResolvedChange) -> None:
         return
     from .backport import detect
     try:
-        change.backport = detect(config.repo, change.sha)
+        change.backport = detect(config.repo, change.sha, change)
     except Exception as exc:  # noqa: BLE001 - see above
         _log(f"[{change.slug}] warning: backport check failed: {exc}")
     if change.backport:
         missing = sum(1 for u in change.backport if u.sha is None)
+        unmarked = any(u.unmarked for u in change.backport)
         _log(f"[{change.slug}] backport review, "
              f"{len(change.backport)} upstream change(s)"
-             + (f", {missing} not found" if missing else ""))
+             + (f", {missing} not found" if missing else "")
+             + (", NO Lustre-change trailers" if unmarked else ""))
 
 
 def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:

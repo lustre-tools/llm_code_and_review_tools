@@ -283,7 +283,21 @@ Change-Id, the `Lustre-change:` target, a stale port, and the
 `Was-Change-Id:` rules of a squashed port. An open upstream `(defect)` comment
 that applies to the port is an `UPSTREAM-BLOCKER`, because the port can land
 before the upstream change. If it cannot get an upstream commit, the
-review still runs and says so. `--no-backport` or `LREVIEW_BACKPORT=0` turns
+review still runs and says so.
+
+A port that lost its trailers looks like a change of its own branch, and
+that is the mistake the review must catch. So a Gerrit change on any
+branch other than `fs/lustre-release` `master` without trailers is looked
+up by its Change-Id and by its subject without the ticket (`LU-2 osd: x`
+matches `ABC-1 osd: x`; subjects shorter than 20 characters are not
+matched): on master first, then on the other branches, because a patch can
+move between two release branches without a master change. A match makes
+it a backport review against that change. The trailers are required, and
+name only master, when master has the change. The Change-Id must match in
+both cases, unless the original Change-Id is already used on the port's
+branch (lreview asks Gerrit) or the commit message gives the reason. A
+subject match that is not a port is dismissed by the review after it
+compares the diffs. `--no-backport` or `LREVIEW_BACKPORT=0` turns
 the check off. `lreview bench` and `lreview chat` do not use it.
 
 ## Review modes (`--mode`)
