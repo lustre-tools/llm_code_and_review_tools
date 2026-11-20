@@ -148,6 +148,20 @@ class TestTicketSearchLabels:
         labels = _collect_search_labels(ctx)
         assert ('message:"LU-18222"', "ticket LU-18222") in labels
 
+    def test_patch_watcher_tags_are_never_searched(self):
+        """pw_shepherd on the anchor pulled every shepherded change in."""
+        ctx = SimpleNamespace(
+            change_number=1,
+            nodes={1: {"topic": "", "hashtags": ["pw_shepherd", "lfu", "pw_halt", "master-next"]}},
+            include_topic=True,
+            include_hashtag=True,
+            extra_topics=[],
+            extra_hashtags=["pw_own", "master-next"],
+            extra_tickets=[],
+        )
+        hashtags = [q for q, label in _collect_search_labels(ctx) if label.startswith("hashtag")]
+        assert hashtags == ["hashtag:lfu", "hashtag:master-next"]
+
 
 class TestLoneAnchor:
     """67069 has no related changes: /related lists nothing for it."""

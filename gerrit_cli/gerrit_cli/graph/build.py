@@ -53,6 +53,16 @@ _MESSAGES_BATCH_SIZE = 20
 # Users can still force-include them with `--include-hashtag`.
 _LIFECYCLE_HASHTAGS = frozenset({"master-next", "mw"})
 
+# Patch Watcher's control tags (pw_shepherd, pw_halt, pw_own, ...) say
+# what the bot does with a change, and hundreds of unrelated changes
+# carry each: one on the anchor pulled 650 changes into a 60-change
+# graph. Never searched, not even when asked for.
+_BOT_HASHTAG_PREFIX = "pw_"
+
+
+def _bot_hashtag(tag: str) -> bool:
+    return tag.startswith(_BOT_HASHTAG_PREFIX)
+
 # Number of pipeline phases printed by build_graph. Must match the
 # number of `logger.start(...)` calls in build_graph so the [N/total]
 # prefix counts correctly.
@@ -889,11 +899,12 @@ def _collect_search_labels(
         # derived list — they're carried by every patch queued for
         # the next merge and would pull in unrelated series.
         hashtags.extend(
-            h for h in anchor_hashtags if h not in _LIFECYCLE_HASHTAGS
+            h for h in anchor_hashtags
+            if h not in _LIFECYCLE_HASHTAGS and not _bot_hashtag(h)
         )
     # User-supplied --include-hashtag still wins; opting in to
-    # "master-next" explicitly is allowed.
-    hashtags.extend(ctx.extra_hashtags)
+    # "master-next" explicitly is allowed, a bot tag is not.
+    hashtags.extend(h for h in ctx.extra_hashtags if not _bot_hashtag(h))
 
     search_labels: list[tuple[str, str]] = []
     seen_t: set[str] = set()
@@ -2101,9 +2112,9 @@ def _prune_unrelated_merged(ctx: BuildContext) -> tuple[int, int]:
     topics.update(t for t in ctx.extra_topics if t)
     hashtags = {
         h for h in (anchor.get("hashtags") or [])
-        if h not in _LIFECYCLE_HASHTAGS
+        if h not in _LIFECYCLE_HASHTAGS and not _bot_hashtag(h)
     }
-    hashtags.update(h for h in ctx.extra_hashtags if h)
+    hashtags.update(h for h in ctx.extra_hashtags if h and not _bot_hashtag(h))
     tickets.update(t for t in ctx.extra_tickets if t)
 
     if not tickets and not topics and not hashtags:
