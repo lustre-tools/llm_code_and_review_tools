@@ -1839,7 +1839,11 @@ class MalooClient:
             self.get_bug_links(buggable_id, buggable_type))
 
         # Step 2: Submit the form (method=GET with commit=Create issue)
+        # Hidden fields carry the auto-association footer
+        # ("autoassociate"), which Maloo appends to the description;
+        # without it Maloo cannot match later failures to the ticket.
         params = {
+            **_raise_bug_hidden_fields(resp.text),
             "buggable_id": buggable_id,
             "buggable_type": buggable_type,
             "project": project,
@@ -1928,6 +1932,20 @@ def _raise_bug_form_attrs(form_html: str) -> dict[str, Any]:
 
 
 _DESCRIPTION_PLACEHOLDER = re.compile(r"<<Please provide additional[^>]*>>")
+
+
+def _raise_bug_hidden_fields(form_html: str) -> dict[str, str]:
+    """Return the name and value of each hidden input on the form."""
+    fields = {}
+    for tag in re.findall(r"<input\b[^>]*>", form_html, re.DOTALL):
+        if not re.search(r'type="hidden"', tag):
+            continue
+        name = re.search(r'name="([^"]*)"', tag)
+        value = re.search(r'value="([^"]*)"', tag, re.DOTALL)
+        if name:
+            fields[name.group(1)] = (
+                html.unescape(value.group(1)) if value else "")
+    return fields
 
 
 def _raise_bug_form_text(form_html: str, name: str) -> str:

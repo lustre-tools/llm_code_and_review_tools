@@ -1345,6 +1345,21 @@ class TestRaiseBug:
         assert desc.endswith("Triage notes.")
         assert "<<" not in desc
 
+    def test_submits_autoassociate_footer(self, client):
+        form = (
+            '<input type="hidden" name="buggable_id" value="st1" />'
+            '<input type="hidden" name="autoassociate" id="autoassociate" '
+            'value="\n\nVVVVVVV DO NOT REMOVE LINES BELOW, Added by Maloo '
+            'for auto-association VVVVVVV\nsanity test_1 - 0 &lt; 6" '
+            'autocomplete="off" />'
+        ) + SUBTEST_FORM
+        web = self._setup_raise_bug(client, form)
+        client.raise_bug(buggable_id="st1", **GOOD)
+        params = self._params(web)
+        assert params["autoassociate"].endswith(
+            "auto-association VVVVVVV\nsanity test_1 - 0 < 6")
+        assert params["buggable_id"] == "st1"
+
     def test_description_appended_without_placeholder(self, client):
         form = '<textarea name="description">Default</textarea>'
         web = self._setup_raise_bug(client, form)
