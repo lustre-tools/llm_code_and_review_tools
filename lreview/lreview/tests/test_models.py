@@ -102,9 +102,11 @@ class TestValidateSelection:
                 validate_selection("codex", slug, "max")
 
     def test_ultra_is_codex_only(self):
-        with pytest.raises(ValueError) as exc:
-            validate_selection("claude", "opus", "ultra")
-        assert "codex-only" in str(exc.value)
+        for agent, model in (("claude", "opus"), ("agy", "gemini-4-neon")):
+            with pytest.raises(ValueError) as exc:
+                validate_selection(agent, model, "ultra")
+            assert "codex-only" in str(exc.value)
+        validate_selection("agy", "gemini-4-neon", "xhigh")
 
     def test_unknown_model_is_not_effort_checked(self):
         validate_selection("codex", "gpt-7-nova", "ultra")
@@ -122,6 +124,8 @@ class TestModelEfforts:
 
     def test_claude_ladder_has_no_ultra(self):
         assert "ultra" not in model_efforts("claude", "opus")
+        assert "ultra" not in model_efforts("agy", "gemini-4-neon")
+        assert "max" in model_efforts("agy", "gemini-4-neon")
 
     def test_unknown_codex_model_has_no_known_ladder(self):
         assert model_efforts("codex", "gpt-7-nova") is None
@@ -146,6 +150,26 @@ def test_cursor_model_lines(monkeypatch):
     assert "not logged in" in cursor_model_lines()[-1]
 
 
+def test_agy_model_lines(monkeypatch):
+    import subprocess
+    from lreview.models import AGY_DEFAULT_MODEL, agy_model_lines
+    listing = ("\r⠋ Fetching available models...\rgemini-4-neon-high  "
+               "Gemini 4 Neon (High)\ngemini-3.8-flash-medium  "
+               "Gemini 3.8 Flash (Medium)\n")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k:
+                        subprocess.CompletedProcess(a, 0, listing, ""))
+    lines = agy_model_lines()
+    assert f"{AGY_DEFAULT_MODEL} (default)" in lines[0]
+    assert "--effort" in lines[0]
+    assert lines[1:] == [
+        "  gemini-4-neon-high  Gemini 4 Neon (High)",
+        "  gemini-3.8-flash-medium  Gemini 3.8 Flash (Medium)",
+    ]
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k:
+                        subprocess.CompletedProcess(a, 1, "", "auth required"))
+    assert "auth required" in agy_model_lines()[-1]
+
+
 class TestResolveEffort:
 
     def test_claude_defaults_to_high(self):
@@ -158,7 +182,7 @@ class TestResolveEffort:
         assert resolve_effort("claude", "medium") == "medium"
         assert resolve_effort("codex", "xhigh") == "xhigh"
 
-    @pytest.mark.parametrize("agent", ["codex", "cursor", "gemini"])
+    @pytest.mark.parametrize("agent", ["codex", "cursor", "gemini", "agy"])
     def test_other_agents_keep_their_own(self, agent):
         from lreview.models import resolve_effort
         assert resolve_effort(agent, None) is None

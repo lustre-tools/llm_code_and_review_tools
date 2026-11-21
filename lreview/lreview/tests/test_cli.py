@@ -6,8 +6,8 @@ import pytest
 
 from lreview.cli import build_parser, default_worktrees_dir
 from lreview.models import (
-    CLAUDE_DEFAULT_MODEL, CODEX_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL,
-    codex_model)
+    AGY_DEFAULT_MODEL, CLAUDE_DEFAULT_MODEL, CODEX_DEFAULT_MODEL,
+    CURSOR_DEFAULT_MODEL, codex_model)
 
 
 class TestParser:
@@ -60,6 +60,8 @@ class TestParser:
         assert args.agent == "codex"
         args = build_parser().parse_args(["run", "1", "--agent", "gemini"])
         assert args.agent == "gemini"
+        args = build_parser().parse_args(["run", "1", "--agent", "agy"])
+        assert args.agent == "agy"
         with pytest.raises(SystemExit):
             build_parser().parse_args(["run", "1", "--agent", "windsurf"])
 
@@ -80,6 +82,7 @@ class TestParser:
         assert resolve_model("claude") == CLAUDE_DEFAULT_MODEL
         assert resolve_model("codex") == CODEX_DEFAULT_MODEL
         assert resolve_model("gemini") is None
+        assert resolve_model("agy") == AGY_DEFAULT_MODEL
         assert resolve_model("cursor") == CURSOR_DEFAULT_MODEL
         assert resolve_model("claude", "fable") == "fable"
         monkeypatch.setenv("LREVIEW_MODEL", "opus")
@@ -104,6 +107,7 @@ class TestParser:
         monkeypatch.setenv("LREVIEW_MODEL", "opus")
         assert resolve_model("codex") == CODEX_DEFAULT_MODEL
         assert resolve_model("gemini") is None
+        assert resolve_model("agy") == AGY_DEFAULT_MODEL
         assert resolve_model("claude") == "opus"
         monkeypatch.setenv("LREVIEW_MODEL", "sol")
         assert resolve_model("claude") == CLAUDE_DEFAULT_MODEL
@@ -138,6 +142,18 @@ class TestParser:
         assert check_selection(
             args, resolve_model(args.agent, args.model)) is True
         assert "not supported for 'gemini'" in capsys.readouterr().out
+
+        args = build_parser().parse_args(
+            ["run", "1", "--agent", "agy", "--effort", "high"])
+        assert check_selection(
+            args, resolve_model(args.agent, args.model)) is True
+        assert capsys.readouterr().out == ""
+
+        args = build_parser().parse_args(
+            ["run", "1", "--agent", "agy", "--effort", "ultra"])
+        assert check_selection(
+            args, resolve_model(args.agent, args.model)) is False
+        assert "codex-only" in capsys.readouterr().out
 
     def test_run_options(self):
         args = build_parser().parse_args([

@@ -18,8 +18,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .defaults import (  # noqa: F401 (re-exported)
-    CLAUDE_DEFAULT_EFFORT, CLAUDE_DEFAULT_MODEL, CODEX_DEFAULT_MODEL,
-    CURSOR_DEFAULT_MODEL)
+    AGY_DEFAULT_MODEL, CLAUDE_DEFAULT_EFFORT, CLAUDE_DEFAULT_MODEL,
+    CODEX_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL)
 
 # The union of every backend's effort ladder; individual agents and
 # models accept subsets (see CLAUDE_EFFORTS and CodexModel.efforts).
@@ -31,11 +31,12 @@ ULTRA_EFFORTS = EFFORT_LEVELS
 MAX_EFFORTS = EFFORT_LEVELS[:-1]
 XHIGH_EFFORTS = EFFORT_LEVELS[:-2]
 
-# claude --effort; "ultra" is codex-only
+# claude and agy --effort; "ultra" is codex-only
 CLAUDE_EFFORTS = MAX_EFFORTS
+AGY_EFFORTS = MAX_EFFORTS
 
 # Agents that take a reasoning effort at all
-EFFORT_AGENTS = ("claude", "codex", "auggie")
+EFFORT_AGENTS = ("claude", "codex", "auggie", "agy")
 
 
 @dataclass(frozen=True)
@@ -139,6 +140,7 @@ DEFAULT_MODELS = {
     "claude": CLAUDE_DEFAULT_MODEL,
     "codex": CODEX_DEFAULT_MODEL,
     "cursor": CURSOR_DEFAULT_MODEL,
+    "agy": AGY_DEFAULT_MODEL,
 }
 
 
@@ -180,6 +182,8 @@ def model_efforts(agent: str, name: Optional[str]) -> Optional[tuple]:
     """Efforts a model accepts, or None when they are not known."""
     if agent == "claude":
         return CLAUDE_EFFORTS
+    if agent == "agy":
+        return AGY_EFFORTS
     if agent == "codex":
         model = codex_model(name)
         return model.efforts if model else None
@@ -207,10 +211,10 @@ def validate_selection(agent: str, model: Optional[str],
     efforts = model_efforts(agent, model)
     if efforts is None or effort in efforts:
         return
-    if agent == "claude":
+    if agent in ("claude", "agy"):
         raise ValueError(
-            f"claude does not support --effort {effort} "
-            f"(accepts: {', '.join(CLAUDE_EFFORTS)}; "
+            f"{agent} does not support --effort {effort} "
+            f"(accepts: {', '.join(efforts)}; "
             f"'{effort}' is codex-only)")
     entry = codex_model(model)
     raise ValueError(
@@ -256,3 +260,26 @@ def cursor_model_lines() -> list:
     # Cursor's own default is not lreview's
     return lines + ["  " + line.replace("(default)", "(Cursor's default)")
                     for line in models]
+
+
+def agy_model_lines() -> list:
+    """Antigravity CLI's models for this account, from `agy models`."""
+    import subprocess
+    lines = [f"  {AGY_DEFAULT_MODEL} (default); --effort: "
+             f"{', '.join(AGY_EFFORTS)}, depending on model"]
+    try:
+        done = subprocess.run(["agy", "models"],
+                              capture_output=True, text=True, timeout=30,
+                              stdin=subprocess.DEVNULL, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return lines + [f"  (could not run 'agy models': {exc})"]
+    models = []
+    for raw in done.stdout.split("\n"):
+        # Strip any carriage-return spinner prefix on the first line
+        line = raw.rsplit("\r", 1)[-1].strip()
+        if line and "Fetching available models" not in line:
+            models.append(line)
+    if done.returncode != 0 or not models:
+        said = " ".join((done.stdout + done.stderr).split())[:200]
+        return lines + [f"  ('agy models' failed: {said})"]
+    return lines + ["  " + line for line in models]

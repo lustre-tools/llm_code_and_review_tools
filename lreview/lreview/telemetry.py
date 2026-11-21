@@ -78,13 +78,17 @@ def _describe(name: str, tool_input) -> str:
     """One line saying what a tool call did."""
     if not isinstance(tool_input, dict):
         return name
-    for key in ("command", "file_path", "pattern", "path", "url",
-                "description", "prompt", "query"):
+    for key in ("command", "CommandLine", "file_path", "Path", "TargetFile",
+                "pattern", "Pattern", "Query", "path", "DirectoryPath",
+                "SearchPath", "url", "Url", "description", "prompt",
+                "Prompt", "query"):
         value = tool_input.get(key)
         if isinstance(value, str) and value:
             value = " ".join(value.split())
             if key == "pattern" and tool_input.get("path"):
                 value += f" in {tool_input['path']}"
+            elif key == "Query" and tool_input.get("SearchPath"):
+                value += f" in {tool_input['SearchPath']}"
             return f"{name}: {value[:160]}"
     return name
 
@@ -129,16 +133,17 @@ def _result_chars(content) -> int:
     return 0
 
 
-# The result event's usage keys: claude's, then cursor's (camelCase).
-# Each set is disjoint, cached input included once.
+# The result event's usage keys: claude's, agy's cache_read_tokens,
+# then cursor's (camelCase). Each set is disjoint, cached input
+# included once.
 RESULT_USAGE_KEYS = (
     "input_tokens", "cache_creation_input_tokens",
-    "cache_read_input_tokens", "output_tokens",
+    "cache_read_input_tokens", "cache_read_tokens", "output_tokens",
     "inputTokens", "cacheWriteTokens", "cacheReadTokens", "outputTokens")
 
 
 def result_tokens(usage: dict) -> int:
-    """Total tokens in a result event's usage, claude's or cursor's."""
+    """Total tokens in a result event's usage (claude, cursor, or agy)."""
     return sum(usage.get(key, 0) or 0 for key in RESULT_USAGE_KEYS)
 
 
@@ -229,6 +234,9 @@ class Telemetry:
     # cursor reports its totals once, in the result event, and no
     # per-call usage
     cursor_usage: dict = field(default_factory=dict)
+    # agy reports cumulative usage in its result event (including any
+    # checkpoint calls) and per-step usage on agent_response steps
+    agy_usage: dict = field(default_factory=dict)
     tool_count: int = 0
     complete: bool = False
 
@@ -319,6 +327,13 @@ class Telemetry:
                     "cache_read": u["cacheReadTokens"],
                     "output": u["outputTokens"],
                     "thinking": None}
+        if self.agy_usage:
+            u = self.agy_usage
+            return {"new_input": u["input_tokens"],
+                    "cache_write": 0,
+                    "cache_read": u["cache_read_tokens"],
+                    "output": u["output_tokens"],
+                    "thinking": u["thinking_tokens"]}
         return {"new_input": sum(c.new_input for c in self.calls),
                 "cache_write": sum(c.cache_write for c in self.calls),
                 "cache_read": sum(c.cache_read for c in self.calls),
@@ -357,7 +372,7 @@ class Telemetry:
             "tool_calls": len(self.tools),
             "cost_usd": (round(self.reported_cost, 4)
                          if self.reported_cost is not None
-                         else None if self.agent in ("codex", "cursor")
+                         else None if self.agent in ("codex", "cursor", "agy")
                          else round(computed, 4)),
             "computed_cost_usd": round(computed, 4),
             "split_usd": {k: round(v, 4) for k, v in split.items()},
@@ -427,6 +442,65 @@ def _cursor_tool(event: dict, ts, tools: dict, call: int) -> None:
     tool.tokens = tool.chars // CHARS_PER_TOKEN
 
 
+# agy's tool names, mapped to the canonical names used in categorize()
+_AGY_TOOLS = {
+    "run_command": "Bash",
+    "read_file": "Read",
+    "view_file": "Read",
+    "write_file": "Write",
+    "write_to_file": "Write",
+    "edit_file": "Edit",
+    "replace_file_content": "Edit",
+    "multi_replace_file_content": "Edit",
+    "sed_file": "Edit",
+    "grep_search": "Grep",
+    "find_by_name": "Glob",
+    "list_dir": "LS",
+    "search_web": "WebSearch",
+    "read_url_content": "WebFetch",
+    "invoke_subagent": "Agent",
+}
+
+
+_AGY_READ_SUMMARY_RE = re.compile(r"^(\d+) lines?, (\d+) bytes?$")
+
+
+def _agy_tool_chars(name: str, params: dict, info: dict) -> int:
+    """Output size in chars; parses agy read_file's 'N lines, M bytes' summary."""
+    out_text = info.get("output")
+    if out_text is None:
+        err = info.get("error")
+        if isinstance(err, dict):
+            out_text = err.get("message")
+    text = str(out_text or "")
+    if name == "Read":
+        match = _AGY_READ_SUMMARY_RE.match(text.strip())
+        if match:
+            total_lines = int(match.group(1))
+            total_bytes = int(match.group(2))
+            start = params.get("StartLine")
+            end = params.get("EndLine")
+            if total_lines > 0 and (isinstance(start, int)
+                                    or isinstance(end, int)):
+                s = start if isinstance(start, int) and start >= 1 else 1
+                e = end if isinstance(end, int) and end >= s else total_lines
+                read_lines = min(total_lines, max(1, e - s + 1))
+                return max(1, total_bytes * read_lines // total_lines)
+            return total_bytes
+    return len(text)
+
+
+def agy_tool(step_update: dict):
+    """(name, params, info) of an agy tool step_update."""
+    info = step_update.get("tool_info")
+    info = info if isinstance(info, dict) else {}
+    raw_name = step_update.get("tool_name") or info.get("name") or "?"
+    name = _AGY_TOOLS.get(raw_name, raw_name)
+    params = info.get("parameters")
+    params = params if isinstance(params, dict) else {}
+    return name, params, info
+
+
 def parse_log(path: Path) -> Telemetry:
     """Read a review's stream-json log into per-call telemetry."""
     path = Path(path)
@@ -437,6 +511,7 @@ def parse_log(path: Path) -> Telemetry:
     label = ""
     last_ts = {}                # agent -> timestamp of its last event
     pending_thinking = 0        # streamed before the call's first event
+    agy_clock = 1.0             # synthetic clock >= 1.0 (truthy) for agy durations
 
     with open(path, errors="replace") as handle:
         for line in handle:
@@ -446,6 +521,78 @@ def parse_log(path: Path) -> Telemetry:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            agy_event = event.get("event")
+            if agy_event == "init":
+                tel.agent = "agy"
+                tel.session_id = event.get("conversation_id") or tel.session_id
+                init = event.get("init") or {}
+                tel.model = init.get("model") or tel.model
+                tel.tool_count = len(init.get("tools") or [])
+                continue
+            if agy_event == "step_update":
+                tel.agent = "agy"
+                su = event.get("step_update") or {}
+                stype = su.get("step_type")
+                state = su.get("state")
+                idx = su.get("step_index")
+                dur = su.get("duration_seconds") or 0.0
+                if stype == "agent_response" and state == "DONE":
+                    start = agy_clock
+                    agy_clock += dur
+                    usage = su.get("usage") or {}
+                    call = Call(
+                        index=len(order), agent="main", model=tel.model,
+                        start=start, end=agy_clock, label=label,
+                        new_input=usage.get("input_tokens", 0) or 0,
+                        cache_read=usage.get("cache_read_tokens", 0) or 0,
+                        output=usage.get("output_tokens", 0) or 0,
+                        thinking=usage.get("thinking_tokens", 0) or 0)
+                    order.append(call)
+                elif stype == "tool":
+                    call_id = f"agy:{idx}" if idx is not None else f"agy:{len(tools)}"
+                    name, params, info = agy_tool(su)
+                    tool = tools.get(call_id)
+                    if tool is None:
+                        call_idx = max(len(order) - 1, 0)
+                        tool = tools[call_id] = ToolUse(
+                            id=call_id, name=name, what=_describe(name, params),
+                            category=categorize(name, json.dumps(params)),
+                            call=call_idx, agent="main")
+                        if order:
+                            order[-1].tools.append(call_id)
+                    if state in ("DONE", "ERROR"):
+                        # Overlap parallel tool calls from the requesting call's end.
+                        issued = order[-1].end if order else agy_clock
+                        tool.issued = issued
+                        tool.answered = issued + dur
+                        agy_clock = max(agy_clock, tool.answered)
+                        err = info.get("error")
+                        tool.error = bool(err) or state == "ERROR"
+                        tool.chars = _agy_tool_chars(name, params, info)
+                        sub_info = su.get("subagent_info") or {}
+                        subagents = sub_info.get("subagents") or []
+                        if subagents:
+                            tel.subagents += len(subagents)
+                        elif name == "Agent":
+                            tel.subagents += 1
+                continue
+            if agy_event == "result":
+                tel.agent = "agy"
+                res = event.get("result") or {}
+                tel.complete = res.get("status") == "SUCCESS"
+                tel.session_id = res.get("conversation_id") or tel.session_id
+                tel.reported_turns = res.get("num_turns")
+                if res.get("duration_seconds"):
+                    tel.reported_seconds = res["duration_seconds"]
+                usage = res.get("usage") or {}
+                tel.agy_usage = {k: usage.get(k, 0) or 0 for k in (
+                    "input_tokens", "cache_read_tokens",
+                    "output_tokens", "thinking_tokens")}
+                tel.reported_tokens = result_tokens(usage)
+                tel.reported_output = usage.get("output_tokens")
+                tel.thinking_tokens = usage.get("thinking_tokens")
+                continue
+
             kind = event.get("type")
             ts = _ts(event.get("timestamp"))
             if ts is None and event.get("timestamp_ms"):
@@ -609,6 +756,8 @@ def _fix_output(tel: Telemetry) -> None:
     starts, so the per-call figures miss most of the thinking.  Give
     the shortfall against the result event's total back to the calls,
     by the thinking each streamed."""
+    if tel.agent == "agy":
+        return
     main_model = tel.model or ""
     calls = [c for c in tel.calls if c.model.startswith(main_model)]
     if not tel.reported_output or not calls:

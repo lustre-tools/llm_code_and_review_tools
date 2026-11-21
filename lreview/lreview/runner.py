@@ -27,7 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from .agents import get_agent, write_cursor_permissions
+from .agents import (get_agent, write_agy_offline_hooks,
+                     write_cursor_permissions)
 from .defaults import (  # noqa: F401 (DEFAULT_STALL_TIMEOUT re-exported)
     DEFAULT_AGENT, DEFAULT_STALL_TIMEOUT, DEFAULT_TIMEOUT)
 from .models import validate_selection
@@ -175,20 +176,25 @@ def live_token_count(log_path: Path) -> Optional[int]:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue  # e.g. a line still being written
-                if obj.get("type") != "assistant":
-                    continue
-                msg = obj.get("message") or {}
-                usage = msg.get("usage")
-                if isinstance(usage, dict):
-                    usage_by_id[msg.get("id")] = usage
+                if obj.get("type") == "assistant":
+                    msg = obj.get("message") or {}
+                    usage = msg.get("usage")
+                    if isinstance(usage, dict):
+                        usage_by_id[msg.get("id")] = usage
+                elif obj.get("event") == "step_update":
+                    su = obj.get("step_update") or {}
+                    usage = su.get("usage")
+                    if isinstance(usage, dict) and su.get("step_index") is not None:
+                        usage_by_id[("agy", su["step_index"])] = usage
     except OSError:
         return None
     if usage_by_id:
         return sum(
-            usage.get(key, 0)
+            usage.get(key, 0) or 0
             for usage in usage_by_id.values()
             for key in ("input_tokens", "cache_creation_input_tokens",
-                        "cache_read_input_tokens", "output_tokens"))
+                        "cache_read_input_tokens", "cache_read_tokens",
+                        "output_tokens"))
     tokens, _ = parse_final_usage(log_path)
     if tokens is not None:
         return tokens
@@ -213,7 +219,8 @@ def parse_final_usage(log_path: Path):
     for line in reversed(tail.splitlines()):
         squashed = line.replace(" ", "")
         if ('"type":"result"' not in squashed
-                and '"type":"turn.completed"' not in squashed):
+                and '"type":"turn.completed"' not in squashed
+                and '"event":"result"' not in squashed):
             continue
         try:
             obj = json.loads(line)
@@ -223,6 +230,10 @@ def parse_final_usage(log_path: Path):
             usage = obj.get("usage") or {}
             tokens = (usage.get("input_tokens", 0)
                       + usage.get("output_tokens", 0))
+            return (tokens or None), None
+        if obj.get("event") == "result":
+            res = obj.get("result") or {}
+            tokens = result_tokens(res.get("usage") or {})
             return (tokens or None), None
         if obj.get("type") != "result":
             continue
@@ -247,7 +258,7 @@ _PROVIDER_REFUSAL_RE = re.compile(
 # done before the check, so once one review fails like this no further
 # review starts in this process.
 _LOGIN_FAILURE_RE = re.compile(
-    r"failed to authenticate|oauth session expired|"
+    r"failed to authenticate|authentication required|oauth session expired|"
     r"invalid api key|please run /login|not logged in", re.IGNORECASE)
 _USAGE_LIMIT_RE = re.compile(
     r"hit your (\S+ )?limit|usage limit|limit will reset|"
@@ -263,7 +274,7 @@ def agent_error(log_path: Path) -> Optional[str]:
     """
     message = None
     for line in _read_tail(log_path, 65536).splitlines():
-        if '"type"' not in line:
+        if '"type"' not in line and '"event"' not in line:
             continue
         try:
             obj = json.loads(line)
@@ -278,6 +289,13 @@ def agent_error(log_path: Path) -> Optional[str]:
             message = obj["message"]
         elif kind == "result" and obj.get("is_error"):
             message = str(obj.get("result") or obj.get("subtype") or "")
+        elif obj.get("event") == "result":
+            res = obj.get("result") or {}
+            if isinstance(res, dict):
+                if res.get("error"):
+                    message = str(res["error"])
+                elif res.get("status") not in (None, "SUCCESS"):
+                    message = str(res["status"])
     if message:
         message = " ".join(message.split())
         if len(message) > 300:
@@ -290,10 +308,12 @@ _NO_SESSION_TEXT = "No conversation found with session ID"
 
 
 def parse_session_id(log_path: Path) -> Optional[str]:
-    """The claude or cursor session ID a stream-json log reports, or None.
+    """The claude, cursor or agy session/conversation ID a stream-json log
+    reports, or None.
 
-    Every claude and cursor event carries it; the init event opens the log and the
-    result event closes it, so the head and the tail are enough.
+    Every claude and cursor event carries session_id, and every agy event
+    carries conversation_id; the init event opens the log and the result
+    event closes it, so the head and the tail are enough.
     """
     try:
         with open(log_path, errors="replace") as f:
@@ -302,14 +322,22 @@ def parse_session_id(log_path: Path) -> Optional[str]:
         return None
     for text in (head, _read_tail(log_path, 65536)):
         for line in text.splitlines():
-            if '"session_id"' not in line:
+            if '"session_id"' not in line and '"conversation_id"' not in line:
                 continue
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(obj, dict) and obj.get("session_id"):
+            if not isinstance(obj, dict):
+                continue
+            if obj.get("session_id"):
                 return obj["session_id"]
+            if obj.get("conversation_id"):
+                return obj["conversation_id"]
+            for key in ("result", "step_update"):
+                sub = obj.get(key)
+                if isinstance(sub, dict) and sub.get("conversation_id"):
+                    return sub["conversation_id"]
     return None
 
 
@@ -401,7 +429,7 @@ class BatchConfig:
     # expand_allowed_tools), each in its agent's syntax. Empty:
     # --dangerously-skip-permissions (claude) or --force (cursor).
     allowed_tools: list[str] = field(default_factory=list)
-    # cursor only: deny rules for the same file (lreview bench offline)
+    # cursor and agy: deny rules (lreview bench offline)
     denied_tools: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -519,7 +547,7 @@ def review_prompt(config: BatchConfig,
         prompt += ".\n\n" + CLOSING_NOTE
     if preloaded and worktree is not None:
         prompt += commit_text(worktree)
-    if preloaded and config.agent in ("codex", "cursor"):
+    if preloaded and config.agent in ("codex", "cursor", "agy"):
         # The protocol first: the same text leads every review's prompt,
         # so the provider's prefix cache shares it between them.
         prompt = preload_file(config).read_text() + "\n\n" + prompt
@@ -550,14 +578,14 @@ PRELOAD_COMMIT_LIMIT = 96 * 1024
 
 def _preloading(config: BatchConfig, change) -> bool:
     return (config.preload and config.mode == "full"
-            and config.agent in ("claude", "codex", "cursor")
+            and config.agent in ("claude", "codex", "cursor", "agy")
             and getattr(change, "provider", None) != "github")
 
 
 def _prompt_on_stdin(config: BatchConfig, change) -> bool:
-    """codex and cursor have no system-prompt file: the preloaded
+    """codex, cursor and agy have no system-prompt file: the preloaded
     protocol leads the first message, which goes in on stdin."""
-    return (config.agent in ("codex", "cursor")
+    return (config.agent in ("codex", "cursor", "agy")
             and _preloading(config, change))
 
 
@@ -692,6 +720,7 @@ def build_agent_cmd(config: BatchConfig,
                      and config.agent == "claude" else None),
         prompt_on_stdin=_prompt_on_stdin(config, change),
         allowed_tools=expand_allowed_tools(config, worktree),
+        denied_tools=config.denied_tools,
         worktree=worktree, **lens_args(config, worktree))
 
 
@@ -805,7 +834,7 @@ def detect_model(log_path: Optional[Path],
     the review's own "Assisted-by: <agent>:<model>" output line.
     """
     if configured:
-        return short_model_name(configured) or configured[:20]
+        return short_model_name(configured) or configured[:40]
     if not log_path:
         return None
     try:
@@ -825,9 +854,9 @@ def detect_model(log_path: Optional[Path],
             if short:
                 return short
             tail = line.rsplit(":", 1)[-1].strip()
-            return tail[:20] or None
+            return tail[:40] or None
     if match:
-        return match.group(1)[:20]
+        return match.group(1)[:40]
     return None
 
 
@@ -932,14 +961,14 @@ _METADATA_NUDGE_TIMEOUT = 600
 
 def _ask_for_metadata(config: BatchConfig, change, log_path: Path,
                       worktree_dir: Path, extra_env: dict):
-    """Resume a claude or cursor review that ended without
+    """Resume a claude, cursor or agy review that ended without
     review-metadata.json and ask for the file once.
 
     Returns that turn's (tokens, cost_usd), or None when it could not
     be asked.  The turn has its own log beside the review's, named so
     that nothing taking kreview-*.log for a review picks it up.
     """
-    if config.agent not in ("claude", "cursor"):
+    if config.agent not in ("claude", "cursor", "agy"):
         return None
     session_id = parse_session_id(log_path)
     if not session_id:
@@ -955,6 +984,7 @@ def _ask_for_metadata(config: BatchConfig, change, log_path: Path,
                      if _preloading(config, change)
                      and config.agent == "claude" else None),
         allowed_tools=expand_allowed_tools(config, worktree_dir),
+        denied_tools=config.denied_tools,
         worktree=worktree_dir)
     _log(f"[{change.slug}] note: the review ended without "
          f"{METADATA_JSON_NAME}; asking for it once")
@@ -1079,7 +1109,22 @@ def stall_point(log_path: Path) -> dict:
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if not isinstance(obj, dict) or not obj.get("type"):
+        if not isinstance(obj, dict) or (not obj.get("type")
+                                         and not obj.get("event")):
+            continue
+        agy_event = obj.get("event")
+        if agy_event:
+            if agy_event == "step_update":
+                su = obj.get("step_update")
+                if isinstance(su, dict) and su.get("step_type") == "tool":
+                    key = f"agy:{su.get('step_index')}"
+                    if su.get("state") == "ACTIVE":
+                        from .telemetry import _describe, agy_tool
+                        name, params, _ = agy_tool(su)
+                        pending[key] = "tool " + _describe(name, params)
+                    else:
+                        pending.pop(key, None)
+            last = obj
             continue
         kind = obj["type"]
         item = obj.get("item") if isinstance(obj.get("item"), dict) else {}
@@ -1116,6 +1161,13 @@ def stall_point(log_path: Path) -> dict:
         if len(detail) > 200:
             detail = detail[:197] + "..."
         return {"waiting_on": "tool", "detail": detail}
+    if last.get("event"):
+        kind = last["event"]
+        su = last.get("step_update")
+        if isinstance(su, dict) and su.get("step_type"):
+            kind += f" {su['step_type']}"
+        return {"waiting_on": "model",
+                "detail": f"no tool call was running; the last event was {kind}"}
     item = last.get("item") if isinstance(last.get("item"), dict) else {}
     kind = last["type"]
     if item.get("type"):
@@ -1224,14 +1276,22 @@ def _run_review(config, change, worktree_dir, log_path, session,
         write_cursor_permissions(
             worktree_dir, expand_allowed_tools(config, worktree_dir),
             config.denied_tools)
+    if config.agent == "agy" and config.denied_tools:
+        write_agy_offline_hooks(worktree_dir)
     cmd = build_agent_cmd(config, change, session, worktree_dir)
     extra_env = {**get_agent(config.agent).env(config.lean),
                  **lens_env(config), **config.env}
     stdin_path = None
     if _prompt_on_stdin(config, change):
-        stdin_path = log_path.with_suffix(".prompt.md")
-        stdin_path.write_text(
-            review_prompt(config, change, session, worktree_dir))
+        prompt_body = review_prompt(config, change, session, worktree_dir)
+        if config.agent == "agy":
+            stdin_path = log_path.with_suffix(".prompt.jsonl")
+            stdin_path.write_text(
+                json.dumps({"event": "user",
+                            "message": {"content": prompt_body}}) + "\n")
+        else:
+            stdin_path = log_path.with_suffix(".prompt.md")
+            stdin_path.write_text(prompt_body)
     start = time.monotonic()
 
     def run(cmd, stdin_path=None) -> int:

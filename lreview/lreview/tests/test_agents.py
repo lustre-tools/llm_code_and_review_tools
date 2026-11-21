@@ -16,10 +16,10 @@ class TestRegistry:
 
     def test_supported_agents(self):
         assert set(AGENTS) == {"claude", "codex", "gemini", "opencode",
-                               "auggie", "cursor"}
+                               "auggie", "cursor", "agy"}
         assert AGENTS["auggie"].stream_json is True
         assert AGENTS["auggie"].verified is False
-        for name in ("claude", "codex", "cursor"):
+        for name in ("claude", "codex", "cursor", "agy"):
             assert AGENTS[name].stream_json is True
             assert AGENTS[name].verified is True
         for name in ("gemini", "opencode"):
@@ -162,6 +162,53 @@ class TestBuildCmd:
                                                 "config=", 1))
         assert {"path": str(skill), "enabled": False} in parsed["config"]
 
+    def test_agy_stream_json_and_options(self):
+        cmd = get_agent("agy").build_cmd(
+            "gemini-4-neon", "high", ["--extra"], PROMPT, lean=True)
+        assert cmd == [
+            "agy", "--output-format", "stream-json",
+            "--dangerously-skip-permissions", "--disable-slash-commands",
+            "--model", "gemini-4-neon", "--effort", "high",
+            "--extra", "-p", PROMPT,
+        ]
+
+    def test_agy_prompt_on_stdin_and_resume(self):
+        cmd = get_agent("agy").build_cmd(
+            None, None, [], PROMPT, resume="conv-1", prompt_on_stdin=True)
+        assert cmd == [
+            "agy", "--output-format", "stream-json",
+            "--dangerously-skip-permissions",
+            "--input-format", "stream-json",
+            "--conversation", "conv-1",
+        ]
+        assert PROMPT not in cmd
+
+    def test_agy_denied_tools_settings(self):
+        cmd = get_agent("agy").build_cmd(
+            None, None, [], PROMPT,
+            denied_tools=["read_url(*)", "command(curl)"])
+        i = cmd.index("--settings")
+        assert json.loads(cmd[i + 1]) == {
+            "permissions": {"deny": ["read_url(*)", "command(curl)"]}}
+
+    def test_write_agy_offline_hooks(self, tmp_path):
+        import subprocess
+        from lreview.agents import write_agy_offline_hooks
+        # Pre-existing hooks are preserved alongside lreview-offline
+        existing = tmp_path / ".agents" / "hooks.json"
+        existing.parent.mkdir()
+        existing.write_text(json.dumps({"user-hook": {"Stop": []}}))
+        path = write_agy_offline_hooks(tmp_path)
+        assert path == existing
+        data = json.loads(path.read_text())
+        assert "user-hook" in data
+        entry = data["lreview-offline"]["PreToolUse"][0]
+        assert "search_web" in entry["matcher"]
+        assert "browser_.*" in entry["matcher"]
+        out = subprocess.run(entry["hooks"][0]["command"], shell=True,
+                             capture_output=True, text=True, check=True).stdout
+        assert json.loads(out)["decision"] == "deny"
+
     def test_gemini_gets_prompt_text(self):
         cmd = get_agent("gemini").build_cmd(None, None, [], PROMPT)
         assert cmd == ["gemini", "--yolo", "-p", PROMPT]
@@ -201,6 +248,15 @@ class TestBuildInteractiveCmd:
             PROMPT,
         ]
 
+    def test_agy_uses_prompt_interactive_flag(self):
+        cmd = get_agent("agy").build_interactive_cmd(
+            "gemini-4-neon", ["--add-dir", "/x"], PROMPT,
+            effort="medium", resume="conv-1")
+        assert cmd == [
+            "agy", "--model", "gemini-4-neon", "--effort", "medium",
+            "--conversation", "conv-1", "--add-dir", "/x", "-i", PROMPT,
+        ]
+
     def test_gemini_uses_prompt_interactive_flag(self):
         cmd = get_agent("gemini").build_interactive_cmd(None, [], PROMPT)
         assert cmd == ["gemini", "-i", PROMPT]
@@ -220,7 +276,7 @@ class TestBuildInteractiveCmd:
 
     def test_no_bypass_flags_in_interactive_mode(self):
         for name in ("claude", "codex", "gemini", "opencode", "auggie",
-                     "cursor"):
+                     "cursor", "agy"):
             cmd = get_agent(name).build_interactive_cmd(None, [], PROMPT)
             joined = " ".join(cmd)
             assert "yolo" not in joined
