@@ -175,6 +175,158 @@ class TestParseLog:
         assert tel.started == 1.0 and tel.finished == 4.5
         assert tel.summary()["tool_calls"] == 2
 
+    def test_agy_log(self, tmp_path):
+        events = [
+            {"event": "init", "conversation_id": "conv-42",
+             "init": {"model": "gemini-4-neon-high", "cwd": "/w",
+                      "tools": ["run_command", "read_file"],
+                      "permission_mode": "always-proceed"}},
+            {"event": "step_update",
+             "step_update": {"conversation_id": "conv-42", "step_index": 0,
+                             "state": "DONE", "step_type": "user_input"}},
+            {"event": "step_update",
+             "step_update": {"conversation_id": "conv-42", "step_index": 1,
+                             "state": "DONE", "step_type": "agent_response",
+                             "duration_seconds": 2.0,
+                             "usage": {"input_tokens": 10000,
+                                       "output_tokens": 50,
+                                       "thinking_tokens": 20,
+                                       "cache_read_tokens": 0,
+                                       "total_tokens": 10050}}},
+            {"event": "step_update",
+             "step_update": {"conversation_id": "conv-42", "step_index": 2,
+                             "state": "ACTIVE", "step_type": "tool",
+                             "tool_name": "run_command",
+                             "tool_info": {"name": "run_command",
+                                           "parameters": {
+                                               "CommandLine": "git show HEAD"}}}},
+            {"event": "step_update",
+             "step_update": {"conversation_id": "conv-42", "step_index": 2,
+                             "state": "DONE", "step_type": "tool",
+                             "tool_name": "run_command",
+                             "duration_seconds": 0.5,
+                             "tool_info": {"name": "run_command",
+                                           "parameters": {
+                                               "CommandLine": "git show HEAD"},
+                                           "output": "d" * 800}}},
+            {"event": "step_update",
+             "step_update": {"conversation_id": "conv-42", "step_index": 3,
+                             "state": "ERROR", "step_type": "tool",
+                             "tool_name": "read_file",
+                             "duration_seconds": 0.1,
+                             "tool_info": {"name": "read_file",
+                                           "parameters": {"Path": "/w/a.c"},
+                                           "error": {"type": "NotFound",
+                                                     "message": "missing"}}}},
+            {"event": "step_update",
+             "step_update": {"conversation_id": "conv-42", "step_index": 4,
+                             "state": "DONE", "step_type": "agent_response",
+                             "duration_seconds": 1.5,
+                             "usage": {"input_tokens": 1200,
+                                       "output_tokens": 30,
+                                       "thinking_tokens": 10,
+                                       "cache_read_tokens": 10000,
+                                       "total_tokens": 1230}}},
+            {"event": "step_update",
+             "step_update": {"conversation_id": "conv-42", "step_index": 5,
+                             "state": "DONE", "step_type": "checkpoint",
+                             "duration_seconds": 0.2,
+                             "usage": {"input_tokens": 100,
+                                       "output_tokens": 5,
+                                       "thinking_tokens": 0,
+                                       "cache_read_tokens": 0,
+                                       "total_tokens": 105}}},
+            {"event": "result",
+             "result": {"conversation_id": "conv-42", "status": "SUCCESS",
+                        "response": "done\n", "duration_seconds": 4.5,
+                        "num_turns": 1,
+                        "usage": {"input_tokens": 11300,
+                                  "output_tokens": 85,
+                                  "thinking_tokens": 30,
+                                  "cache_read_tokens": 10000,
+                                  "total_tokens": 11385}}},
+        ]
+        log = tmp_path / "kreview-6_ps1-x.1.log"
+        log.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+        tel = parse_log(log)
+        assert tel.agent == "agy" and tel.complete
+        assert tel.model == "gemini-4-neon-high"
+        assert tel.session_id == "conv-42"
+        assert tel.reported_tokens == 21385
+        assert len(tel.calls) == 2
+        assert tel.starting_context == 10000
+        assert tel.peak_context == 11200
+        git_tool, read_tool = tel.tools
+        assert (git_tool.name, git_tool.category, git_tool.seconds) == (
+            "Bash", "git", 0.5)
+        assert not git_tool.error
+        assert (read_tool.name, read_tool.error) == ("Read", True)
+        s = tel.summary()
+        assert s["cost_usd"] is None
+        assert s["wall_s"] == 4.5
+        assert s["model_s"] == 3.5
+        # step 2 (0.5s) and step 3 (0.1s) ran in the same turn, so wall tool
+        # time overlaps to max(0.5, 0.1) = 0.5 rather than summing to 0.6.
+        assert s["tool_s"] == 0.5
+        assert s["tokens"] == {
+            "new_input": 11300, "cache_write": 0,
+            "cache_read": 10000, "output": 85, "thinking": 30}
+        assert "cost total -, median -" in render([s], [tel.to_json()])
+
+    def test_agy_read_file_byte_sizing(self, tmp_path):
+        """agy's read_file emits 'N lines, M bytes'; scale by StartLine..EndLine
+        so Read outputs get their real share of context growth."""
+        events = [
+            {"event": "init", "conversation_id": "c",
+             "init": {"model": "gemini-4-neon"}},
+            {"event": "step_update",
+             "step_update": {"step_index": 1, "state": "DONE",
+                             "step_type": "agent_response",
+                             "duration_seconds": 1.0,
+                             "usage": {"input_tokens": 10000,
+                                       "cache_read_tokens": 0,
+                                       "output_tokens": 100}}},
+            {"event": "step_update",
+             "step_update": {"step_index": 2, "state": "DONE",
+                             "step_type": "tool", "tool_name": "read_file",
+                             "duration_seconds": 0.2,
+                             "tool_info": {"name": "read_file",
+                                           "parameters": {"Path": "/w/full.c"},
+                                           "output": "100 lines, 8000 bytes"}}},
+            {"event": "step_update",
+             "step_update": {"step_index": 3, "state": "DONE",
+                             "step_type": "tool", "tool_name": "read_file",
+                             "duration_seconds": 0.3,
+                             "tool_info": {"name": "read_file",
+                                           "parameters": {"Path": "/w/big.c",
+                                                          "StartLine": 1,
+                                                          "EndLine": 100},
+                                           "output": "400 lines, 16000 bytes"}}},
+            {"event": "step_update",
+             "step_update": {"step_index": 4, "state": "DONE",
+                             "step_type": "agent_response",
+                             "duration_seconds": 1.0,
+                             "usage": {"input_tokens": 3100,
+                                       "cache_read_tokens": 10000,
+                                       "output_tokens": 20}}},
+            {"event": "result",
+             "result": {"conversation_id": "c", "status": "SUCCESS",
+                        "duration_seconds": 2.4, "num_turns": 1,
+                        "usage": {"input_tokens": 13100,
+                                  "cache_read_tokens": 10000,
+                                  "output_tokens": 120}}},
+        ]
+        log = tmp_path / "kreview-7_ps1-x.1.log"
+        log.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+        tel = parse_log(log)
+        full_read, slice_read = tel.tools
+        assert full_read.chars == 8000
+        assert slice_read.chars == 4000
+        # Context grew by 3100 - 100 = 3000 tokens, split 2:1 (8000 vs 4000)
+        assert full_read.tokens == 2000
+        assert slice_read.tokens == 1000
+        assert tel.tool_seconds() == pytest.approx(0.3)
+
     def test_write_telemetry(self, review_log, tmp_path):
         dest = tmp_path / "t.json"
         summary = write_telemetry(review_log, dest, {"lean": True})

@@ -218,6 +218,32 @@ def test_cursor_offline_rules():
     assert len(deny) == len(OFFLINE_COMMANDS)
 
 
+def test_agy_offline_rules():
+    from lreview.bench import OFFLINE_COMMANDS, agy_offline_rules
+    deny = agy_offline_rules()
+    assert {"read_url(*)", "execute_url(*)", "download_url(*)",
+            "mcp(*)"} <= set(deny)
+    assert "command(curl)" in deny and "command(jira)" in deny
+    assert len(deny) == 4 + len(OFFLINE_COMMANDS)
+
+
+def test_agy_leak_is_reported(tmp_path):
+    label = tmp_path / "arm"
+    _rep(label, 1, "c1", ["a is uninitialized"])
+    log = next((label / "rep1").glob("kreview-*.log"))
+    with open(log, "a") as handle:
+        handle.write("\n" + json.dumps({
+            "event": "step_update",
+            "step_update": {"step_index": 2, "state": "DONE",
+                            "step_type": "tool", "tool_name": "run_command",
+                            "tool_info": {"name": "run_command",
+                                          "output": "abcdef1234 LU-2 llite: the fix"}}}))
+    case = _case("0" * 40)
+    case["bugs"][0].update(fix_sha="abcdef1234567", fix_subject="LU-2 llite: the fix")
+    scored = bench.score(label, [case])
+    assert bench.summarize(scored)["leaked"] == 1
+
+
 def test_offline_env_shadows_network_commands(tmp_path):
     env = bench.offline_env(tmp_path)
     shims = tmp_path / "offline-bin"

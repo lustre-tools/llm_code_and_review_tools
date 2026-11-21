@@ -1643,6 +1643,138 @@ def test_stall_point_cursor_tool_call(tmp_path):
     assert stall_point(log)["waiting_on"] == "model"
 
 
+def test_agy_log_helpers(tmp_path):
+    from lreview.runner import (
+        agent_error, detect_model, live_token_count,
+        parse_final_usage, parse_session_id, stall_point,
+    )
+    log = tmp_path / "kreview-agy.log"
+    active_tool = {
+        "event": "step_update",
+        "step_update": {"conversation_id": "conv-9", "step_index": 2,
+                        "state": "ACTIVE", "step_type": "tool",
+                        "tool_name": "run_command",
+                        "tool_info": {"name": "run_command",
+                                      "parameters": {"CommandLine": "make -j8"}}},
+    }
+    log.write_text("\n".join([
+        json.dumps({"event": "init", "conversation_id": "conv-9",
+                    "init": {"model": "gemini-4-neon-high"}}),
+        json.dumps({"event": "step_update",
+                    "step_update": {"conversation_id": "conv-9",
+                                    "step_index": 1, "state": "DONE",
+                                    "step_type": "agent_response",
+                                    "usage": {"input_tokens": 1000,
+                                              "cache_read_tokens": 500,
+                                              "output_tokens": 25}}}),
+        json.dumps(active_tool),
+    ]) + "\n")
+    assert parse_session_id(log) == "conv-9"
+    assert detect_model(log) == "gemini-4-neon-high"
+    assert detect_model(None, configured="gemini-4-hydrogen-xhigh") == (
+        "gemini-4-hydrogen-xhigh")
+    assert detect_model(None, configured="gemini-pro-orchestrator-neon") == (
+        "gemini-pro-orchestrator-neon")
+    assert live_token_count(log) == 1525
+    assert stall_point(log) == {"waiting_on": "tool",
+                                "detail": "tool Bash: make -j8"}
+    # Tool completes and result arrives
+    done_tool = {
+        "event": "step_update",
+        "step_update": {**active_tool["step_update"], "state": "DONE"},
+    }
+    result_ev = {
+        "event": "result",
+        "result": {"conversation_id": "conv-9", "status": "SUCCESS",
+                   "usage": {"input_tokens": 1200, "cache_read_tokens": 1500,
+                             "output_tokens": 80, "thinking_tokens": 20,
+                             "total_tokens": 1280}},
+    }
+    log.write_text(log.read_text() + json.dumps(done_tool) + "\n"
+                   + json.dumps(result_ev) + "\n")
+    assert parse_final_usage(log) == (2780, None)
+    assert stall_point(log)["waiting_on"] == "model"
+    # Error result
+    err_log = tmp_path / "kreview-agy-err.log"
+    err_log.write_text(json.dumps({
+        "event": "result",
+        "result": {"conversation_id": "", "status": "ERROR",
+                   "error": "authentication required"},
+    }) + "\n")
+    assert agent_error(err_log) == "authentication required"
+
+
+def test_agy_end_to_end_preload_and_metadata_nudge(repo, tmp_path, monkeypatch):
+    """Stub `agy` verifies preload JSONL stdin, stream-json collection,
+    and --conversation nudge when review-metadata.json is omitted."""
+    prompts = tmp_path / "prompts"
+    (prompts / "subsystem").mkdir(parents=True)
+    for rel in ("review-core.md", "technical-patterns.md",
+                "subsystem/build.md", "lustre-commit-message.md",
+                "lustre-style.md", "subsystem/subsystem.md"):
+        (prompts / rel).write_text(f"# {rel}\n")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    args_log = tmp_path / "agy-args.log"
+    stdin_capture = tmp_path / "agy-stdin.jsonl"
+    stub = bin_dir / "agy"
+    stub.write_text(
+        "#!/bin/bash\n"
+        f"printf '%s\\n' \"$@\" -- >> {args_log}\n"
+        "case \" $* \" in\n"
+        "  *\" --input-format stream-json \"*)\n"
+        f"    cat > {stdin_capture}\n"
+        "    echo '{\"event\":\"init\",\"conversation_id\":\"conv-e2e\","
+        "\"init\":{\"model\":\"gemini-4-neon-high\"}}'\n"
+        "    echo '{\"event\":\"result\",\"result\":{"
+        "\"conversation_id\":\"conv-e2e\",\"status\":\"SUCCESS\","
+        "\"usage\":{\"input_tokens\":500,\"cache_read_tokens\":1000,"
+        "\"output_tokens\":40,\"total_tokens\":540}}}'\n"
+        "    exit 0\n"
+        "    ;;\n"
+        "  *\" --conversation conv-e2e \"*)\n"
+        "    printf '{\"author\":\"a\",\"sha\":\"s\",\"subject\":\"t\","
+        "\"issues-found\":0,\"issue-severity-score\":\"none\","
+        "\"issue-severity-explanation\":\"clean\"}' > review-metadata.json\n"
+        "    echo '{\"event\":\"result\",\"result\":{"
+        "\"conversation_id\":\"conv-e2e\",\"status\":\"SUCCESS\","
+        "\"usage\":{\"input_tokens\":50,\"cache_read_tokens\":500,"
+        "\"output_tokens\":10,\"total_tokens\":60}}}'\n"
+        "    exit 0\n"
+        "    ;;\n"
+        "esac\n"
+        "exit 2\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    sha = _git(repo, "rev-parse", "HEAD")
+    config = _config(repo, tmp_path, agent="agy", prompts_dir=prompts,
+                     preload=True, lean=True, model="gemini-4-neon",
+                     effort="high", denied_tools=["read_url(*)", "command(curl)"],
+                     keep_worktrees=True)
+    results = run_batch(config, [_change(99, sha)])
+    assert len(results) == 1
+    res = results[0]
+    assert res.status == STATUS_CLEAN
+    # 1540 from main run + 560 from metadata nudge
+    assert res.tokens == 2100
+    assert res.cost_usd is None
+    assert res.agent == "agy"
+    assert res.effort == "high"
+    # Preload prompt went on stdin as a stream-json user event
+    sent = json.loads(stdin_capture.read_text().strip())
+    assert sent["event"] == "user"
+    assert "Lustre review protocol" in sent["message"]["content"]
+    # Nudge resumed the exact conversation_id
+    recorded_args = args_log.read_text()
+    assert "--conversation\nconv-e2e\n" in recorded_args
+    # Offline hook was written into the review worktree
+    hooks_files = list(config.worktrees_dir.glob("*/.agents/hooks.json"))
+    assert len(hooks_files) == 1
+    assert "lreview-offline" in json.loads(hooks_files[0].read_text())
+
+
 class TestPluginsOff:
     """A lean claude review gets settings that disable the user's
     plugins; --no-lean and other agents keep them."""

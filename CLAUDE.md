@@ -189,8 +189,8 @@ Runs AI patch reviews — the
 `review-core.md` deep-dive regression analysis, referenced directly
 by prompt (no skill/slash-command install needed, just a clone) — on
 a batch of Gerrit changes in parallel: one headless agent process per
-change (Claude Code by default; codex/auggie/cursor/gemini/opencode
-via `--agent` / `$LREVIEW_AGENT`, best-effort), each in its own git worktree, then
+change (Claude Code by default; codex/cursor/agy verified, and
+auggie/gemini/opencode best-effort via `--agent` / `$LREVIEW_AGENT`), each in its own git worktree, then
 posts the collected `gerrit-review.json` results via gerrit-cli.
 
 ```bash
