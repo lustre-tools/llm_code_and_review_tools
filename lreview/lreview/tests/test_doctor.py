@@ -166,8 +166,9 @@ class TestAgentLogin:
 
     def test_other_backends_are_not_checked(self):
         with patch("subprocess.run") as run:
-            ok, _ = check_agent_login("gemini")
-        assert ok
+            for agent in ("gemini", "agy"):
+                ok, _ = check_agent_login(agent)
+                assert ok
         run.assert_not_called()
 
     def test_claude_ping_is_cheap(self):

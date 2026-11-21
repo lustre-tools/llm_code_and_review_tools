@@ -25,6 +25,9 @@ AGENT_INSTALL = {
     "codex": (
         "npm install -g @openai/codex\n"
         "  then run 'codex login'"),
+    "agy": (
+        "curl -fsSL https://antigravity.google/cli/install.sh | bash\n"
+        "  then run 'agy' once to sign in"),
     "gemini": (
         "npm install -g @google/gemini-cli\n"
         "  then run 'gemini' once to authenticate"),
@@ -72,7 +75,8 @@ LOGIN_PROMPT = "Reply with the single word ok."
 # What claude and codex say when the account is not logged in or the
 # credential is refused.
 _AUTH_FAILURES = ("not logged in", "/login", "authentication_failed",
-                  "failed to authenticate", "invalid api key", "oauth token")
+                  "authentication required", "failed to authenticate",
+                  "invalid api key", "oauth token")
 
 
 def check_agent_login(agent: str, live: bool = False) -> Tuple[bool, str]:
@@ -193,7 +197,7 @@ def run_setup(agent: str, prompts_dir: Optional[str]) -> int:
     spec = get_agent(agent)
     print(f"lreview setup — agent: {agent}"
           + ("" if spec.verified else " (best-effort backend; claude, "
-             "codex and cursor are the verified ones)"))
+             "codex, cursor and agy are the verified ones)"))
     print()
 
     # 1. Agent CLI
