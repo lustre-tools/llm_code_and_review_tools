@@ -9,6 +9,10 @@ merged option), Sonnet 5.5 reviewer at `--effort high`, `--lean`,
 $540 of reviews at list price. Updated 2026-11-17 with how the reviewer
 settles lens candidates ("Lens finds that do not reach the review") and
 what a lens review costs ("Where the cost goes"), about $90 more.
+Updated 2026-11-20 with strict verification on the full sets, nine cases
+added to the benchmark from changes aireview had reviewed (52 changes,
+60 known bugs now), and two changes that cut a lens review's cost by a
+third ("Full sets and cheaper lens reviews"), about $230 more.
 
 Which bug each variant found, run by run, is in
 `lens-review-benchmark-results.md`.
@@ -25,9 +29,10 @@ Which bug each variant found, run by run, is in
 - **Running an ordinary review several times does not get there.** Two
   or three runs add 1-3 points each; one lens review is above what three
   ordinary runs reach together.
-- **Cost:** about 5x an ordinary review with the lenses at high effort,
-  about 2.5x at medium (the `--lenses` default), which keeps roughly 70%
-  of the gain.
+- **Cost:** about 2x an ordinary review ($1.02 against ~$0.50) since the
+  lens prompt carries lens.md and the diff and the reviewer waits for the
+  lenses; it was 3x before. Lenses at high cost twice as much again and,
+  with strict verification, found no more (26/31 both).
 - **Not worth doing:** adding the TodoWrite tool, a "recall first" line in
   the protocol, more effort, more repeats, or carrying notes between runs
   (`--memory`).
@@ -37,6 +42,17 @@ Which bug each variant found, run by run, is in
   from 8/22 to 13/22 on the cases where this happened, at the same cost
   ($1.64 vs $1.67 a review) and a minute faster; defect precision held,
   `(minor)` precision fell (11/12 to 8/12 in a blind check).
+- **On the full sets with strict verification** (reviewer at high, lenses
+  at medium): 74% of known bugs on the pilot set plus the nine new cases,
+  84% with the two cost changes, against 57% for an ordinary run; 87% on
+  the eval set against 84% (92% for the old lenses at high). On the nine
+  new cases, never used while designing the lenses, lens reviews found
+  28 of 30 bug-runs against 10 of 20 for ordinary runs.
+- **Keep the reviewer at high.** With the reviewer at medium too, the
+  pilot set fell to 52% (11/21) against 67% (14/21) at high.
+- **Pre-existing bugs** that a change did not introduce are now listed
+  in the review message instead of dropped; 16 of 24 were real in a blind
+  check, and none had been introduced by the change.
 - **Where a lens review's cost goes:** the reviewer's work after the lenses
   return (settling candidates on a ~100K context) is the largest part;
   each lens costs about 9% of a review, needed or not. The reviewer at
@@ -265,6 +281,67 @@ checker is fallible on exactly the cases nobody can settle quickly.
 Still dropped: the svc stats read. Not written by any lens in these runs:
 the fgets overflow, the unlocked tree dump, the unlocked ban search.
 
+## Full sets and cheaper lens reviews
+
+Measured 2026-11-18 .. 20, reviewer Sonnet at high, lenses at medium,
+strict verification, one run per variant; per-bug results in
+`lens-review-benchmark-results.md` ("Full-set round").
+
+| set | variant | $/review | known bugs per run |
+|---|---|---|---|
+| pilot 19 + nine new cases | ordinary review | ~0.45 | 47/83 (57%) |
+| pilot 19 + nine new cases | lens review | 1.56 | 23/31 (74%) |
+| pilot 19 + nine new cases | **+ D1 + D2** | **1.02** | **26/31 (84%)** |
+| pilot 19 + nine new cases | + D1 + D2, lenses at high | 2.04 | 26/31 (84%) |
+| eval | ordinary review | 0.50 | 64/76 (84%) |
+| eval | lenses at high, before strict verification | 2.46 | 72/78 (92%) |
+| eval | lens review | 1.48 | 34/39 (87%) |
+
+- **D1, lens.md and the diff in the lens prompt.** Each lens used to read
+  lens.md and run `git show HEAD` itself: five cache writes of the same
+  text and one more turn per lens. The lens agent's prompt now carries
+  both (the diff up to 60K characters), so the five lenses share one
+  cached prefix. On the 8 cases of the verification round: $1.75 to
+  $1.33 a review (-24%), cheaper on every case, same known bugs.
+- **D2, the reviewer waits for the lenses.** The lenses ran in the
+  background and the reviewer kept reading code meanwhile: about ten
+  turns on a ~100K context, some 20% of the cost, while bugs that the
+  reviewer found and no lens did were 3 of 179 found. A lens review now sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`,
+  so each Agent call blocks until its lens returns (the five calls in one
+  message still run in parallel). Same 8 cases: $1.51 (-14%), 8/11 known
+  bugs against 7/11.
+- **Both together** on 28 cases: $1.02 against $1.56, cheaper on every
+  case, 26/31 against 23/31 (unlocked-tree-dump, skip-ipv6-uninit and the
+  qmt workqueue order found, nothing lost). On the other four cases of the
+  verification round: 5/7, losing the test-script version gate once.
+- **Lenses at high** found the same 26/31 at twice the cost (one bug more,
+  one less), so `--lenses` keeps them at medium.
+- **The reviewer at medium**, with the "every change" wording, on the
+  pilot set: 11/21 against 14/21 at high. It lost the shrinker header
+  guard, the EFA P2P configure guard and the fld range type; keep it at
+  high.
+- **The eval set** is near its ceiling for every variant. Lenses at
+  medium miss `legacy-nid-oob` and `skip-ipv6-uninit` there, which the
+  old lenses at high found in both runs; on the 28 cases medium and high
+  lenses tie.
+- **The nine new cases** (`e02f351`, changes aireview had reviewed and a
+  later commit fixed) were not used while designing the lenses or the
+  verification rules. Lens reviews found 9/10, 9/10 and 10/10 there, and
+  four of the five bugs ordinary runs never found (the GSSIAM modprobe
+  loop, the unused encryption index, the failure-domain race, the
+  o2iblnd gap test) in every run.
+
+## Pre-existing bugs
+
+Strict verification calls a real bug the change did not introduce
+PRE-EXISTING. It used to be dropped; a lens review now lists such bugs at
+the end of the review message, under "Pre-existing issues (not introduced
+by this change)", and lreview appends them to `pre-existing.jsonl` in the
+results directory, keyed by file and function. 17 lens reviews reported
+24 distinct ones; Opus at high effort, blind, against the code and the parent commit:
+16 real and present before the change, 6 wrong (three of them one claim
+worded three ways), 2 unsettled, none introduced by the change.
+
 ## Where the cost goes
 
 Measured from lreview's telemetry (per-call cost, the fan-out point taken
@@ -297,8 +374,9 @@ settles the candidates.
   to 9 calls. Its one miss is the qmt bug, in the run where it skipped the
   lenses on the ten-line change ("the change is about ten lines in three
   files, so I did the Task 2 analysis myself"); TASK 1D now says to run
-  them for every change, however small. That rerun was cut short by a
-  usage limit, so medium is not yet the default.
+  them for every change, however small. On the full pilot set it then
+  lost bugs (see "Full sets and cheaper lens reviews"): high stays the
+  default.
 
 ## Setup notes
 
@@ -324,8 +402,10 @@ Fixed since: two `bench run`s started together raced in `prepare_repos()`
 asked again and left out of the counts), and the judge's self-correction
 broke the parser (the last JSON object now counts); an expired login or a
 usage limit ("You've hit your 5-hour limit") failed every later review,
-several after billing partial work (no further review starts now); and
-`test238-setup-rc-unchecked` was not a bug (dropped). Still open:
+several after billing partial work (no further review starts now);
+`test238-setup-rc-unchecked` was not a bug (dropped); and a SIGTERM ended
+lreview but not its reviews, nor the commands Claude Code runs in sessions
+of their own (lreview now stops both). Still open:
 
 - The `eval` set is saturated by construction (bugs the default finds at
   least sometimes); the `hard` labels are stale (Sonnet at high now finds
@@ -337,5 +417,5 @@ several after billing partial work (no further review starts now); and
 Opus as the reviewer with Sonnet lenses; the upstream per-file
 orchestrator (`kernel/agent/orc.md`); a union of Claude and another model;
 effort levels for the ordinary review; spin-cycle rounds whose code
-changes between rounds; strict verification on the full pilot and eval
-sets; the reviewer at medium with the "every change" wording.
+changes between rounds; D1 + D2 on the eval set, and a second run of the
+full-set round.

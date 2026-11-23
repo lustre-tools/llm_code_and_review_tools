@@ -126,6 +126,126 @@ The 32 `eval` cases, two runs each. One ordinary run of `o2iblnd-rtnl` read the 
 | gds-support-for-kfilnd ([61824](https://review.whamcloud.com/c/fs/lustre-release/+/61824/2)) | fix-error-handling-in-dma-mapp | 1/2 | 2/2 | 2/2 | 1/1 |
 | **total** | | **7/26 (27%)** | **8/22 (36%)** | **13/22 (59%)** | **6/11 (55%)** |
 
+## Full-set round
+
+Strict verification on the full sets, and the two cost changes (the lens
+prompt with lens.md and the diff, "D1"; the reviewer waiting for the
+lenses, "D2"), one run each unless a cell says otherwise. Reviewer at
+high, lenses at medium unless a column says otherwise.
+
+### Pilot set and the nine aireview escapes
+
+The 19 cases of the pilot round plus the nine cases added from changes
+aireview had reviewed. "Ordinary" is the pilot round's three runs; for the
+nine new cases it is the two runs recorded in each case's notes.
+
+| case (change) | bug | ordinary | strict, lenses medium | + D1 + D2, lenses medium | + D1 + D2, lenses high |
+|---|---|---|---|---|---|
+| debug-vlen-always-inline ([69231](https://review.whamcloud.com/c/fs/lustre-release/+/69231/10)) | va-list-in-static-inline | 0/2 | 0/1 | 0/1 | 1/1 |
+| dne-migrate-layout ([58585](https://review.whamcloud.com/c/fs/lustre-release/+/58585/8)) | fld-range-uninit | 1/3 | 1/1 | 1/1 | 1/1 |
+| ec-parity-km-zero ([62906](https://review.whamcloud.com/c/fs/lustre-release/+/62906/42)) | ec-k-zero-divide | 2/2 | 1/1 | 1/1 | 1/1 |
+| ec-parity-km-zero ([62906](https://review.whamcloud.com/c/fs/lustre-release/+/62906/42)) | ec-m-zero-lassert | 2/2 | 1/1 | 1/1 | 1/1 |
+| enforce-file-quota-for-root ([60213](https://review.whamcloud.com/c/fs/lustre-release/+/60213/9)) | fix-silent-data-loss-for-root | 0/3 | 1/1 | 1/1 | 1/1 |
+| gssiam-modprobe-loop ([65062](https://review.whamcloud.com/c/fs/lustre-release/+/65062/78)) | wireflavor2policy-loop | 0/2 | 1/1 | 1/1 | 1/1 |
+| lassert-side-effects ([56115](https://review.whamcloud.com/c/fs/lustre-release/+/56115/5)) | state-change-in-assert | 3/3 | 1/1 | 1/1 | 1/1 |
+| lfs-find-ost-supports-index ([55902](https://review.whamcloud.com/c/fs/lustre-release/+/55902/5)) | fix-lfs-find-m-mdtidx-negation | 3/3 | 1/1 | 1/1 | 1/1 |
+| llog-skip-plain-client ([60240](https://review.whamcloud.com/c/fs/lustre-release/+/60240/27)) | skip-plain-server-only | 2/2 | 1/1 | 1/1 | 1/1 |
+| llog-subcommands ([56040](https://review.whamcloud.com/c/fs/lustre-release/+/56040/8)) | remove-runs-check | 3/3 | 1/1 | 1/1 | 1/1 |
+| lmv-disconnect-uaf ([64317](https://review.whamcloud.com/c/fs/lustre-release/+/64317/23)) | upcall-clear-after-disconnect | 2/2 | 1/1 | 1/1 | 1/1 |
+| lnd-module-loading ([57946](https://review.whamcloud.com/c/fs/lustre-release/+/57946/3)) | err-ptr-positive | 3/3 | 1/1 | 1/1 | 1/1 |
+| lnet-recreate-peers ([61596](https://review.whamcloud.com/c/fs/lustre-release/+/61596/17)) | sleep-in-spinlock | 3/3 | 1/1 | 1/1 | 1/1 |
+| lnetctl-import ([65055](https://review.whamcloud.com/c/fs/lustre-release/+/65055/8)) | import-fgets-overflow | 0/3 | 0/1 | 0/1 | 0/1 |
+| memcg-balance-dirty ([59223](https://review.whamcloud.com/c/fs/lustre-release/+/59223/11)) | unlocked-tree-dump | 0/3 | 0/1 | 1/1 | 0/1 |
+| mgs-buffer-checks ([64953](https://review.whamcloud.com/c/fs/lustre-release/+/64953/4)) | skip-ipv6-uninit | 0/3 | 0/1 | 1/1 | 1/1 |
+| move-include-to-top-level ([60989](https://review.whamcloud.com/c/fs/lustre-release/+/60989/9)) | fix-shrinker-debug-init-fini-i | 3/3 | 1/1 | 1/1 | 1/1 |
+| nodemap-ban-default ([60074](https://review.whamcloud.com/c/fs/lustre-release/+/60074/15)) | ban-search-unlocked | 0/3 | 0/1 | 0/1 | 0/1 |
+| nodemap-fileset-inherit ([55614](https://review.whamcloud.com/c/fs/lustre-release/+/55614/24)) | fileset-parent-check | 0/3 | 0/1 | 0/1 | 0/1 |
+| o2iblnd-fastreg-gaps ([66689](https://review.whamcloud.com/c/fs/lustre-release/+/66689/3)) | mid-page-split-counted-as-gap | 0/2 | 1/1 | 1/1 | 1/1 |
+| ofd-failure-domain-race ([65184](https://review.whamcloud.com/c/fs/lustre-release/+/65184/18)) | failure-domain-unlocked-read | 0/2 | 1/1 | 1/1 | 1/1 |
+| osc-encrypt-unused-index ([69505](https://review.whamcloud.com/c/fs/lustre-release/+/69505/9)) | fallback-macro-drops-index | 0/2 | 1/1 | 1/1 | 1/1 |
+| osc-kswapd-deadlock ([64397](https://review.whamcloud.com/c/fs/lustre-release/+/64397/2)) | comment-cites-removed-osc-flush-async-page | 3/3 | 1/1 | 1/1 | 1/1 |
+| osc-kswapd-deadlock ([64397](https://review.whamcloud.com/c/fs/lustre-release/+/64397/2)) | oe-memalloc-never-set-dead-check | 3/3 | 1/1 | 1/1 | 1/1 |
+| osc-lu-device ([58818](https://review.whamcloud.com/c/fs/lustre-release/+/58818/8)) | device-free-null-obd | 3/3 | 1/1 | 1/1 | 1/1 |
+| p2pdma-per-stripe ([66987](https://review.whamcloud.com/c/fs/lustre-release/+/66987/30)) | p2p-decided-per-chunk | 2/2 | 1/1 | 1/1 | 1/1 |
+| relate-qmt-lvbo-free-wq-and ([56661](https://review.whamcloud.com/c/fs/lustre-release/+/56661/3)) | fix-the-order-of-freeing-qmt-l | 0/3 | 0/1 | 1/1 | 1/1 |
+| return-error-for-verify-when ([61751](https://review.whamcloud.com/c/fs/lustre-release/+/61751/8)) | fix-resync-with-nosync-stale-c | 0/3 | 0/1 | 0/1 | 0/1 |
+| support-pci-p2p-dma-mapping ([66985](https://review.whamcloud.com/c/fs/lustre-release/+/66985/26)) | fix-efa-p2p-configure-guard | 3/3 | 1/1 | 1/1 | 1/1 |
+| swap-layouts-interop ([64757](https://review.whamcloud.com/c/fs/lustre-release/+/64757/2)) | pack-before-set-size | 3/3 | 1/1 | 1/1 | 1/1 |
+| swap-layouts-interop ([64757](https://review.whamcloud.com/c/fs/lustre-release/+/64757/2)) | swab-min-size | 3/3 | 1/1 | 1/1 | 1/1 |
+| **total** | | **47/83 (57%)** | **23/31 (74%)** | **26/31 (84%)** | **26/31 (84%)** |
+
+$/review: strict $1.56, + D1 + D2 $1.02, + D1 + D2 with lenses at high
+$2.04.
+
+### Eval set
+
+| case (change) | bug | ordinary | lenses at high, before strict | strict, lenses medium |
+|---|---|---|---|---|
+| changelog-enc-names ([55916](https://review.whamcloud.com/c/fs/lustre-release/+/55916/8)) | ns-store-null-target | 1/2 | 2/2 | 1/1 |
+| fallocate-no-restart ([59158](https://review.whamcloud.com/c/fs/lustre-release/+/59158/4)) | restart-offset-units | 2/2 | 2/2 | 1/1 |
+| fileset-llog-compat ([60006](https://review.whamcloud.com/c/fs/lustre-release/+/60006/10)) | nodemap-del-null | 2/2 | 2/2 | 1/1 |
+| fsinfo-long-nids ([59421](https://review.whamcloud.com/c/fs/lustre-release/+/59421/5)) | root-path-want | 2/2 | 2/2 | 1/1 |
+| gds-support-for-kfilnd ([61824](https://review.whamcloud.com/c/fs/lustre-release/+/61824/2)) | fix-error-handling-in-dma-mapp | 1/2 | 2/2 | 1/1 |
+| gds-support-for-kfilnd ([61824](https://review.whamcloud.com/c/fs/lustre-release/+/61824/2)) | fix-sg-table-free-after-orig-n | 2/2 | 2/2 | 1/1 |
+| grant-rpc-failure ([56547](https://review.whamcloud.com/c/fs/lustre-release/+/56547/5)) | o-grant-not-reset | 2/2 | 2/2 | 1/1 |
+| lassert-side-effects ([56115](https://review.whamcloud.com/c/fs/lustre-release/+/56115/5)) | state-change-in-assert | 2/2 | 2/2 | 1/1 |
+| lfs-find-ost-supports-index ([55902](https://review.whamcloud.com/c/fs/lustre-release/+/55902/5)) | fix-lfs-find-m-mdtidx-negation | 2/2 | 2/2 | 1/1 |
+| llog-subcommands ([56040](https://review.whamcloud.com/c/fs/lustre-release/+/56040/8)) | remove-runs-check | 2/2 | 2/2 | 1/1 |
+| lmv-qos-exclude ([60794](https://review.whamcloud.com/c/fs/lustre-release/+/60794/9)) | exclude-list-uaf | 2/2 | 2/2 | 1/1 |
+| lnd-module-loading ([57946](https://review.whamcloud.com/c/fs/lustre-release/+/57946/3)) | err-ptr-positive | 2/2 | 2/2 | 1/1 |
+| lnet-mr-forwarding ([63582](https://review.whamcloud.com/c/fs/lustre-release/+/63582/5)) | test237-238-no-interop-version-gate | 0/2 | 1/2 | 1/1 |
+| lnet-recreate-peers ([61596](https://review.whamcloud.com/c/fs/lustre-release/+/61596/17)) | sleep-in-spinlock | 2/2 | 2/2 | 1/1 |
+| lu-env-add-errors ([57272](https://review.whamcloud.com/c/fs/lustre-release/+/57272/12)) | osp-thread-args-leak | 2/2 | 2/2 | 1/1 |
+| mgc-new-registration ([59212](https://review.whamcloud.com/c/fs/lustre-release/+/59212/8)) | legacy-nid-oob | 0/2 | 2/2 | 0/1 |
+| mgc-nid-notify ([59868](https://review.whamcloud.com/c/fs/lustre-release/+/59868/11)) | unchecked-reply | 2/2 | 2/2 | 1/1 |
+| mgs-buffer-checks ([64953](https://review.whamcloud.com/c/fs/lustre-release/+/64953/4)) | skip-ipv6-uninit | 0/2 | 2/2 | 0/1 |
+| mount-large-nids ([57560](https://review.whamcloud.com/c/fs/lustre-release/+/57560/10)) | append-param-nul | 2/2 | 2/2 | 1/1 |
+| nodemap-innermost-range ([59890](https://review.whamcloud.com/c/fs/lustre-release/+/59890/10)) | orphaned-subranges | 2/2 | 2/2 | 1/1 |
+| o2iblnd-rtnl ([63038](https://review.whamcloud.com/c/fs/lustre-release/+/63038/5)) | rtnl-in-rcu | 1/1 | 2/2 | 1/1 |
+| o2iblnd-rtnl ([63038](https://review.whamcloud.com/c/fs/lustre-release/+/63038/5)) | rtnl-under-global-lock | 1/1 | 2/2 | 1/1 |
+| osc-kswapd-deadlock ([64397](https://review.whamcloud.com/c/fs/lustre-release/+/64397/2)) | comment-cites-removed-osc-flush-async-page | 2/2 | 2/2 | 1/1 |
+| osc-kswapd-deadlock ([64397](https://review.whamcloud.com/c/fs/lustre-release/+/64397/2)) | oe-memalloc-never-set-dead-check | 2/2 | 2/2 | 1/1 |
+| ping-evictor-rework ([58620](https://review.whamcloud.com/c/fs/lustre-release/+/58620/3)) | export-timer-alloc | 2/2 | 2/2 | 1/1 |
+| pm-qos-latency ([57039](https://review.whamcloud.com/c/fs/lustre-release/+/57039/12)) | cpu-index-math | 2/2 | 2/2 | 1/1 |
+| pm-qos-latency ([57039](https://review.whamcloud.com/c/fs/lustre-release/+/57039/12)) | delayed-work-not-stopped | 2/2 | 2/2 | 1/1 |
+| pm-qos-latency ([57039](https://review.whamcloud.com/c/fs/lustre-release/+/57039/12)) | svc-stats-unprotected | 0/2 | 0/2 | 0/1 |
+| quota-nodemap ([59297](https://review.whamcloud.com/c/fs/lustre-release/+/59297/5)) | nodemap-put-early | 2/2 | 2/2 | 1/1 |
+| refresh-context-vs-lbug-upon ([62467](https://review.whamcloud.com/c/fs/lustre-release/+/62467/5)) | refresh-context-vs-lbug-upon-g | 2/2 | 2/2 | 1/1 |
+| replace-client-lock-lru-with ([60162](https://review.whamcloud.com/c/fs/lustre-release/+/60162/28)) | fix-lfru-priv-ratio-limit-over | 2/2 | 2/2 | 1/1 |
+| resource-id-check ([59208](https://review.whamcloud.com/c/fs/lustre-release/+/59208/6)) | getxattr-check-order | 2/2 | 1/2 | 0/1 |
+| shrinker-compat ([60352](https://review.whamcloud.com/c/fs/lustre-release/+/60352/7)) | shrinker-alloc-leak | 2/2 | 2/2 | 1/1 |
+| socklnd-restrict-ip ([59673](https://review.whamcloud.com/c/fs/lustre-release/+/59673/15)) | callback-not-restored | 0/2 | 0/2 | 0/1 |
+| socklnd-restrict-ip ([59673](https://review.whamcloud.com/c/fs/lustre-release/+/59673/15)) | waitqueue-before-init | 2/2 | 2/2 | 1/1 |
+| specify-total-count-for-mirr ([55867](https://review.whamcloud.com/c/fs/lustre-release/+/55867/11)) | fix-issues-with-llapi-get-lmm | 2/2 | 2/2 | 1/1 |
+| swap-layouts-interop ([64757](https://review.whamcloud.com/c/fs/lustre-release/+/64757/2)) | pack-before-set-size | 2/2 | 2/2 | 1/1 |
+| swap-layouts-interop ([64757](https://review.whamcloud.com/c/fs/lustre-release/+/64757/2)) | swab-min-size | 2/2 | 2/2 | 1/1 |
+| use-nidmasks-for-ipv6-nids ([56184](https://review.whamcloud.com/c/fs/lustre-release/+/56184/10)) | fix-nidlist-leak-in-nodemap-pa | 2/2 | 2/2 | 1/1 |
+| **total** | | **64/76 (84%)** | **72/78 (92%)** | **34/39 (87%)** |
+
+$/review: ordinary $0.50, lenses at high $2.46, strict $1.48.
+
+### Cost variants on the verification round's cases
+
+"Strict" is the verification round's column (two runs); "+ D1 + D2"
+pools the 28-change run and a run of the other four cases.
+
+| case (change) | bug | strict, lenses medium | + D1 | + D2 | + D1 + D2 |
+|---|---|---|---|---|---|
+| gds-support-for-kfilnd ([61824](https://review.whamcloud.com/c/fs/lustre-release/+/61824/2)) | fix-error-handling-in-dma-mapp | 2/2 | 1/1 | 0/1 | 1/1 |
+| gds-support-for-kfilnd ([61824](https://review.whamcloud.com/c/fs/lustre-release/+/61824/2)) | fix-sg-table-free-after-orig-n | 2/2 | 1/1 | 1/1 | 1/1 |
+| lnet-mr-forwarding ([63582](https://review.whamcloud.com/c/fs/lustre-release/+/63582/5)) | test237-238-no-interop-version-gate | 2/2 | 1/1 | 1/1 | 0/1 |
+| lnetctl-import ([65055](https://review.whamcloud.com/c/fs/lustre-release/+/65055/8)) | import-fgets-overflow | 0/2 | 0/1 | 0/1 | 0/1 |
+| memcg-balance-dirty ([59223](https://review.whamcloud.com/c/fs/lustre-release/+/59223/11)) | unlocked-tree-dump | 0/2 | 0/1 | 1/1 | 1/1 |
+| mgc-new-registration ([59212](https://review.whamcloud.com/c/fs/lustre-release/+/59212/8)) | legacy-nid-oob | 2/2 | 1/1 | 1/1 | 1/1 |
+| nodemap-ban-default ([60074](https://review.whamcloud.com/c/fs/lustre-release/+/60074/15)) | ban-search-unlocked | 0/2 | 0/1 | 0/1 | 0/1 |
+| pm-qos-latency ([57039](https://review.whamcloud.com/c/fs/lustre-release/+/57039/12)) | cpu-index-math | 2/2 | 1/1 | 1/1 | 1/1 |
+| pm-qos-latency ([57039](https://review.whamcloud.com/c/fs/lustre-release/+/57039/12)) | delayed-work-not-stopped | 2/2 | 1/1 | 1/1 | 1/1 |
+| pm-qos-latency ([57039](https://review.whamcloud.com/c/fs/lustre-release/+/57039/12)) | svc-stats-unprotected | 0/2 | 0/1 | 1/1 | 0/1 |
+| relate-qmt-lvbo-free-wq-and ([56661](https://review.whamcloud.com/c/fs/lustre-release/+/56661/3)) | fix-the-order-of-freeing-qmt-l | 1/2 | 1/1 | 1/1 | 1/1 |
+| **total** | | **13/22 (59%)** | **7/11 (64%)** | **8/11 (73%)** | **7/11 (64%)** |
+
+$/review: strict $1.67, + D1 $1.33, + D2 $1.51, + D1 + D2 $1.18.
+
 ## Appendix: the known bugs
 
 | case | bug | change | what the bug is | known from |
@@ -180,3 +300,13 @@ The 32 `eval` cases, two runs each. One ordinary run of `o2iblnd-rtnl` read the 
 | gds-support-for-kfilnd | fix-error-handling-in-dma-mapp | [61824](https://review.whamcloud.com/c/fs/lustre-release/+/61824/2) | In kfilnd_tn.c:kfilnd_tn_set_sgl_buf() (added by the ORIGINAL commit), the return value of lnet_rdma_map_sg_attrs()/dma_map_sgtable() is not checked before setting tn->tn_sgt_mapped = true and populating tn_num_iovec from tn_sgt.nents. If DMA mapping fails, the function proceeds as if mapped, so ... | fixed by 3d6df6b288 "LU-19496 kfilnd: Fix error handling in DMA mapping" |
 | replace-client-lock-lru-with | fix-lfru-priv-ratio-limit-over | [60162](https://review.whamcloud.com/c/fs/lustre-release/+/60162/28) | In the ORIGINAL change, `ns_lfru_priv_ratio_limit_256` is declared `__s8` in struct ldlm_namespace (lustre_dlm.h) but is assigned values up to 255 (default 30*256/100=76, but sysfs `lru_priv_ratio_limit_store` in ldlm_resource.c accepts any int and stores `tmp * 256 / 100` unchecked). Values ... | fixed by f1e4a9fcfe "LU-11509 ldlm: fix lfru priv_ratio_limit overflow issue" |
 | specify-total-count-for-mirr | fix-issues-with-llapi-get-lmm | [55867](https://review.whamcloud.com/c/fs/lustre-release/+/55867/11) | The ORIGINAL commit adds llapi_get_lmm_from_path() in liblustreapi.c and its use in lfs.c:lfs_setstripe_internal (-N=TOTAL mode). In llapi_get_lmm_from_path, lmmlen is declared size_t so the `lmmlen < 0` check from get_mds_md_size() is never true (negative error wraps to a huge value), leading ... | fixed by bed10bb933 "LU-16446 utils: fix issues with llapi_get_lmm_from_path()" |
+| lmv-disconnect-uaf | upcall-clear-after-disconnect | [64317](https://review.whamcloud.com/c/fs/lustre-release/+/64317/23) | lmv_disconnect_mdc() and the lmv_check_connect() error path clear tgt->ltd_exp->exp_obd->obd_upcall (onu_owner/onu_upcall) after obd_disconnect(tgt->ltd_exp). obd_disconnect() drops the export reference, so the export can already be freed: use-after-free (sanity-sec test_27e crash). The upcall must ... | fixed by deacfcca45 "LU-20700 lmv: fix use-after-free in lmv_disconnect_mdc()" |
+| ec-parity-km-zero | ec-k-zero-divide | [62906](https://review.whamcloud.com/c/fs/lustre-release/+/62906/42) | lod_qos_prep_create() sizes a parity component with ec_split_stripes(data stripe count, llc_dstripe_count). llc_dstripe_count (k) comes unchecked from the client layout; lod_verify_striping() bounds only k+m. k == 0 divides by zero in ec_split_stripes() ('total % suggested') on the MDS. | fixed by fed89412bf "LU-19548 lfs: mirror extend support for EC" |
+| ec-parity-km-zero | ec-m-zero-lassert | [62906](https://review.whamcloud.com/c/fs/lustre-release/+/62906/42) | llc_cstripe_count (m) is also copied unchecked from the client layout. m == 0 makes the parity component's llc_stripe_count = (n0 + n1) * 0 = 0, which trips LASSERT(lod_comp->llc_stripe_count) on the MDS. lod_verify_striping() must reject k == 0 or m == 0. | fixed by fed89412bf "LU-19548 lfs: mirror extend support for EC" |
+| gssiam-modprobe-loop | wireflavor2policy-loop | [65062](https://review.whamcloud.com/c/fs/lustre-release/+/65062/78) | sptlrpc_wireflavor2policy() now retries request_module("ptlrpc_gss") in while(1) until policies[SPTLRPC_POLICY_GSSIAM] is set, but nothing registers a GSSIAM policy. Any RPC with a GSSIAM wire flavor pins the calling thread (a ptlrpc service thread for an incoming request) in a loop that runs ... | fixed by 201f039a1b "LU-20984 ptlrpc: bound ptlrpc_gss load in policy lookup" |
+| p2pdma-per-stripe | p2p-decided-per-chunk | [66987](https://review.whamcloud.com/c/fs/lustre-release/+/66987/30) | P2P DMA capability is evaluated in osc_io_init()/mdc_io_init(), but lov_io_rw_iter_init() limits each cl_io_loop() pass to one stripe chunk and creates the sub-IO only in that pass. A direct I/O whose first stripe supports P2P pins and sends P2P pages before a later non-capable stripe sets ... | fixed by 3ace9a1d38 "LU-20438 clio: eagerly evaluate P2P DMA capability via layout" |
+| osc-encrypt-unused-index | fallback-macro-drops-index | [69505](https://review.whamcloud.com/c/fs/lustre-release/+/69505/9) | Without embedded llcrypt (CONFIG_LL_ENCRYPTION unset) the fallback osc_encrypt_pagecache_blocks() macro drops its inode, index and directio arguments, so the new 'index' variable in osc_brw_prep_request() is set but never used and a clang -Werror build fails (-Wunused-but-set-variable). | fixed by 6f724612d9 "LU-20896 osc: fix unused variable in non-llcrypt build" |
+| debug-vlen-always-inline | va-list-in-static-inline | [69231](https://review.whamcloud.com/c/fs/lustre-release/+/69231/10) | lustre_debug_vlen() is a static inline in include/trace/events/lustre_debug.h that uses va_copy()/va_list. On older kernels built without CONFIG_OPTIMIZE_INLINING (el8 4.18, every aarch64 build) 'inline' means always_inline, and gcc refuses: 'function can never be inlined because it uses variable ... | fixed by 657e3f656c "LU-20837 libcfs: move lustre_debug_vlen() out of line" |
+| ofd-failure-domain-race | failure-domain-unlocked-read | [65184](https://review.whamcloud.com/c/fs/lustre-release/+/65184/18) | ofd_statfs() copies ofd->ofd_failure_domain into os_failure_domain without ofd_flags_lock, while failure_domain_store() writes it under that lock (Coverity CID 506107 data race). | fixed by 76b710dde6 "LU-17000 ofd: Fix data race when accessing ofd_failure_domain" |
+| o2iblnd-fastreg-gaps | mid-page-split-counted-as-gap | [66689](https://review.whamcloud.com/c/fs/lustre-release/+/66689/3) | kiblnd_setup_rd_kiov() flags tx_gaps when a non-first kiov fragment starts mid-page or a non-last one ends mid-page. ib_sg_to_pages() coalesces fragments that meet inside a page (end of one == start of the next), so a contiguous payload split mid-page is not a gap; the check needlessly requires ... | fixed by 073c739a0d "LU-20886 o2iblnd: use the FastReg key for immediate payload" |
+| llog-skip-plain-client | skip-plain-server-only | [60240](https://review.whamcloud.com/c/fs/lustre-release/+/60240/27) | The patch moves the LLOG_SKIP_PLAIN -> 0 conversion in llog_cat_process_cb() inside #ifdef CONFIG_LUSTRE_FS_SERVER. On a client-only build a plain-llog skip (chlg_read_cat_process_cb() via llog_is_plain_skipable()) stops the whole catalog walk, so a client changelog reader (lustre_rsync) silently ... | fixed by af770d08d0 "LU-16489 obdclass: handle LLOG_SKIP_PLAIN on client builds" |

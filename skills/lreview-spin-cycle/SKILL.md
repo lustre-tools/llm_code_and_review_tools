@@ -162,9 +162,9 @@ tmp.
 `--lenses` has the reviewer start five subagents, one per class of bug
 (concurrency, lifecycle, data, semantics, build), and verify everything
 they find. On the benchmark one lens review found more known bugs than
-three plain rounds together, at about 2.5x the cost of a plain round
-with the default medium-effort lenses, 5x with `--lens-effort high`
-(`lreview/docs/lens-review-evaluation.md`). It needs the claude agent and
+three plain rounds together, at about 2x the cost of a plain round
+with the default medium-effort lenses (`--lens-effort high` costs twice
+as much again and found no more; `lreview/docs/lens-review-evaluation.md`). It needs the claude agent and
 full mode.
 
 The cycle above does not use it. Add `--lenses` to a round only when

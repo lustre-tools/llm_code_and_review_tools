@@ -210,8 +210,9 @@ so the modes never overwrite each other).
 
 `--lenses` adds five lens subagents (concurrency, lifecycle, data,
 semantics, build) whose candidates the reviewer verifies: more bugs in
-one run than two or three ordinary runs, at about 2.5x the cost
-(`--lens-effort medium`, the default) or 5x (`high`). See
+one run than two or three ordinary runs, at about 2x the cost
+(`--lens-effort medium`, the default; `high` costs twice as much again
+and found no more). See
 `lreview/docs/lens-review-evaluation.md`.
 
 `--last N` (`-n`) points lreview at a directory instead of Gerrit and

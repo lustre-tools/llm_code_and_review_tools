@@ -354,10 +354,11 @@ lreview run --lenses --lens-model opus 64086    # lenses on another model
 On `lreview bench`, with the lenses at high, known-bug recall went from
 59% to 70% and from 84% to 92% on two case sets, one run beat two or
 three ordinary runs together, and real defects per review rose by
-roughly 35-50% with unchanged precision. A review costs about 5x an
-ordinary one and takes about twice as long; with the lenses at medium
-(the default) it costs about 2.5x and keeps roughly 70% of the gain.
-`docs/lens-review-evaluation.md` has the measurements and
+roughly 35-50% with unchanged precision. With the verification rules
+below and the lenses at medium (the default), a lens review found 84% of
+the known bugs of 28 cases against 57% for an ordinary run, at about 2x
+its cost ($1.02 against ~$0.50); lenses at high cost twice as much again
+and found no more. `docs/lens-review-evaluation.md` has the measurements and
 `docs/lens-review-benchmark-results.md` the per-bug results.
 
 - claude only, `--mode full` only, and not for `--github` reviews.
@@ -372,6 +373,15 @@ ordinary one and takes about twice as long; with the lenses at medium
   reports tests that can give a wrong result. Before this, it dropped
   much of what the lenses found; see the evaluation.
 - The lenses run for every change, however small.
+- The lens agent's prompt carries `lens.md` and the commit's diff (up
+  to 60K characters), so the five lenses share one cached prompt, and
+  the reviewer waits for them (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
+  makes each Agent call block; the five still run in parallel).
+- A real bug the change did not introduce is listed at the end of the
+  review message under "Pre-existing issues (not introduced by this
+  change)", not as an inline comment, and appended to
+  `pre-existing.jsonl` in the results directory, keyed by file and
+  function.
 - lreview puts TASK 1D, the lens step, into the preloaded
   review-core.md in front of Task 2 (into the first message without
   `--preload`); the prompts checkout is not changed.
