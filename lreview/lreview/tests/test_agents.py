@@ -194,20 +194,84 @@ class TestBuildCmd:
     def test_write_agy_offline_hooks(self, tmp_path):
         import subprocess
         from lreview.agents import write_agy_offline_hooks
-        # Pre-existing hooks are preserved alongside lreview-offline
+        # Pre-existing patch hooks are replaced rather than preserved
         existing = tmp_path / ".agents" / "hooks.json"
         existing.parent.mkdir()
-        existing.write_text(json.dumps({"user-hook": {"Stop": []}}))
+        existing.write_text(json.dumps({"patch-hook": {"Stop": []}}))
         path = write_agy_offline_hooks(tmp_path)
         assert path == existing
         data = json.loads(path.read_text())
-        assert "user-hook" in data
+        assert list(data.keys()) == ["lreview-offline"]
         entry = data["lreview-offline"]["PreToolUse"][0]
         assert "search_web" in entry["matcher"]
         assert "browser_.*" in entry["matcher"]
         out = subprocess.run(entry["hooks"][0]["command"], shell=True,
                              capture_output=True, text=True, check=True).stdout
         assert json.loads(out)["decision"] == "deny"
+
+    def test_scrub_agy_worktree_removes_paths_and_keeps_git_clean(self, tmp_path):
+        import subprocess
+        from lreview.agents import (
+            AGY_WORKTREE_CUSTOMIZATION_PATHS, scrub_agy_worktree,
+            write_agy_offline_hooks,
+        )
+
+        def git(cwd, *args):
+            return subprocess.run(
+                ["git", "-C", str(cwd), *args],
+                capture_output=True, text=True, check=True,
+            ).stdout
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        git(repo, "init")
+        git(repo, "config", "user.name", "Test")
+        git(repo, "config", "user.email", "test@example.com")
+        (repo / "src").mkdir()
+        (repo / "src" / "main.c").write_text("int main(void) { return 0; }\n")
+        (repo / "sub").mkdir()
+        (repo / "sub" / "AGENTS.md").write_text("subfolder rule\n")
+        (repo / "AGENTS.md").write_text("root rule\n")
+        (repo / "GEMINI.md").write_text("gemini rule\n")
+        (repo / "shared_target").mkdir()
+        (repo / "shared_target" / "keep.txt").write_text("keep\n")
+        (repo / ".agent").symlink_to("shared_target")
+        for d in (".agents", "_agents", "_agent", ".gemini"):
+            (repo / d).mkdir()
+            (repo / d / "file.txt").write_text(f"in {d}\n")
+        (repo / ".agents" / "hooks.json").write_text(
+            json.dumps({"patch-hook": {"SessionStart": []}}))
+        git(repo, "add", ".")
+        git(repo, "commit", "-m", "initial")
+
+        wt = tmp_path / "wt"
+        git(repo, "worktree", "add", "--detach", str(wt), "HEAD")
+        try:
+            removed = scrub_agy_worktree(wt)
+            assert set(removed) == set(AGY_WORKTREE_CUSTOMIZATION_PATHS)
+            for name in AGY_WORKTREE_CUSTOMIZATION_PATHS:
+                assert not (wt / name).exists()
+                assert not (wt / name).is_symlink()
+            # Unlinking a symlinked customization dir never deletes its target
+            assert (wt / "shared_target" / "keep.txt").read_text() == "keep\n"
+            assert (wt / "src" / "main.c").is_file()
+            assert (wt / "sub" / "AGENTS.md").is_file()
+            assert git(wt, "status", "--porcelain") == ""
+            assert git(wt, "diff") == ""
+            assert git(wt, "diff", "HEAD") == ""
+            assert git(wt, "show", "HEAD:AGENTS.md") == "root rule\n"
+            # Writing a fresh offline hook over a previously tracked path
+            # still keeps git status clean and leaves only lreview-offline.
+            hooks_path = write_agy_offline_hooks(wt)
+            assert list(json.loads(hooks_path.read_text()).keys()) == [
+                "lreview-offline"]
+            assert git(wt, "status", "--porcelain") == ""
+        finally:
+            git(repo, "worktree", "remove", "--force", str(wt))
+
+    def test_scrub_agy_worktree_noop_when_absent(self, tmp_path):
+        from lreview.agents import scrub_agy_worktree
+        assert scrub_agy_worktree(tmp_path) == []
 
     def test_gemini_gets_prompt_text(self):
         cmd = get_agent("gemini").build_cmd(None, None, [], PROMPT)

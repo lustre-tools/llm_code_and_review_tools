@@ -1797,6 +1797,77 @@ def test_agy_end_to_end_preload_and_metadata_nudge(repo, tmp_path, monkeypatch):
     assert "lreview-offline" in json.loads(hooks_files[0].read_text())
 
 
+def test_agy_worktree_scrubbed_but_in_place_untouched(tmp_path, monkeypatch):
+    """Disposable agy worktrees drop root customization paths while
+    keeping git status clean; non-agy worktrees and in-place reviews
+    leave them untouched."""
+    from lreview import worktree as wt
+    from lreview.runner import prepare_worktree
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    (repo / "f.c").write_text("int x;\n")
+    (repo / "AGENTS.md").write_text("repo rule\n")
+    (repo / ".agents").mkdir()
+    (repo / ".agents" / "hooks.json").write_text(
+        json.dumps({"patch-hook": {"SessionStart": []}}))
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "add patch")
+
+    sha = _git(repo, "rev-parse", "HEAD")
+    change = _change(101, sha)
+
+    # Disposable worktree for agy is scrubbed and clean
+    agy_cfg = _config(repo, tmp_path / "agy-out", agent="agy",
+                      keep_worktrees=True)
+    agy_wt = prepare_worktree(agy_cfg, change)
+    try:
+        assert not (agy_wt / "AGENTS.md").exists()
+        assert not (agy_wt / ".agents").exists()
+        assert _git(agy_wt, "status", "--porcelain") == ""
+        assert _git(agy_wt, "show", "HEAD:AGENTS.md") == "repo rule"
+    finally:
+        wt.remove_worktree(repo, agy_wt)
+
+    # Disposable worktree for claude keeps AGENTS.md intact
+    claude_cfg = _config(repo, tmp_path / "claude-out", agent="claude",
+                         keep_worktrees=True)
+    claude_wt = prepare_worktree(claude_cfg, change)
+    try:
+        assert (claude_wt / "AGENTS.md").is_file()
+        assert (claude_wt / ".agents" / "hooks.json").is_file()
+    finally:
+        wt.remove_worktree(repo, claude_wt)
+
+    # In-place agy review never touches config.repo
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "review-core.md").write_text("review protocol\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "agy"
+    stub.write_text(
+        "#!/bin/sh\n"
+        "printf '{\"author\":\"a\",\"sha\":\"s\",\"subject\":\"t\","
+        "\"issues-found\":0,\"issue-severity-score\":\"none\","
+        "\"issue-severity-explanation\":\"clean\"}' > review-metadata.json\n"
+        "echo '{\"event\":\"result\",\"result\":{"
+        "\"conversation_id\":\"c1\",\"status\":\"SUCCESS\","
+        "\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}'\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    in_place_cfg = _config(repo, tmp_path / "inplace-out", agent="agy",
+                           prompts_dir=prompts, preload=False)
+    results = run_batch(in_place_cfg, [change], in_place=True)
+    assert len(results) == 1
+    assert results[0].status == STATUS_CLEAN
+    assert (repo / "AGENTS.md").is_file()
+    assert (repo / ".agents" / "hooks.json").is_file()
+
+
 class TestPluginsOff:
     """A lean claude review gets settings that disable the user's
     plugins; --no-lean and other agents keep them."""

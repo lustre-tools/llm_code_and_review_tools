@@ -27,8 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from .agents import (get_agent, write_agy_offline_hooks,
-                     write_cursor_permissions)
+from .agents import (get_agent, scrub_agy_worktree,
+                     write_agy_offline_hooks, write_cursor_permissions)
 from .defaults import (  # noqa: F401 (DEFAULT_STALL_TIMEOUT re-exported)
     DEFAULT_AGENT, DEFAULT_STALL_TIMEOUT, DEFAULT_TIMEOUT)
 from .models import validate_selection
@@ -802,6 +802,12 @@ def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:
     # deleted out-of-band), which would otherwise fail the add forever.
     wt.prune_worktrees(config.repo)
     wt.add_worktree(config.repo, dest, change.sha)
+    if config.agent == "agy":
+        try:
+            scrub_agy_worktree(dest)
+        except Exception:
+            wt.remove_worktree(config.repo, dest)
+            raise
     return dest
 
 

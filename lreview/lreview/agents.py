@@ -16,6 +16,7 @@ import functools
 import json
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,10 +50,20 @@ def lean_claude_args(extra_tools: tuple = ()) -> list[str]:
 # the worktree; a review loads none of them, lean or not (Patrick,
 # 2026-11-06). claude reads only the user's settings, CLAUDE.md and
 # skills; codex reads no project AGENTS.md and turns off each skill the
-# worktree holds, by path, having no switch for the repo scope.
+# worktree holds, by path, having no switch for the repo scope; agy has
+# no flag either, so prepare_worktree scrubs its root customization paths
+# in the disposable worktree (scrub_agy_worktree).
 CLAUDE_SOURCE_ARGS = ["--setting-sources", "user"]
 CODEX_SOURCE_ARGS = ["-c", "project_doc_max_bytes=0"]
 CHECKOUT_SKILL_DIRS = (".agents/skills", ".codex/skills")
+# Root-level paths agy scans for workspace rules, skills, agents,
+# plugins, hooks, MCP configs, and personal_customization_dir redirects.
+# agy stops at .git and never scans subfolders below the workspace root.
+AGY_WORKTREE_CUSTOMIZATION_PATHS = (
+    "AGENTS.md", "GEMINI.md",
+    ".agents", ".agent", "_agents", "_agent",
+    ".gemini",
+)
 
 
 @functools.lru_cache(maxsize=1)
@@ -248,7 +259,8 @@ class AgentSpec:
             return cmd + extra_args + ["-" if prompt_on_stdin else prompt_text]
         if self.name == "agy":
             # Preloaded prompts use --input-format stream-json on stdin to
-            # avoid argv limits. agy has no flag to ignore worktree rules.
+            # avoid argv limits. agy has no flag to ignore worktree rules;
+            # prepare_worktree scrubs them via scrub_agy_worktree().
             cmd = ["agy", "--output-format", "stream-json",
                    "--dangerously-skip-permissions"]
             if prompt_on_stdin:
@@ -403,30 +415,70 @@ AGY_OFFLINE_TOOL_MATCHER = (
 )
 
 
+def scrub_agy_worktree(worktree: Path) -> list[str]:
+    """Remove root-level agy customization paths from a disposable worktree.
+
+    agy has no CLI flag or settings key to disable workspace discovery
+    (tracked upstream in
+    https://github.com/google-antigravity/antigravity-cli/issues/1693), so
+    lreview removes these entries before launching agy and marks any tracked
+    files among them --skip-worktree so git status and git diff stay clean
+    while git show HEAD stays untouched.  Returns the removed top-level names.
+    """
+    present = [
+        name for name in AGY_WORKTREE_CUSTOMIZATION_PATHS
+        if (worktree / name).exists() or (worktree / name).is_symlink()
+    ]
+    if not present:
+        return []
+    if (worktree / ".git").exists():
+        ls = subprocess.run(
+            ["git", "-C", str(worktree), "ls-files", "-z", "--", *present],
+            capture_output=True,
+        )
+        if ls.returncode != 0:
+            raise RuntimeError(
+                f"git ls-files failed in {worktree}: "
+                f"{ls.stderr.decode('utf-8', errors='replace').strip()}"
+            )
+        if ls.stdout:
+            upd = subprocess.run(
+                ["git", "-C", str(worktree), "update-index",
+                 "--skip-worktree", "-z", "--stdin"],
+                input=ls.stdout, capture_output=True,
+            )
+            if upd.returncode != 0:
+                raise RuntimeError(
+                    f"git update-index --skip-worktree failed in {worktree}: "
+                    f"{upd.stderr.decode('utf-8', errors='replace').strip()}"
+                )
+    for name in present:
+        path = worktree / name
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+    return present
+
+
 def write_agy_offline_hooks(worktree: Path) -> Path:
-    """Write <worktree>/.agents/hooks.json denying agy's web/browser tools."""
+    """Write a clean <worktree>/.agents/hooks.json denying agy's web/browser tools."""
     path = worktree / ".agents" / "hooks.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    hooks = {}
-    if path.is_file():
-        try:
-            existing = json.loads(path.read_text())
-            if isinstance(existing, dict):
-                hooks = existing
-        except (OSError, ValueError):
-            pass
-    hooks["lreview-offline"] = {
-        "PreToolUse": [{
-            "matcher": AGY_OFFLINE_TOOL_MATCHER,
-            "hooks": [{
-                "type": "command",
-                "command": (
-                    "printf '%s\\n' "
-                    "'{\"decision\":\"deny\","
-                    "\"reason\":\"network access is disabled for this review\"}'"
-                ),
+    hooks = {
+        "lreview-offline": {
+            "PreToolUse": [{
+                "matcher": AGY_OFFLINE_TOOL_MATCHER,
+                "hooks": [{
+                    "type": "command",
+                    "command": (
+                        "printf '%s\\n' "
+                        "'{\"decision\":\"deny\","
+                        "\"reason\":\"network access is disabled for this review\"}'"
+                    ),
+                }],
             }],
-        }],
+        },
     }
     path.write_text(json.dumps(hooks, indent=2) + "\n")
     return path

@@ -159,7 +159,13 @@ it a review.) Select the backend with
   averaging 5.2m and 1.34M tokens/review.
   **Limits:** `-m` does not fork sessions; `--lean` only adds
   `--disable-slash-commands`; `agy` has no flag to ignore worktree
-  rules/skills (`AGENTS.md`, `GEMINI.md`, `.agents/`); and `lreview check`
+  customizations (tracked in
+  [google-antigravity/antigravity-cli#1693](https://github.com/google-antigravity/antigravity-cli/issues/1693)),
+  so `lreview` removes root-level `AGENTS.md`, `GEMINI.md`, `.agents/`,
+  `.agent/`, `_agents/`, `_agent/`, and `.gemini/` from the disposable
+  review worktree (marked `--skip-worktree` so `git status` and `git diff`
+  stay clean while `git show HEAD` stays intact — in-place reviews of
+  `--repo` without change args are left untouched); and `lreview check`
   does not probe keyring login.
 - **gemini / opencode** — best-effort backends via `gemini --yolo -p`
   (legacy `gemini-cli`, still usable with paid Gemini API keys or
