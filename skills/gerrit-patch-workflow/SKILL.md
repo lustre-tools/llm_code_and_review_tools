@@ -94,7 +94,11 @@ message. Push refuses while the account has other drafts on the change
 (publishing would take them along); say so rather than deleting them.
 
 Or write the replies to a file and post them together -- one review, one
-mail to everyone on the change, instead of one per reply:
+mail to everyone on the change, instead of one per reply.  Prefer this:
+answer all of a patchset's comments in one review, and keep each reply
+terse: "Done." for a simple request, one sentence for a medium change,
+and a longer explanation only when declining a reviewer's comment or
+for a complex answer:
 
 ```bash
 gc batch <change> replies.json    # '-' reads the JSON from stdin
