@@ -412,3 +412,16 @@ def test_name_lookup_through_the_real_client_asks_gerrit_for_names():
     client.rest = Rest()
     assert resolve_account(client, {"name": "Vitaly Fertman",
                                     "email": "c17818@cray.com"}) == 135
+
+
+def test_order_rules_state_when_unanswered_asks_hold():
+    """The help said "asked often and never answering", and a run saw 0 of
+    12 answered with no hold and took it for a bug: the rule also needs
+    few votes on Gerrit (fb-3edbb26ad2f2)."""
+    from gerrit_cli.commands import reviewer_load as rl
+    from gerrit_cli.commands.reviewer_candidates import ORDER_RULES
+    text = ORDER_RULES["balanced"]
+    assert f"asked {rl.HOLD_UNANSWERED_ASKS}+ times" in text
+    assert f"under {rl.HOLD_UNANSWERED_REVIEWED} Code-Review votes" in text
+    assert f"in {rl.LOAD_DAYS} days" in text
+    assert f"{rl.SELDOM_COOLDOWN_DAYS} days after each ask" in text
