@@ -453,10 +453,13 @@ class BatchConfig:
             raise ValueError(
                 f"mode must be one of {REVIEW_MODES}, got {self.mode!r}")
         if self.lenses:
-            if self.agent != "claude" or self.mode != "full":
-                raise ValueError("--lenses needs the claude agent and "
-                                 "--mode full")
-            validate_selection("claude", self.lens_model, self.lens_effort)
+            from .lenses import validate_lens_options
+            err = validate_lens_options(self.agent, self.mode,
+                                        self.lens_model, self.lens_effort)
+            if err:
+                raise ValueError(err)
+            if self.agent == "claude":
+                validate_selection("claude", self.lens_model, self.lens_effort)
         if self.jobs < 1:
             raise ValueError(f"jobs must be >= 1, got {self.jobs}")
         if self.stall_timeout < 0:
@@ -542,7 +545,8 @@ def review_prompt(config: BatchConfig,
         from .lenses import task_text
         prompt += (".\n\nThe protocol has one more task for this review, "
                    "between TASK 1C and Task 2:\n\n"
-                   + task_text(config.prompts_dir).rstrip().rstrip("."))
+                   + task_text(config.prompts_dir,
+                               agent=config.agent).rstrip().rstrip("."))
     if config.mode == "full" and not preloaded:
         prompt += ".\n\n" + CLOSING_NOTE
     if preloaded and worktree is not None:
@@ -607,7 +611,7 @@ def preload_file(config: BatchConfig) -> Path:
         text = (config.prompts_dir / name).read_text()
         if config.lenses and name == "review-core.md":
             from .lenses import with_task
-            text = with_task(text, config.prompts_dir)
+            text = with_task(text, config.prompts_dir, agent=config.agent)
         parts.append(f"\n\n======== {name} ========\n\n{text}")
     parts.append(f"\n\n======== lreview ========\n\n{CLOSING_NOTE}\n")
     content = "".join(parts)
@@ -725,9 +729,10 @@ def build_agent_cmd(config: BatchConfig,
 
 
 def lens_args(config: BatchConfig, worktree: Optional[Path] = None) -> dict:
-    """build_cmd arguments for a --lenses review: the Agent tool and
-    the lens agent type, its prompt carrying this review's commit."""
-    if not config.lenses:
+    """build_cmd arguments for a --lenses review (claude only): the Agent
+    tool and the lens agent type, its prompt carrying this review's commit.
+    agy loads its lens agent from <worktree>/.agents/agents/lens.md."""
+    if not config.lenses or config.agent != "claude":
         return {}
     from .lenses import LENS_REVIEW_TOOLS, agents_json, commit_diff
     return {"extra_tools": LENS_REVIEW_TOOLS,
@@ -745,9 +750,12 @@ def lens_env(config: BatchConfig) -> dict:
 
 
 def lens_label(config: BatchConfig) -> Optional[str]:
-    """How the lenses ran, for the results: "<model>/<effort>"."""
+    """How the lenses ran, for the results: "<model>/<effort>" (or the
+    subagent model tier for agy)."""
     if not config.lenses:
         return None
+    if config.agent == "agy":
+        return config.lens_model or "inherit"
     return (f"{config.lens_model or config.model or 'default'}/"
             f"{config.lens_effort or 'default'}")
 
@@ -1122,7 +1130,7 @@ def stall_point(log_path: Path) -> dict:
         if agy_event:
             if agy_event == "step_update":
                 su = obj.get("step_update")
-                if isinstance(su, dict) and su.get("step_type") == "tool":
+                if isinstance(su, dict) and su.get("step_type") in ("tool", "subagent"):
                     key = f"agy:{su.get('step_index')}"
                     if su.get("state") == "ACTIVE":
                         from .telemetry import _describe, agy_tool
@@ -1284,6 +1292,10 @@ def _run_review(config, change, worktree_dir, log_path, session,
             config.denied_tools)
     if config.agent == "agy" and config.denied_tools:
         write_agy_offline_hooks(worktree_dir)
+    if config.agent == "agy" and config.lenses:
+        from .lenses import commit_diff, write_agy_lens_agent
+        write_agy_lens_agent(worktree_dir, config.lens_model,
+                             commit_diff(worktree_dir))
     cmd = build_agent_cmd(config, change, session, worktree_dir)
     extra_env = {**get_agent(config.agent).env(config.lean),
                  **lens_env(config), **config.env}
@@ -1751,6 +1763,24 @@ def run_batch(
     # itself and must never be removed
     prepared: list[tuple[ResolvedChange, Path, bool]] = []
     results: list[ReviewResult] = []
+    # In-place agy --lenses writes .agents/agents/lens.md into config.repo;
+    # snapshot any pre-existing file/symlink/dirs so finally restores them cleanly.
+    in_place_lens_backup = None
+    if in_place and config.agent == "agy" and config.lenses:
+        from .lenses import AGY_LENS_AGENT_REL
+        lens_path = config.repo / AGY_LENS_AGENT_REL
+        if lens_path.is_symlink():
+            prev = ("symlink", os.readlink(lens_path))
+        elif lens_path.is_file():
+            prev = ("file", lens_path.read_bytes())
+        else:
+            prev = None
+        in_place_lens_backup = (
+            lens_path,
+            prev,
+            [p for p in (lens_path.parent, lens_path.parent.parent)
+             if not p.exists()],
+        )
     for change in changes:
         if in_place:
             _stash_stale_artifacts(config, config.repo)
@@ -1803,6 +1833,28 @@ def run_batch(
                                 wt.remove_worktree(config.repo, wtree)
                     if in_place:
                         _remove_artifacts(config.repo)
+                        if in_place_lens_backup is not None:
+                            lens_path, prev, created_dirs = in_place_lens_backup
+                            if prev is not None:
+                                kind, value = prev
+                                try:
+                                    lens_path.unlink()
+                                except OSError:
+                                    pass
+                                if kind == "symlink":
+                                    lens_path.symlink_to(value)
+                                else:
+                                    lens_path.write_bytes(value)
+                            else:
+                                try:
+                                    lens_path.unlink()
+                                except OSError:
+                                    pass
+                                for d in created_dirs:
+                                    try:
+                                        d.rmdir()
+                                    except OSError:
+                                        pass
     finally:
         update_summary(config.results_dir, results, repo=config.repo)
 

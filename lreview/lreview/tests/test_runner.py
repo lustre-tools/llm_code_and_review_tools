@@ -1868,6 +1868,74 @@ def test_agy_worktree_scrubbed_but_in_place_untouched(tmp_path, monkeypatch):
     assert (repo / ".agents" / "hooks.json").is_file()
 
 
+def test_agy_lenses_writes_agent_md_and_cleans_in_place(repo, tmp_path, monkeypatch):
+    """agy --lenses writes .agents/agents/lens.md in the review worktree
+    (with the commit diff inlined) and cleans it back up after an in-place
+    review."""
+    from lreview.lenses import AGY_LENS_AGENT_REL
+    prompts = tmp_path / "prompts"
+    (prompts / "subsystem").mkdir(parents=True)
+    for name in ("technical-patterns.md", "lustre-commit-message.md",
+                 "lustre-style.md", "subsystem/build.md",
+                 "subsystem/subsystem.md"):
+        (prompts / name).write_text(f"{name}\n")
+    (prompts / "review-core.md").write_text(
+        "# Protocol\n\n### Task 2: Analyze the changes for regressions\n")
+
+    seen_lens_md = tmp_path / "seen-lens.md"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "agy"
+    stub.write_text(
+        "#!/bin/sh\n"
+        f"cp .agents/agents/lens.md {seen_lens_md}\n"
+        "printf '{\"author\":\"a\",\"sha\":\"s\",\"subject\":\"t\","
+        "\"issues-found\":0,\"issue-severity-score\":\"none\","
+        "\"issue-severity-explanation\":\"clean\"}' > review-metadata.json\n"
+        "echo '{\"event\":\"result\",\"result\":{"
+        "\"conversation_id\":\"c-lens\",\"status\":\"SUCCESS\","
+        "\"usage\":{\"input_tokens\":100,\"output_tokens\":20,\"total_tokens\":120}}}'\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    sha = _git(repo, "rev-parse", "HEAD")
+    # 1. Disposable worktree run
+    cfg = _config(repo, tmp_path / "wt-out", agent="agy", prompts_dir=prompts,
+                  preload=True, lenses=True, lens_model="flash",
+                  keep_worktrees=True)
+    results = run_batch(cfg, [_change(102, sha)])
+    assert len(results) == 1
+    assert results[0].status == STATUS_CLEAN
+    assert results[0].lenses == "flash"
+    lens_md_text = seen_lens_md.read_text()
+    assert "model: flash\n" in lens_md_text
+    assert "## The commit under review" in lens_md_text
+
+    # 2. In-place run removes the temporary .agents/agents/lens.md afterwards
+    seen_lens_md.unlink()
+    ip_cfg = _config(repo, tmp_path / "ip-out", agent="agy",
+                     prompts_dir=prompts, preload=False, lenses=True)
+    ip_results = run_batch(ip_cfg, [_change(103, sha)], in_place=True)
+    assert len(ip_results) == 1
+    assert ip_results[0].status == STATUS_CLEAN
+    assert ip_results[0].lenses == "inherit"
+    assert "model: inherit\n" in seen_lens_md.read_text()
+    assert not (repo / AGY_LENS_AGENT_REL).exists()
+    assert not (repo / ".agents").exists()
+
+    # 3. In-place run restores a pre-existing symlink without overwriting its target
+    target = tmp_path / "user-lens.md"
+    target.write_text("user lens content\n")
+    lens_link = repo / AGY_LENS_AGENT_REL
+    lens_link.parent.mkdir(parents=True)
+    lens_link.symlink_to(target)
+    ip_results2 = run_batch(ip_cfg, [_change(104, sha)], in_place=True)
+    assert ip_results2[0].status == STATUS_CLEAN
+    assert lens_link.is_symlink()
+    assert os.readlink(lens_link) == str(target)
+    assert target.read_text() == "user lens content\n"
+
+
 class TestPluginsOff:
     """A lean claude review gets settings that disable the user's
     plugins; --no-lean and other agents keep them."""

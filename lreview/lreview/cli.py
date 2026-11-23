@@ -129,9 +129,13 @@ def resolve_model(agent: str, model: str = None) -> str:
 
 def check_lenses(args) -> bool:
     """--lenses and its lens options make sense together."""
-    if args.lenses and (args.agent != "claude" or args.mode != "full"):
-        print("error: --lenses needs the claude agent and --mode full")
-        return False
+    from .lenses import validate_lens_options
+    if args.lenses:
+        err = validate_lens_options(args.agent, args.mode,
+                                    args.lens_model, args.lens_effort)
+        if err:
+            print(f"error: {err}")
+            return False
     if args.lenses and getattr(args, "github", None):
         print("error: --lenses does not apply to --github reviews")
         return False
@@ -143,7 +147,10 @@ def check_lenses(args) -> bool:
 
 def lens_effort(args):
     from .lenses import DEFAULT_LENS_EFFORT
-    return args.lens_effort or (DEFAULT_LENS_EFFORT if args.lenses else None)
+    if args.lens_effort:
+        return args.lens_effort
+    return (DEFAULT_LENS_EFFORT
+            if args.lenses and args.agent == "claude" else None)
 
 
 def check_selection(args, model) -> bool:
@@ -389,8 +396,11 @@ def print_dry_run_plan(args, changes, memory_db) -> None:
     if args.effort:
         settings.append(f"effort {args.effort}")
     if args.lenses:
-        lenses = args.lens_model or model or "default"
-        settings.append(f"lenses ({lenses}, {lens_effort(args)})")
+        if args.agent == "agy":
+            settings.append(f"lenses ({args.lens_model or 'inherit'})")
+        else:
+            lenses = args.lens_model or model or "default"
+            settings.append(f"lenses ({lenses}, {lens_effort(args)})")
     print(f"  agent:     {', '.join(settings)}")
     if memory_db is not None:
         from .memory import find_doc
@@ -1230,19 +1240,19 @@ def build_parser() -> argparse.ArgumentParser:
              "xhigh; see 'lreview models'")
     run_p.add_argument(
         "--lenses", action="store_true",
-        help="Lens review (claude, full mode): after categorising the "
+        help="Lens review (claude or agy, full mode): after categorising the "
              "change, the reviewer starts five lens subagents "
              "(concurrency, lifecycle, data, semantics, build) and "
              "verifies every candidate they write. More bugs per run at "
-             "about 2.5x the cost of a review (lenses at medium effort) "
-             "or 5x (at high); see lreview/docs/lens-review-evaluation.md")
+             "about 2x the cost on claude (lenses at medium effort); "
+             "see lreview/docs/lens-review-evaluation.md")
     run_p.add_argument(
         "--lens-model", default=None,
-        help="Model for the --lenses lenses (default: the review's)")
+        help="Model for the --lenses lenses (claude: default the review's; "
+             "agy: inherit, flash_lite, flash, or pro; default inherit)")
     run_p.add_argument(
         "--lens-effort", choices=list(CLAUDE_EFFORTS), default=None,
-        help="Effort for the --lenses lenses (default: medium; high "
-             "found more for about twice the cost)")
+        help="Effort for the --lenses lenses (claude only; default: medium)")
     run_p.add_argument(
         "--memory", "-m", action="store_true",
         help="Use per-change review memory: read the change's notes "
@@ -1365,19 +1375,19 @@ def build_parser() -> argparse.ArgumentParser:
                            default=_env_flag("LREVIEW_PRELOAD", DEFAULT_PRELOAD))
     bench_run.add_argument(
         "--lenses", action="store_true",
-        help="Lens review (claude, full mode): after categorising the "
+        help="Lens review (claude or agy, full mode): after categorising the "
              "change, the reviewer starts five lens subagents "
              "(concurrency, lifecycle, data, semantics, build) and "
              "verifies every candidate they write. More bugs per run at "
-             "about 2.5x the cost of a review (lenses at medium effort) "
-             "or 5x (at high); see lreview/docs/lens-review-evaluation.md")
+             "about 2x the cost on claude (lenses at medium effort); "
+             "see lreview/docs/lens-review-evaluation.md")
     bench_run.add_argument(
         "--lens-model", default=None,
-        help="Model for the --lenses lenses (default: the review's)")
+        help="Model for the --lenses lenses (claude: default the review's; "
+             "agy: inherit, flash_lite, flash, or pro; default inherit)")
     bench_run.add_argument(
         "--lens-effort", choices=list(CLAUDE_EFFORTS), default=None,
-        help="Effort for the --lenses lenses (default: medium; high "
-             "found more for about twice the cost)")
+        help="Effort for the --lenses lenses (claude only; default: medium)")
     bench_run.add_argument(
         "--memory", "-m", action="store_true",
         help="Review memory: each rep is a round that reads the notes "

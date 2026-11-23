@@ -491,13 +491,23 @@ def _agy_tool_chars(name: str, params: dict, info: dict) -> int:
 
 
 def agy_tool(step_update: dict):
-    """(name, params, info) of an agy tool step_update."""
+    """(name, params, info) of an agy tool or subagent step_update."""
     info = step_update.get("tool_info")
     info = info if isinstance(info, dict) else {}
     raw_name = step_update.get("tool_name") or info.get("name") or "?"
     name = _AGY_TOOLS.get(raw_name, raw_name)
     params = info.get("parameters")
     params = params if isinstance(params, dict) else {}
+    if not params:
+        sub_info = step_update.get("subagent_info")
+        subagents = (sub_info.get("subagents")
+                     if isinstance(sub_info, dict) else None) or []
+        if subagents and isinstance(subagents[0], dict):
+            s = subagents[0]
+            label = s.get("type_name") or "subagent"
+            if s.get("role"):
+                label = f"{label} ({s['role']})"
+            params = {"description": label}
     return name, params, info
 
 
@@ -548,7 +558,7 @@ def parse_log(path: Path) -> Telemetry:
                         output=usage.get("output_tokens", 0) or 0,
                         thinking=usage.get("thinking_tokens", 0) or 0)
                     order.append(call)
-                elif stype == "tool":
+                elif stype in ("tool", "subagent"):
                     call_id = f"agy:{idx}" if idx is not None else f"agy:{len(tools)}"
                     name, params, info = agy_tool(su)
                     tool = tools.get(call_id)
@@ -561,6 +571,7 @@ def parse_log(path: Path) -> Telemetry:
                         if order:
                             order[-1].tools.append(call_id)
                     if state in ("DONE", "ERROR"):
+                        already_done = tool.answered is not None
                         # Overlap parallel tool calls from the requesting call's end.
                         issued = order[-1].end if order else agy_clock
                         tool.issued = issued
@@ -569,12 +580,13 @@ def parse_log(path: Path) -> Telemetry:
                         err = info.get("error")
                         tool.error = bool(err) or state == "ERROR"
                         tool.chars = _agy_tool_chars(name, params, info)
-                        sub_info = su.get("subagent_info") or {}
-                        subagents = sub_info.get("subagents") or []
-                        if subagents:
-                            tel.subagents += len(subagents)
-                        elif name == "Agent":
-                            tel.subagents += 1
+                        if state == "DONE" and not already_done:
+                            sub_info = su.get("subagent_info") or {}
+                            subagents = sub_info.get("subagents") or []
+                            if subagents:
+                                tel.subagents += len(subagents)
+                            elif name == "Agent":
+                                tel.subagents += 1
                 continue
             if agy_event == "result":
                 tel.agent = "agy"

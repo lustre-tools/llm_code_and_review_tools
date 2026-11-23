@@ -21,8 +21,15 @@ LENS_PROMPT_PATH = Path(__file__).resolve().parent / "lens.md"
 # TASK 1D says "five": keep them in step.
 LENSES = ("concurrency", "lifecycle", "data", "semantics", "build")
 LENS_AGENT = "lens"
+LENS_AGENTS = ("claude", "agy")
 # What a lens runs with: it reads code and writes its LENS file.
 LENS_TOOLS = ("Bash", "Read", "Write", "Grep", "Glob")
+# agy custom subagent frontmatter accepts only these four model tiers;
+# a specific model slug causes agy to silently ignore the agent file.
+AGY_SUBAGENT_MODELS = ("inherit", "flash_lite", "flash", "pro")
+AGY_LENS_TOOLS = ("run_command", "read_file", "write_file", "edit_file",
+                  "grep_search", "find_by_name")
+AGY_LENS_AGENT_REL = Path(".agents") / "agents" / f"{LENS_AGENT}.md"
 # Tools the reviewer needs on top of the lean set: Agent starts the
 # lenses; TodoWrite was in the measured setup.
 LENS_REVIEW_TOOLS = ("Agent", "TodoWrite")
@@ -76,10 +83,60 @@ them to `./{PREEXISTING_JSON_NAME}` as
 "evidence": ...}}]}}`.  Write gerrit-review.json for them even when they
 are the only thing to report."""
 
-def task_text(prompts_dir: Path) -> str:
+def validate_lens_options(agent: str, mode: str,
+                          lens_model: Optional[str] = None,
+                          lens_effort: Optional[str] = None) -> Optional[str]:
+    """Return an error string if a --lenses combination is unsupported,
+    else None."""
+    if agent not in LENS_AGENTS or mode != "full":
+        return "--lenses needs the claude or agy agent and --mode full"
+    if agent == "agy":
+        if lens_effort:
+            return ("--lens-effort is claude-only "
+                    "(agy subagents inherit the review's effort)")
+        if lens_model and lens_model not in AGY_SUBAGENT_MODELS:
+            return (f"--lens-model for agy must be one of "
+                    f"{', '.join(AGY_SUBAGENT_MODELS)}, got {lens_model!r}")
+    return None
+
+
+def task_text(prompts_dir: Path, agent: str = "claude") -> str:
     """TASK 1D: start the lenses, then settle what they find."""
     names = ", ".join(f"`{lens}`" for lens in LENSES)
-    head = f"""### TASK 1D: Specialist lenses (mandatory when the Agent tool is available)
+    if agent == "agy":
+        head = f"""### TASK 1D: Specialist lenses (mandatory when the invoke_subagent tool is available)
+
+One reviewer carrying every check through every change misses bugs that a
+focused pass finds.  Do this for every change, however small: the size of
+a change says little about its bugs.  After TASK 1C, launch five specialist subagents **in a
+single message** (five `invoke_subagent` tool calls, so they run in parallel), one per
+lens: {names}.  Use `TypeName: "{LENS_AGENT}"` (when that subagent type is
+available, else `"self"`), `Workspace: "inherit"`, and a distinct `Role` per
+lens (for example `"Concurrency Lens Reviewer"`).  Each `Prompt` says:
+
+    Follow the lens instructions in your system prompt (if it has none,
+    read {LENS_PROMPT_PATH} and follow that).
+    Lens: <lens>
+    Prompt directory: {prompts_dir}
+    Commit: HEAD of the repository in <current directory>
+    Output directory: <current directory>/{LENS_OUTPUT_DIR}
+    Changed functions and CHANGE categories: <your TASK 1C list>
+
+Give both directories as absolute paths.  After launching all five
+subagents, end your turn with no further tool calls (do not call
+`schedule`, `manage_subagents`, or poll the directory, and do not start
+Task 2 while lenses are still running): the system wakes you
+automatically as each subagent finishes.  If woken up before all five
+have reported back, end your turn again with no tool calls until all five
+have completed.  Once all five have reported back, read every
+`./{LENS_OUTPUT_DIR}/LENS-*.json`.  A lens candidate is not evidence by
+itself and a lens's silence proves nothing; still do your own Task 2
+analysis.
+
+"""
+        skip_line = "\nIf the invoke_subagent tool is not available, skip this task.\n\n"
+    else:
+        head = f"""### TASK 1D: Specialist lenses (mandatory when the Agent tool is available)
 
 One reviewer carrying every check through every change misses bugs that a
 focused pass finds.  Do this for every change, however small: the size of
@@ -104,6 +161,7 @@ itself and a lens's silence proves nothing; still do your own Task 2
 analysis.
 
 """
+        skip_line = "\nIf the Agent tool is not available, skip this task.\n\n"
     settle = f"""Every candidate is a suspect bug for Task 2; treat it like one you found
 yourself and verify it against the code in Task 2 and Task 3.  Lens
 candidates are lost far more often by being dismissed than by being
@@ -122,13 +180,13 @@ then output:
 
     LENSES: <N> candidates from <M> lenses; <K> confirmed, <E> eliminated, <P> pre-existing, <U> unsettled
 """
-    return head + settle + "\nIf the Agent tool is not available, skip this task.\n\n"
+    return head + settle + skip_line
 
 
-def with_task(protocol: str, prompts_dir: Path) -> str:
+def with_task(protocol: str, prompts_dir: Path, agent: str = "claude") -> str:
     """review-core.md with TASK 1D in front of Task 2, where it was
     measured; at the end when that heading has moved."""
-    task = task_text(prompts_dir)
+    task = task_text(prompts_dir, agent=agent)
     if TASK_2_HEADING in protocol:
         return protocol.replace(TASK_2_HEADING, task + TASK_2_HEADING, 1)
     return protocol.rstrip("\n") + "\n\n" + task
@@ -180,6 +238,41 @@ def agents_json(model: Optional[str], effort: Optional[str],
     if effort:
         spec["effort"] = effort
     return json.dumps({LENS_AGENT: spec})
+
+
+def agy_lens_agent_markdown(model: Optional[str] = None,
+                            diff: Optional[str] = None) -> str:
+    """<worktree>/.agents/agents/lens.md for an agy --lenses review."""
+    tier = model or "inherit"
+    if tier not in AGY_SUBAGENT_MODELS:
+        raise ValueError(
+            f"--lens-model for agy must be one of "
+            f"{', '.join(AGY_SUBAGENT_MODELS)}, got {tier!r}")
+    tools_yaml = "\n".join(f"  - {tool}" for tool in AGY_LENS_TOOLS)
+    frontmatter = (
+        "---\n"
+        f"name: {LENS_AGENT}\n"
+        "description: Specialist lens reviewer for one Lustre commit; "
+        "follows the lens instructions in its system prompt\n"
+        "subagent: true\n"
+        "mainAgent: false\n"
+        f"model: {tier}\n"
+        "tools:\n"
+        f"{tools_yaml}\n"
+        "---\n\n"
+    )
+    return frontmatter + lens_prompt(diff)
+
+
+def write_agy_lens_agent(worktree: Path, model: Optional[str] = None,
+                         diff: Optional[str] = None) -> Path:
+    """Write <worktree>/.agents/agents/lens.md for an agy --lenses review."""
+    path = worktree / AGY_LENS_AGENT_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        path.unlink()
+    path.write_text(agy_lens_agent_markdown(model, diff))
+    return path
 
 
 def lens_files(repo_dir: Path) -> list:

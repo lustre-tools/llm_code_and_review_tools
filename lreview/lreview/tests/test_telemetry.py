@@ -327,6 +327,53 @@ class TestParseLog:
         assert slice_read.tokens == 1000
         assert tel.tool_seconds() == pytest.approx(0.3)
 
+    def test_agy_subagent_step_counted(self, tmp_path):
+        log = tmp_path / "kreview-9_ps1-x.1.log"
+        events = [
+            {"event": "init", "conversation_id": "c-sub",
+             "init": {"model": "gemini-4-neon-high", "tools": ["invoke_subagent"]}},
+            {"event": "step_update", "step_update": {
+                "step_index": 1, "step_type": "agent_response", "state": "DONE",
+                "duration_seconds": 1.0,
+                "usage": {"input_tokens": 500, "cache_read_tokens": 0,
+                          "output_tokens": 50}}},
+            {"event": "step_update", "step_update": {
+                "step_index": 2, "step_type": "subagent", "state": "ACTIVE",
+                "tool_name": "invoke_subagent",
+                "subagent_info": {"subagents": [
+                    {"type_name": "lens", "role": "Concurrency Lens Reviewer"}]}}},
+            {"event": "step_update", "step_update": {
+                "step_index": 2, "step_type": "subagent", "state": "DONE",
+                "tool_name": "invoke_subagent", "duration_seconds": 0.1,
+                "subagent_info": {"subagents": [
+                    {"type_name": "lens", "role": "Concurrency Lens Reviewer"}]}}},
+            # Duplicate DONE for the same step_index is not double-counted
+            {"event": "step_update", "step_update": {
+                "step_index": 2, "step_type": "subagent", "state": "DONE",
+                "tool_name": "invoke_subagent", "duration_seconds": 0.1,
+                "subagent_info": {"subagents": [
+                    {"type_name": "lens", "role": "Concurrency Lens Reviewer"}]}}},
+            # A failed subagent launch does not increment tel.subagents
+            {"event": "step_update", "step_update": {
+                "step_index": 3, "step_type": "subagent", "state": "ERROR",
+                "tool_name": "invoke_subagent", "duration_seconds": 0.05,
+                "subagent_info": {"subagents": [
+                    {"type_name": "lens", "role": "Build Lens Reviewer"}]}}},
+            {"event": "result", "result": {
+                "conversation_id": "c-sub", "status": "SUCCESS",
+                "duration_seconds": 12.0, "num_turns": 1,
+                "usage": {"input_tokens": 1000, "cache_read_tokens": 500,
+                          "output_tokens": 100, "thinking_tokens": 20}}},
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in events) + "\n")
+        tel = parse_log(log)
+        assert tel.subagents == 1
+        assert len(tel.tools) == 2
+        assert tel.tools[0].name == "Agent"
+        assert tel.tools[0].category == "subagent"
+        assert "Concurrency Lens Reviewer" in tel.tools[0].what
+        assert tel.tools[1].error is True
+
     def test_write_telemetry(self, review_log, tmp_path):
         dest = tmp_path / "t.json"
         summary = write_telemetry(review_log, dest, {"lean": True})

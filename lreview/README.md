@@ -383,12 +383,22 @@ its cost ($1.02 against ~$0.50); lenses at high cost twice as much again
 and found no more. `docs/lens-review-evaluation.md` has the measurements and
 `docs/lens-review-benchmark-results.md` the per-bug results.
 
-- claude only, `--mode full` only, and not for `--github` reviews.
-- The lenses run as a custom agent type, `lens`, passed with claude's
-  `--agents`: their model (`--lens-model`, default the review's) and
-  effort (`--lens-effort`, default `medium`) are set apart from the
+- claude and agy, `--mode full` only, and not for `--github` reviews.
+- On claude, the lenses run as a custom agent type, `lens`, passed with
+  claude's `--agents`: their model (`--lens-model`, default the review's)
+  and effort (`--lens-effort`, default `medium`) are set apart from the
   reviewer's. A lean review adds the Agent tool to its tools, and an
   `--allow-tool` review adds it to the allowlist.
+- On agy, `lreview` writes `<worktree>/.agents/agents/lens.md` (with
+  `lens.md`, the inlined commit diff, and a minimal coding toolset) and
+  TASK 1D instructs `agy` to launch the five lenses in parallel with
+  `invoke_subagent` (`TypeName: "lens"`) and wait for all five to report
+  back. `--lens-model` accepts agy's subagent tiers (`inherit`,
+  `flash_lite`, `flash`, `pro`; default `inherit`, which uses the
+  review's model and effort); `--lens-effort` is claude-only because
+  `agy` subagents have no separate effort setting. Note that `agy`'s
+  `stream-json` `result.usage` reports parent tokens only (subagent token
+  usage is not included in the stream total).
 - The reviewer settles every lens candidate: it drops one only with the
   code that prevents the bug, checks "pre-existing" against the parent
   commit, reports what it cannot settle as a `(minor)` question, and also
