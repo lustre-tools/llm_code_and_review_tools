@@ -65,6 +65,11 @@ produces a 400 rather than a helpful error. Same for `jira issue-types`,
 `jira components`, `jira versions` and `jira roles` when creating or
 editing.
 
+To close a ticket, always move it to Resolved, never Closed:
+`jira transition LU-12345 Resolved --resolution Fixed` (or `Duplicate`,
+`"Cannot Reproduce"`, ...).  A Closed issue can no longer be modified,
+so labels can't be added and comments can't be edited afterwards.
+
 Labels, components and fix versions each have add and remove commands
 (`add-label` / `remove-label`, `set-component` / `remove-component`,
 `set-fix-version` / `remove-fix-version`). The `set-*` ones add and keep
