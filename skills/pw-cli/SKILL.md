@@ -23,6 +23,7 @@ pw-cli halt 69157 owner is reworking this
 pw-cli clear-halt 69157 --note "rework uploaded"
 pw-cli reviewers 69157         # find and add reviewers, once
 pw-cli lreview 69157 [--light] # AI review posted on the patchset
+pw-cli rebase 69157            # rebase onto master, once; anyone may ask
 pw-cli request 69157 rebase this on master and fix the conflict
 pw-cli request 69157 -         # the request from stdin, paragraphs and all
 pw-cli feedback 69157 the bot retested a failure it caused
@@ -89,10 +90,10 @@ with `may_change` and `halt.you_may_clear` what you could do about it.
   days. It adds them 16 hours after Maloo's +1, once the patchset's AI review
   is in (24 hours at most), not while that review found concerns, and never
   on a change whose subject starts with WIP; it says on the change whom it
-  added. Its only upload is a simple rebase (a cherry-pick veto, or a patchset
-  over 30 days old): when the rebase needs no code changes, or only
-  mechanical substitutions, it uploads and says so on the change; any other
-  conflict is left for a person.
+  added. It does not rebase by itself: when the change cannot be
+  cherry-picked, it says once on the change (after the master-next landing
+  window) that it is not landable, and rebases it when anyone asks
+  (`pw-cli rebase`, or `@Patrickbot rebase` on the change).
 - **smallfix**: repairs builds, rebases through conflicts, and makes small
   changes reviewers ask for.
 - **bigfix**: makes everything reviewers ask for; design-level changes wait
@@ -105,7 +106,7 @@ deep in its series of open changes, against LU-0000, or marked
 `fortestonly` or `forbuildonly`. Do not retry those. Smallfix and up still
 work on them.
 
-## Runs: reviewers, lreview, request
+## Runs: reviewers, lreview, rebase, request
 
 Each starts one run at once and answers on the change itself:
 
@@ -113,13 +114,19 @@ Each starts one run at once and answers on the change itself:
   history. A change gets at most two sets; a third is declined.
 - `lreview` posts AI review findings on the current patchset as inline
   comments; 30 to 90 minutes, `--light` is quicker. It never votes.
+- `rebase` rebases the change onto master, once. Anyone may ask, on any
+  change, watched or not. Below smallfix, or unwatched, it is a simple
+  rebase: uploaded when it needs no code changes or only mechanical
+  substitutions, and said on the change; any other conflict is left for a
+  person. `CONFLICT` when another run is on the change (`busy`) or it is
+  closed, halted by a person, or has an open parent (`declined`).
 - `request TEXT` starts one run that does what TEXT asks and nothing else.
   The words are posted on the change, and the run answers there when it
   ends. It declines a request it finds unreasonable or unrelated. Not on a
   closed or halted change; `CONFLICT` with `server_code: busy` when another
   run is on the change (ask again when it ends).
 
-A person may start 10 request runs a day, on Gerrit, JIRA and here
+A person may start 10 request and rebase runs a day, on Gerrit, JIRA and here
 together; admins are not limited. Write the request as you would for a
 colleague: what to do, on what, and what done looks like.
 

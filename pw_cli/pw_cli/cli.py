@@ -295,6 +295,14 @@ def lreview(changes: tuple[str, ...], light: bool) -> None:
 
 
 @main.command()
+@click.argument("changes", nargs=-1, required=True)
+def rebase(changes: tuple[str, ...]) -> None:
+    """Have the bot rebase each change onto master, once. Anyone may ask,
+    on any change; it counts toward your 10 requests a day."""
+    _each(changes, "rebase", lambda number: call("POST", f"changes/{number}/rebase", {}))
+
+
+@main.command()
 @click.argument("change")
 @click.argument("text", nargs=-1, required=True)
 def request(change: str, text: tuple[str, ...]) -> None:

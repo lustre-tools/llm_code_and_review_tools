@@ -158,6 +158,8 @@ def test_runs_go_to_their_routes():
     assert sent[0][1].endswith("/changes/1/reviewers") and sent[0][2] == {}
     _, _, sent = run("lreview", "1", "--light", answers=[(200, {})])
     assert sent[0][1].endswith("/changes/1/lreview") and sent[0][2] == {"mode": "light"}
+    _, _, sent = run("rebase", "1", answers=[(200, {"run_id": "r"})])
+    assert sent[0][1].endswith("/changes/1/rebase") and sent[0][2] == {}
     _, _, sent = run("request", "1", "run", "sanity", "56", answers=[(200, {})])
     assert sent[0][1].endswith("/changes/1/request") and sent[0][2] == {"text": "run sanity 56"}
     _, _, sent = run("feedback", "1", "too", "chatty", answers=[(200, {})])
