@@ -1294,6 +1294,15 @@ def _run_review(config, change, worktree_dir, log_path, session,
         except OSError:
             pass
 
+    from .lenses import PREEXISTING_JSON_NAME, record_preexisting
+    preexisting = worktree_dir / PREEXISTING_JSON_NAME
+    if preexisting.is_file():
+        n = record_preexisting(preexisting, config.results_dir,
+                               f"{change.slug}{tag}", change.slug, change.sha)
+        if n:
+            _log(f"[{change.slug}] {n} pre-existing issue(s) recorded in "
+                 f"{config.results_dir / 'pre-existing.jsonl'}")
+
     # review-metadata.json is written for every completed analysis;
     # collect it (best effort) and use it as the completion marker.
     severity = None
@@ -1582,9 +1591,10 @@ def telemetry_path(log_path: Path) -> Path:
 def _stash_stale_artifacts(config: BatchConfig, repo_dir: Path) -> None:
     """Move pre-existing review artifacts out of an in-place repo so a
     stale gerrit-review.json is never collected as this run's result."""
-    from .lenses import lens_files
+    from .lenses import PREEXISTING_JSON_NAME, lens_files
     for path in [repo_dir / name for name in
-                 (REVIEW_JSON_NAME, REVIEW_RESULT_NAME, METADATA_JSON_NAME)
+                 (REVIEW_JSON_NAME, REVIEW_RESULT_NAME, METADATA_JSON_NAME,
+                  PREEXISTING_JSON_NAME)
                  ] + lens_files(repo_dir):
         if path.exists():
             dest = config.results_dir / f"stale-{os.getpid()}-{path.name}"
@@ -1594,9 +1604,10 @@ def _stash_stale_artifacts(config: BatchConfig, repo_dir: Path) -> None:
 
 
 def _remove_artifacts(repo_dir: Path) -> None:
-    from .lenses import LENS_OUTPUT_DIR, lens_files
+    from .lenses import LENS_OUTPUT_DIR, PREEXISTING_JSON_NAME, lens_files
     for path in [repo_dir / name for name in
-                 (REVIEW_JSON_NAME, REVIEW_RESULT_NAME, METADATA_JSON_NAME)
+                 (REVIEW_JSON_NAME, REVIEW_RESULT_NAME, METADATA_JSON_NAME,
+                  PREEXISTING_JSON_NAME)
                  ] + lens_files(repo_dir):
         try:
             path.unlink()

@@ -33,10 +33,49 @@ DEFAULT_LENS_EFFORT = "medium"
 TASK_2_HEADING = "### Task 2: Analyze the changes for regressions"
 
 
+# How the reviewer settles a lens candidate.  On lreview bench it
+# dropped much of what the lenses found with reasons it never checked.
+SETTLE_RULES = """\
+- Eliminate a candidate (ELIMINATED) only by pointing at what prevents
+  it: the lock that is held, the check that runs first, the ordering that
+  guarantees it, or the code that shows the claim is wrong.  "Low
+  confidence", "speculative", "debug only", "unlikely" and "an existing
+  pattern" are not reasons on their own.
+- "Pre-existing" or "unchanged" needs the parent commit: read the code in
+  `git show HEAD^:<file>` and compare it with what the patch does.  Code
+  the patch adds, moves, reorders or calls from a new place is the
+  patch's, even where similar code existed before; so is an old bug the
+  patch makes reachable or more likely.  A real bug that the patch did
+  none of this to is PRE-EXISTING, not ELIMINATED.
+- An assumption about how the code is used ("no caller does that", "that
+  configuration is not deployed") eliminates a candidate only when the
+  code enforces it.
+- A candidate you can neither confirm nor eliminate this way is
+  UNSETTLED, not ELIMINATED.
+- A candidate about a test script under `lustre/tests/` is CONFIRMED when
+  the test can give a wrong result: it passes without exercising the
+  change, fails in a configuration the test suite runs (interop with
+  older servers or routers, for one), or carries on after its own setup
+  failed.  The EXCLUSIONS rule on test scripts does not cover these.
+"""
+
+PREEXISTING_JSON_NAME = "pre-existing.json"
+
+REPORTING = f"""\
+Report CONFIRMED candidates as findings.  Report each UNSETTLED one as
+`(minor)`, saying what the possible bug is and what could not be settled.
+PRE-EXISTING bugs are not inline comments: list them at the end of the
+`message` in gerrit-review.json under "Pre-existing issues (not
+introduced by this change)", one line each with file:line, and also write
+them to `./{PREEXISTING_JSON_NAME}` as
+`{{"issues": [{{"file": ..., "line": ..., "function": ..., "claim": ...,
+"evidence": ...}}]}}`.  Write gerrit-review.json for them even when they
+are the only thing to report."""
+
 def task_text(prompts_dir: Path) -> str:
-    """TASK 1D: start the lenses, then verify what they find."""
+    """TASK 1D: start the lenses, then settle what they find."""
     names = ", ".join(f"`{lens}`" for lens in LENSES)
-    return f"""### TASK 1D: Specialist lenses (mandatory when the Agent tool is available)
+    head = f"""### TASK 1D: Specialist lenses (mandatory when the Agent tool is available)
 
 One reviewer carrying every check through every change misses bugs that a
 focused pass finds.  Do this for every change, however small: the size of
@@ -55,50 +94,30 @@ prompt says:
 
 Give both directories as absolute paths.  While they run you have nothing
 to wait on: when they return, read every
-`./{LENS_OUTPUT_DIR}/LENS-*.json`.  Every candidate is a suspect bug for Task
-2; treat it like one you found yourself and verify it against the code in
-Task 2 and Task 3.  A lens candidate is not evidence by itself and a lens's
-silence proves nothing; still do your own Task 2 analysis.
+`./{LENS_OUTPUT_DIR}/LENS-*.json`.  A lens candidate is not evidence by
+itself and a lens's silence proves nothing; still do your own Task 2
+analysis.
 
-Lens candidates are lost far more often by being dismissed than by being
+"""
+    settle = f"""Every candidate is a suspect bug for Task 2; treat it like one you found
+yourself and verify it against the code in Task 2 and Task 3.  Lens
+candidates are lost far more often by being dismissed than by being
 wrong.  Settle each one on its own:
 
-- Eliminate a candidate only by pointing at what prevents it: the lock
-  that is held, the check that runs first, the ordering that guarantees
-  it, or the code that shows the claim is wrong.  "Low confidence",
-  "speculative", "debug only", "unlikely" and "an existing pattern" are
-  not reasons on their own.
-- "Pre-existing" or "unchanged" needs the parent commit: read the code in
-  `git show HEAD^:<file>` and compare it with what the patch does.  Code
-  the patch adds, moves, reorders or calls from a new place is the
-  patch's, even where similar code existed before; so is an old bug the
-  patch makes reachable or more likely.
-- An assumption about how the code is used ("no caller does that", "that
-  configuration is not deployed") eliminates a candidate only when the
-  code enforces it.
-- A candidate you can neither confirm nor eliminate this way is not
-  dropped: report it as `(minor)`, saying what the possible bug is and
-  what you could not settle.
-- In this review a lens candidate about a test script under
-  `lustre/tests/` is reportable when the test can give a wrong result: it
-  passes without exercising the change, fails in a configuration the test
-  suite runs (interop with older servers or routers, for one), or carries
-  on after its own setup failed.  The EXCLUSIONS rule on test scripts does
-  not cover these.
+{SETTLE_RULES}
+{REPORTING}
 
 Before Task 3, list every candidate with its disposition:
 
     LENS DISPOSITIONS:
     - <lens> <n>: CONFIRMED | ELIMINATED (<file:line that prevents it>) |
-      NOT THE PATCH'S (<HEAD^ file:line, same behaviour>) | UNSETTLED
+      PRE-EXISTING (<HEAD^ file:line>) | UNSETTLED
 
 then output:
 
-    LENSES: <N> candidates from <M> lenses; <K> confirmed, <E> eliminated
-
-If the Agent tool is not available, skip this task.
-
+    LENSES: <N> candidates from <M> lenses; <K> confirmed, <E> eliminated, <P> pre-existing, <U> unsettled
 """
+    return head + settle + "\nIf the Agent tool is not available, skip this task.\n\n"
 
 
 def with_task(protocol: str, prompts_dir: Path) -> str:
@@ -127,3 +146,33 @@ def agents_json(model: Optional[str], effort: Optional[str]) -> str:
 
 def lens_files(repo_dir: Path) -> list:
     return sorted((repo_dir / LENS_OUTPUT_DIR).glob("LENS-*.json"))
+
+
+def record_preexisting(path: Path, results_dir: Path, slug: str,
+                       change_label: str, sha: str) -> int:
+    """Keep the pre-existing bugs a review reported: a copy beside the
+    review's other files, and one line each in pre-existing.jsonl, the
+    database across reviews.  Each line has a key from file and
+    function (the line when there is no function): reviews word the
+    same bug differently, so the key finds reports about the same
+    place and the claims tell them apart.  Returns how many were
+    recorded."""
+    import hashlib
+    import time
+    try:
+        issues = json.loads(path.read_text()).get("issues") or []
+    except (OSError, ValueError, AttributeError):
+        return 0
+    issues = [i for i in issues if isinstance(i, dict)]
+    if not issues:
+        return 0
+    (results_dir / f"pre-existing-{slug}.json").write_text(
+        json.dumps({"issues": issues}, indent=1))
+    with open(results_dir / "pre-existing.jsonl", "a") as db:
+        for i in issues:
+            where = i.get("function") or f"line {i.get('line')}"
+            key = hashlib.sha256(json.dumps(
+                [i.get("file"), where]).encode()).hexdigest()[:16]
+            db.write(json.dumps({"key": key, "change": change_label, "sha": sha,
+                                 "date": time.strftime("%Y-%m-%d"), **i}) + "\n")
+    return len(issues)

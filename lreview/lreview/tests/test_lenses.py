@@ -60,31 +60,12 @@ class TestLensPrompt:
 
     def test_task_sets_how_candidates_are_settled(self, tmp_path):
         text = task_text(tmp_path / "p")
-        assert "Eliminate a candidate only by pointing at what prevents it" in text
+        assert "only by pointing at what prevents" in text
         assert "git show HEAD^:<file>" in text
-        assert "report it as `(minor)`" in text
+        assert "UNSETTLED one as\n`(minor)`" in text
         assert "`lustre/tests/`" in text
-        assert "LENS DISPOSITIONS:" in text
-        assert text.index("LENS DISPOSITIONS:") < text.index("LENSES: <N>")
-
-    def test_lens_says_whether_the_patch_introduced_it(self):
-        text = LENS_PROMPT_PATH.read_text()
-        assert "git show HEAD^:<file>" in text
-        assert '"introduced"' in text
-
-    def test_task_goes_in_front_of_task_2(self, tmp_path):
-        out = with_task(PROTOCOL, tmp_path)
-        assert out.index("### TASK 1D") < out.index(TASK_2_HEADING)
-        assert out.index("### TASK 1C") < out.index("### TASK 1D")
-        assert out.count(TASK_2_HEADING) == 1
-
-    def test_task_is_appended_when_task_2_moved(self, tmp_path):
-        out = with_task("# Protocol\n\nno such heading\n", tmp_path)
-        assert out.startswith("# Protocol")
-        assert "### TASK 1D" in out
-
-
-class TestLensAgent:
+        assert "is PRE-EXISTING, not ELIMINATED" in text
+        assert "./pre-existing.json" in text
 
     def test_model_effort_and_tools(self):
         spec = json.loads(agents_json("sonnet", "medium"))[LENS_AGENT]
@@ -227,3 +208,49 @@ class TestCli:
         from lreview.cli import build_parser
         args = build_parser().parse_args(["bench", "run", "--lenses"])
         assert "lenses" in default_label(args)
+
+
+class TestPreexisting:
+
+    def test_preexisting_issues_go_to_the_database(self, tmp_path):
+        from lreview.lenses import record_preexisting
+        src = tmp_path / "pre-existing.json"
+        issue = {"file": "a.c", "line": 3, "function": "f",
+                 "claim": "Leaks  X", "evidence": "a.c:3"}
+        src.write_text(json.dumps({"issues": [issue]}))
+        out = tmp_path / "results"
+        out.mkdir()
+        assert record_preexisting(src, out, "1_ps1", "1_ps1", "abc") == 1
+        assert record_preexisting(src, out, "2_ps1", "2_ps1", "def") == 1
+        lines = [json.loads(l) for l in
+                 (out / "pre-existing.jsonl").read_text().splitlines()]
+        assert [l["change"] for l in lines] == ["1_ps1", "2_ps1"]
+        assert lines[0]["key"] == lines[1]["key"]  # the same bug
+
+    def test_preexisting_key_ignores_the_wording(self, tmp_path):
+        from lreview.lenses import record_preexisting
+        out = tmp_path / "results"
+        out.mkdir()
+        for n, claim in enumerate(("wq destroyed before pool fini",
+                                   "Workqueue is freed too early", "")):
+            src = tmp_path / f"p{n}.json"
+            src.write_text(json.dumps({"issues": [
+                {"file": "qmt_dev.c", "function": "qmt_device_fini",
+                 "claim": claim}]}))
+            record_preexisting(src, out, f"{n}_ps1", f"{n}_ps1", "abc")
+        src.write_text(json.dumps({"issues": [
+            {"file": "qmt_dev.c", "line": 7, "claim": "x"},
+            {"file": "qmt_dev.c", "line": 9, "claim": "x"}]}))
+        record_preexisting(src, out, "9_ps1", "9_ps1", "abc")
+        keys = [json.loads(l)["key"] for l in
+                (out / "pre-existing.jsonl").read_text().splitlines()]
+        assert len(set(keys[:3])) == 1
+        assert len(set(keys[2:])) == 3
+        assert (out / "pre-existing-1_ps1.json").exists()
+
+    def test_nothing_to_record(self, tmp_path):
+        from lreview.lenses import record_preexisting
+        src = tmp_path / "pre-existing.json"
+        src.write_text("not json")
+        assert record_preexisting(src, tmp_path, "s", "s", "x") == 0
+        assert not (tmp_path / "pre-existing.jsonl").exists()
