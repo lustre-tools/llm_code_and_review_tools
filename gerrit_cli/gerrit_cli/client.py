@@ -1252,7 +1252,10 @@ class GerritCommentsClient:
 
         query = " OR ".join(parts)
         encoded_query = quote(query, safe="")
-        return self.rest.get(f"/accounts/?q={encoded_query}&n={limit}")
+        # o=DETAILS: without it Gerrit returns bare _account_ids, and a
+        # caller matching on name (reviewer-candidates --load) finds none.
+        return self.rest.get(
+            f"/accounts/?q={encoded_query}&n={limit}&o=DETAILS")
 
     def search_changes(
         self,

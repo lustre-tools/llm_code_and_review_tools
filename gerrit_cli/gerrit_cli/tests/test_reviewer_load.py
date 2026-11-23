@@ -390,3 +390,25 @@ def test_table_is_one_short_row_per_candidate_in_ranked_order(
     assert len(json.dumps(data)) < len(json.dumps(comp))
     # Without the flag the output is the full one.
     assert "rows" not in full and "files" in full["candidates"][0]
+
+
+def test_name_lookup_through_the_real_client_asks_gerrit_for_names():
+    # Gerrit's /accounts/ query returns bare _account_ids unless asked for
+    # DETAILS, so the exact-name match dropped Vitaly Fertman and Jinshan
+    # Xiong ("no unambiguous Gerrit account", fb-c602ac034d37) though
+    # find-user resolved each to one account.
+    from gerrit_cli.client import GerritCommentsClient
+
+    class Rest:
+        def get(self, path):
+            if "%40" in path or "username%3A" in path:
+                return []
+            row = {"_account_id": 135}
+            if "o=DETAILS" in path:
+                row.update(name="Vitaly Fertman", username="vitaly_fertman")
+            return [row]
+
+    client = GerritCommentsClient.__new__(GerritCommentsClient)
+    client.rest = Rest()
+    assert resolve_account(client, {"name": "Vitaly Fertman",
+                                    "email": "c17818@cray.com"}) == 135
