@@ -85,11 +85,23 @@ def cmd_extract(args):
         elif getattr(args, 'timeline', False):
             entries = comment_timeline(result.threads, since)
             data = {"timeline": entries, "count": len(entries)}
+            hints = []
             if result.hidden_resolved_count:
-                data["hint"] = (
+                hints.append(
                     f"{result.hidden_resolved_count} resolved thread(s) are not in the "
                     "timeline; add --all for them."
                 )
+            # The timeline is inline comments only: an empty one with --since
+            # read as "nothing happened" to a run judging a halt, when votes
+            # and replies had come as change messages.
+            later = len(message_list(result.review_messages, since)) if since else 0
+            if later and not entries:
+                hints.append(
+                    f"{later} change message(s) since {since} are not in the "
+                    "timeline (inline comments only); use --messages for them."
+                )
+            if hints:
+                data["hint"] = " ".join(hints)
         elif fields:
             threads = threads_since(result.threads, since) if since else result.threads
             # Output filtered flat list of threads (--fields takes precedence)

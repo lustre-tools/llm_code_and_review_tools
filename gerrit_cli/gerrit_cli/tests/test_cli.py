@@ -530,6 +530,44 @@ class TestCmdExtract:
         with pytest.raises(SystemExit):
             build_parser().parse_args(["comments", "1", "--messages", "--timeline"])
 
+    def test_empty_timeline_since_points_at_the_change_messages(self, capsys):
+        """--timeline --since with no inline comment after the time but change
+        messages after it says so, rather than an empty list a halt judge
+        reads as nothing having happened (fb-7aec1ef0b74b)."""
+        import json
+
+        from gerrit_cli.cli import build_parser, cmd_extract
+        from gerrit_cli.extractor import CommentExtractor
+
+        client = MagicMock()
+        client.get_change_detail.return_value = {
+            "current_revision": "abc",
+            "revisions": {"abc": {"_number": 3}},
+        }
+        client.get_comments.return_value = {}
+        client.get_messages.return_value = [
+            {"id": "m1", "author": {"name": "Andreas Dilger"},
+             "date": "2026-11-22 10:00:00.000000000",
+             "message": "Patch Set 3: Code-Review+1", "_revision_number": 3},
+        ]
+        client.format_change_url.return_value = "https://example.com/12345"
+
+        def extract(**kwargs):
+            kwargs.pop("url")
+            return CommentExtractor(client).extract_from_change(12345, **kwargs)
+
+        args = build_parser().parse_args(
+            ["comments", "12345", "--timeline", "--since", "2026-11-22 09:00"])
+        with patch('gerrit_cli.cli.extract_comments', side_effect=extract), \
+             patch('gerrit_cli.commands.comments.LastURLManager'), \
+             pytest.raises(SystemExit) as exc_info:
+            cmd_extract(args)
+        assert exc_info.value.code == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["timeline"] == []
+        assert "1 change message(s) since 2026-11-22 09:00" in data["hint"]
+        assert "--messages" in data["hint"]
+
     def test_since_filters_the_default_listing(self, capsys):
         """--since without --fields/--timeline/--messages narrows the default
         listing: threads with a comment at or after it, keeping their index,
