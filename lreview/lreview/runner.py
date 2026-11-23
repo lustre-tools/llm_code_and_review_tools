@@ -664,18 +664,18 @@ def build_agent_cmd(config: BatchConfig,
                      and config.agent == "claude" else None),
         prompt_on_stdin=_prompt_on_stdin(config, change),
         allowed_tools=expand_allowed_tools(config, worktree),
-        worktree=worktree, **lens_args(config))
+        worktree=worktree, **lens_args(config, worktree))
 
 
-def lens_args(config: BatchConfig) -> dict:
+def lens_args(config: BatchConfig, worktree: Optional[Path] = None) -> dict:
     """build_cmd arguments for a --lenses review: the Agent tool and
-    the lens agent type."""
+    the lens agent type, its prompt carrying this review's commit."""
     if not config.lenses:
         return {}
-    from .lenses import LENS_REVIEW_TOOLS, agents_json
+    from .lenses import LENS_REVIEW_TOOLS, agents_json, commit_diff
     return {"extra_tools": LENS_REVIEW_TOOLS,
             "agents": agents_json(config.lens_model or config.model,
-                                  config.lens_effort)}
+                                  config.lens_effort, commit_diff(worktree))}
 
 
 def lens_label(config: BatchConfig) -> Optional[str]:

@@ -28,6 +28,10 @@ LENS_TOOLS = ("Bash", "Read", "Write", "Grep", "Glob")
 LENS_REVIEW_TOOLS = ("Agent", "TodoWrite")
 LENS_OUTPUT_DIR = "review-context"
 DEFAULT_LENS_EFFORT = "medium"
+# The commit's diff goes into the lens agent's prompt up to this size;
+# a larger one the lenses read themselves.  --agents is one argument,
+# which Linux caps at 128 KiB.
+INLINE_DIFF_MAX = 60_000
 
 # The protocol section this task goes in front of.
 TASK_2_HEADING = "### Task 2: Analyze the changes for regressions"
@@ -85,7 +89,8 @@ lens: {names}.  Use
 `subagent_type: "{LENS_AGENT}"` when that agent type exists, else the default.  Each
 prompt says:
 
-    Read {LENS_PROMPT_PATH} and follow it.
+    Follow the lens instructions in your system prompt (if it has none,
+    read {LENS_PROMPT_PATH} and follow that).
     Lens: <lens>
     Prompt directory: {prompts_dir}
     Commit: HEAD of the repository in <current directory>
@@ -129,13 +134,46 @@ def with_task(protocol: str, prompts_dir: Path) -> str:
     return protocol.rstrip("\n") + "\n\n" + task
 
 
-def agents_json(model: Optional[str], effort: Optional[str]) -> str:
-    """claude --agents: the lens agent type with its model and effort."""
+def lens_prompt(commit_diff: Optional[str] = None) -> str:
+    """The lens agent's system prompt: lens.md, and the commit's diff
+    when it is small enough.  The five lenses of a review share it, so
+    it is cached once instead of each lens reading the same files."""
+    text = ("You are a specialist Lustre kernel code reviewer.  Follow "
+            "these lens instructions exactly.\n\n"
+            + LENS_PROMPT_PATH.read_text())
+    if commit_diff and len(commit_diff) <= INLINE_DIFF_MAX:
+        text = text.replace(
+            "1. `git show HEAD` and read the whole diff once.",
+            "1. Read the whole diff once: it is at the end of these "
+            "instructions (`git show HEAD`).", 1)
+        text += ("\n\n## The commit under review (`git show HEAD`)\n\n"
+                 "```\n" + commit_diff + "\n```\n")
+    return text
+
+
+def commit_diff(worktree: Optional[Path]) -> Optional[str]:
+    """`git show HEAD` in the review's worktree, None when unavailable."""
+    if worktree is None:
+        return None
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(worktree), "show", "HEAD"],
+                           capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return r.stdout.decode("utf-8", errors="replace")
+
+
+def agents_json(model: Optional[str], effort: Optional[str],
+                diff: Optional[str] = None) -> str:
+    """claude --agents: the lens agent type with its model and effort;
+    diff is the commit, for the lens prompt."""
     spec = {"description": "Specialist lens reviewer for one Lustre "
-                           "commit; follows the lens.md it is pointed at",
-            "prompt": "You are a specialist Lustre kernel code reviewer. "
-                      "Follow the lens instructions you are given "
-                      "exactly.",
+                           "commit; follows the lens instructions in its "
+                           "prompt",
+            "prompt": lens_prompt(diff),
             "tools": list(LENS_TOOLS)}
     if model:
         spec["model"] = model

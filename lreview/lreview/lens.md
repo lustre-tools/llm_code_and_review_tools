@@ -24,6 +24,8 @@ output directory.
    `git show HEAD^:<file>`.  Code the patch adds, moves, reorders or calls
    from a new place belongs to the patch.  Say which in `introduced`.
 5. Do not look forward in git history and do not use the network.
+6. Keep scratch files (scripts, notes, build output) in the output
+   directory, never in /tmp.
 
 ## Lenses
 

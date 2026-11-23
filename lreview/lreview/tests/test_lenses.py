@@ -52,7 +52,7 @@ class TestLensPrompt:
         assert len(LENSES) == 5
         for lens in LENSES:
             assert f"`{lens}`" in text
-        assert f"Read {LENS_PROMPT_PATH} and follow it." in text
+        assert f"read {LENS_PROMPT_PATH} and follow that" in text
         assert f"Prompt directory: {tmp_path / 'p'}" in text
         assert f'subagent_type: "{LENS_AGENT}"' in text
         assert "Output directory: <current directory>/review-context" in text
@@ -72,6 +72,35 @@ class TestLensPrompt:
         assert spec["model"] == "sonnet" and spec["effort"] == "medium"
         assert spec["tools"] == ["Bash", "Read", "Write", "Grep", "Glob"]
         assert spec["description"] and spec["prompt"]
+
+    def test_prompt_carries_lens_md_and_a_small_diff(self):
+        from lreview.lenses import INLINE_DIFF_MAX
+        spec = json.loads(agents_json("sonnet", "medium",
+                                      diff="diff --git a/x b/x"))[LENS_AGENT]
+        assert "## Lenses" in spec["prompt"]
+        assert spec["prompt"].endswith("diff --git a/x b/x\n```\n")
+        assert "it is at the end of these instructions" in spec["prompt"]
+        big = json.loads(agents_json("sonnet", "medium",
+                                     diff="x" * (INLINE_DIFF_MAX + 1)))
+        assert "## The commit under review" not in big[LENS_AGENT]["prompt"]
+        assert "1. `git show HEAD` and read" in big[LENS_AGENT]["prompt"]
+
+    def test_review_command_puts_the_commit_in_the_lens_prompt(
+            self, tmp_path):
+        import subprocess
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        git = ["git", "-C", str(repo), "-c", "user.name=t",
+               "-c", "user.email=t@t"]
+        subprocess.run(git[:3] + ["init", "-q"], check=True)
+        (repo / "a.c").write_text("int a;\n")
+        subprocess.run(git + ["add", "a.c"], check=True)
+        subprocess.run(git + ["commit", "-qm", "add a"], check=True)
+        config = _config(tmp_path, model="sonnet", lean=True, lenses=True,
+                         lens_effort="medium")
+        agents = json.loads(_arg(build_agent_cmd(config, worktree=repo),
+                                 "--agents"))
+        assert "+int a;" in agents[LENS_AGENT]["prompt"]
 
     def test_unset_model_and_effort_are_left_out(self):
         spec = json.loads(agents_json(None, None))[LENS_AGENT]
