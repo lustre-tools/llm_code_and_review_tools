@@ -691,6 +691,28 @@ class TestRunBatch:
         assert time_mod.monotonic() - start < 25
         assert results[0].status == STATUS_FAILED
 
+    def test_stragglers_in_a_review_directory_are_killed(self, tmp_path):
+        """A command the agent started in a session of its own outlives
+        the kill of the review's process group; it is found by its
+        working directory."""
+        import subprocess
+        from lreview.runner import kill_stragglers
+        review = tmp_path / "kreview_x"
+        (review / "sub").mkdir(parents=True)
+        other = tmp_path / "other"
+        other.mkdir()
+        inside = subprocess.Popen(["sleep", "60"], cwd=review / "sub",
+                                  start_new_session=True)
+        outside = subprocess.Popen(["sleep", "60"], cwd=other,
+                                   start_new_session=True)
+        try:
+            assert kill_stragglers([review]) == 1
+            assert inside.wait(timeout=10) != 0
+            assert outside.poll() is None
+        finally:
+            outside.kill()
+            inside.kill()
+
     def test_no_metadata_means_incomplete_not_clean(self, repo, tmp_path,
                                                     stub_claude):
         sha = _commit_with_marker(repo, "NO_METADATA_MARKER")

@@ -63,15 +63,42 @@ _KILL_GRACE_SECONDS = 15
 # the timeout path can group-kill them), which also means a Ctrl+C
 # SIGINT never reaches them on its own — an interrupted batch must
 # kill them explicitly or they keep running (and billing) headless.
-_RUNNING_PGIDS: set = set()
+# Maps each process group to the review's working directory.
+_RUNNING_PGIDS: dict = {}
 _RUNNING_PGIDS_LOCK = threading.Lock()
+
+
+def kill_stragglers(dirs) -> int:
+    """SIGKILL every process whose working directory is inside one of
+    dirs.  The agent starts some commands in process groups of their
+    own, which outlive a kill of the review's group.  Returns how many
+    were killed; nothing where there is no /proc."""
+    roots = [str(Path(d)) for d in dirs]
+    killed = 0
+    for proc_dir in Path("/proc").glob("[0-9]*"):
+        try:
+            cwd = os.readlink(proc_dir / "cwd")
+            pid = int(proc_dir.name)
+        except (OSError, ValueError):
+            continue
+        if pid == os.getpid() or not any(
+                cwd == r or cwd.startswith(r + "/") for r in roots):
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+            killed += 1
+        except (ProcessLookupError, PermissionError):
+            pass
+    return killed
 
 
 def kill_running_reviews(grace: float = 5.0) -> int:
     """SIGTERM every live review process group, SIGKILL survivors
-    after a grace period; returns how many were signalled."""
+    after a grace period, then anything still working in a review's
+    directory; returns how many groups were signalled."""
     with _RUNNING_PGIDS_LOCK:
         pgids = list(_RUNNING_PGIDS)
+        dirs = list(_RUNNING_PGIDS.values())
     for pgid in pgids:
         try:
             os.killpg(pgid, signal.SIGTERM)
@@ -91,6 +118,7 @@ def kill_running_reviews(grace: float = 5.0) -> int:
                 os.killpg(pgid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
+        kill_stragglers(dirs)
     return len(pgids)
 
 # Seconds between status updates: fast in-place redraws on a TTY,
@@ -982,7 +1010,7 @@ def _run_agent(cmd: list[str], cwd: Path, log_path: Path,
         if stdin_path:
             stdin.close()
         with _RUNNING_PGIDS_LOCK:
-            _RUNNING_PGIDS.add(proc.pid)
+            _RUNNING_PGIDS[proc.pid] = Path(cwd).resolve()
         try:
             return _wait_for_agent(proc, log_file, timeout, stall_timeout)
         except (subprocess.TimeoutExpired, ReviewStalled):
@@ -998,10 +1026,11 @@ def _run_agent(cmd: list[str], cwd: Path, log_path: Path,
                 except ProcessLookupError:
                     pass
                 proc.wait()
+            kill_stragglers([Path(cwd).resolve()])
             raise
         finally:
             with _RUNNING_PGIDS_LOCK:
-                _RUNNING_PGIDS.discard(proc.pid)
+                _RUNNING_PGIDS.pop(proc.pid, None)
 
 
 def _wait_for_agent(proc, log_file, timeout: float,

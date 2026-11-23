@@ -1551,7 +1551,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _terminate_as_interrupt(signum, frame):
+    raise KeyboardInterrupt
+
+
 def main(argv=None) -> None:
+    # Reviews run in sessions of their own, so a SIGTERM that only
+    # ends lreview would leave them running (and billing): take the
+    # Ctrl-C path, which kills them.
+    import signal
+    import threading
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, _terminate_as_interrupt)
     with telemetry.session("lreview") as run:
         args = build_parser().parse_args(argv)
         run.command = args.command

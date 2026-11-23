@@ -855,3 +855,10 @@ class TestConfigValueTypes:
         monkeypatch.delenv("LREVIEW_RESULTS_DIR")
         args = build_parser().parse_args(["run"])
         assert args.results_dir == str(Path.home() / "rr")
+
+
+def test_sigterm_takes_the_interrupt_path():
+    import pytest
+    from lreview.cli import _terminate_as_interrupt
+    with pytest.raises(KeyboardInterrupt):
+        _terminate_as_interrupt(15, None)
