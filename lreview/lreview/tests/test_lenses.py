@@ -239,6 +239,15 @@ class TestCli:
         assert "lenses" in default_label(args)
 
 
+class TestLensEnv:
+
+    def test_lens_review_waits_for_the_lenses(self, tmp_path):
+        from lreview.runner import lens_env
+        assert lens_env(_config(tmp_path, lenses=True)) == {
+            "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
+        assert lens_env(_config(tmp_path)) == {}
+
+
 class TestPreexisting:
 
     def test_preexisting_issues_go_to_the_database(self, tmp_path):

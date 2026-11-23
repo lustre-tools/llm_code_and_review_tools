@@ -678,6 +678,15 @@ def lens_args(config: BatchConfig, worktree: Optional[Path] = None) -> dict:
                                   config.lens_effort, commit_diff(worktree))}
 
 
+def lens_env(config: BatchConfig) -> dict:
+    """Environment for a --lenses review: Agent calls block until the
+    lens returns, so the reviewer waits for the lenses instead of
+    working alongside them."""
+    if not config.lenses or config.agent != "claude":
+        return {}
+    return {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
+
+
 def lens_label(config: BatchConfig) -> Optional[str]:
     """How the lenses ran, for the results: "<model>/<effort>"."""
     if not config.lenses:
@@ -1187,7 +1196,8 @@ def _run_review(config, change, worktree_dir, log_path, session,
             worktree_dir, expand_allowed_tools(config, worktree_dir),
             config.denied_tools)
     cmd = build_agent_cmd(config, change, session, worktree_dir)
-    extra_env = {**get_agent(config.agent).env(config.lean), **config.env}
+    extra_env = {**get_agent(config.agent).env(config.lean),
+                 **lens_env(config), **config.env}
     stdin_path = None
     if _prompt_on_stdin(config, change):
         stdin_path = log_path.with_suffix(".prompt.md")
