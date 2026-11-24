@@ -1665,6 +1665,277 @@ def test_stall_point_cursor_tool_call(tmp_path):
     assert stall_point(log)["waiting_on"] == "model"
 
 
+def test_agy_log_helpers(tmp_path):
+    from lreview.runner import (
+        agent_error, detect_model, live_token_count,
+        parse_final_usage, parse_session_id, stall_point,
+    )
+    log = tmp_path / "kreview-agy.log"
+    active_tool = {
+        "event": "step_update",
+        "step_update": {"conversation_id": "conv-9", "step_index": 2,
+                        "state": "ACTIVE", "step_type": "tool",
+                        "tool_name": "run_command",
+                        "tool_info": {"name": "run_command",
+                                      "parameters": {"CommandLine": "make -j8"}}},
+    }
+    log.write_text("\n".join([
+        json.dumps({"event": "init", "conversation_id": "conv-9",
+                    "init": {"model": "gemini-4-neon-high"}}),
+        json.dumps({"event": "step_update",
+                    "step_update": {"conversation_id": "conv-9",
+                                    "step_index": 1, "state": "DONE",
+                                    "step_type": "agent_response",
+                                    "usage": {"input_tokens": 1000,
+                                              "cache_read_tokens": 500,
+                                              "output_tokens": 25}}}),
+        json.dumps(active_tool),
+    ]) + "\n")
+    assert parse_session_id(log) == "conv-9"
+    assert detect_model(log) == "gemini-4-neon-high"
+    assert detect_model(None, configured="gemini-4-hydrogen-xhigh") == (
+        "gemini-4-hydrogen-xhigh")
+    assert detect_model(None, configured="gemini-pro-orchestrator-neon") == (
+        "gemini-pro-orchestrator-neon")
+    assert live_token_count(log) == 1525
+    assert stall_point(log) == {"waiting_on": "tool",
+                                "detail": "tool Bash: make -j8"}
+    # Tool completes and result arrives
+    done_tool = {
+        "event": "step_update",
+        "step_update": {**active_tool["step_update"], "state": "DONE"},
+    }
+    result_ev = {
+        "event": "result",
+        "result": {"conversation_id": "conv-9", "status": "SUCCESS",
+                   "usage": {"input_tokens": 1200, "cache_read_tokens": 1500,
+                             "output_tokens": 80, "thinking_tokens": 20,
+                             "total_tokens": 1280}},
+    }
+    log.write_text(log.read_text() + json.dumps(done_tool) + "\n"
+                   + json.dumps(result_ev) + "\n")
+    assert parse_final_usage(log) == (2780, None)
+    assert stall_point(log)["waiting_on"] == "model"
+    # Error result
+    err_log = tmp_path / "kreview-agy-err.log"
+    err_log.write_text(json.dumps({
+        "event": "result",
+        "result": {"conversation_id": "", "status": "ERROR",
+                   "error": "authentication required"},
+    }) + "\n")
+    assert agent_error(err_log) == "authentication required"
+
+
+def test_agy_end_to_end_preload_and_metadata_nudge(repo, tmp_path, monkeypatch):
+    """Stub `agy` verifies preload JSONL stdin, stream-json collection,
+    and --conversation nudge when review-metadata.json is omitted."""
+    prompts = tmp_path / "prompts"
+    (prompts / "subsystem").mkdir(parents=True)
+    for rel in ("review-core.md", "technical-patterns.md",
+                "subsystem/build.md", "lustre-commit-message.md",
+                "lustre-style.md", "subsystem/subsystem.md"):
+        (prompts / rel).write_text(f"# {rel}\n")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    args_log = tmp_path / "agy-args.log"
+    stdin_capture = tmp_path / "agy-stdin.jsonl"
+    stub = bin_dir / "agy"
+    stub.write_text(
+        "#!/bin/bash\n"
+        f"printf '%s\\n' \"$@\" -- >> {args_log}\n"
+        "case \" $* \" in\n"
+        "  *\" --input-format stream-json \"*)\n"
+        f"    cat > {stdin_capture}\n"
+        "    echo '{\"event\":\"init\",\"conversation_id\":\"conv-e2e\","
+        "\"init\":{\"model\":\"gemini-4-neon-high\"}}'\n"
+        "    echo '{\"event\":\"result\",\"result\":{"
+        "\"conversation_id\":\"conv-e2e\",\"status\":\"SUCCESS\","
+        "\"usage\":{\"input_tokens\":500,\"cache_read_tokens\":1000,"
+        "\"output_tokens\":40,\"total_tokens\":540}}}'\n"
+        "    exit 0\n"
+        "    ;;\n"
+        "  *\" --conversation conv-e2e \"*)\n"
+        "    printf '{\"author\":\"a\",\"sha\":\"s\",\"subject\":\"t\","
+        "\"issues-found\":0,\"issue-severity-score\":\"none\","
+        "\"issue-severity-explanation\":\"clean\"}' > review-metadata.json\n"
+        "    echo '{\"event\":\"result\",\"result\":{"
+        "\"conversation_id\":\"conv-e2e\",\"status\":\"SUCCESS\","
+        "\"usage\":{\"input_tokens\":50,\"cache_read_tokens\":500,"
+        "\"output_tokens\":10,\"total_tokens\":60}}}'\n"
+        "    exit 0\n"
+        "    ;;\n"
+        "esac\n"
+        "exit 2\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    sha = _git(repo, "rev-parse", "HEAD")
+    config = _config(repo, tmp_path, agent="agy", prompts_dir=prompts,
+                     preload=True, lean=True, model="gemini-4-neon",
+                     effort="high", denied_tools=["read_url(*)", "command(curl)"],
+                     keep_worktrees=True)
+    results = run_batch(config, [_change(99, sha)])
+    assert len(results) == 1
+    res = results[0]
+    assert res.status == STATUS_CLEAN
+    # 1540 from main run + 560 from metadata nudge
+    assert res.tokens == 2100
+    assert res.cost_usd is None
+    assert res.agent == "agy"
+    assert res.effort == "high"
+    # Preload prompt went on stdin as a stream-json user event
+    sent = json.loads(stdin_capture.read_text().strip())
+    assert sent["event"] == "user"
+    assert "Lustre review protocol" in sent["message"]["content"]
+    # Nudge resumed the exact conversation_id
+    recorded_args = args_log.read_text()
+    assert "--conversation\nconv-e2e\n" in recorded_args
+    # Offline hook was written into the review worktree
+    hooks_files = list(config.worktrees_dir.glob("*/.agents/hooks.json"))
+    assert len(hooks_files) == 1
+    assert "lreview-offline" in json.loads(hooks_files[0].read_text())
+
+
+def test_agy_worktree_scrubbed_but_in_place_untouched(tmp_path, monkeypatch):
+    """Disposable agy worktrees drop root customization paths while
+    keeping git status clean; non-agy worktrees and in-place reviews
+    leave them untouched."""
+    from lreview import worktree as wt
+    from lreview.runner import prepare_worktree
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    (repo / "f.c").write_text("int x;\n")
+    (repo / "AGENTS.md").write_text("repo rule\n")
+    (repo / ".agents").mkdir()
+    (repo / ".agents" / "hooks.json").write_text(
+        json.dumps({"patch-hook": {"SessionStart": []}}))
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "add patch")
+
+    sha = _git(repo, "rev-parse", "HEAD")
+    change = _change(101, sha)
+
+    # Disposable worktree for agy is scrubbed and clean
+    agy_cfg = _config(repo, tmp_path / "agy-out", agent="agy",
+                      keep_worktrees=True)
+    agy_wt = prepare_worktree(agy_cfg, change)
+    try:
+        assert not (agy_wt / "AGENTS.md").exists()
+        assert not (agy_wt / ".agents").exists()
+        assert _git(agy_wt, "status", "--porcelain") == ""
+        assert _git(agy_wt, "show", "HEAD:AGENTS.md") == "repo rule"
+    finally:
+        wt.remove_worktree(repo, agy_wt)
+
+    # Disposable worktree for claude keeps AGENTS.md intact
+    claude_cfg = _config(repo, tmp_path / "claude-out", agent="claude",
+                         keep_worktrees=True)
+    claude_wt = prepare_worktree(claude_cfg, change)
+    try:
+        assert (claude_wt / "AGENTS.md").is_file()
+        assert (claude_wt / ".agents" / "hooks.json").is_file()
+    finally:
+        wt.remove_worktree(repo, claude_wt)
+
+    # In-place agy review never touches config.repo
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "review-core.md").write_text("review protocol\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "agy"
+    stub.write_text(
+        "#!/bin/sh\n"
+        "printf '{\"author\":\"a\",\"sha\":\"s\",\"subject\":\"t\","
+        "\"issues-found\":0,\"issue-severity-score\":\"none\","
+        "\"issue-severity-explanation\":\"clean\"}' > review-metadata.json\n"
+        "echo '{\"event\":\"result\",\"result\":{"
+        "\"conversation_id\":\"c1\",\"status\":\"SUCCESS\","
+        "\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}'\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    in_place_cfg = _config(repo, tmp_path / "inplace-out", agent="agy",
+                           prompts_dir=prompts, preload=False)
+    results = run_batch(in_place_cfg, [change], in_place=True)
+    assert len(results) == 1
+    assert results[0].status == STATUS_CLEAN
+    assert (repo / "AGENTS.md").is_file()
+    assert (repo / ".agents" / "hooks.json").is_file()
+
+
+def test_agy_lenses_writes_agent_md_and_cleans_in_place(repo, tmp_path, monkeypatch):
+    """agy --lenses writes .agents/agents/lens.md in the review worktree
+    (with the commit diff inlined) and cleans it back up after an in-place
+    review."""
+    from lreview.lenses import AGY_LENS_AGENT_REL
+    prompts = tmp_path / "prompts"
+    (prompts / "subsystem").mkdir(parents=True)
+    for name in ("technical-patterns.md", "lustre-commit-message.md",
+                 "lustre-style.md", "subsystem/build.md",
+                 "subsystem/subsystem.md"):
+        (prompts / name).write_text(f"{name}\n")
+    (prompts / "review-core.md").write_text(
+        "# Protocol\n\n### Task 2: Analyze the changes for regressions\n")
+
+    seen_lens_md = tmp_path / "seen-lens.md"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "agy"
+    stub.write_text(
+        "#!/bin/sh\n"
+        f"cp .agents/agents/lens.md {seen_lens_md}\n"
+        "printf '{\"author\":\"a\",\"sha\":\"s\",\"subject\":\"t\","
+        "\"issues-found\":0,\"issue-severity-score\":\"none\","
+        "\"issue-severity-explanation\":\"clean\"}' > review-metadata.json\n"
+        "echo '{\"event\":\"result\",\"result\":{"
+        "\"conversation_id\":\"c-lens\",\"status\":\"SUCCESS\","
+        "\"usage\":{\"input_tokens\":100,\"output_tokens\":20,\"total_tokens\":120}}}'\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    sha = _git(repo, "rev-parse", "HEAD")
+    # 1. Disposable worktree run
+    cfg = _config(repo, tmp_path / "wt-out", agent="agy", prompts_dir=prompts,
+                  preload=True, lenses=True, lens_model="flash",
+                  keep_worktrees=True)
+    results = run_batch(cfg, [_change(102, sha)])
+    assert len(results) == 1
+    assert results[0].status == STATUS_CLEAN
+    assert results[0].lenses == "flash"
+    lens_md_text = seen_lens_md.read_text()
+    assert "model: flash\n" in lens_md_text
+    assert "## The commit under review" in lens_md_text
+
+    # 2. In-place run removes the temporary .agents/agents/lens.md afterwards
+    seen_lens_md.unlink()
+    ip_cfg = _config(repo, tmp_path / "ip-out", agent="agy",
+                     prompts_dir=prompts, preload=False, lenses=True)
+    ip_results = run_batch(ip_cfg, [_change(103, sha)], in_place=True)
+    assert len(ip_results) == 1
+    assert ip_results[0].status == STATUS_CLEAN
+    assert ip_results[0].lenses == "inherit"
+    assert "model: inherit\n" in seen_lens_md.read_text()
+    assert not (repo / AGY_LENS_AGENT_REL).exists()
+    assert not (repo / ".agents").exists()
+
+    # 3. In-place run restores a pre-existing symlink without overwriting its target
+    target = tmp_path / "user-lens.md"
+    target.write_text("user lens content\n")
+    lens_link = repo / AGY_LENS_AGENT_REL
+    lens_link.parent.mkdir(parents=True)
+    lens_link.symlink_to(target)
+    ip_results2 = run_batch(ip_cfg, [_change(104, sha)], in_place=True)
+    assert ip_results2[0].status == STATUS_CLEAN
+    assert lens_link.is_symlink()
+    assert os.readlink(lens_link) == str(target)
+    assert target.read_text() == "user lens content\n"
+
+
 class TestPluginsOff:
     """A lean claude review gets settings that disable the user's
     plugins; --no-lean and other agents keep them."""
@@ -1729,6 +2000,9 @@ class TestLoginFailure:
         assert _USAGE_LIMIT_RE.search(
             "You've hit your 5-hour limit \u00b7 resets 7:40pm (Europe/Berlin)")
         assert _USAGE_LIMIT_RE.search("Claude AI usage limit reached")
+        assert _USAGE_LIMIT_RE.search(
+            "Individual quota reached. Please upgrade your subscription to "
+            "increase your limits. Resets in 3h50m25s.")
         assert not _USAGE_LIMIT_RE.search("rate_limit_event")
 
     def test_later_reviews_do_not_start(self, tmp_path):

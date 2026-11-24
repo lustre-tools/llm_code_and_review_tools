@@ -35,7 +35,7 @@ exact instructions for anything missing:
 
 1. **An agent CLI** on PATH — `claude` (Claude Code, the default;
    `npm install -g @anthropic-ai/claude-code`, then log in), or
-   `codex` / `auggie` / `agent` (Cursor) / `gemini` / `opencode` for other AIs (see Agents below).
+   `codex` / `agent` (Cursor) / `agy` (Antigravity) / `auggie` / `gemini` / `opencode` for other AIs (see Agents below).
 2. **The review prompts** — bundled with this repository as the
    [review-prompts](https://github.com/verygreen/review-prompts/)
    submodule, which `./install.sh` initializes automatically (or
@@ -68,7 +68,7 @@ silent offline). `LREVIEW_PROMPTS_UPDATE=off` disables the check,
 
 ## Agents
 
-> **Disclaimer:** **claude**, **codex** and **cursor** are verified
+> **Disclaimer:** **claude**, **codex**, **cursor** and **agy** are verified
 > end-to-end. auggie, gemini and opencode are best-effort integrations — expect
 > to tweak invocation flags (`--agent-arg`) and please report what
 > works.
@@ -86,7 +86,7 @@ analysis of the top commit
 ("deep dive regression analysis" is deliberate — per the
 review-prompts README it gets better prompt compliance than calling
 it a review.) Select the backend with
-`--agent {claude,codex,gemini,opencode,auggie,cursor}` or `LREVIEW_AGENT`:
+`--agent {claude,codex,cursor,agy,auggie,gemini,opencode}` or `LREVIEW_AGENT`:
 
 - **claude** (default) — run with stream-json output, which is what
   powers the live token counter, final token/cost figures, and model
@@ -146,11 +146,33 @@ it a review.) Select the backend with
   Mode for the Cursor account. Do not review private code with a model
   that `agent --list-models` marks "NO ZDR" (no zero data retention),
   such as the Fable models.
+- **agy (Antigravity CLI)** — Google's replacement for consumer
+  `gemini-cli`. Install with `curl -fsSL https://antigravity.google/cli/install.sh
+  | bash`, then run `agy` once to sign in. Defaults to `gemini-4-neon`
+  (`agy`'s default effort is `medium`; pass `--effort high` or
+  `--model gemini-4-neon-high` for high). See `lreview models --agent agy`
+  for models and `--effort` (`low`..`max`). Runs `--output-format
+  stream-json` (tokens and tool calls, no dollar cost), `--preload` on
+  stdin, and `--offline` via `permissions.deny` + `.agents/hooks.json`.
+  On the `lreview bench` quick set (2026-11-21, 8 cases, 1 rep),
+  `gemini-4-neon-high` found 10/10 known bugs (judge and regex),
+  averaging 5.2m and 1.34M tokens/review.
+  **Limits:** `-m` does not fork sessions; `--lean` only adds
+  `--disable-slash-commands`; `agy` has no flag to ignore worktree
+  customizations (tracked in
+  [google-antigravity/antigravity-cli#1693](https://github.com/google-antigravity/antigravity-cli/issues/1693)),
+  so `lreview` removes root-level `AGENTS.md`, `GEMINI.md`, `.agents/`,
+  `.agent/`, `_agents/`, `_agent/`, and `.gemini/` from the disposable
+  review worktree (marked `--skip-worktree` so `git status` and `git diff`
+  stay clean while `git show HEAD` stays intact — in-place reviews of
+  `--repo` without change args are left untouched); and `lreview check`
+  does not probe keyring login.
 - **gemini / opencode** — best-effort backends via `gemini --yolo -p`
-  or `opencode run`. Reviews, logs, collection, and posting all work,
-  but there is no token/cost/model reporting and the invocations have
-  not been battle-tested — use `--agent-arg` to adjust flags if your
-  CLI version differs.
+  (legacy `gemini-cli`, still usable with paid Gemini API keys or
+  Enterprise licenses) or `opencode run`. Reviews, logs, collection,
+  and posting all work, but there is no token/cost/model reporting and
+  the invocations have not been battle-tested — use `--agent-arg` to
+  adjust flags if your CLI version differs.
 
 ### Codex models and effort
 
@@ -361,12 +383,22 @@ its cost ($1.02 against ~$0.50); lenses at high cost twice as much again
 and found no more. `docs/lens-review-evaluation.md` has the measurements and
 `docs/lens-review-benchmark-results.md` the per-bug results.
 
-- claude only, `--mode full` only, and not for `--github` reviews.
-- The lenses run as a custom agent type, `lens`, passed with claude's
-  `--agents`: their model (`--lens-model`, default the review's) and
-  effort (`--lens-effort`, default `medium`) are set apart from the
+- claude and agy, `--mode full` only, and not for `--github` reviews.
+- On claude, the lenses run as a custom agent type, `lens`, passed with
+  claude's `--agents`: their model (`--lens-model`, default the review's)
+  and effort (`--lens-effort`, default `medium`) are set apart from the
   reviewer's. A lean review adds the Agent tool to its tools, and an
   `--allow-tool` review adds it to the allowlist.
+- On agy, `lreview` writes `<worktree>/.agents/agents/lens.md` (with
+  `lens.md`, the inlined commit diff, and a minimal coding toolset) and
+  TASK 1D instructs `agy` to launch the five lenses in parallel with
+  `invoke_subagent` (`TypeName: "lens"`) and wait for all five to report
+  back. `--lens-model` accepts agy's subagent tiers (`inherit`,
+  `flash_lite`, `flash`, `pro`; default `inherit`, which uses the
+  review's model and effort); `--lens-effort` is claude-only because
+  `agy` subagents have no separate effort setting. Note that `agy`'s
+  `stream-json` `result.usage` reports parent tokens only (subagent token
+  usage is not included in the stream total).
 - The reviewer settles every lens candidate: it drops one only with the
   code that prevents the bug, checks "pre-existing" against the parent
   commit, reports what it cannot settle as a `(minor)` question, and also
@@ -855,11 +887,11 @@ needed: chat defaults to the repository recorded in the manifest at
 review time.
 
 Like `run`, chat picks its backend with `--agent
-{claude,codex,gemini,opencode,auggie,cursor}` or `$LREVIEW_AGENT` (default claude —
+{claude,codex,cursor,agy,auggie,gemini,opencode}` or `$LREVIEW_AGENT` (default claude —
 the verified one; the others are best-effort). The interactive
 invocations are taken from each CLI's official docs: claude and
-codex take the seed prompt as a bare positional argument, as do auggie and cursor; gemini
-needs `-i/--prompt-interactive` (`-p` and, on older releases, a bare
+codex take the seed prompt as a bare positional argument, as do auggie and cursor; agy and gemini
+need `-i/--prompt-interactive` (`-p` and, on older gemini releases, a bare
 positional are one-shot), and opencode takes `--prompt` (its root
 positional is a project *path*). All are auto-submitted as the first
 turn, and the session then stays interactive with the CLI's normal
@@ -885,9 +917,9 @@ opencode's `--model` wants the `provider/model` form.
 | `--results-dir DIR` | `$LREVIEW_RESULTS_DIR`, else `lreview-results/` in the llm tools checkout (cwd-relative without a checkout) | Logs, JSONs, summary.json |
 | `--worktrees-dir DIR` | auto | Where worktrees are created |
 | `--keep-worktrees` | off | Keep worktrees after review |
-| `--agent NAME` | `claude` (or `$LREVIEW_AGENT`) | Agent backend: claude, codex, cursor (verified), auggie, gemini, opencode |
-| `--model NAME` | `$LREVIEW_MODEL`, else the backend's default (marked in `lreview models`); auggie, gemini and opencode use their CLI's own | Model for the review runs. See `lreview models`, `auggie models list --json` or `agent --list-models`. |
-| `--effort LEVEL` | `high` for claude, else the agent's own (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max, plus `ultra` on the codex models that have it — claude (`--effort`), codex (`-c model_reasoning_effort=...`) or auggie (`--reasoning-effort`); ignored for gemini/opencode/cursor (a cursor model slug carries its effort). Known model ladders are checked before the run; Auggie validates its own model/effort support |
+| `--agent NAME` | `claude` (or `$LREVIEW_AGENT`) | Agent backend: claude, codex, cursor, agy (verified), auggie, gemini, opencode |
+| `--model NAME` | `$LREVIEW_MODEL`, else the backend's default (marked in `lreview models`); auggie, gemini and opencode use their CLI's own | Model for the review runs. See `lreview models`, `lreview models --agent agy`, `auggie models list --json` or `agent --list-models`. |
+| `--effort LEVEL` | `high` for claude, else the agent's own (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max, plus `ultra` on the codex models that have it — claude/agy (`--effort`), codex (`-c model_reasoning_effort=...`) or auggie (`--reasoning-effort`); ignored for gemini/opencode/cursor (a cursor model slug carries its effort). Known model ladders are checked before the run; agy and Auggie validate per-model effort support |
 | `--lenses` | off | Five lens subagents feed the reviewer (claude, full mode); see "Lens reviews" |
 | `--lens-model M` | the review's model | Model for the `--lenses` subagents |
 | `--lens-effort LEVEL` | `medium` | Effort for the `--lenses` subagents |
@@ -895,8 +927,8 @@ opencode's `--model` wants the `provider/model` form.
 | `--clear-memory, -c` | off | With `-m`: delete the change's memory document first |
 | `--no-resume` | off | With `-m` (claude): start a fresh session from the memory document instead of resuming the recorded review conversation |
 | `--db DIR` | `$LREVIEW_DB`, else `<repo>/lreview-db` | Memory database directory |
-| `--lean` / `--no-lean` | on (`$LREVIEW_LEAN=0` for off) | claude: minimal tools, no MCP/skills/CLAUDE.md, 5-minute prompt cache; codex: unused features off (see "Cost, speed and telemetry") |
-| `--preload` / `--no-preload` | on (`$LREVIEW_PRELOAD=0` for off) | full mode: the protocol and its always-loaded files up front (claude: system prompt; codex and cursor: start of the prompt), the commit in the first message |
+| `--lean` / `--no-lean` | on (`$LREVIEW_LEAN=0` for off) | claude: minimal tools, no MCP/skills/CLAUDE.md, 5-minute prompt cache; codex: unused features off; agy: `--disable-slash-commands` (see "Cost, speed and telemetry") |
+| `--preload` / `--no-preload` | on (`$LREVIEW_PRELOAD=0` for off) | full mode: the protocol and its always-loaded files up front (claude: system prompt; codex, cursor and agy: start of the prompt on stdin), the commit in the first message |
 | `--agent-arg=ARG` | — | Extra agent-CLI arg (repeatable; `--claude-arg` is a legacy alias) |
 | `--allow-tool=RULE` | — | claude or cursor. A permission rule in that agent's syntax, for example `Bash(git log *)` or `Shell(git:log *)` (repeatable). With one or more rules, a claude review runs with `--permission-mode dontAsk` and only these tools, in place of `--dangerously-skip-permissions`. `{worktree}` and `{prompts}` expand to absolute paths, so `Edit(/{worktree}/**)` lets the agent write only in its worktree. Add a deny rule with `--agent-arg=--disallowedTools --agent-arg=RULE`. A cursor review gets the rules in its worktree's `.cursor/cli.json` and runs without `--force`, so Cursor rejects a shell command that no rule allows. Cursor's file tools are not gated: they run with no allow rule, and only a deny rule in `~/.cursor/cli-config.json` stops them. The sandbox stays off, because in the sandbox Cursor runs every shell command whatever the rules say. Rules in `~/.cursor/cli-config.json` also apply |
 | `--post` | off | Post findings when batch finishes |
@@ -938,7 +970,7 @@ in psN." message, but only when named (`lreview post 69459`, or
 
 ## Notes
 
-- The agent processes run in their CLI's unattended mode (claude:
+- The agent processes run in their CLI's unattended mode (claude and agy:
   `--dangerously-skip-permissions`, codex: `--json
   --dangerously-bypass-approvals-and-sandbox`, gemini: `--yolo`) —
   they must read the tree, run git/grep, and write one JSON file; each

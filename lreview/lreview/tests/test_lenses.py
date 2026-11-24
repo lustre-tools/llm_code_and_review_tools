@@ -106,6 +106,46 @@ class TestLensPrompt:
         spec = json.loads(agents_json(None, None))[LENS_AGENT]
         assert "model" not in spec and "effort" not in spec
 
+    def test_agy_task_text_uses_invoke_subagent_and_waits(self, tmp_path):
+        text = task_text(tmp_path / "p", agent="agy")
+        assert text.startswith("### TASK 1D")
+        assert "invoke_subagent" in text
+        assert f'TypeName: "{LENS_AGENT}"' in text
+        assert 'Workspace: "inherit"' in text
+        assert "end your turn with no further tool calls" in text
+        assert "subagent_type" not in text
+        for lens in LENSES:
+            assert f"`{lens}`" in text
+
+    def test_agy_lens_agent_markdown_and_write(self, tmp_path):
+        from lreview.lenses import (
+            AGY_LENS_AGENT_REL, AGY_LENS_TOOLS, INLINE_DIFF_MAX,
+            agy_lens_agent_markdown, write_agy_lens_agent,
+        )
+        md = agy_lens_agent_markdown(None, diff="diff --git a/x b/x")
+        assert md.startswith("---\nname: lens\n")
+        assert "subagent: true\n" in md
+        assert "mainAgent: false\n" in md
+        assert "model: inherit\n" in md
+        for tool in AGY_LENS_TOOLS:
+            assert f"  - {tool}\n" in md
+        assert "## Lenses" in md
+        assert md.endswith("diff --git a/x b/x\n```\n")
+        assert "it is at the end of these instructions" in md
+
+        big = agy_lens_agent_markdown("flash",
+                                      diff="x" * (INLINE_DIFF_MAX + 1))
+        assert "model: flash\n" in big
+        assert "## The commit under review" not in big
+        assert "1. `git show HEAD` and read" in big
+
+        with pytest.raises(ValueError, match="inherit, flash_lite, flash, pro"):
+            agy_lens_agent_markdown("gemini-4-neon")
+
+        written = write_agy_lens_agent(tmp_path, "pro", diff="diff --git a/a b/a")
+        assert written == tmp_path / AGY_LENS_AGENT_REL
+        assert "model: pro\n" in written.read_text()
+
 
 class TestReviewCommand:
 
@@ -157,18 +197,50 @@ class TestReviewCommand:
         assert "### TASK 1D" in prompt
         assert "task.." not in prompt
 
+    def test_agy_lenses_cmd_and_prompts(self, tmp_path):
+        from lreview.runner import lens_args, lens_env
+        config = _config(tmp_path, agent="agy", model="gemini-4-neon",
+                         lean=True, preload=True, lenses=True,
+                         lens_model="flash")
+        assert lens_args(config) == {}
+        assert lens_env(config) == {}
+        assert lens_label(config) == "flash"
+        assert lens_label(_config(tmp_path, agent="agy", lenses=True)) == "inherit"
+        cmd = build_agent_cmd(config)
+        assert "--agents" not in cmd
+        text = preload_file(config).read_text()
+        assert "### TASK 1D" in text
+        assert "invoke_subagent" in text
+        assert "subagent_type" not in text
+        # Non-preload prompt also uses agy's TASK 1D
+        no_pre = review_prompt(_config(tmp_path, agent="agy", preload=False,
+                                       lenses=True))
+        assert "invoke_subagent" in no_pre
+        assert "subagent_type" not in no_pre
+
 
 class TestValidation:
 
     @pytest.mark.parametrize("kwargs", [{"agent": "codex"},
-                                        {"mode": "light"}])
-    def test_claude_full_mode_only(self, tmp_path, kwargs):
+                                        {"mode": "light"},
+                                        {"agent": "agy", "mode": "light"}])
+    def test_claude_or_agy_full_mode_only(self, tmp_path, kwargs):
         with pytest.raises(ValueError, match="--lenses needs"):
             _config(tmp_path, lenses=True, **kwargs)
 
     def test_lens_effort_is_checked(self, tmp_path):
         with pytest.raises(ValueError, match="ultra"):
             _config(tmp_path, lenses=True, lens_effort="ultra")
+
+    def test_agy_lens_validation(self, tmp_path):
+        # Valid tiers pass
+        for tier in (None, "inherit", "flash_lite", "flash", "pro"):
+            _config(tmp_path, agent="agy", lenses=True, lens_model=tier)
+        with pytest.raises(ValueError, match="--lens-effort is claude-only"):
+            _config(tmp_path, agent="agy", lenses=True, lens_effort="medium")
+        with pytest.raises(ValueError, match="--lens-model for agy"):
+            _config(tmp_path, agent="agy", lenses=True,
+                    lens_model="gemini-4-neon")
 
 
 class TestInPlaceArtifacts:
@@ -197,12 +269,21 @@ class TestCli:
         from lreview.cli import build_parser
         return build_parser().parse_args(["run", "1", *argv])
 
-    def test_needs_claude_and_full_mode(self, capsys):
+    def test_needs_claude_or_agy_and_full_mode(self, capsys):
         from lreview.cli import check_lenses
         assert not check_lenses(self._args("--lenses", "--agent", "codex"))
         assert not check_lenses(self._args("--lenses", "--mode", "light"))
         assert "--lenses needs" in capsys.readouterr().out
         assert check_lenses(self._args("--lenses"))
+        assert check_lenses(self._args("--lenses", "--agent", "agy"))
+        assert check_lenses(self._args("--lenses", "--agent", "agy",
+                                       "--lens-model", "flash"))
+        assert not check_lenses(self._args("--lenses", "--agent", "agy",
+                                           "--lens-effort", "medium"))
+        assert "claude-only" in capsys.readouterr().out
+        assert not check_lenses(self._args("--lenses", "--agent", "agy",
+                                           "--lens-model", "gemini-4-neon"))
+        assert "inherit, flash_lite, flash, pro" in capsys.readouterr().out
 
     def test_not_for_github_reviews(self, capsys):
         from lreview.cli import build_parser, check_lenses
@@ -225,11 +306,12 @@ class TestCli:
         assert not check_lenses(self._args("--lens-effort", "high"))
         assert "go with --lenses" in capsys.readouterr().out
 
-    def test_lens_effort_defaults_to_medium(self):
+    def test_lens_effort_defaults_to_medium_for_claude_only(self):
         from lreview.cli import lens_effort
         assert lens_effort(self._args("--lenses")) == "medium"
         assert lens_effort(self._args("--lenses", "--lens-effort",
                                       "high")) == "high"
+        assert lens_effort(self._args("--lenses", "--agent", "agy")) is None
         assert lens_effort(self._args()) is None
 
     def test_bench_label_says_lenses(self):

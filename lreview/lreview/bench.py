@@ -165,6 +165,12 @@ def offline_rules() -> tuple:
             [f"Shell({name}:*)" for name in OFFLINE_COMMANDS])
 
 
+def agy_offline_rules() -> list:
+    """agy permissions.deny rules for --offline (paired with .agents/hooks.json)."""
+    return (["read_url(*)", "execute_url(*)", "download_url(*)", "mcp(*)"]
+            + [f"command({name})" for name in OFFLINE_COMMANDS])
+
+
 def bench_change(case: dict) -> LocalChange:
     return LocalChange(ref_name=f"bench-{case['id']}", sha=case["sha"],
                        subject=case["subject"],
@@ -288,7 +294,7 @@ def leaked(log: Path, case: dict) -> list:
         return []
     with open(log, errors="replace") as handle:
         for line in handle:
-            if '"tool_result"' not in line:
+            if '"tool_result"' not in line and '"tool_info"' not in line:
                 continue
             for mark in marks:
                 if mark in line:

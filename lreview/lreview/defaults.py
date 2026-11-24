@@ -45,6 +45,10 @@ CLAUDE_DEFAULT_EFFORT = "high"
 # Cursor also runs are better reached through their own CLIs.
 CURSOR_DEFAULT_MODEL = "cursor-grok-4.6-high"
 
+# Quick bench (2026-11-21): gemini-4-neon-high found 10/10 known bugs
+# (5.2m, 1.34M tok/review). Effort stays unset so --effort never conflicts.
+AGY_DEFAULT_MODEL = "gemini-4-neon"
+
 # Directory names used when no path option or variable says otherwise.
 DEFAULT_RESULTS_DIRNAME = "lreview-results"
 DEFAULT_WORKTREES_DIRNAME = "worktrees"

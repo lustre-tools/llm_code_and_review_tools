@@ -26,12 +26,11 @@ from llm_tool_common.update_check import maybe_check_for_updates
 
 from . import __version__
 from .defaults import (
-    CLAUDE_DEFAULT_MODEL, CODEX_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL,
-    DEFAULT_AGENT, DEFAULT_BACKPORT, DEFAULT_BENCH_JOBS, DEFAULT_JOBS,
-    DEFAULT_LEAN,
-    DEFAULT_MODE, DEFAULT_PREFIX, DEFAULT_PRELOAD, DEFAULT_RESULTS_DIRNAME,
-    DEFAULT_STALL_RETRY, DEFAULT_STALL_TIMEOUT, DEFAULT_TIMEOUT,
-    DEFAULT_WORKTREES_DIRNAME)
+    AGY_DEFAULT_MODEL, CLAUDE_DEFAULT_MODEL, CODEX_DEFAULT_MODEL,
+    CURSOR_DEFAULT_MODEL, DEFAULT_AGENT, DEFAULT_BACKPORT, DEFAULT_BENCH_JOBS,
+    DEFAULT_JOBS, DEFAULT_LEAN, DEFAULT_MODE, DEFAULT_PREFIX, DEFAULT_PRELOAD,
+    DEFAULT_RESULTS_DIRNAME, DEFAULT_STALL_RETRY, DEFAULT_STALL_TIMEOUT,
+    DEFAULT_TIMEOUT, DEFAULT_WORKTREES_DIRNAME)
 from .gerrit import resolve_change
 from .poster import post_results
 from .runner import (
@@ -130,9 +129,13 @@ def resolve_model(agent: str, model: str = None) -> str:
 
 def check_lenses(args) -> bool:
     """--lenses and its lens options make sense together."""
-    if args.lenses and (args.agent != "claude" or args.mode != "full"):
-        print("error: --lenses needs the claude agent and --mode full")
-        return False
+    from .lenses import validate_lens_options
+    if args.lenses:
+        err = validate_lens_options(args.agent, args.mode,
+                                    args.lens_model, args.lens_effort)
+        if err:
+            print(f"error: {err}")
+            return False
     if args.lenses and getattr(args, "github", None):
         print("error: --lenses does not apply to --github reviews")
         return False
@@ -144,7 +147,10 @@ def check_lenses(args) -> bool:
 
 def lens_effort(args):
     from .lenses import DEFAULT_LENS_EFFORT
-    return args.lens_effort or (DEFAULT_LENS_EFFORT if args.lenses else None)
+    if args.lens_effort:
+        return args.lens_effort
+    return (DEFAULT_LENS_EFFORT
+            if args.lenses and args.agent == "claude" else None)
 
 
 def check_selection(args, model) -> bool:
@@ -390,8 +396,11 @@ def print_dry_run_plan(args, changes, memory_db) -> None:
     if args.effort:
         settings.append(f"effort {args.effort}")
     if args.lenses:
-        lenses = args.lens_model or model or "default"
-        settings.append(f"lenses ({lenses}, {lens_effort(args)})")
+        if args.agent == "agy":
+            settings.append(f"lenses ({args.lens_model or 'inherit'})")
+        else:
+            lenses = args.lens_model or model or "default"
+            settings.append(f"lenses ({lenses}, {lens_effort(args)})")
     print(f"  agent:     {', '.join(settings)}")
     if memory_db is not None:
         from .memory import find_doc
@@ -449,8 +458,8 @@ def cmd_run(args) -> int:
     from .agents import get_agent
     if not get_agent(args.agent).verified:
         print(f"note: the '{args.agent}' backend is best-effort and not "
-              "yet verified end-to-end; claude, codex and cursor are. Use "
-              "--agent-arg to adjust flags if needed.")
+              "yet verified end-to-end; claude, codex, cursor and agy are. "
+              "Use --agent-arg to adjust flags if needed.")
     from .models import resolve_effort
     args.effort = resolve_effort(args.agent, args.effort)
     if not check_selection(args, resolve_model(args.agent, args.model)):
@@ -853,6 +862,8 @@ def cmd_bench(args) -> int:
     allow, deny = ([], [])
     if args.offline and args.agent == "cursor":
         allow, deny = bench.offline_rules()
+    elif args.offline and args.agent == "agy":
+        deny = bench.agy_offline_rules()
 
     def config_for(results_dir: Path, repo: Path) -> BatchConfig:
         return BatchConfig(
@@ -893,8 +904,8 @@ def cmd_chat(args) -> int:
     from .agents import get_agent
     if not get_agent(args.agent).verified:
         print(f"note: the '{args.agent}' backend is best-effort and "
-              "not yet verified end-to-end; claude, codex and cursor "
-              "are.")
+              "not yet verified end-to-end; claude, codex, cursor and "
+              "agy are.")
     # chat passes --model alone, never a run default
     from .models import canonical_model
     model = canonical_model(args.agent, args.model)
@@ -919,7 +930,8 @@ def cmd_chat(args) -> int:
 def cmd_models(args) -> int:
     """Print what each agent will accept for --model and --effort."""
     from .models import (CLAUDE_EFFORTS, CLAUDE_DEFAULT_MODEL, CLAUDE_MODELS,
-                         codex_catalog_lines, cursor_model_lines)
+                         agy_model_lines, codex_catalog_lines,
+                         cursor_model_lines)
     agents = [args.agent] if args.agent else ["claude", "codex"]
     for agent in agents:
         if agent == "claude":
@@ -934,6 +946,9 @@ def cmd_models(args) -> int:
         elif agent == "cursor":
             print("cursor")
             print("\n".join(cursor_model_lines()))
+        elif agent == "agy":
+            print("agy")
+            print("\n".join(agy_model_lines()))
         else:
             print(f"{agent}\n  models are the CLI's own; --effort is "
                   "not supported")
@@ -1042,13 +1057,15 @@ def build_parser() -> argparse.ArgumentParser:
             f"  -j, --jobs N     parallel reviews (default: {DEFAULT_JOBS})\n"
             f"  --mode NAME      full or light (default: {DEFAULT_MODE});\n"
             "                   light is one cheap focused pass\n"
-            f"  --agent NAME     claude, codex, gemini, opencode, auggie,\n"
-            f"                   cursor (default: {DEFAULT_AGENT})\n"
+            f"  --agent NAME     claude, codex, cursor, agy, gemini, opencode,\n"
+            f"                   auggie (default: {DEFAULT_AGENT})\n"
             f"  --model NAME     claude: {CLAUDE_DEFAULT_MODEL} (default), opus, fable\n"
             f"                   codex: {CODEX_DEFAULT_MODEL} (default), astra, terra,\n"
             "                   luna, ... — see 'lreview models'\n"
             f"                   cursor: {CURSOR_DEFAULT_MODEL} (default), ... —\n"
             "                   see 'lreview models --agent cursor'\n"
+            f"                   agy: {AGY_DEFAULT_MODEL} (default), ... —\n"
+            "                   see 'lreview models --agent agy'\n"
             "  --effort LEVEL   low..max, ultra (codex, per model)\n"
             "  --post           post findings when the batch finishes\n"
             "  --prefix TEXT    posted-message prefix; <model> placeholder\n"
@@ -1201,20 +1218,21 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--agent", choices=sorted(AGENTS), default=default_agent,
         help="Agent to run the reviews with (default: $LREVIEW_AGENT or "
-             "claude; claude, codex and cursor are the verified "
+             "claude; claude, codex, cursor and agy are the verified "
              "backends, auggie, gemini and opencode are best-effort)")
     run_p.add_argument(
         "--model", default=None,
         help=f"Model for the review runs. Defaults to {CLAUDE_DEFAULT_MODEL} "
-             f"for claude, {CODEX_DEFAULT_MODEL} for codex, and "
-             f"{CURSOR_DEFAULT_MODEL} for cursor. $LREVIEW_MODEL overrides "
+             f"for claude, {CODEX_DEFAULT_MODEL} for codex, "
+             f"{CURSOR_DEFAULT_MODEL} for cursor, and {AGY_DEFAULT_MODEL} "
+             "for agy. $LREVIEW_MODEL overrides "
              "the default. Run 'lreview models' for available models and aliases.")
     run_p.add_argument(
         "--effort", choices=list(EFFORT_LEVELS),
         default=os.environ.get("LREVIEW_EFFORT"),
-        help="Reasoning effort for claude (--effort) or codex "
-             "(-c model_reasoning_effort=...); default: "
-             "$LREVIEW_EFFORT, else high for claude (whatever the "
+        help="Reasoning effort for claude/agy (--effort), codex "
+             "(-c model_reasoning_effort=...) or auggie (--reasoning-effort); "
+             "default: $LREVIEW_EFFORT, else high for claude (whatever the "
              "user's settings say), else the agent's own. Ignored for "
              "gemini/opencode/cursor (cursor model slugs carry the "
              "effort). The ladder is per model — 'ultra' is "
@@ -1222,19 +1240,19 @@ def build_parser() -> argparse.ArgumentParser:
              "xhigh; see 'lreview models'")
     run_p.add_argument(
         "--lenses", action="store_true",
-        help="Lens review (claude, full mode): after categorising the "
+        help="Lens review (claude or agy, full mode): after categorising the "
              "change, the reviewer starts five lens subagents "
              "(concurrency, lifecycle, data, semantics, build) and "
              "verifies every candidate they write. More bugs per run at "
-             "about 2.5x the cost of a review (lenses at medium effort) "
-             "or 5x (at high); see lreview/docs/lens-review-evaluation.md")
+             "about 2x the cost on claude (lenses at medium effort); "
+             "see lreview/docs/lens-review-evaluation.md")
     run_p.add_argument(
         "--lens-model", default=None,
-        help="Model for the --lenses lenses (default: the review's)")
+        help="Model for the --lenses lenses (claude: default the review's; "
+             "agy: inherit, flash_lite, flash, or pro; default inherit)")
     run_p.add_argument(
         "--lens-effort", choices=list(CLAUDE_EFFORTS), default=None,
-        help="Effort for the --lenses lenses (default: medium; high "
-             "found more for about twice the cost)")
+        help="Effort for the --lenses lenses (claude only; default: medium)")
     run_p.add_argument(
         "--memory", "-m", action="store_true",
         help="Use per-change review memory: read the change's notes "
@@ -1260,14 +1278,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=_env_flag("LREVIEW_LEAN", DEFAULT_LEAN),
         help="Start the reviewer with only what a review uses -- claude: "
              "six tools, no MCP servers, skills or CLAUDE.md, a 5-minute "
-             "prompt cache; codex: unused features off (default: on; "
+             "prompt cache; codex: unused features off; agy: "
+             "--disable-slash-commands (default: on; "
              "$LREVIEW_LEAN=0 turns it off)")
     run_p.add_argument(
         "--preload", action=argparse.BooleanOptionalAction,
         default=_env_flag("LREVIEW_PRELOAD", DEFAULT_PRELOAD),
         help="Full mode: give the reviewer the protocol and the files it "
-             "always loads up front (claude: system prompt; codex and "
-             "cursor: start of the prompt, on stdin) and the commit in its first message, instead "
+             "always loads up front (claude: system prompt; codex, cursor "
+             "and agy: start of the prompt, on stdin) and the commit in its first message, instead "
              "of having it read them one call at a time (default: on; "
              "$LREVIEW_PRELOAD=0 turns it off)")
     run_p.add_argument(
@@ -1356,19 +1375,19 @@ def build_parser() -> argparse.ArgumentParser:
                            default=_env_flag("LREVIEW_PRELOAD", DEFAULT_PRELOAD))
     bench_run.add_argument(
         "--lenses", action="store_true",
-        help="Lens review (claude, full mode): after categorising the "
+        help="Lens review (claude or agy, full mode): after categorising the "
              "change, the reviewer starts five lens subagents "
              "(concurrency, lifecycle, data, semantics, build) and "
              "verifies every candidate they write. More bugs per run at "
-             "about 2.5x the cost of a review (lenses at medium effort) "
-             "or 5x (at high); see lreview/docs/lens-review-evaluation.md")
+             "about 2x the cost on claude (lenses at medium effort); "
+             "see lreview/docs/lens-review-evaluation.md")
     bench_run.add_argument(
         "--lens-model", default=None,
-        help="Model for the --lenses lenses (default: the review's)")
+        help="Model for the --lenses lenses (claude: default the review's; "
+             "agy: inherit, flash_lite, flash, or pro; default inherit)")
     bench_run.add_argument(
         "--lens-effort", choices=list(CLAUDE_EFFORTS), default=None,
-        help="Effort for the --lenses lenses (default: medium; high "
-             "found more for about twice the cost)")
+        help="Effort for the --lenses lenses (claude only; default: medium)")
     bench_run.add_argument(
         "--memory", "-m", action="store_true",
         help="Review memory: each rep is a round that reads the notes "
@@ -1476,11 +1495,11 @@ def build_parser() -> argparse.ArgumentParser:
     chat_p.add_argument(
         "--effort", choices=list(EFFORT_LEVELS),
         default=os.environ.get("LREVIEW_EFFORT"),
-        help="Reasoning effort for the session — claude "
-             "(--effort) or codex (-c model_reasoning_effort=...); "
-             "default: $LREVIEW_EFFORT or the agent's own default. "
-             "Ignored for gemini/opencode/cursor; see 'lreview models' for "
-             "the per-model ladders")
+        help="Reasoning effort for the session — claude/agy "
+             "(--effort), codex (-c model_reasoning_effort=...) or auggie "
+             "(--reasoning-effort); default: $LREVIEW_EFFORT or the "
+             "agent's own default. Ignored for gemini/opencode/cursor; "
+             "see 'lreview models' for the per-model ladders")
     chat_p.add_argument(
         "--keep-worktree", action="store_true",
         help="Keep the discussion worktree after the session ends")

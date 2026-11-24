@@ -5,17 +5,18 @@ review-core.md directly (the review-prompts README quick-start form),
 so every backend receives the same instruction text — only the
 headless CLI invocation differs per agent.
 
-Claude, codex and cursor are the verified backends. All three are run
-with a JSONL event stream (claude's and cursor's --output-format
-stream-json, codex's --json) that lreview parses for token usage;
-only claude's carries a dollar cost. auggie, gemini and opencode are
-best-effort command templates.
+Claude, codex, cursor and agy are the verified backends. All four are
+run with a JSONL event stream (claude's, cursor's and agy's
+--output-format stream-json, codex's --json) that lreview parses for
+token usage; only claude's carries a dollar cost. auggie, gemini and
+opencode are best-effort command templates (auggie also emits JSON).
 """
 
 import functools
 import json
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,10 +50,20 @@ def lean_claude_args(extra_tools: tuple = ()) -> list[str]:
 # the worktree; a review loads none of them, lean or not (Patrick,
 # 2026-11-06). claude reads only the user's settings, CLAUDE.md and
 # skills; codex reads no project AGENTS.md and turns off each skill the
-# worktree holds, by path, having no switch for the repo scope.
+# worktree holds, by path, having no switch for the repo scope; agy has
+# no flag either, so prepare_worktree scrubs its root customization paths
+# in the disposable worktree (scrub_agy_worktree).
 CLAUDE_SOURCE_ARGS = ["--setting-sources", "user"]
 CODEX_SOURCE_ARGS = ["-c", "project_doc_max_bytes=0"]
 CHECKOUT_SKILL_DIRS = (".agents/skills", ".codex/skills")
+# Root-level paths agy scans for workspace rules, skills, agents,
+# plugins, hooks, MCP configs, and personal_customization_dir redirects.
+# agy stops at .git and never scans subfolders below the workspace root.
+AGY_WORKTREE_CUSTOMIZATION_PATHS = (
+    "AGENTS.md", "GEMINI.md",
+    ".agents", ".agent", "_agents", "_agent",
+    ".gemini",
+)
 
 
 @functools.lru_cache(maxsize=1)
@@ -152,6 +163,7 @@ class AgentSpec:
         system_file: Optional[str] = None,
         prompt_on_stdin: bool = False,
         allowed_tools: Optional[list[str]] = None,
+        denied_tools: Optional[list[str]] = None,
         worktree: Optional[Path] = None,
         extra_tools: tuple = (),
         agents: Optional[str] = None,
@@ -164,9 +176,10 @@ class AgentSpec:
         # this allowlist in place of --dangerously-skip-permissions.
         # The agent cannot use a tool that the list does not name, and
         # nothing prompts. cursor: see below.
-        # effort: claude gets --effort; codex gets a config override
-        # for model_reasoning_effort (Codex has no --effort flag).
-        # gemini/opencode/cursor ignore it (the CLI warns when dropped).
+        # effort: claude and agy get --effort; codex gets a config override
+        # for model_reasoning_effort (Codex has no --effort flag); auggie
+        # gets --reasoning-effort. gemini/opencode/cursor ignore it (the
+        # CLI warns when dropped).
         # extra_tools, claude: tools on top of the lean set or the
         # allowlist (the Agent tool for --lenses). agents, claude: an
         # --agents definition (the lens agent).
@@ -244,6 +257,30 @@ class AgentSpec:
             # "-" reads the prompt from stdin: a preloaded one is past
             # what one command-line argument may hold.
             return cmd + extra_args + ["-" if prompt_on_stdin else prompt_text]
+        if self.name == "agy":
+            # Preloaded prompts use --input-format stream-json on stdin to
+            # avoid argv limits. agy has no flag to ignore worktree rules;
+            # prepare_worktree scrubs them via scrub_agy_worktree().
+            cmd = ["agy", "--output-format", "stream-json",
+                   "--dangerously-skip-permissions"]
+            if prompt_on_stdin:
+                cmd += ["--input-format", "stream-json"]
+            if lean:
+                cmd += ["--disable-slash-commands"]
+            if model:
+                cmd += ["--model", model]
+            if effort:
+                cmd += ["--effort", effort]
+            if resume:
+                cmd += ["--conversation", resume]
+            if denied_tools:
+                cmd += ["--settings",
+                        json.dumps({"permissions": {
+                            "deny": list(denied_tools)}})]
+            cmd += extra_args
+            if not prompt_on_stdin:
+                cmd += ["-p", prompt_text]
+            return cmd
         if self.name == "gemini":
             cmd = ["gemini", "--yolo"]
             if model:
@@ -309,6 +346,17 @@ class AgentSpec:
             if effort:
                 cmd += ["-c", f'model_reasoning_effort="{effort}"']
             return cmd + extra_args + [prompt_text]
+        if self.name == "agy":
+            # -i/--prompt-interactive runs the initial prompt and keeps
+            # the TUI open; -p is one-shot headless mode.
+            cmd = ["agy"]
+            if model:
+                cmd += ["--model", model]
+            if effort:
+                cmd += ["--effort", effort]
+            if resume:
+                cmd += ["--conversation", resume]
+            return cmd + extra_args + ["-i", prompt_text]
         if self.name == "gemini":
             # -i/--prompt-interactive is the explicit interactive
             # seed; -p is one-shot, and a bare positional prompt is
@@ -359,6 +407,83 @@ def write_cursor_permissions(worktree: Path, rules: list[str],
     return path
 
 
+# Web/browser tools not covered by agy's permissions.deny (notably search_web).
+AGY_OFFLINE_TOOL_MATCHER = (
+    "search_web|read_url_content|open_browser_url|browser_.*|"
+    "read_browser_page|list_browser_pages|capture_browser_.*|"
+    "click_browser_pixel|execute_browser_javascript|search_marketplace"
+)
+
+
+def scrub_agy_worktree(worktree: Path) -> list[str]:
+    """Remove root-level agy customization paths from a disposable worktree.
+
+    agy has no CLI flag or settings key to disable workspace discovery
+    (tracked upstream in
+    https://github.com/google-antigravity/antigravity-cli/issues/1693), so
+    lreview removes these entries before launching agy and marks any tracked
+    files among them --skip-worktree so git status and git diff stay clean
+    while git show HEAD stays untouched.  Returns the removed top-level names.
+    """
+    present = [
+        name for name in AGY_WORKTREE_CUSTOMIZATION_PATHS
+        if (worktree / name).exists() or (worktree / name).is_symlink()
+    ]
+    if not present:
+        return []
+    if (worktree / ".git").exists():
+        ls = subprocess.run(
+            ["git", "-C", str(worktree), "ls-files", "-z", "--", *present],
+            capture_output=True,
+        )
+        if ls.returncode != 0:
+            raise RuntimeError(
+                f"git ls-files failed in {worktree}: "
+                f"{ls.stderr.decode('utf-8', errors='replace').strip()}"
+            )
+        if ls.stdout:
+            upd = subprocess.run(
+                ["git", "-C", str(worktree), "update-index",
+                 "--skip-worktree", "-z", "--stdin"],
+                input=ls.stdout, capture_output=True,
+            )
+            if upd.returncode != 0:
+                raise RuntimeError(
+                    f"git update-index --skip-worktree failed in {worktree}: "
+                    f"{upd.stderr.decode('utf-8', errors='replace').strip()}"
+                )
+    for name in present:
+        path = worktree / name
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+    return present
+
+
+def write_agy_offline_hooks(worktree: Path) -> Path:
+    """Write a clean <worktree>/.agents/hooks.json denying agy's web/browser tools."""
+    path = worktree / ".agents" / "hooks.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    hooks = {
+        "lreview-offline": {
+            "PreToolUse": [{
+                "matcher": AGY_OFFLINE_TOOL_MATCHER,
+                "hooks": [{
+                    "type": "command",
+                    "command": (
+                        "printf '%s\\n' "
+                        "'{\"decision\":\"deny\","
+                        "\"reason\":\"network access is disabled for this review\"}'"
+                    ),
+                }],
+            }],
+        },
+    }
+    path.write_text(json.dumps(hooks, indent=2) + "\n")
+    return path
+
+
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9-]+")
 
 
@@ -376,6 +501,7 @@ AGENTS = {
     "codex": AgentSpec(name="codex", stream_json=True),
     "auggie": AgentSpec(name="auggie", stream_json=True, verified=False),
     "cursor": AgentSpec(name="cursor", stream_json=True, command="agent"),
+    "agy": AgentSpec(name="agy", stream_json=True),
     "gemini": AgentSpec(name="gemini", verified=False),
     "opencode": AgentSpec(name="opencode", verified=False),
 }
