@@ -384,6 +384,9 @@ class ReviewResult:
     telemetry: Optional[dict] = None
     # One entry per attempt that stalled (see stall_point)
     stalls: list = field(default_factory=list)
+    # The agent whose provider refused the review, when this result is
+    # its rerun on BatchConfig.fallback_agent
+    fallback_from: Optional[str] = None
 
 
 @dataclass
@@ -431,6 +434,11 @@ class BatchConfig:
     allowed_tools: list[str] = field(default_factory=list)
     # cursor and agy: deny rules (lreview bench offline)
     denied_tools: list[str] = field(default_factory=list)
+    # A review the provider's safety classifier refuses
+    # (_PROVIDER_REFUSAL_RE) runs once more on this agent, with
+    # fallback_model (None: that agent's default)
+    fallback_agent: Optional[str] = None
+    fallback_model: Optional[str] = None
 
     def __post_init__(self) -> None:
         # git -C <repo> resolves relative paths against the repo, not
@@ -452,6 +460,8 @@ class BatchConfig:
         if self.mode not in REVIEW_MODES:
             raise ValueError(
                 f"mode must be one of {REVIEW_MODES}, got {self.mode!r}")
+        if self.fallback_agent:
+            get_agent(self.fallback_agent)
         if self.lenses:
             from .lenses import validate_lens_options
             err = validate_lens_options(self.agent, self.mode,
@@ -1563,6 +1573,27 @@ def _run_review(config, change, worktree_dir, log_path, session,
         log_path=log_path)
 
 
+def _refusal_fallback(config: BatchConfig,
+                      result: ReviewResult) -> Optional[BatchConfig]:
+    """The config to review again with when the provider's safety
+    classifier refused this review and a different fallback agent is
+    set, else None.  The rerun keeps the review's mode and scope but
+    none of the first agent's own settings (model, effort, arguments,
+    lenses), which need not apply to the other agent."""
+    fallback = config.fallback_agent
+    if (not fallback or fallback == config.agent
+            or result.status != STATUS_FAILED
+            or not _PROVIDER_REFUSAL_RE.search(result.error or "")):
+        return None
+    import dataclasses
+    return dataclasses.replace(
+        config, agent=fallback, model=config.fallback_model, effort=None,
+        agent_args=[], lenses=False, lens_model=None, lens_effort=None,
+        allowed_tools=(config.allowed_tools
+                       if fallback in ("claude", "cursor") else []),
+        fallback_agent=None, fallback_model=None)
+
+
 def _review_and_cleanup(
     config: BatchConfig,
     change: ResolvedChange,
@@ -1614,6 +1645,18 @@ def _review_and_cleanup(
     try:
         result = run_review(config, change, worktree_dir,
                             log_path=log_path, session=session)
+        fallback = _refusal_fallback(config, result)
+        if fallback is not None:
+            _log(f"[{change.slug}] the provider refused the review on "
+                 f"{config.agent}; reviewing it again with "
+                 f"{fallback.agent}")
+            _remove_artifacts(worktree_dir)
+            refused_agent = config.agent
+            config = fallback
+            log_path = log_path.with_suffix(".fallback.log")
+            result = run_review(config, change, worktree_dir,
+                                log_path=log_path, session=None)
+            result.fallback_from = refused_agent
     except Exception as exc:  # noqa: BLE001 - one bad review must not
         # abort the batch or strand the other results
         _log(f"[{change.slug}] FAILED with unexpected error: {exc!r}")
@@ -1922,6 +1965,7 @@ def update_summary(results_dir: Path, results: list[ReviewResult],
                 "telemetry": result.telemetry,
                 "error": result.error,
                 "stalls": result.stalls or None,
+                "fallback_from": result.fallback_from,
                 "posted": False,
                 "reviewed_at": datetime.now(timezone.utc).isoformat(
                     timespec="seconds"),

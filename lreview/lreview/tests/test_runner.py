@@ -2018,3 +2018,58 @@ class TestLoginFailure:
         assert "could not sign in" in result.error
         assert not (tmp_path / "results").exists() or not list(
             (tmp_path / "results").glob("kreview-*.log"))
+
+
+class TestRefusalFallback:
+    """A review the provider's classifier refuses runs again on
+    fallback_agent (71347: Codex refused a filesystem review three
+    times and the run had no other reviewer)."""
+
+    REFUSED = ("codex exited 1: This content was flagged for possible "
+               "cybersecurity risk.")
+
+    def _run(self, tmp_path, monkeypatch, first_error, **kwargs):
+        from lreview import runner
+        calls = []
+
+        def fake_review(config, change, worktree_dir, log_path, session):
+            calls.append((config.agent, config.model, log_path.name))
+            if len(calls) == 1:
+                return runner.ReviewResult(change, runner.STATUS_FAILED,
+                                           error=first_error)
+            return runner.ReviewResult(change, runner.STATUS_CLEAN)
+
+        monkeypatch.setattr(runner, "run_review", fake_review)
+        monkeypatch.setattr(runner, "record_telemetry",
+                            lambda config, result: None)
+        config = _config(tmp_path, tmp_path, agent="codex",
+                         model="gpt-6.2-sol", **kwargs)
+        result = runner._review_and_cleanup(
+            config, _change(5, "e" * 40), tmp_path / "wt", cleanup=False)
+        return result, calls
+
+    def test_a_refused_review_is_rerun_on_the_fallback_agent(
+            self, tmp_path, monkeypatch):
+        from lreview import runner
+        result, calls = self._run(tmp_path, monkeypatch, self.REFUSED,
+                                  fallback_agent="claude",
+                                  fallback_model="sonnet")
+        assert [c[:2] for c in calls] == [("codex", "gpt-6.2-sol"),
+                                          ("claude", "sonnet")]
+        assert calls[1][2].endswith(".fallback.log")
+        assert result.status == runner.STATUS_CLEAN
+        assert result.agent == "claude"
+        assert result.fallback_from == "codex"
+
+    def test_other_failures_are_not_rerun(self, tmp_path, monkeypatch):
+        from lreview import runner
+        result, calls = self._run(tmp_path, monkeypatch, "timed out",
+                                  fallback_agent="claude")
+        assert len(calls) == 1
+        assert result.status == runner.STATUS_FAILED
+        assert result.agent == "codex"
+        assert result.fallback_from is None
+
+    def test_no_fallback_agent_no_rerun(self, tmp_path, monkeypatch):
+        result, calls = self._run(tmp_path, monkeypatch, self.REFUSED)
+        assert len(calls) == 1

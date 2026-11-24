@@ -669,6 +669,9 @@ def cmd_run(args) -> int:
         agent=args.agent,
         model=resolve_model(args.agent, args.model),
         effort=args.effort,
+        fallback_agent=getattr(args, "fallback_agent", "") or None,
+        fallback_model=(resolve_model(args.fallback_agent, None)
+                        if getattr(args, "fallback_agent", "") else None),
         memory_db=memory_db,
         resume=not args.no_resume,
         lean=args.lean,
@@ -1220,6 +1223,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Agent to run the reviews with (default: $LREVIEW_AGENT or "
              "claude; claude, codex, cursor and agy are the verified "
              "backends, auggie, gemini and opencode are best-effort)")
+    run_p.add_argument(
+        "--fallback-agent", choices=[""] + sorted(AGENTS),
+        default=os.environ.get("LREVIEW_FALLBACK_AGENT", ""),
+        help="Review again with this agent, at its default model, when "
+             "the provider's safety classifier refuses a review "
+             "(default: $LREVIEW_FALLBACK_AGENT, else none)")
     run_p.add_argument(
         "--model", default=None,
         help=f"Model for the review runs. Defaults to {CLAUDE_DEFAULT_MODEL} "

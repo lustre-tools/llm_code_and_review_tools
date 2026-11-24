@@ -918,6 +918,7 @@ opencode's `--model` wants the `provider/model` form.
 | `--worktrees-dir DIR` | auto | Where worktrees are created |
 | `--keep-worktrees` | off | Keep worktrees after review |
 | `--agent NAME` | `claude` (or `$LREVIEW_AGENT`) | Agent backend: claude, codex, cursor, agy (verified), auggie, gemini, opencode |
+| `--fallback-agent NAME` | none (or `$LREVIEW_FALLBACK_AGENT`) | Review once more with this agent, at its default model, when the provider's safety classifier refuses a review; summary.json records `fallback_from` |
 | `--model NAME` | `$LREVIEW_MODEL`, else the backend's default (marked in `lreview models`); auggie, gemini and opencode use their CLI's own | Model for the review runs. See `lreview models`, `lreview models --agent agy`, `auggie models list --json` or `agent --list-models`. |
 | `--effort LEVEL` | `high` for claude, else the agent's own (or `$LREVIEW_EFFORT`) | Reasoning effort: low/medium/high/xhigh/max, plus `ultra` on the codex models that have it — claude/agy (`--effort`), codex (`-c model_reasoning_effort=...`) or auggie (`--reasoning-effort`); ignored for gemini/opencode/cursor (a cursor model slug carries its effort). Known model ladders are checked before the run; agy and Auggie validate per-model effort support |
 | `--lenses` | off | Five lens subagents feed the reviewer (claude, full mode); see "Lens reviews" |
@@ -956,6 +957,7 @@ in psN." message, but only when named (`lreview post 69459`, or
 | Variable | Effect |
 |---|---|
 | `LREVIEW_AGENT` | Default for `--agent` (else `claude`) |
+| `LREVIEW_FALLBACK_AGENT` | Default for `--fallback-agent` |
 | `LREVIEW_MODEL` | Default for `--model` (else the backend's default, as for `--model`). A name from another agent's catalog, such as `opus` under `--agent codex`, gives way to the selected backend's default. |
 | `LREVIEW_EFFORT` | Default for `--effort` (else `high` for claude, the agent's own for the others) |
 | `LREVIEW_DB` | Default for `--db` (memory database directory) |
