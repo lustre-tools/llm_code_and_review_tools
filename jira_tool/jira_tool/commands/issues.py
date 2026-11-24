@@ -9,6 +9,7 @@ from ..client import ISSUE_FIELDS
 from ..envelope import success_response
 from ..errors import ConfigError, ExitCode, JiraToolError
 from ._helpers import (
+    _custom_fields,
     _normalize_comments,
     _normalize_issue,
     _trim_issue,
@@ -30,8 +31,11 @@ def register(main):
     @click.option("--output", "output_field_name", help="Output only this field (plain text, no JSON envelope)")
     @click.option("--comments", "include_comments", default=None, type=int,
                   help="Include N comments inline (e.g. --comments 5, --comments 50)")
+    @click.option("--custom", "include_custom", is_flag=True,
+                  help="Add custom_fields: every non-empty custom field, by display name")
     @click.pass_context
-    def issue_get(ctx: click.Context, key: str, fields: str | None, output_field_name: str | None, include_comments: int | None) -> None:
+    def issue_get(ctx: click.Context, key: str, fields: str | None, output_field_name: str | None,
+                  include_comments: int | None, include_custom: bool) -> None:
         """
         Get issue details.
 
@@ -41,6 +45,8 @@ def register(main):
 
         Use --comments N to include N comments inline (e.g. --comments 5).
         Use --output to extract a single field (e.g., --output key, --output status).
+        Use --custom to add the custom fields that a project fills in, such
+        as Steps To Reproduce or Actual Result.
         """
         command = "get"
         pretty = ctx.obj.get("pretty", False)
@@ -50,10 +56,25 @@ def register(main):
             client = get_client(ctx, issue_key=key)
 
             field_list = fields.split(",") if fields else None
-            raw_issue = client.get_issue(key, fields=field_list or ISSUE_FIELDS)
+            request_fields = field_list or ISSUE_FIELDS
+            if include_custom:
+                request_fields = [*request_fields, "*all"]
+            raw_issue = client.get_issue(
+                key, fields=request_fields,
+                expand=["names"] if include_custom else None,
+            )
 
-            # Normalize output to agent-friendly format
-            issue_data = _normalize_issue(raw_issue)
+            # Normalize output to agent-friendly format. "*all" brought
+            # every field, so keep to the ones --fields named.
+            asked_issue = raw_issue
+            if field_list and include_custom:
+                asked_issue = {**raw_issue, "fields": {
+                    name: value for name, value in raw_issue.get("fields", {}).items()
+                    if name in field_list
+                }}
+            issue_data = _normalize_issue(asked_issue)
+            if include_custom:
+                issue_data["custom_fields"] = _custom_fields(raw_issue)
 
             # If --output specified, just output that field
             if output_field_name:
@@ -61,7 +82,7 @@ def register(main):
                 sys.exit(ExitCode.SUCCESS)
 
             if field_list:
-                issue_data = _trim_issue(issue_data, field_list)
+                issue_data = _trim_issue(issue_data, [*field_list, "custom_fields"])
 
             # If --comments specified, fetch and inline comments
             if include_comments:

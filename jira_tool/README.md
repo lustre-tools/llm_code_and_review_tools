@@ -67,6 +67,9 @@ jira get PROJ-123
 # Get issue with comments inline
 jira get PROJ-123 --comments 5
 
+# Get issue with its non-empty custom fields, by display name
+jira get PROJ-123 --custom
+
 # Search issues
 jira search "project = PROJ AND status = Open"
 
@@ -125,7 +128,7 @@ or `jira describe` for machine-readable API documentation.
 
 | Command | Description |
 |---------|-------------|
-| `jira get <key>` | Get issue details (add `--comments N` to inline the N most recent comments) |
+| `jira get <key>` | Get issue details (add `--comments N` to inline the N most recent comments, `--custom` to add the non-empty custom fields) |
 | `jira comments <key>` | Get comments with pagination |
 | `jira attachments <key>` | List attachments |
 | `jira search <jql>` | Search with JQL |

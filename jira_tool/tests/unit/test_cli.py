@@ -337,6 +337,95 @@ class TestCLIIssueGet:
         assert data["data"]["key"] == "PROJ-123"
         assert data["meta"]["command"] == "get"
 
+    @responses.activate
+    def test_issue_get_custom(self, runner, mock_env):
+        """--custom asks for every field with their names, and returns
+        the non-empty custom fields by name as readable values."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={
+                "key": "PROJ-123",
+                "names": {
+                    "customfield_1": "Steps To Reproduce",
+                    "customfield_2": "Severity",
+                    "customfield_3": "Empty",
+                    "customfield_4": "Owners",
+                    "customfield_5": "Steps To Reproduce",
+                },
+                "fields": {
+                    "summary": "Test issue",
+                    "customfield_1": {"type": "doc", "version": 1, "content": [
+                        {"type": "paragraph", "content": [{"type": "text", "text": "mount it"}]},
+                    ]},
+                    "customfield_2": {"value": "3", "id": "21084"},
+                    "customfield_3": None,
+                    "customfield_4": [{"displayName": "A"}, {"displayName": "B"}],
+                    "customfield_5": "plain",
+                },
+            },
+            status=200,
+        )
+
+        result = runner.invoke(main, ["get", "PROJ-123", "--custom"])
+
+        assert result.exit_code == 0
+        custom = json.loads(result.output)["custom_fields"]
+        assert custom == {
+            "Steps To Reproduce": "mount it",
+            "Severity": "3",
+            "Owners": ["A", "B"],
+            "customfield_5": "plain",
+        }
+        params = responses.calls[0].request.params
+        assert params["expand"] == "names"
+        assert "*all" in params["fields"].split(",")
+
+    @responses.activate
+    def test_issue_get_custom_with_fields(self, runner, mock_env):
+        """--fields with --custom returns the named fields and the
+        custom fields, not every field that *all brought."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={
+                "key": "PROJ-123",
+                "names": {"customfield_1": "Conclusion"},
+                "fields": {
+                    "summary": "Test issue",
+                    "description": "long text",
+                    "labels": ["x"],
+                    "customfield_1": "done",
+                },
+            },
+            status=200,
+        )
+
+        result = runner.invoke(main, ["get", "PROJ-123", "--fields", "summary", "--custom"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["summary"] == "Test issue"
+        assert "description" not in data
+        assert "labels" not in data
+        assert data["custom_fields"] == {"Conclusion": "done"}
+
+    @responses.activate
+    def test_issue_get_without_custom(self, runner, mock_env):
+        """Without --custom, get adds no custom_fields and no expand."""
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/issue/PROJ-123",
+            json={"key": "PROJ-123", "fields": {"summary": "Test issue"}},
+            status=200,
+        )
+
+        result = runner.invoke(main, ["get", "PROJ-123"])
+
+        assert result.exit_code == 0
+        assert "custom_fields" not in json.loads(result.output)
+        assert "expand" not in responses.calls[0].request.params
+
     @pytest.mark.parametrize("alias", ["view", "show"])
     @responses.activate
     def test_alias_is_get(self, runner, mock_env, alias):
