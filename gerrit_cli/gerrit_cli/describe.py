@@ -620,6 +620,28 @@ def get_tool_description() -> ToolDescription:
                 output_fields=["users[].username", "users[].name", "users[].email", "users[].account_id", "users[].is_bot"],
                 next_actions=["add-reviewer"],
             ),
+            Command(
+                name="test-numbers",
+                description="Usable new subtest numbers in a lustre/tests script: free, and in a gap no open change touches",
+                usage="gc test-numbers FILE... [--suggest K] [--family 56x] [--human]",
+                arguments=[
+                    Argument(name="files", description="Test scripts (sanity.sh or lustre/tests/sanity.sh)", required=True),
+                    Argument(name="--suggest", description="Up to K usable numbers, one per gap, inside the range before the append point", type="integer", default=0),
+                    Argument(name="--family", description="Next letter suffix in a family (56x gives 56xc after 56xb)"),
+                    Argument(name="--branch", description="Target branch, or any", default="master"),
+                    Argument(name="--days", description="Open changes updated in the last N days", type="integer", default=60),
+                    Argument(name="--except-branches", description="Comma list of branches whose except lists to avoid", default="master,b2_15,b2_16,b2_17"),
+                    Argument(name="--human", description="Readable report", type="boolean", default=False),
+                ],
+                examples=["gc test-numbers sanity.sh --suggest 3",
+                          "gc test-numbers sanity.sh --family 56x",
+                          "gc test-numbers sanity.sh sanity-quota.sh --human"],
+                output_fields=["files.<path>.suggest[].number", "files.<path>.suggest[].after", "files.<path>.suggest[].gap",
+                               "files.<path>.slots[].numbers", "files.<path>.slots[].taken_by", "files.<path>.slots[].usable",
+                               "files.<path>.append", "files.<path>.family", "files.<path>.collisions",
+                               "files.<path>.near_conflicts", "files.<path>.except_listed", "files.<path>.changes[]"],
+                next_actions=["conflicts", "upload"],
+            ),
             # --- Help ---
             Command(
                 name="explain",

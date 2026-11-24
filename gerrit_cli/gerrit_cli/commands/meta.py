@@ -780,6 +780,40 @@ accounts, by the same list as 'reviewers' (Gerrit leaves some untagged).
         ],
         "related": ["add-reviewer", "reviewers"],
     },
+    "test-numbers": {
+        "summary": "Usable new subtest numbers in a lustre/tests script",
+        "description": """
+A new subtest's number picks its place in the script: between the test
+before it and the test after it. Two open changes adding different numbers
+into the same gap still conflict, and the append point (max+1) is where
+everyone goes. A number is usable only when
+  1. no tip test, open change (on the branch, updated in --days) or except
+     list (ALWAYS_EXCEPT, always_except, except/<suite>.ex on master and
+     the maintained branches) uses it, and
+  2. no open change has a hunk in, or within 3 lines of, its gap: the
+     run_test line of the test before it to the first line of the test
+     after it (its comment or test_M() line), at the tip.
+Each change's hunks are placed on the tip by the nearest test line above
+them, so a change on an older base still lands in the right gap. A letter
+suffix (--family 56x) goes at the end of its family and is contested when
+an open change adds to that family. --suggest K lists usable numbers, one
+per gap, gaps inside the range before the append point, and says when the
+append point is contested. Interim: once new subtests can live in .ltsh
+fragments, only the number check matters. Retired numbers are not checked:
+git log -S'run_test N ' <branch> -- <file>.
+""",
+        "examples": [
+            {
+                "command": "gc test-numbers sanity.sh --suggest 3",
+                "description": "Three usable numbers for a new sanity test",
+            },
+            {
+                "command": "gc test-numbers sanity.sh --family 56x",
+                "description": "The next 56x letter, and whether its slot is contested",
+            },
+        ],
+        "related": ["conflicts", "search"],
+    },
     "batch": {
         "summary": "Reply to multiple comments from a JSON file",
         "description": """

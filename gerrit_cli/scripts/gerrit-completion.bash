@@ -10,7 +10,7 @@ _gerrit_completions() {
     _init_completion || return
 
     local global_opts="--envelope --help --user --version -U -h"
-    local commands="abandon abort ack add-reviewer batch check checkout co comments conflicts continue-reintegration delete-comment delete-message describe diff done examples explain extract find-user finish-patch graph hashtag info label maloo message next-patch publish-drafts push rebase related remove-reviewer reply restore review review-series reviewer-candidates reviewers s search series-comments series-info series-status set-topic skip-reintegration stage staged status upload vote watch work-on-patch"
+    local commands="abandon abort ack add-reviewer batch check checkout co comments conflicts continue-reintegration delete-comment delete-message describe diff done examples explain extract find-user finish-patch graph hashtag info label maloo message next-patch publish-drafts push rebase related remove-reviewer reply restore review review-series reviewer-candidates reviewers s search series-comments series-info series-status set-topic skip-reintegration stage staged status test-numbers upload vote watch work-on-patch"
 
     # The command is the first word that is not a global option.
     local cmd="" i=1
@@ -91,6 +91,7 @@ _gerrit_completions() {
         staged:remove) opts="--envelope --help --user -U -h" ;;
         staged:show) opts="--envelope --help --pretty --user -U -h -p" ;;
         status) opts="--envelope --help --user -U -h" ;;
+        test-numbers) opts="--branch --days --envelope --except-branches --family --help --human --pretty --suggest --user -U -h -p" ;;
         upload) opts="--base --branch --dry-run --envelope --expect-patchset --help --max-commits --no-amend --no-author-edit --no-ci-reviewers --private --project --public --repo --series --topic --user -C -U -b -h -n -t" ;;
         watch) opts="--envelope --help --user -U -h" ;;
         work-on-patch) opts="--envelope --help --user -U -h" ;;

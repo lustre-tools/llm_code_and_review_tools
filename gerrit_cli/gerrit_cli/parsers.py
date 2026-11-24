@@ -1160,6 +1160,57 @@ def add_find_user_parser(subparsers):
     return parser
 
 
+def add_test_numbers_parser(subparsers):
+    """Add the 'test-numbers' subcommand parser."""
+    parser = subparsers.add_parser(
+        "test-numbers",
+        help="Usable new subtest numbers in a lustre/tests script",
+        description="Which new subtest numbers are free in a lustre/tests "
+                    "script and sit in a gap no open change touches. A number "
+                    "is usable only when no tip test, open change or except "
+                    "list uses it, and no open change has a hunk in or within "
+                    "3 lines of its gap (run_test of the test before it to the "
+                    "first line of the test after it). Interim, until new "
+                    "subtests can live in .ltsh fragments.",
+    )
+    parser.add_argument(
+        "files", nargs="+", metavar="FILE",
+        help="Test scripts: sanity.sh or lustre/tests/sanity.sh",
+    )
+    parser.add_argument(
+        "--suggest", type=int, default=0, metavar="K",
+        help="List up to K usable numbers, one per gap: inside the range "
+             "first, then the append point",
+    )
+    parser.add_argument(
+        "--family", metavar="ID",
+        help="The next letter suffix after a family, e.g. 56x gives 56xc "
+             "after 56xb; contested when an open change adds to the family",
+    )
+    parser.add_argument(
+        "--branch", default="master",
+        help="Target branch, or 'any' (default: master)",
+    )
+    parser.add_argument(
+        "--days", type=int, default=60,
+        help="Open changes updated in the last N days (default: 60)",
+    )
+    parser.add_argument(
+        "--except-branches", metavar="B1,B2",
+        help="Branches whose except lists a number must avoid "
+             "(default: master," + ",".join(("b2_15", "b2_16", "b2_17")) + "; '' for none)",
+    )
+    parser.add_argument(
+        "--human", action="store_true",
+        help="A readable report instead of JSON",
+    )
+    parser.add_argument(
+        "--pretty", "-p", action="store_true",
+        help="Pretty-print JSON output",
+    )
+    return parser
+
+
 def add_explain_parser(subparsers):
     """Add the 'explain' subcommand parser."""
     parser = subparsers.add_parser(
@@ -1952,6 +2003,8 @@ def setup_parsers(subparsers, handlers):
     add_remove_reviewer_parser(subparsers).set_defaults(
         func=handlers['remove_reviewer'])
     add_find_user_parser(subparsers).set_defaults(func=handlers['find_user'])
+    add_test_numbers_parser(subparsers).set_defaults(
+        func=handlers['test_numbers'])
     add_reviewer_candidates_parser(subparsers).set_defaults(
         func=handlers['reviewer_candidates'])
     add_abandon_parser(subparsers).set_defaults(func=handlers['abandon'])

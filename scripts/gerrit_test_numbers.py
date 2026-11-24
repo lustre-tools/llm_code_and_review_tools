@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Find test numbers that open Gerrit changes use in lustre/tests files.
 
+Superseded by `gerrit test-numbers FILE --suggest K` (gerrit_cli), which
+also places hunks by position, marks gaps taken and suggests a number;
+this script is kept for people who already use it.
+
 For each named test file the script reports:
   - the test IDs in the branch tip,
   - the test IDs that each open, recently updated change adds,

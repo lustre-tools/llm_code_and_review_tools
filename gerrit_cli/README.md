@@ -765,6 +765,17 @@ reviewer-candidates <URL>        # Rank who reviewed/wrote the change's files
                                  # --path, --brief; see below)
 ```
 
+### Lustre subtest numbers
+```bash
+test-numbers sanity.sh --suggest 3   # gaps no open change touches, best first
+test-numbers sanity.sh --family 56x  # next letter suffix of a family
+test-numbers sanity.sh --human       # text report: taken gaps, collisions
+```
+A number is usable when no open change (on `--branch`, updated within
+`--days`, default 60) or the tip uses it and no open change has a hunk
+within 3 lines of its gap; the append point counts as one shared gap.
+Numbers in except lists on master and the maintained branches are skipped.
+
 #### Finding reviewer candidates
 
 `reviewer-candidates` reads the files a change touches from Gerrit

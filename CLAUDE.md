@@ -158,6 +158,10 @@ owner sets this variable; agents must not set, unset, or override it.
   (ranks who reviewed, by Reviewed-by trailers, and wrote the change's
   files over the last 12 months of local git history; who MAINTAINERS
   names for the files is listed beside the ranking, not in it)
+- **Lustre subtest numbers:** `gerrit test-numbers <file> --suggest 3`
+  (`--family 56x` for the next suffix, `--json`): gaps in the tip file
+  that no open change on the branch touches, each taken one naming the
+  change, and whether the append point is contested.
 
 **Configuration:** environment variables, or a `.env` file.
 Variables already set in the environment always win. Only one file

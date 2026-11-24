@@ -113,6 +113,8 @@ for exactly the collisions you would act on, landing conflicts with
 Finding the free value is part of the fix; the tool sees only the pairs
 it tried. List the open changes on the file, read the values they add,
 and take a gap: a free value at the shared append point still conflicts.
+For a Lustre subtest number, `gerrit test-numbers <file> --suggest 3`
+does this: it names gaps no open change touches.
 Old changes (see "Old changes" in SKILL.md) do not hold a value.
 
 ```bash
