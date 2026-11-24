@@ -262,7 +262,7 @@ _LOGIN_FAILURE_RE = re.compile(
     r"invalid api key|please run /login|not logged in", re.IGNORECASE)
 _USAGE_LIMIT_RE = re.compile(
     r"hit your (\S+ )?limit|usage limit|limit will reset|"
-    r"out of extra usage", re.IGNORECASE)
+    r"out of extra usage|quota reached", re.IGNORECASE)
 _LOGIN_FAILED = threading.Event()
 
 

@@ -2000,6 +2000,9 @@ class TestLoginFailure:
         assert _USAGE_LIMIT_RE.search(
             "You've hit your 5-hour limit \u00b7 resets 7:40pm (Europe/Berlin)")
         assert _USAGE_LIMIT_RE.search("Claude AI usage limit reached")
+        assert _USAGE_LIMIT_RE.search(
+            "Individual quota reached. Please upgrade your subscription to "
+            "increase your limits. Resets in 3h50m25s.")
         assert not _USAGE_LIMIT_RE.search("rate_limit_event")
 
     def test_later_reviews_do_not_start(self, tmp_path):
