@@ -260,74 +260,80 @@ class TestRetrigger:
         assert loc == "HTTP 200"
 
 
+def _change_param(change):
+    return [{"parameters": [
+        {"name": "GERRIT_CHANGE_NUMBER", "value": str(change)},
+    ]}]
+
+
+def _mock_job(client, builds):
+    """Serve ``builds`` as the job listing and each one's detail."""
+    by_number = {b["number"]: b for b in builds}
+    listing_calls = []
+
+    def mock_get(url, **kwargs):
+        resp = MagicMock()
+        tail = url.split("/job/foo/", 1)[1]
+        if tail == "api/json":
+            listing_calls.append(kwargs.get("params", {}))
+            tree = kwargs["params"]["tree"]
+            limit = int(tree.rsplit(",", 1)[1].rstrip("}"))
+            resp.json.return_value = {"allBuilds": builds[:limit]}
+        else:
+            resp.json.return_value = by_number[int(tail.split("/")[0])]
+        return resp
+
+    client.session.get.side_effect = mock_get
+    return listing_calls
+
+
 class TestFindBuildsByGerritChange:
     def test_finds_matching_builds(self, client):
-        builds_resp = MagicMock()
-        builds_resp.json.return_value = {
-            "builds": [
-                {"number": 100},
-                {"number": 99},
-            ]
-        }
-
-        detail_100 = {
-            "number": 100,
-            "actions": [
-                {"parameters": [
-                    {"name": "GERRIT_CHANGE_NUMBER", "value": "54225"}
-                ]}
-            ],
-        }
-        detail_99 = {
-            "number": 99,
-            "actions": [
-                {"parameters": [
-                    {"name": "GERRIT_CHANGE_NUMBER", "value": "54000"}
-                ]}
-            ],
-        }
-
-        def mock_get(url, **kwargs):
-            resp = MagicMock()
-            if "/99/" in url:
-                resp.json.return_value = detail_99
-            elif "/100/" in url:
-                resp.json.return_value = detail_100
-            else:
-                resp.json.return_value = builds_resp.json.return_value
-            return resp
-
-        client.session.get.side_effect = mock_get
+        _mock_job(client, [
+            {"number": 100, "actions": _change_param(54225)},
+            {"number": 99, "actions": _change_param(54000)},
+        ])
 
         matches = client.find_builds_by_gerrit_change("foo", 54225)
         assert len(matches) == 1
         assert matches[0]["number"] == 100
 
     def test_no_matches(self, client):
-        builds_resp = MagicMock()
-        builds_resp.json.return_value = {"builds": [{"number": 100}]}
-
-        detail_100 = {
-            "number": 100,
-            "actions": [
-                {"parameters": [
-                    {"name": "GERRIT_CHANGE_NUMBER", "value": "99999"}
-                ]}
-            ],
-        }
-
-        def mock_get(url, **kwargs):
-            resp = MagicMock()
-            if "/100/" in url:
-                resp.json.return_value = detail_100
-            else:
-                resp.json.return_value = builds_resp.json.return_value
-            return resp
-
-        client.session.get.side_effect = mock_get
+        _mock_job(client, [
+            {"number": 100, "actions": _change_param(99999)},
+        ])
 
         matches = client.find_builds_by_gerrit_change("foo", 54225)
         assert len(matches) == 0
+
+    def test_finds_build_hundreds_back(self, client):
+        """fb-fecb68d471f4: lustre-reviews 137105 for 70628 ps4 was 562
+        builds back, and the old window of 20 (fetched one build per
+        request) returned nothing. The default window must reach it,
+        past the 100 that Jenkins' ``builds`` caps at, in one listing
+        request, fetching only the matching build in full."""
+        builds = [
+            {"number": 137667 - i, "actions": _change_param(70000 + i)}
+            for i in range(600)
+        ]
+        builds[562] = {"number": 137105, "actions": _change_param(70628)}
+        listing = _mock_job(client, builds)
+
+        matches = client.find_builds_by_gerrit_change("foo", 70628)
+        assert [m["number"] for m in matches] == [137105]
+        assert len(listing) == 1
+        assert listing[0]["tree"].startswith("allBuilds[")
+        assert client.session.get.call_count == 2
+
+    def test_tolerates_builds_without_parameters(self, client):
+        _mock_job(client, [
+            {"number": 101, "actions": [{}, {"parameters": None}]},
+            {"number": 100, "actions": None},
+            {"number": 99, "actions": _change_param(54225)},
+        ])
+
+        matches = client.find_builds_by_gerrit_change("foo", 54225)
+        assert [m["number"] for m in matches] == [99]
 
 
 class TestAnonymousAccess:

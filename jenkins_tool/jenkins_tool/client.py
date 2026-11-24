@@ -223,35 +223,37 @@ class JenkinsClient:
         self,
         job_name: str,
         change_number: int,
-        max_builds: int = 20,
+        max_builds: int = 1000,
     ) -> list[dict[str, Any]]:
         """Find builds triggered by a specific Gerrit change number.
 
-        Searches recent builds of a job for ones whose parameters
-        contain the given Gerrit change number.
+        Scans the newest ``max_builds`` builds of a job for ones whose
+        GERRIT_CHANGE_NUMBER parameter is the given change. The
+        parameters come in one request (``allBuilds``, which unlike
+        ``builds`` is not capped at 100), and only the matching builds
+        are fetched in full, so a deep window costs one call.
         """
-        builds = self.get_builds(job_name, limit=max_builds)
+        data = self._get_json(
+            f"/job/{job_name}/api/json",
+            params={"tree": "allBuilds[number,"
+                    f"actions[parameters[name,value]]]{{0,{max_builds}}}"},
+        )
         matching = []
-        for b in builds:
-            detail = self.get_build(job_name, b["number"])
-            for action in detail.get("actions", []):
-                params = action.get("parameters", [])
-                for p in params:
-                    if (
-                        p.get("name") == "GERRIT_CHANGE_NUMBER"
-                        and str(p.get("value")) == str(change_number)
-                    ):
-                        matching.append(detail)
-                        break
-                else:
-                    continue
-                break
+        for b in data.get("allBuilds", []):
+            for action in b.get("actions") or []:
+                if any(
+                    p.get("name") == "GERRIT_CHANGE_NUMBER"
+                    and str(p.get("value")) == str(change_number)
+                    for p in action.get("parameters") or []
+                ):
+                    matching.append(self.get_build(job_name, b["number"]))
+                    break
         return matching
 
     def find_review_builds(
         self,
         change_number: int,
-        max_builds: int = 30,
+        max_builds: int = 1000,
     ) -> list[dict[str, Any]]:
         """Find builds for a Gerrit review across review jobs.
 

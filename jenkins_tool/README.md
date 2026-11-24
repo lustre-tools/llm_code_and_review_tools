@@ -134,6 +134,8 @@ build number (aliases are rejected).
 - Console output defaults to last 200 lines (`--tail 200`); use `--head N` for the start
 - Use `--grep PATTERN` to filter console output by regex — returns only matching lines with line numbers
 - `builds` defaults to last 10 builds; use `--limit N` for more
+- `review` scans the newest 1000 builds of each `*-reviews` job (about a
+  week of lustre-reviews) in one request per job; `--limit N` goes deeper
 
 ## License
 

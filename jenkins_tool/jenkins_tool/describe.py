@@ -115,7 +115,7 @@ def get_tool_description() -> ToolDescription:
                 arguments=[
                     Argument(name="change_number", description="Gerrit change number", type="integer", required=True),
                     Argument(name="--job", description="Specific job to search"),
-                    Argument(name="--limit", description="Max builds to search per job", type="integer", default=20),
+                    Argument(name="--limit", description="Newest builds to scan per job", type="integer", default=1000),
                 ],
                 examples=[
                     "jenkins review 54225",

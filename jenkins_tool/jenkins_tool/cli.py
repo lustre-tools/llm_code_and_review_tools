@@ -544,7 +544,7 @@ def console(
 @main.command()
 @click.argument("change_number", type=int)
 @click.option("--job", default=None, help="Specific job to search (default: all *-reviews jobs)")
-@click.option("--limit", type=int, default=20, help="Max builds to search per job (default: 20)")
+@click.option("--limit", type=int, default=1000, help="Newest builds to scan per job (default: 1000, about a week of lustre-reviews)")
 @click.option("--url", envvar="JENKINS_URL", default=None, help="Jenkins server URL")
 @click.option("--token", envvar="JENKINS_TOKEN", default=None, help="Jenkins API token")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output")
