@@ -35,10 +35,9 @@ class TestBuildCmd:
 
     def test_auggie_print_and_billing(self):
         cmd = get_agent("auggie").build_cmd("model-id", "high", ["--extra"], PROMPT)
-        assert cmd == ["auggie", "--print", "--output-format", "json", "--show-cost",
-                       "--log-file", "-", "--log-level", "info",
-                       "--permission", "launch-process:allow", "--model", "model-id",
-                       "--reasoning-effort", "high", "--extra", PROMPT]
+        assert cmd == ["auggie", "--print", "--mode", "json", "--show-cost",
+                       "--no-session", "--model", "model-id",
+                       "--thinking", "high", "--extra", PROMPT]
 
     def test_cursor_stream_json_ignores_effort(self):
         cmd = get_agent("cursor").build_cmd(

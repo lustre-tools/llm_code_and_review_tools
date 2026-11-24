@@ -1263,7 +1263,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--effort", choices=list(EFFORT_LEVELS),
         default=os.environ.get("LREVIEW_EFFORT"),
         help="Reasoning effort for claude/agy (--effort), codex "
-             "(-c model_reasoning_effort=...) or auggie (--reasoning-effort); "
+             "(-c model_reasoning_effort=...) or auggie (--thinking); "
              "default: $LREVIEW_EFFORT, else high for claude (whatever the "
              "user's settings say), else the agent's own. Ignored for "
              "gemini/opencode/cursor (cursor model slugs carry the "
@@ -1516,7 +1516,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("LREVIEW_EFFORT"),
         help="Reasoning effort for the session — claude/agy "
              "(--effort), codex (-c model_reasoning_effort=...) or auggie "
-             "(--reasoning-effort); default: $LREVIEW_EFFORT or the "
+             "(--thinking); default: $LREVIEW_EFFORT or the "
              "agent's own default. Ignored for gemini/opencode/cursor; "
              "see 'lreview models' for the per-model ladders")
     chat_p.add_argument(

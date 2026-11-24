@@ -211,7 +211,8 @@ def parse_final_usage(log_path: Path):
     no dollar figure to report — and its input_tokens already include
     the cached ones (cached_input_tokens is a subset, and
     reasoning_output_tokens a subset of output_tokens), so the total
-    is input + output and nothing else.
+    is input + output and nothing else. auggie's closing billing
+    event carries cost only.
 
     Returns (tokens, cost_usd), either possibly None.
     """
@@ -220,12 +221,17 @@ def parse_final_usage(log_path: Path):
         squashed = line.replace(" ", "")
         if ('"type":"result"' not in squashed
                 and '"type":"turn.completed"' not in squashed
-                and '"event":"result"' not in squashed):
+                and '"event":"result"' not in squashed
+                and '"type":"billing"' not in squashed):
             continue
         try:
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if obj.get("type") == "billing":
+            if obj.get("usage_unit") != "usd":
+                return None, None
+            return None, obj.get("total_cost")
         if obj.get("type") == "turn.completed":
             usage = obj.get("usage") or {}
             tokens = (usage.get("input_tokens", 0)
