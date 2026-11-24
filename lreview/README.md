@@ -127,9 +127,7 @@ it a review.) Select the backend with
   (`gpt-5.3-codex-high`), so `--effort` is ignored. `--preload` sends
   the protocol and the commit on stdin, as for codex. A review that
   ends without `review-metadata.json` is asked for it once with
-  `--resume`, which continues the chat. The `agent` CLI has no fork
-  option, so `-m` does not resume an earlier review: it starts a new
-  chat from the memory document, as for codex. `--lean` does nothing
+  `--resume`, which continues the chat. `--lean` does nothing
   for cursor. Cursor's `--exclude-workspace-context` would remove the
   rules and skills, but the server refused it for the test account, so a
   review keeps Cursor's own context, about 12K tokens. The final
@@ -157,7 +155,7 @@ it a review.) Select the backend with
   On the `lreview bench` quick set (2026-11-21, 8 cases, 1 rep),
   `gemini-4-neon-high` found 10/10 known bugs (judge and regex),
   averaging 5.2m and 1.34M tokens/review.
-  **Limits:** `-m` does not fork sessions; `--lean` only adds
+  **Limits:** `--lean` only adds
   `--disable-slash-commands`; `agy` has no flag to ignore worktree
   customizations (tracked in
   [google-antigravity/antigravity-cli#1693](https://github.com/google-antigravity/antigravity-cli/issues/1693)),
@@ -340,8 +338,7 @@ machinery:
   the review-prompts checkout), sanity-check the commit message, and
   double-check every issue before reporting it — with the full
   protocol's false-positive discipline distilled in. Much cheaper and
-  faster; the everyday iteration loop, especially combined with
-  `--memory`.
+  faster; the everyday iteration loop.
 
 Light-mode artifacts are namespaced with a `-light` suffix
 (`gerrit-review-<change>_ps<N>-light.json`, `..._ps<N>-light.md`,
@@ -352,8 +349,8 @@ unposted findings for that change; use the exact key
 (`lreview post 64086-light`) to target one mode.
 
 ```bash
-lreview run --mode light --repo lustre-release -m 64086   # cheap pass
-lreview run --repo lustre-release -m 64086                # full gate
+lreview run --mode light --repo lustre-release 64086   # cheap pass
+lreview run --repo lustre-release 64086                # full gate
 ```
 
 ## Lens reviews (`--lenses`)
@@ -507,7 +504,6 @@ inputs.
 lreview bench list                                   # the cases
 lreview bench run --repo ~/lustre-release --reps 2   # one arm, every case twice
 lreview bench run --label sonnet --model sonnet --reps 2 --repo ...
-lreview bench run --label memory --memory --reps 2 --repo ...
 lreview bench report                                 # every arm, side by side
 lreview bench report --judge DIR...                  # LLM-judged matching
 ```
@@ -530,11 +526,6 @@ lreview bench report --judge DIR...                  # LLM-judged matching
   `lreview-results/bench/`), one `rep<N>` per repetition, with
   `bench-run.json` recording the lreview, agent and prompts versions
   and the options. Running again with the same `--label` adds reps.
-- `--memory` makes the reps successive rounds sharing one notes
-  database, so round 2 reads round 1's notes; without it reps are
-  independent. Comparing "found in any rep" between the two shows
-  whether memory narrows what repeated rounds find. `--resume` is off
-  here unless asked for.
 - `report` gives per arm: mean cost, wall time, calls, peak context,
   findings per review, known bugs found per review and in any rep;
   then each rep's and each case's results. Matching is by the cases'
@@ -601,78 +592,6 @@ lreview bench report --judge DIR...                  # LLM-judged matching
 
 A URL that pins an explicit patchset (`.../+/64086/38`) reviews that
 patchset instead of the current one.
-
-## Review memory (`--memory` / `-m`)
-
-Every run normally studies the patch from scratch, which burns most
-of the effort budget on re-deriving context — and makes successive
-runs surface a different handful of findings each time. `-m` gives
-each change a persistent notes document (modeled on a per-patch
-ai_docs workflow):
-
-```bash
-lreview run -m --repo lustre-release 63809     # read notes, review, update notes
-lreview run -m -c --repo lustre-release 63809  # clear the notes first
-```
-
-Before analyzing, the agent reads the change's document — what the
-patch does, call chains already established, findings already
-reported, and **false positives already eliminated** — then diffs
-the previously-reviewed patchset against the current one and spends
-the freed effort on deeper analysis and on areas marked not yet
-covered. Afterwards it rewrites the document as a fresh snapshot.
-The protocol lives in `lreview/memory-prompt.md` (shipped with the
-package; readable and editable).
-
-Documents are plain Markdown in the database directory
-(`--db`, `$LREVIEW_DB`, default `lreview-db/` in this repository —
-gitignored), named `<change>-<subject>.md` and keyed by **Gerrit
-Change-Id**, so a local pre-push review and later Gerrit reviews of
-the same patch share one document. The paths are listed at the end
-of the run — the explanations are useful reading on their own.
-
-Each document's frontmatter carries a `reviews:` counter — how many
-`-m` iterations have completed on this change. lreview bumps it
-itself after every completed run (the agent is told to leave it
-alone), records it in `summary.json` (`memory_reviews`), shows it in
-the run-end memory listing ("iteration N"), and appends it to the
-Gerrit cover message when the result is posted — "(review iteration
-N of this change, with accumulated review memory)" — so unrepeated
-earlier findings read as tracked, not forgotten. Documents from
-before the counter existed are seeded from their History section.
-
-### Resuming the review conversation (claude)
-
-With the claude agent, a completed `-m` review also records its
-conversation: the frontmatter gets a `claude-session-full:` line (or
-`claude-session-light:` for a light review) with the session ID and
-the patchset that session reviewed. The next `-m` run in that mode
-resumes a fork of that conversation (`claude --resume <id>
---fork-session`), so the agent starts with the code it read and the
-reasoning behind its earlier findings, not only the notes; the prompt
-tells it where the code is checked out now and which patchset it is.
-The new run's session replaces the old one in the document.
-
-When the conversation outgrows the context, Claude compacts it. The
-notes are already in the document, which the protocol has the agent
-save after each area of the analysis, and a per-run hook passed with
-`--settings` tells the agent right after the compaction to re-read
-the protocol and the document.
-
-```bash
-lreview run -m --repo lustre-release 63809              # resume the conversation
-lreview run -m --no-resume --repo lustre-release 63809  # fresh session, notes only
-```
-
-`--no-resume` starts a fresh session that reads only the document, as
-before; that session is recorded all the same. A recorded session
-Claude no longer has -- it deletes sessions after 30 days, and
-another machine never had it -- falls back to a fresh one with a
-note. Other agents ignore all of this.
-
-Without `-m` the database is neither read nor written. `-c` and
-`--no-resume` require `-m`; `-c` deletes just that change's document,
-recorded sessions included, before the run.
 
 ## Local reviews (no Gerrit)
 
@@ -809,9 +728,7 @@ severity, model/tokens/cost, the overall assessment, and each finding
 anchored to its file and line. A clean review writes a report saying
 so; re-reviewing a change+patchset that previously had findings also
 removes the now-superseded `gerrit-review-*.json`, so the results
-directory always reflects the latest review (with `--memory`, the
-clean report points at the memory document, which records what was
-re-checked and withdrawn). The paths are listed at the end of the
+directory always reflects the latest review. The paths are listed at the end of the
 `run` output, so results can be read comfortably without posting
 anything to Gerrit. `lreview render` (re)generates the reports for
 review JSONs that already exist — from older runs predating this
@@ -858,25 +775,16 @@ worktree (taken from the results manifest, so it matches the report
 byte-for-byte and needs no network; an unreviewed change is resolved
 from Gerrit instead) and starts an **interactive claude session**
 primed with the change's artifacts — findings JSON, report, severity
-metadata, event log, and the review memory document. Ask why a
+metadata and event log. Ask why a
 finding was raised, whether it survives a counter-argument, how the
 patch works, anything. The session is instructed to verify claims
-against the checked-out code rather than trusting the report, never
-to modify the checkout or post anywhere, and to touch the memory
-document only when explicitly asked to record something. The
+against the checked-out code rather than trusting the report, and
+never to modify the checkout or post anywhere. The
 worktree is removed when the session ends (`--keep-worktree` to
 keep it); `--model` and `--agent-arg` pass through to the agent CLI.
 
-When the review was a claude `-m` review, chat continues a fork of
-that review's own conversation (`claude --resume <id>
---fork-session`, for the mode of the review it discusses), so the
-agent already has the code it read and the reasoning behind its
-findings; the first message says where the code is checked out now.
-The fork is never recorded: anything worth keeping goes into the
-memory document, and the next `run -m` resumes the review's
-conversation as the review left it. `--no-resume`, or a session
-Claude no longer has, starts a fresh session primed with the
-artifacts as above.
+For a review run with the deprecated `-m`, chat continues a fork of
+that review's own conversation instead; `--no-resume` starts fresh.
 
 `chat --local [REF]` (default HEAD) discusses a **local review**
 instead: the ref is resolved in `--repo` (or the cwd) and matched
@@ -924,10 +832,7 @@ opencode's `--model` wants the `provider/model` form.
 | `--lenses` | off | Five lens subagents feed the reviewer (claude, full mode); see "Lens reviews" |
 | `--lens-model M` | the review's model | Model for the `--lenses` subagents |
 | `--lens-effort LEVEL` | `medium` | Effort for the `--lenses` subagents |
-| `--memory, -m` | off | Read/update the per-change review memory document |
-| `--clear-memory, -c` | off | With `-m`: delete the change's memory document first |
-| `--no-resume` | off | With `-m` (claude): start a fresh session from the memory document instead of resuming the recorded review conversation |
-| `--db DIR` | `$LREVIEW_DB`, else `<repo>/lreview-db` | Memory database directory |
+| `--memory, -m` | off | Deprecated, prints a warning: [lowers bug recall](docs/lens-review-evaluation.md#review-memory---memory) |
 | `--lean` / `--no-lean` | on (`$LREVIEW_LEAN=0` for off) | claude: minimal tools, no MCP/skills/CLAUDE.md, 5-minute prompt cache; codex: unused features off; agy: `--disable-slash-commands` (see "Cost, speed and telemetry") |
 | `--preload` / `--no-preload` | on (`$LREVIEW_PRELOAD=0` for off) | full mode: the protocol and its always-loaded files up front (claude: system prompt; codex, cursor and agy: start of the prompt on stdin), the commit in the first message |
 | `--agent-arg=ARG` | — | Extra agent-CLI arg (repeatable; `--claude-arg` is a legacy alias) |
@@ -960,7 +865,6 @@ in psN." message, but only when named (`lreview post 69459`, or
 | `LREVIEW_FALLBACK_AGENT` | Default for `--fallback-agent` |
 | `LREVIEW_MODEL` | Default for `--model` (else the backend's default, as for `--model`). A name from another agent's catalog, such as `opus` under `--agent codex`, gives way to the selected backend's default. |
 | `LREVIEW_EFFORT` | Default for `--effort` (else `high` for claude, the agent's own for the others) |
-| `LREVIEW_DB` | Default for `--db` (memory database directory) |
 | `LREVIEW_LEAN` | `0` turns `--lean` off by default |
 | `LREVIEW_PRELOAD` | `0` turns `--preload` off by default |
 | `LREVIEW_RESULTS_DIR` | Default for `--results-dir` |
@@ -1021,7 +925,7 @@ Precedence: command line, then the option's environment variable
 (`$LREVIEW_AGENT` and so on), then the config file, then the built-in
 default. Options that name one invocation's targets (`--last`,
 `--since`, `--local`, `--dry-run`, ...) are not configurable. A boolean
-flag set to `true` (`post`, `memory`, `keep-worktrees`) cannot be turned
+flag set to `true` (`post`, `keep-worktrees`) cannot be turned
 off from the command line.
 
 `worktrees_dir` is also accepted. A relative path is relative to the

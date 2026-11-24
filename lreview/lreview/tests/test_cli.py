@@ -572,6 +572,18 @@ class TestNoResume:
         assert rc == 0
         assert config.resume is True
 
+    def test_memory_warns_that_it_is_deprecated(self, tmp_path,
+                                                monkeypatch, capsys):
+        rc, config = self._run(tmp_path, monkeypatch, "-m")
+        assert rc == 0
+        assert config.memory_db is not None  # still works
+        assert "--memory/-m is deprecated" in capsys.readouterr().err
+
+    def test_no_warning_without_memory(self, tmp_path, monkeypatch, capsys):
+        rc, config = self._run(tmp_path, monkeypatch)
+        assert rc == 0
+        assert "deprecated" not in capsys.readouterr().err
+
     def test_no_resume_starts_fresh(self, tmp_path, monkeypatch):
         rc, config = self._run(tmp_path, monkeypatch, "-m", "--no-resume")
         assert rc == 0

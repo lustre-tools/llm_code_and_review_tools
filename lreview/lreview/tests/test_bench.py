@@ -157,11 +157,10 @@ def test_run_bench_end_to_end(tmp_path, source, monkeypatch):
     def config_for(results_dir, repo):
         return BatchConfig(repo=repo, results_dir=results_dir,
                            worktrees_dir=bench_dir / "worktrees",
-                           prompts_dir=prompts, memory_db=label / "db")
+                           prompts_dir=prompts)
     bench.run_bench(config_for, cases, label, 2, repos, log=lambda *a: None)
     meta = json.loads((label / bench.RUN_FILE).read_text())
     assert [r["rep"] for r in meta["reps"]] == [1, 2]
-    assert meta["memory"] is True and meta["environment"]["memory"] is True
     s = bench.summarize(bench.score(label, cases))
     assert (s["bugs_found"], s["bug_chances"]) == (2, 2)
 

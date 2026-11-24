@@ -196,8 +196,6 @@ def environment(config, cases_path: Path = CASES_PATH) -> dict:
         "lean": config.lean, "preload": config.preload,
         "lenses": config.lenses, "lens_model": config.lens_model,
         "lens_effort": config.lens_effort,
-        "memory": config.memory_db is not None,
-        "resume": config.memory_db is not None and config.resume,
         "offline": "offline-bin" in config.env.get("PATH", ""),
         "agent_args": config.agent_args,
         "prompts_rev": _git_out(config.prompts_dir, "rev-parse", "HEAD"),
@@ -214,11 +212,7 @@ def run_bench(config_for, cases: list, label_dir: Path, reps: int,
     """Review every case `reps` times; rep k's results go to
     label_dir/rep<k>.  config_for(results_dir, repo) gives the
     BatchConfig for one case; each case runs as its own batch, in its
-    own repository, `jobs` at a time.
-
-    With review memory, the reps are rounds: every rep's config names
-    the same database, label_dir/db, so round k reads the notes round
-    k-1 wrote."""
+    own repository, `jobs` at a time."""
     from concurrent.futures import ThreadPoolExecutor
     from .runner import kill_running_reviews, run_batch
     label_dir.mkdir(parents=True, exist_ok=True)
@@ -231,7 +225,6 @@ def run_bench(config_for, cases: list, label_dir: Path, reps: int,
         results_dir = label_dir / f"rep{rep}"
         config = config_for(results_dir, repos[cases[0]["id"]])
         meta.setdefault("environment", environment(config, cases_path))
-        meta["memory"] = config.memory_db is not None
         meta["cases"] = sorted(set(meta.get("cases", []))
                                | {c["id"] for c in cases})
         log(f"bench rep {rep}: {len(cases)} case(s) -> {results_dir}")
@@ -598,8 +591,6 @@ def default_label(args) -> str:
         parts.append("nolean")
     if not args.preload:
         parts.append("nopreload")
-    if args.memory:
-        parts.append("memory-resume" if args.resume else "memory")
     return f"{stamp}-{'-'.join(parts)}"
 
 

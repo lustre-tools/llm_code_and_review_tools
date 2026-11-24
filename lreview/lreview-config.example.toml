@@ -10,7 +10,7 @@
 # (for example $LREVIEW_AGENT), then this file, then the built-in default.
 # Options that name one invocation's targets (--last, --since, --local,
 # --dry-run, ...) cannot be set here. A boolean flag set to true here
-# (post, memory, keep-worktrees, series) cannot be turned off per run.
+# (post, keep-worktrees, series) cannot be turned off per run.
 
 # Built-in defaults, defined in lreview/defaults.py. Update these lines
 # when you change a default there; tests/test_defaults.py checks them.
@@ -41,11 +41,9 @@
 
 # [run]
 # post = false                        # false
-# memory = false                      # false
 # lenses = false                      # false; see "Lens reviews"
 # lens-model = "opus"                 # the review's model
 # lens-effort = "high"                # medium
-# db = "~/lreview-db"                 # lreview-db/ in the tools checkout
 
 # [chat]
 # model = "opus"

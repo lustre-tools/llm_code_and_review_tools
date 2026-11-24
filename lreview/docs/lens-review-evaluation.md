@@ -34,8 +34,7 @@ Which bug each variant found, run by run, is in
   lenses; it was 3x before. Lenses at high cost twice as much again and,
   with strict verification, found no more (26/31 both).
 - **Not worth doing:** adding the TodoWrite tool, a "recall first" line in
-  the protocol, more effort, more repeats, or carrying notes between runs
-  (`--memory`).
+  the protocol, more effort, or more repeats.
 - **The reviewer used to drop much of what the lenses found:** of the known
   bugs a lens review missed, a lens had written 43% down. Making the
   reviewer settle every candidate with evidence raised known bugs found
@@ -172,10 +171,6 @@ choice of N of the runs available:
 | cost round | ordinary, all 2-3 runs together | 56% | ~$1.2-1.8 |
 | cost round | lens review, lenses at medium, x1 | 67% | $1.42 |
 | cost round | lens review, lenses at medium, x2 | 78% | $2.84 |
-
-Earlier, on the same benchmark, rounds that read the previous round's
-notes (`--memory`) found 8 of 20 known bugs against 11 for three
-independent rounds: repeated rounds must stay independent.
 
 ### Precision
 
@@ -377,6 +372,18 @@ settles the candidates.
   them for every change, however small. On the full pilot set it then
   lost bugs (see "Full sets and cheaper lens reviews"): high stays the
   default.
+
+## Review memory (`--memory`)
+
+Deprecated. With `-m`, a review read the notes of the earlier rounds of
+the same change and rewrote them. It did not find more bugs (`lreview
+bench`, 2026-10-09):
+
+- Three rounds sharing notes found 8 of 20 known bugs; three independent
+  rounds found 11.
+- The later rounds with notes only confirmed what round 1 had found.
+
+Repeated rounds must stay independent.
 
 ## Setup notes
 

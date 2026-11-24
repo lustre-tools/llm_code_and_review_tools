@@ -388,6 +388,12 @@ def apply_since(args, repo: Path, changes, results_dir: Path):
     return None
 
 
+MEMORY_DEPRECATED = (
+    "warning: --memory/-m is deprecated and will be removed. Rounds that "
+    "read earlier notes found fewer bugs than independent rounds (8 of 20 "
+    "known bugs against 11). Review without it; --lenses finds more per run.")
+
+
 def print_dry_run_plan(args, changes, memory_db) -> None:
     """What `run` would do with these resolved changes."""
     model = resolve_model(args.agent, args.model)
@@ -613,6 +619,7 @@ def cmd_run(args) -> int:
 
     memory_db = None
     if args.memory:
+        print(MEMORY_DEPRECATED, file=sys.stderr)
         from .memory import clear_doc, default_db_dir
         from .prompts import _REPO_ROOT
         memory_db = (Path(args.db).expanduser().resolve() if args.db
@@ -876,8 +883,7 @@ def cmd_bench(args) -> int:
             timeout=args.timeout, stall_timeout=args.stall_timeout,
             stall_retry=args.stall_retry, mode=args.mode, agent=args.agent,
             model=model, effort=args.effort,
-            memory_db=(label_dir / "db") if args.memory else None,
-            resume=args.resume, lean=args.lean, preload=args.preload,
+            lean=args.lean, preload=args.preload,
             lenses=args.lenses, lens_model=args.lens_model,
             lens_effort=lens_effort(args),
             env=bench.offline_env(bench_dir) if args.offline else {},
@@ -1264,24 +1270,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Effort for the --lenses lenses (claude only; default: medium)")
     run_p.add_argument(
         "--memory", "-m", action="store_true",
-        help="Use per-change review memory: read the change's notes "
-             "document from the lreview-db before analyzing (what the "
-             "patch does, prior findings, eliminated false positives) "
-             "and rewrite it afterwards. Without this flag the db is "
-             "neither read nor written.")
+        help="Deprecated, will be removed: lowers bug recall")
     run_p.add_argument(
         "--clear-memory", "-c", action="store_true",
-        help="With --memory: delete the change's memory document "
-             "first, starting its notes from scratch")
+        help=argparse.SUPPRESS)
     run_p.add_argument(
-        "--no-resume", action="store_true",
-        help="With --memory (claude agent): start a fresh session that "
-             "reads only the memory document, instead of resuming the "
-             "review conversation recorded in it")
+        "--no-resume", action="store_true", help=argparse.SUPPRESS)
     run_p.add_argument(
-        "--db", default=None, metavar="DIR",
-        help="Memory database directory (default: $LREVIEW_DB, else "
-             "lreview-db/ in this repository — gitignored)")
+        "--db", default=None, metavar="DIR", help=argparse.SUPPRESS)
     run_p.add_argument(
         "--lean", action=argparse.BooleanOptionalAction,
         default=_env_flag("LREVIEW_LEAN", DEFAULT_LEAN),
@@ -1361,8 +1357,7 @@ def build_parser() -> argparse.ArgumentParser:
              "running again with the same label adds reps to it")
     bench_run.add_argument(
         "--reps", type=_positive_int, default=1,
-        help="Times to review each case (default 1).  With --memory "
-             "they are successive rounds sharing one notes database")
+        help="Times to review each case (default 1)")
     bench_run.add_argument(
         "--repo", default=None,
         help="A lustre-release checkout to fetch case commits from "
@@ -1397,14 +1392,6 @@ def build_parser() -> argparse.ArgumentParser:
     bench_run.add_argument(
         "--lens-effort", choices=list(CLAUDE_EFFORTS), default=None,
         help="Effort for the --lenses lenses (claude only; default: medium)")
-    bench_run.add_argument(
-        "--memory", "-m", action="store_true",
-        help="Review memory: each rep is a round that reads the notes "
-             "the previous round wrote")
-    bench_run.add_argument(
-        "--resume", action="store_true",
-        help="With --memory (claude): also resume the previous round's "
-             "conversation (off by default here)")
     bench_run.add_argument(
         "--offline", action=argparse.BooleanOptionalAction, default=True,
         help="Keep the reviewer off Gerrit and JIRA (default: on): a merged "
