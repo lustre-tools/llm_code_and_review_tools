@@ -349,6 +349,43 @@ def _normalize_issue(raw_issue: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _custom_value(value: Any) -> Any:
+    """A custom field value as text an agent can read: rich text as
+    Markdown, a select option as its value, a user or object as its
+    name."""
+    if isinstance(value, list):
+        return [_custom_value(v) for v in value]
+    if not isinstance(value, dict):
+        return value
+    if value.get("type") == "doc":
+        return _adf_to_text(value)
+    for name in ("value", "displayName", "name"):
+        if name in value:
+            child = value.get("child")
+            if child:
+                return f"{value[name]} / {_custom_value(child)}"
+            return value[name]
+    return value
+
+
+def _custom_fields(raw_issue: dict[str, Any]) -> dict[str, Any]:
+    """The issue's non-empty custom fields, by display name. The names
+    come from expand=names; a field without one keeps its ID, and so
+    does the second of two fields with the same name."""
+    names = raw_issue.get("names") or {}
+    result: dict[str, Any] = {}
+    for field_id, value in (raw_issue.get("fields") or {}).items():
+        if not field_id.startswith("customfield_"):
+            continue
+        if field_id == EPIC_LINK_FIELD or value in (None, "", [], {}):
+            continue
+        name = names.get(field_id) or field_id
+        if name in result:
+            name = field_id
+        result[name] = _custom_value(value)
+    return result
+
+
 def _trim_issue(issue: dict[str, Any], asked: list[str]) -> dict[str, Any]:
     """An issue as --fields asked for it: the key, what was named, and
     what came back under another name (fixVersions is fix_versions).

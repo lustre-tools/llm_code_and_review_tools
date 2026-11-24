@@ -29,14 +29,16 @@ def get_tool_description() -> ToolDescription:
                     Argument(name="--fields", description="Comma-separated list of fields to return"),
                     Argument(name="--output", description="Output only this field as plain text (no JSON envelope)"),
                     Argument(name="--comments", description="Include N most recent comments inline", type="integer"),
+                    Argument(name="--custom", description="Add custom_fields: every non-empty custom field by display name, rich text as Markdown, options as values", type="boolean", default=False),
                 ],
                 examples=[
                     "jira get PROJ-123",
+                    "jira get PROJ-123 --custom",
                     "jira get PROJ-123 --comments 5",
                     "jira get https://jira.example.com/browse/PROJ-123",
                     "jira get PROJ-123 --output status",
                 ],
-                output_fields=["key", "id", "summary", "description", "status", "priority", "issue_type", "project", "assignee", "reporter", "resolution", "created", "updated", "labels", "components", "fix_versions", "affects_versions", "comments", "total_comments"],
+                output_fields=["key", "id", "summary", "description", "status", "priority", "issue_type", "project", "assignee", "reporter", "resolution", "created", "updated", "labels", "components", "fix_versions", "affects_versions", "comments", "total_comments", "custom_fields"],
                 next_actions=["comments", "transitions", "attachments", "links"],
             ),
             Command(
