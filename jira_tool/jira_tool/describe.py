@@ -692,10 +692,12 @@ def get_tool_description() -> ToolDescription:
             Command(
                 name="config test",
                 description="Test connectivity to JIRA server, and the token if one is set",
-                usage="jira config test",
-                arguments=[],
-                examples=["jira config test"],
-                output_fields=["connected", "authenticated", "user", "server_title", "version", "base_url"],
+                usage="jira config test [--project KEY]",
+                arguments=[
+                    Argument(name="--project", description="Also report whether you may create issues in this project"),
+                ],
+                examples=["jira config test", "jira config test --project LU"],
+                output_fields=["connected", "authenticated", "user", "server_title", "version", "base_url", "project", "can_create"],
             ),
             Command(
                 name="config show",

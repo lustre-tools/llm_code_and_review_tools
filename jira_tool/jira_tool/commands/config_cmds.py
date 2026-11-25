@@ -79,14 +79,18 @@ def register(main):
         sys.exit(ExitCode.SUCCESS)
 
     @config.command("test")
+    @click.option(
+        "--project",
+        help="Also report whether you may create issues in this project",
+    )
     @click.pass_context
-    def config_test(ctx: click.Context) -> None:
+    def config_test(ctx: click.Context, project: str | None) -> None:
         """Test connectivity to JIRA server, and the token if one is set."""
         command = "config.test"
         pretty = ctx.obj.get("pretty", False)
 
         try:
-            client = get_client(ctx)
+            client = get_client(ctx, project=project)
             server_info = client.get_server_info()
             authenticated: bool | None = False
             user = None
@@ -103,6 +107,12 @@ def register(main):
                 "version": server_info.get("version"),
                 "base_url": server_info.get("baseUrl"),
             }
+            if project:
+                test_data["project"] = project
+                test_data["can_create"] = (
+                    client.config.authenticated
+                    and client.can_create_issues(project)
+                )
 
             envelope = success_response(test_data, command)
             output_result(envelope, pretty)

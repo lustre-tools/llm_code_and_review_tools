@@ -442,6 +442,8 @@ class JiraClient:
         parts = endpoint.strip("/").split("/")
         if parts[0] == "issue" and len(parts) in (2, 3):
             return ErrorCode.ISSUE_NOT_FOUND
+        if parts[0] == "mypermissions":
+            return ErrorCode.PROJECT_NOT_FOUND
         if parts[0] == "project" and len(parts) >= 2:
             return ErrorCode.PROJECT_NOT_FOUND
         return ErrorCode.NOT_FOUND
@@ -1491,6 +1493,17 @@ class JiraClient:
     def get_myself(self) -> dict[str, Any]:
         """Get the user the token belongs to."""
         return self._request("GET", "myself")
+
+    def can_create_issues(self, project_key: str) -> bool:
+        """Whether this account may create issues in the project."""
+        # Cloud requires the permissions parameter; Server ignores it.
+        result = self._request(
+            "GET", "mypermissions",
+            params={"projectKey": project_key, "permissions": "CREATE_ISSUES"},
+            context=project_key,
+        )
+        permission = result.get("permissions", {}).get("CREATE_ISSUES", {})
+        return bool(permission.get("havePermission"))
 
     # =========================================================================
     # Attachment Operations

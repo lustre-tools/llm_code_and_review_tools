@@ -923,6 +923,64 @@ class TestCLIConfigTest:
         assert data["data"]["authenticated"] is False
         assert len(responses.calls) == 1
 
+    PERMISSIONS = "https://jira.example.com/rest/api/2/mypermissions"
+
+    def _config_test_project(self, runner, *, status=200, **kwargs):
+        responses.add(responses.GET,
+                      "https://jira.example.com/rest/api/2/serverInfo",
+                      json=self.SERVER_INFO, status=200)
+        responses.add(responses.GET,
+                      "https://jira.example.com/rest/api/2/myself",
+                      json={"name": "jdoe"}, status=200)
+        responses.add(responses.GET, self.PERMISSIONS, status=status, **kwargs)
+        return runner.invoke(main, [
+            "--envelope", "config", "test", "--project", "LU"])
+
+    @responses.activate
+    @pytest.mark.parametrize("allowed", [True, False])
+    def test_config_test_project(self, runner, mock_env, allowed):
+        """A missing permission is reported, not an error."""
+        result = self._config_test_project(runner, json={"permissions": {
+            "CREATE_ISSUES": {"key": "CREATE_ISSUES",
+                              "havePermission": allowed}}})
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        assert data["project"] == "LU"
+        assert data["can_create"] is allowed
+        url = responses.calls[-1].request.url
+        assert "projectKey=LU" in url
+        assert "permissions=CREATE_ISSUES" in url
+
+    @responses.activate
+    def test_config_test_unknown_project(self, runner, mock_env):
+        result = self._config_test_project(
+            runner, status=404, body="<html>Not Found</html>",
+            content_type="text/html")
+
+        assert result.exit_code != 0
+        error = json.loads(result.output)["error"]
+        assert error["code"] == "PROJECT_NOT_FOUND"
+        assert "LU" in error["message"]
+
+    @responses.activate
+    def test_config_test_project_without_token(self, runner, monkeypatch, tmp_path):
+        """Without a token a write is refused, so nothing is asked."""
+        monkeypatch.setenv("JIRA_SERVER", "https://jira.example.com")
+        monkeypatch.delenv("JIRA_TOKEN", raising=False)
+        monkeypatch.delenv("JIRA_TOOL_CONFIG", raising=False)
+        responses.add(responses.GET,
+                      "https://jira.example.com/rest/api/2/serverInfo",
+                      json=self.SERVER_INFO, status=200)
+
+        result = runner.invoke(main, [
+            "--envelope", "--config", str(tmp_path / "none.json"),
+            "config", "test", "--project", "LU"])
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["data"]["can_create"] is False
+        assert len(responses.calls) == 1
+
     @responses.activate
     def test_config_test_scope_without_profile(self, runner, monkeypatch, tmp_path):
         """A scoped Cloud token may work without the scope to read myself."""
