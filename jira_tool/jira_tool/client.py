@@ -177,6 +177,7 @@ class JiraClient:
         self._session = requests.Session()
         self._api_root: str | None = None
         self._project_keys: list[str] | None = None
+        self._permission_names: str | None = None
 
         headers = {
             "Content-Type": "application/json",
@@ -1496,14 +1497,31 @@ class JiraClient:
 
     def can_create_issues(self, project_key: str) -> bool:
         """Whether this account may create issues in the project."""
+        permissions = self._my_permissions(project_key, "CREATE_ISSUES")
+        return bool(permissions.get("CREATE_ISSUES", {}).get("havePermission"))
+
+    def _my_permissions(self, project_key: str, names: str) -> dict[str, Any]:
         # Cloud requires the permissions parameter; Server ignores it.
         result = self._request(
             "GET", "mypermissions",
-            params={"projectKey": project_key, "permissions": "CREATE_ISSUES"},
+            params={"projectKey": project_key, "permissions": names},
             context=project_key,
         )
-        permission = result.get("permissions", {}).get("CREATE_ISSUES", {})
-        return bool(permission.get("havePermission"))
+        return result.get("permissions") or {}
+
+    def get_my_permissions(self, project_key: str) -> dict[str, dict[str, Any]]:
+        """This account's permissions in the project, by permission key.
+
+        Global permissions are included, as type GLOBAL. Server's old
+        names for a permission, which repeat the current one, are not.
+        """
+        if self.config.is_cloud and self._permission_names is None:
+            result = self._request("GET", "permissions")
+            self._permission_names = ",".join(result.get("permissions") or {})
+        permissions = self._my_permissions(
+            project_key, self._permission_names or "")
+        return {key: entry for key, entry in permissions.items()
+                if not entry.get("deprecatedKey")}
 
     # =========================================================================
     # Attachment Operations
@@ -1630,6 +1648,11 @@ class JiraClient:
     def visible_project_keys(self) -> list[str]:
         """Keys of every project the account can browse (cached per client)."""
         if self._project_keys is not None:
+            return self._project_keys
+        if not self.config.is_cloud:
+            # project/search is Cloud only.
+            listed = self._request("GET", "project", context="project list")
+            self._project_keys = [p["key"] for p in listed if p.get("key")]
             return self._project_keys
         keys: list[str] = []
         start = 0

@@ -981,6 +981,142 @@ class TestCLIConfigTest:
         assert json.loads(result.output)["data"]["can_create"] is False
         assert len(responses.calls) == 1
 
+    @staticmethod
+    def _permissions(**granted):
+        """A mypermissions reply; a value of None is a deprecated entry."""
+        entries = {}
+        for key, have in granted.items():
+            entries[key] = {
+                "key": key, "havePermission": bool(have),
+                "type": "GLOBAL" if key.startswith("G_") else "PROJECT"}
+            if have is None:
+                entries[key]["deprecatedKey"] = True
+        return {"permissions": entries}
+
+    def _permission_replies(self, replies):
+        responses.add(responses.GET,
+                      "https://jira.example.com/rest/api/2/serverInfo",
+                      json=self.SERVER_INFO, status=200)
+        responses.add(responses.GET,
+                      "https://jira.example.com/rest/api/2/myself",
+                      json={"name": "jdoe"}, status=200)
+        for project, reply in replies.items():
+            kwargs = {"json": reply} if isinstance(reply, dict) else {"status": reply}
+            responses.add(
+                responses.GET, self.PERMISSIONS,
+                match=[responses.matchers.query_param_matcher(
+                    {"projectKey": project}, strict_match=False)], **kwargs)
+
+    def _permission_run(self, runner, *args):
+        result = runner.invoke(
+            main, ["--envelope", "config", "test", "--permissions", *args])
+        assert result.exit_code == 0, result.output
+        return json.loads(result.output)["data"]
+
+    @responses.activate
+    def test_permissions_one_project(self, runner, mock_env):
+        self._permission_replies({"LU": self._permissions(
+            CREATE_ISSUES=True, BROWSE=True, DELETE_ISSUES=False,
+            G_BULK=True, G_ADMIN=False, OLD_NAME=None)})
+
+        data = self._permission_run(runner, "--project", "LU")
+
+        assert data["can_create"] is True
+        assert data["permissions"] == {
+            "global": {"granted": ["G_BULK"], "denied": ["G_ADMIN"]},
+            "projects": [{"keys": ["LU"],
+                          "granted": ["BROWSE", "CREATE_ISSUES"],
+                          "denied": ["DELETE_ISSUES"]}],
+        }
+        # One mypermissions call answers both.
+        assert len(responses.calls) == 3
+
+    @responses.activate
+    def test_permissions_all_projects_are_grouped(self, runner, mock_env):
+        responses.add(responses.GET,
+                      "https://jira.example.com/rest/api/2/project",
+                      json=[{"key": "LU"}, {"key": "ATM"}, {"key": "EDU"}],
+                      status=200)
+        same = self._permissions(BROWSE=True, EDIT=False, G_BULK=True)
+        self._permission_replies({
+            "LU": same, "ATM": self._permissions(BROWSE=True, EDIT=True),
+            "EDU": same})
+
+        data = self._permission_run(runner)
+
+        assert "can_create" not in data
+        assert data["permissions"]["projects"] == [
+            {"keys": ["EDU", "LU"], "granted": ["BROWSE"], "denied": ["EDIT"]},
+            {"keys": ["ATM"], "granted": ["BROWSE", "EDIT"], "denied": []},
+        ]
+        assert data["permissions"]["global"]["granted"] == ["G_BULK"]
+
+    @responses.activate
+    def test_permissions_one_unreadable_project_is_reported(self, runner, mock_env):
+        responses.add(responses.GET,
+                      "https://jira.example.com/rest/api/2/project",
+                      json=[{"key": "LU"}, {"key": "GONE"}], status=200)
+        self._permission_replies(
+            {"LU": self._permissions(BROWSE=True), "GONE": 404})
+
+        data = self._permission_run(runner)
+
+        assert [g["keys"] for g in data["permissions"]["projects"]] == [["LU"]]
+        assert list(data["permissions"]["errors"]) == ["GONE"]
+
+    @responses.activate
+    def test_permissions_without_token(self, runner, monkeypatch, tmp_path):
+        monkeypatch.setenv("JIRA_SERVER", "https://jira.example.com")
+        monkeypatch.delenv("JIRA_TOKEN", raising=False)
+        monkeypatch.delenv("JIRA_TOOL_CONFIG", raising=False)
+        responses.add(responses.GET,
+                      "https://jira.example.com/rest/api/2/serverInfo",
+                      json=self.SERVER_INFO, status=200)
+
+        result = runner.invoke(main, [
+            "--envelope", "--config", str(tmp_path / "none.json"),
+            "config", "test", "--permissions"])
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["data"]["permissions"] is None
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_permissions_cloud_names_every_permission(
+        self, runner, monkeypatch, tmp_path
+    ):
+        """Cloud refuses mypermissions without a list of permissions."""
+        (tmp_path / "c.json").write_text(json.dumps({
+            "server": "https://myorg.atlassian.net", "cloud_id": "site",
+            "auth": {"type": "basic", "email": "u@example.com", "token": "t"}}))
+        for var in ("JIRA_SERVER", "JIRA_TOKEN", "JIRA_TOOL_CONFIG",
+                    "JIRA_CLOUD_ID", "JIRA_CLOUD_EMAIL", "JIRA_CLOUD_PROJECTS"):
+            monkeypatch.delenv(var, raising=False)
+        base = "https://myorg.atlassian.net/rest/api/3/"
+        responses.add(responses.GET, base + "serverInfo", json=self.SERVER_INFO)
+        responses.add(responses.GET, base + "myself", json={"displayName": "U"})
+        responses.add(responses.GET, base + "project/search",
+                      json={"values": [{"key": "EX"}, {"key": "DDN"}],
+                            "isLast": True})
+        responses.add(responses.GET, base + "permissions",
+                      json={"permissions": {"BROWSE": {}, "EDIT": {}}})
+        responses.add(responses.GET, base + "mypermissions",
+                      json=self._permissions(BROWSE=True, EDIT=False))
+
+        result = runner.invoke(main, [
+            "--envelope", "--config", str(tmp_path / "c.json"),
+            "config", "test", "--permissions"])
+
+        assert result.exit_code == 0, result.output
+        groups = json.loads(result.output)["data"]["permissions"]["projects"]
+        assert groups == [{"keys": ["DDN", "EX"], "granted": ["BROWSE"],
+                           "denied": ["EDIT"]}]
+        urls = [c.request.url for c in responses.calls]
+        assert sum("/permissions" in u and "mypermissions" not in u
+                   for u in urls) == 1
+        assert all("permissions=BROWSE%2CEDIT" in u
+                   for u in urls if "mypermissions" in u)
+
     @responses.activate
     def test_config_test_scope_without_profile(self, runner, monkeypatch, tmp_path):
         """A scoped Cloud token may work without the scope to read myself."""

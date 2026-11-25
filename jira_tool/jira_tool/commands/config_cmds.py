@@ -1,9 +1,11 @@
 """Config commands: config group (show/sample/test)."""
 
 import sys
+from typing import Any
 
 import click
 
+from ..client import JiraClient
 from ..config import (
     DEFAULT_CONFIG_PATH,
     config_file_path,
@@ -11,12 +13,62 @@ from ..config import (
     load_config,
 )
 from ..envelope import success_response
-from ..errors import ConfigError, ExitCode, JiraToolError
+from ..errors import AuthError, ConfigError, ExitCode, JiraToolError, NotFoundError
 from ._helpers import (
     get_client,
     handle_error,
     output_result,
 )
+
+
+def _permissions_report(
+    client: JiraClient, project: str | None
+) -> dict[str, Any]:
+    """Granted and denied permissions, in *project* or every visible one.
+
+    Projects with the same permissions share an entry: a Cloud site can
+    have a hundred projects and a handful of permission schemes.
+    """
+    groups: dict[tuple[tuple[str, ...], tuple[str, ...]], list[str]] = {}
+    global_report: dict[str, list[str]] = {}
+    errors: dict[str, str] = {}
+
+    def split(entries: dict[str, dict[str, Any]], want_global: bool
+              ) -> tuple[list[str], list[str]]:
+        granted: list[str] = []
+        denied: list[str] = []
+        for key in sorted(entries):
+            if (entries[key].get("type") == "GLOBAL") == want_global:
+                have = entries[key].get("havePermission")
+                (granted if have else denied).append(key)
+        return granted, denied
+
+    for key in [project] if project else client.visible_project_keys():
+        try:
+            entries = client.get_my_permissions(key)
+        except (NotFoundError, AuthError) as e:
+            if project or e.http_status == 401:
+                raise
+            errors[key] = e.message
+            continue
+        if not global_report:
+            granted, denied = split(entries, True)
+            global_report = {"granted": granted, "denied": denied}
+        granted, denied = split(entries, False)
+        groups.setdefault((tuple(granted), tuple(denied)), []).append(key)
+
+    report: dict[str, Any] = {
+        "global": global_report,
+        "projects": [
+            {"keys": sorted(keys), "granted": list(granted),
+             "denied": list(denied)}
+            for (granted, denied), keys in sorted(
+                groups.items(), key=lambda item: (-len(item[1]), item[1]))
+        ],
+    }
+    if errors:
+        report["errors"] = errors
+    return report
 
 
 def register(main):
@@ -83,8 +135,15 @@ def register(main):
         "--project",
         help="Also report whether you may create issues in this project",
     )
+    @click.option(
+        "--permissions", is_flag=True,
+        help="Also list your permissions, in --project or in every project "
+             "you can see (one request each)",
+    )
     @click.pass_context
-    def config_test(ctx: click.Context, project: str | None) -> None:
+    def config_test(
+        ctx: click.Context, project: str | None, permissions: bool
+    ) -> None:
         """Test connectivity to JIRA server, and the token if one is set."""
         command = "config.test"
         pretty = ctx.obj.get("pretty", False)
@@ -107,12 +166,21 @@ def register(main):
                 "version": server_info.get("version"),
                 "base_url": server_info.get("baseUrl"),
             }
+            report = None
+            if permissions and client.config.authenticated:
+                report = _permissions_report(client, project)
             if project:
                 test_data["project"] = project
-                test_data["can_create"] = (
-                    client.config.authenticated
-                    and client.can_create_issues(project)
-                )
+                if report:
+                    can_create = "CREATE_ISSUES" in report["projects"][0]["granted"]
+                else:
+                    can_create = (
+                        client.config.authenticated
+                        and client.can_create_issues(project)
+                    )
+                test_data["can_create"] = can_create
+            if permissions:
+                test_data["permissions"] = report
 
             envelope = success_response(test_data, command)
             output_result(envelope, pretty)
