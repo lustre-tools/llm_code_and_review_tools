@@ -277,6 +277,18 @@ contain the `<model>` placeholder, e.g.
 `[Marc Bot - AI review - opus]`. The model is taken from `--model`,
 falling back to the model claude reports in the review log.
 
+## Version gates in tests
+
+When a commit adds `version_code` checks to tests, lreview compares their
+numbers with the version of the commit's tree, the current version of the
+branch it goes to and, for a gate of another release, whether the patch is
+on that branch (`lreview/gates.py`), and gives the reviewer the result with
+`lreview/version-gates.md`. A gate above the tree's version is a defect,
+since the patch skips its own test. A gate more than one tag behind its
+branch, because the base is old or the gate was not updated, is a resolved
+`(minor)` note. It only looks at the remotes of the change's own project,
+and at upstream's for a port.
+
 ## Backport reviews (`--backport`)
 
 A commit with a `Lustre-change:` or `Lustre-commit:` trailer is a port, and

@@ -28,6 +28,7 @@ class ResolvedChange:
     provider: str = "gerrit"
     status: Optional[str] = None  # NEW, MERGED or ABANDONED
     backport: Optional[list] = None  # backport.Upstream, set by run_batch
+    gates: str = ""  # gates.gate_facts(), set by run_batch
 
     @property
     def slug(self) -> str:
@@ -63,6 +64,7 @@ class LocalChange:
     change_id: Optional[str] = None
     since: Optional[Any] = None  # since.SinceFocus
     backport: Optional[list] = None  # backport.Upstream, set by run_batch
+    gates: str = ""  # gates.gate_facts(), set by run_batch
 
     @property
     def slug(self) -> str:

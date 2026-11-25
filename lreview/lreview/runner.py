@@ -558,6 +558,8 @@ def review_prompt(config: BatchConfig,
     if upstreams:
         from .backport import backport_prompt
         prompt += ".\n\n" + backport_prompt(upstreams)
+    if getattr(change, "gates", ""):
+        prompt += ".\n\n" + change.gates.rstrip().rstrip(".")
     if config.lenses and not preloaded:
         from .lenses import task_text
         prompt += (".\n\nThe protocol has one more task for this review, "
@@ -797,6 +799,19 @@ def attach_backport(config: BatchConfig, change: ResolvedChange) -> None:
              f"{len(change.backport)} upstream change(s)"
              + (f", {missing} not found" if missing else "")
              + (", NO Lustre-change trailers" if unmarked else ""))
+
+
+def attach_gates(config: BatchConfig, change: ResolvedChange) -> None:
+    """Look up the test version gates a change adds. As a hint: a failure
+    leaves the review without it."""
+    if getattr(change, "provider", None) == "github":
+        return
+    from .gates import gate_facts
+    try:
+        change.gates = gate_facts(config.repo, change,
+                                  getattr(change, "backport", None))
+    except Exception as exc:  # noqa: BLE001 - see above
+        _log(f"[{change.slug}] warning: version gate check failed: {exc}")
 
 
 def prepare_worktree(config: BatchConfig, change: ResolvedChange) -> Path:
@@ -1841,12 +1856,14 @@ def run_batch(
         if in_place:
             _stash_stale_artifacts(config, config.repo)
             attach_backport(config, change)
+            attach_gates(config, change)
             prepared.append((change, config.repo, False))
             continue
         try:
             prepared.append(
                 (change, prepare_worktree(config, change), True))
             attach_backport(config, change)
+            attach_gates(config, change)
         except Exception as exc:  # noqa: BLE001 - record and continue
             _log(f"[{change.slug}] worktree setup failed: {exc}")
             results.append(ReviewResult(
