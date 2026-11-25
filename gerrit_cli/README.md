@@ -801,6 +801,11 @@ gc reviewer-candidates --path lustre/llite/file.c --months 24 --brief
 `--compact` keeps only what choosing needs: per candidate name, email,
 account, score, reviewed, balanced, load, asks and hold, plus who is on
 the change now (`on_change`). The default output is unchanged.
+`no_account: true` marks a candidate with no Gerrit account matched:
+their load and holds are unknown, so balanced may rank them too high;
+resolve them with `gerrit find-user` first. `votes` counts Code-Review
+votes over `votes_days`; when that is 0, `votes_active` gives the count
+over `active_days`.
 `--table` is `--compact` with one text row per candidate in ranked order
 (`columns` names the fields: eligible or hold, senior, Reviewed-by on the
 files, last review, tree-wide `reviews_12m`, load and asks).

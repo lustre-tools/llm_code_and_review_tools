@@ -325,8 +325,7 @@ def compact_candidate(entry):
     if entry.get("account_id") is None:
         # fb-4354c0d9d048, fb-40c0a2b9cdb5: no Gerrit account found, so
         # load and holds are unknown and balanced may rank them too high.
-        out["no_account"] = ("no Gerrit account matched; load unknown: "
-                             "gerrit find-user by name or username first")
+        out["no_account"] = True
     if "balanced" in entry:
         out["balanced"] = entry["balanced"]
     if "load" in entry:

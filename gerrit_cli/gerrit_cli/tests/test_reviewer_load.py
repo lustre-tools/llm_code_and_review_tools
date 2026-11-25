@@ -288,7 +288,9 @@ def test_compact_keeps_only_what_the_choice_needs(
     assert data["on_change"] and all(
         set(p) == {"name", "email", "role"} for p in data["on_change"])
     for entry in data["candidates"]:
-        assert set(entry) == {
+        # no_account only on people with no Gerrit account (fb-4354c0d9d048)
+        assert (entry["account_id"] is None) == ("no_account" in entry)
+        assert set(entry) - {"no_account"} == {
             "name", "email", "account_id", "score", "reviewed",
             "last_reviewed", "on_change", "balanced", "asked", "answered",
             "pending", "last_asked", "hold_at", "hold", "senior",

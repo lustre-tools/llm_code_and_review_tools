@@ -299,5 +299,5 @@ def test_compact_votes_say_their_window():
     busy = compact_candidate({"name": "Q", "load": {
         "window_days": 30, "waiting": 2, "reviewed": 40}})
     assert busy["votes_days"] == 30 and "votes_active" not in busy
-    assert "find-user" in busy["no_account"]
+    assert busy["no_account"] is True
     assert "no_account" not in compact_candidate({"name": "R", "account_id": 5})
