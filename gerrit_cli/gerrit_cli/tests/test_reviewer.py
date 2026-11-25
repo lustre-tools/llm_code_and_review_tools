@@ -369,6 +369,24 @@ class TestCodeReviewer:
         assert "line" not in comment
 
     @patch("gerrit_cli.reviewer.GerritCommentsClient")
+    def test_post_review_in_reply_to_passthrough(self, mock_client_class):
+        """Test that a reply keeps in_reply_to, so it joins the thread."""
+        mock_client = MagicMock()
+        mock_client.rest.post.return_value = {}
+        mock_client_class.return_value = mock_client
+
+        result = CodeReviewer().post_review(
+            change_number=123,
+            comments={"test.py": [{"line": 4, "message": "Reply",
+                                   "in_reply_to": "abc123"}]},
+        )
+
+        assert result.success is True
+        comment = mock_client.rest.post.call_args[1]["json"]["comments"]["test.py"][0]
+        assert comment["in_reply_to"] == "abc123"
+        assert comment["line"] == 4
+
+    @patch("gerrit_cli.reviewer.GerritCommentsClient")
     def test_post_review_side_passthrough(self, mock_client_class):
         """Test that a PARENT-side comment keeps its side field."""
         mock_client = MagicMock()
