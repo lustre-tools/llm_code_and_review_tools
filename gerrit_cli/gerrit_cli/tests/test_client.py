@@ -374,6 +374,24 @@ class TestGerritCommentsClientWithMocks:
     @patch.dict(os.environ, {"GERRIT_CLI_MODE": "full"})
     @patch("gerrit_cli.client.GerritRestAPI")
     @patch("gerrit_cli.client.HTTPBasicAuth")
+    def test_update_draft(self, mock_auth, mock_api):
+        """An update goes to the draft's own endpoint and publishes
+        nothing, drafts mode or not."""
+        mock_rest = MagicMock()
+        mock_rest.put.return_value = {"id": "d1", "message": "new"}
+        mock_api.return_value = mock_rest
+
+        client = GerritCommentsClient()
+        comment = {"path": "a.c", "line": 3, "message": "new"}
+        assert client.update_draft(123, "abc123", "d1", comment) == {
+            "id": "d1", "message": "new"}
+        mock_rest.put.assert_called_once_with(
+            "/changes/123/revisions/abc123/drafts/d1", json=comment)
+        mock_rest.post.assert_not_called()
+
+    @patch.dict(os.environ, {"GERRIT_CLI_MODE": "full"})
+    @patch("gerrit_cli.client.GerritRestAPI")
+    @patch("gerrit_cli.client.HTTPBasicAuth")
     def test_post_review(self, mock_auth, mock_api):
         """Test posting a review."""
         mock_rest = MagicMock()
