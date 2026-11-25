@@ -379,6 +379,7 @@ class ReviewResult:
     memory_updated: bool = False
     memory_reviews: Optional[int] = None
     session_id: Optional[str] = None
+    session_options: Optional[dict] = None
     log_path: Optional[Path] = None
     error: Optional[str] = None
     telemetry: Optional[dict] = None
@@ -750,13 +751,16 @@ def lens_args(config: BatchConfig, worktree: Optional[Path] = None) -> dict:
                                   config.lens_effort, commit_diff(worktree))}
 
 
+LENS_ENV = {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
+
+
 def lens_env(config: BatchConfig) -> dict:
     """Environment for a --lenses review: Agent calls block until the
     lens returns, so the reviewer waits for the lenses instead of
     working alongside them."""
     if not config.lenses or config.agent != "claude":
         return {}
-    return {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
+    return dict(LENS_ENV)
 
 
 def lens_label(config: BatchConfig) -> Optional[str]:
@@ -1673,6 +1677,9 @@ def _review_and_cleanup(
     result.lenses = lens_label(config)
     if config.agent == "claude" and result.log_path:
         result.session_id = parse_session_id(result.log_path)
+        if result.session_id:
+            from .session import session_options
+            result.session_options = session_options(config, change)
     if result.log_path and result.log_path.is_file():
         result.telemetry = record_telemetry(config, result)
     if memory_path is not None:
@@ -1961,6 +1968,9 @@ def update_summary(results_dir: Path, results: list[ReviewResult],
                 "memory": (str(result.memory_path)
                            if result.memory_path else None),
                 "memory_reviews": result.memory_reviews,
+                "session": ({"id": result.session_id,
+                             **(result.session_options or {})}
+                            if result.session_id else None),
                 "log": result.log_path.name if result.log_path else None,
                 "telemetry": result.telemetry,
                 "error": result.error,

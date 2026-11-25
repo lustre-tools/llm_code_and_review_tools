@@ -579,6 +579,29 @@ class TestNoResume:
         assert config.memory_db is not None  # still works
         assert "--memory/-m is deprecated" in capsys.readouterr().err
 
+    @pytest.mark.parametrize("argv, error", [
+        (("--chat",), "needs a terminal"),
+        (("--chat", "--agent", "codex"), "needs the claude agent"),
+    ])
+    def test_chat_needs_claude_and_a_terminal(self, tmp_path, monkeypatch,
+                                              capsys, argv, error):
+        rc, config = self._run(tmp_path, monkeypatch, *argv)
+        assert rc == 1
+        assert config is None  # nothing was reviewed
+        assert error in capsys.readouterr().out
+
+    def test_chat_starts_after_the_batch(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
+        monkeypatch.setattr("sys.stdout.isatty", lambda: True, raising=False)
+        monkeypatch.setattr(
+            "lreview.chat.chat_after_run",
+            lambda config, results, in_place=False:
+                calls.append((results, in_place)))
+        rc, config = self._run(tmp_path, monkeypatch, "--chat")
+        assert rc == 0
+        assert calls == [([], True)]
+
     def test_no_warning_without_memory(self, tmp_path, monkeypatch, capsys):
         rc, config = self._run(tmp_path, monkeypatch)
         assert rc == 0

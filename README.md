@@ -41,8 +41,8 @@ lreview run --repo lustre-release --post 64086   # or review + post in one go
 lreview run --mode light --repo lustre-release 64086  # cheap single-pass review
 lreview run --repo lustre-release --last 3      # or review the newest 3
                                                 # local commits, no Gerrit
-lreview chat 64086                              # interactive session over an
-                                                # existing review
+lreview run --chat 64086                        # review, then discuss it
+lreview chat 64086                              # discuss an earlier review
 ```
 
 Live colored status with per-review token counter while running;

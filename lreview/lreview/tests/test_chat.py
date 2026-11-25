@@ -395,7 +395,7 @@ class TestRunChat:
         assert argv[argv.index("--resume") + 1] == "sess-9"
         assert "--fork-session" in argv
         prompt = argv[-1]
-        assert "continuing your earlier review" in prompt
+        assert "is finished" in prompt and "continuing it" in prompt
         assert invocation["cwd"] in prompt
         # the chat's own session is a fork that is never recorded
         assert read_session(doc, "full").session_id == "sess-9"
@@ -443,3 +443,213 @@ class TestRunChat:
         args = build_parser().parse_args(["chat", "64616"])
         cmd_chat(args)
         assert captured["resume"] is True
+
+
+class TestReviewSession:
+    """chat continues the review's own conversation, found in the
+    manifest, or in the log of a review that did not record it."""
+
+    OPTIONS = {"model": "sonnet", "effort": "high", "lean": True,
+               "preload": ".preload-abc.md", "lenses": True,
+               "lens_model": None, "lens_effort": "medium",
+               "agent_args": ["--x"]}
+
+    @pytest.fixture
+    def world(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        for cmd in (["git", "init", "-q", str(repo)],
+                    ["git", "-C", str(repo), "-c", "user.email=t@t", "-c",
+                     "user.name=t", "commit", "-q", "--allow-empty", "-m",
+                     "c"]):
+            subprocess.run(cmd, check=True)
+        sha = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True,
+            capture_output=True, check=True).stdout.strip()
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        stub = bin_dir / "claude"
+        record = tmp_path / "invocation.json"
+        stub.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, sys\n"
+            f"open({str(record)!r}, 'w').write(json.dumps(\n"
+            "    {'argv': sys.argv[1:], 'cwd': os.getcwd(),\n"
+            "     'env': dict(os.environ)}))\n")
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+        monkeypatch.setenv(
+            "PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+        config_dir = tmp_path / "claude-config"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+        session = config_dir / "projects" / "-wt" / "sess-9.jsonl"
+        (session.with_suffix("") / "subagents").mkdir(parents=True)
+        session.write_text("{}\n")
+        results = tmp_path / "results"
+        results.mkdir()
+        (results / ".preload-abc.md").write_text("protocol")
+
+        class World:
+            pass
+        w = World()
+        w.repo, w.sha, w.results, w.tmp = repo, sha, results, tmp_path
+        w.session_file = session
+        w.invocation = lambda: json.loads(record.read_text())
+
+        def entry(**kw):
+            (results / "summary.json").write_text(json.dumps({"64616": {
+                "number": 64616, "patchset": 27, "sha": sha, "mode": "full",
+                "subject": "LU-1 lod: subject", "status": "findings",
+                "agent": "claude", "base_url": "https://gerrit.invalid",
+                "repository": "fs/lustre-release", **kw}}))
+        w.entry = entry
+
+        def chat(**kw):
+            assert run_chat("64616", repo=repo, results_dir=results,
+                            worktrees_dir=tmp_path / "wt", **kw) == 0
+            return w.invocation()
+        w.chat = chat
+        return w
+
+    def test_continues_with_the_reviews_own_flags(self, world):
+        world.entry(session={"id": "sess-9", **self.OPTIONS})
+        got = world.chat()
+        argv = got["argv"]
+        assert argv[argv.index("--resume") + 1] == "sess-9"
+        assert "--fork-session" in argv
+        assert argv[argv.index("--model") + 1] == "sonnet"
+        assert argv[argv.index("--effort") + 1] == "high"
+        assert argv[argv.index("--tools") + 1].endswith("Agent,TodoWrite")
+        assert "lens" in json.loads(argv[argv.index("--agents") + 1])
+        assert argv[argv.index("--append-system-prompt-file") + 1] == str(
+            world.results / ".preload-abc.md")
+        assert "--x" in argv
+        assert got["env"]["CLAUDE_CODE_PROMPT_CACHE_TTL"] == "5m"
+        assert got["env"]["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+        assert "dangerously" not in " ".join(argv)
+        assert "subagents/*.jsonl" in argv[-1]
+        assert "suspicions" not in argv[-1]
+
+    def test_the_review_command_has_the_same_cached_flags(self, world):
+        """What chat passes for the tools and the system prompt is what
+        the review passed, or the prompt cache misses."""
+        from lreview.runner import BatchConfig, build_agent_cmd
+        from lreview.session import ReviewSession, launch, session_options
+        prompts = world.tmp / "prompts"
+        (prompts / "subsystem").mkdir(parents=True)
+        from lreview.runner import PRELOAD_FILES
+        for name in PRELOAD_FILES:
+            (prompts / name).write_text(name)
+        config = BatchConfig(
+            repo=world.repo, results_dir=world.results,
+            worktrees_dir=world.tmp / "wt", prompts_dir=prompts,
+            model="sonnet", effort="high", lean=True, preload=True,
+            lenses=True, lens_effort="medium")
+        change = _change(sha=world.sha)
+        review = build_agent_cmd(config, change, worktree=world.repo)
+        args, _ = launch(
+            ReviewSession("s", "r", session_options(config, change)),
+            world.repo, world.results)
+        for flag in ("--setting-sources", "--agents", "--tools",
+                     "--append-system-prompt-file"):
+            assert (args[args.index(flag) + 1]
+                    == review[review.index(flag) + 1]), flag
+        assert "--disable-slash-commands" not in args  # keeps /exit
+        for flag in ("--strict-mcp-config",
+                     "--exclude-dynamic-system-prompt-sections"):
+            assert flag in args and flag in review
+
+    def test_an_older_review_has_its_session_in_the_log(self, world):
+        (world.results / "r.log").write_text(
+            '{"type":"system","subtype":"init","session_id":"sess-9"}\n')
+        world.entry(log="r.log", model="sonnet", effort="high",
+                    lenses="sonnet/medium")
+        argv = world.chat()["argv"]
+        assert argv[argv.index("--resume") + 1] == "sess-9"
+        assert argv[argv.index("--model") + 1] == "sonnet"
+
+    def test_chats_own_model_wins(self, world):
+        world.entry(session={"id": "sess-9", **self.OPTIONS})
+        argv = world.chat(model="opus")["argv"]
+        assert argv[argv.index("--model") + 1] == "opus"
+
+    LENS_LOG = "\n".join(json.dumps(e) for e in (
+        {"type": "system", "session_id": "sess-9"},
+        {"type": "assistant", "parent_tool_use_id": "t", "message": {
+            "content": [{"type": "tool_use", "name": "Bash", "input": {
+                "command": "mkdir -p c; cat > c/LENS-data.json <<'EOF'\n"
+                           "{\"claim\": \"overflow\"}\nEOF\necho ok"}}]}},
+        {"type": "assistant", "parent_tool_use_id": "t", "message": {
+            "content": [{"type": "tool_use", "name": "Bash", "input": {
+                "command": "echo '{\"candidates\":[]}' > "
+                           "c/LENS-build.json"}}]}},
+        {"type": "assistant", "message": {"content": [{
+            "type": "text",
+            "text": "LENS DISPOSITIONS:\n- data 1: ELIMINATED (a.c:7)"}]}},
+    ))
+
+    def test_no_resume_starts_from_the_lens_dossier(self, world):
+        (world.results / "r.log").write_text(self.LENS_LOG)
+        (world.results / "r.md").write_text("THE REPORT TEXT")
+        world.entry(log="r.log", markdown="r.md",
+                    session={"id": "sess-9", **self.OPTIONS})
+        argv = world.chat(resume=False)["argv"]
+        assert "--resume" not in argv and "--agents" not in argv
+        assert "--add-dir" not in argv
+        assert "THE REPORT TEXT" in argv[-1]
+        assert '{"claim": "overflow"}' in argv[-1]
+        assert '{"candidates":[]}' in argv[-1]
+        assert "data 1: ELIMINATED (a.c:7)" in argv[-1]
+
+    def test_a_lost_session_starts_from_the_lens_dossier(self, world,
+                                                         capsys):
+        world.session_file.unlink()
+        (world.results / "r.log").write_text(self.LENS_LOG)
+        world.entry(log="r.log", session={"id": "sess-9", **self.OPTIONS})
+        argv = world.chat()["argv"]
+        assert "--resume" not in argv
+        assert "overflow" in argv[-1]
+        assert "no longer has the review session" in capsys.readouterr().out
+
+    def test_another_agents_review_is_not_resumed(self, world):
+        world.entry(agent="codex", session={"id": "sess-9"})
+        assert "--resume" not in world.chat()["argv"]
+
+    def _result(self, world, number=64616, **kw):
+        from lreview.runner import ReviewResult
+        change = _change(number=number, sha=world.sha)
+        return ReviewResult(change, kw.pop("status", "findings"),
+                            session_id=kw.pop("session_id", "sess-9"),
+                            session_options=self.OPTIONS, **kw)
+
+    def _after_run(self, world, results, **kw):
+        from lreview.chat import chat_after_run
+        from lreview.runner import BatchConfig
+        world.entry()
+        return chat_after_run(BatchConfig(
+            repo=world.repo, results_dir=world.results,
+            worktrees_dir=world.tmp / "wt"), results, **kw)
+
+    def test_run_chat_goes_on_in_the_review(self, world):
+        assert self._after_run(world, [self._result(world)]) == 0
+        got = world.invocation()
+        assert got["argv"][got["argv"].index("--resume") + 1] == "sess-9"
+        # the review's worktree path, gone again afterwards
+        assert got["cwd"].endswith(f"kreview_64616_ps27.{os.getpid()}")
+        assert not Path(got["cwd"]).exists()
+
+    def test_run_chat_in_place_keeps_the_repo(self, world):
+        self._after_run(world, [self._result(world)], in_place=True)
+        assert world.invocation()["cwd"] == str(world.repo)
+        assert world.repo.is_dir()
+
+    def test_run_chat_asks_which_of_several(self, world, monkeypatch):
+        answers = iter(["9", "2"])
+        monkeypatch.setattr("builtins.input", lambda p: next(answers))
+        self._after_run(world, [
+            self._result(world, number=1), self._result(world, number=2),
+            self._result(world, number=3, status="failed")])
+        assert "Gerrit change 2 " in world.invocation()["argv"][-1]
+
+    def test_run_chat_without_a_finished_review(self, world, capsys):
+        self._after_run(world, [self._result(world, status="failed")])
+        assert "no finished claude review" in capsys.readouterr().out
+        assert not (world.tmp / "invocation.json").exists()

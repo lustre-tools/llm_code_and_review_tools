@@ -14,6 +14,7 @@ the reviewer's.
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -307,3 +308,71 @@ def record_preexisting(path: Path, results_dir: Path, slug: str,
             db.write(json.dumps({"key": key, "change": change_label, "sha": sha,
                                  "date": time.strftime("%Y-%m-%d"), **i}) + "\n")
     return len(issues)
+
+
+# What chat gets of a lens review at most; a review writes 6 KB on average.
+DOSSIER_MAX = 60_000
+_LENS_FILE_RE = re.compile(r"LENS-(%s)\.json" % "|".join(LENSES))
+_HEREDOC_RE = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n(.*?)\n\1\b", re.S)
+_VERDICT_RE = re.compile(
+    r"LENS DISPOSITIONS|^LENSES: |\b(?:CONFIRMED|ELIMINATED|PRE-EXISTING|"
+    r"UNSETTLED)\b", re.M)
+
+
+def dossier(log_path: Path) -> str:
+    """What the lenses suspected and how the reviewer settled it, from
+    a claude review's log; "" when the log has none.  The lenses' files
+    themselves go with the review's worktree."""
+    candidates: dict = {}
+    verdicts: list = []
+    try:
+        lines = open(log_path, errors="replace")
+    except OSError:
+        return ""
+    with lines:
+        for line in lines:
+            if "LENS" not in line and not _VERDICT_RE.search(line):
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "assistant":
+                continue
+            for block in (event.get("message") or {}).get("content") or []:
+                if event.get("parent_tool_use_id"):
+                    if block.get("type") == "tool_use":
+                        found = _lens_write(block.get("input") or {})
+                        if found:
+                            candidates[found[0]] = found[1]
+                elif (block.get("type") == "text"
+                        and _VERDICT_RE.search(block["text"])):
+                    verdicts.append(block["text"].strip())
+    parts = [f"### {lens}\n{candidates[lens]}"
+             for lens in LENSES if lens in candidates]
+    if not parts:
+        return ""
+    text = "## What the lenses suspected\n\n" + "\n\n".join(parts)
+    text += "\n\n## How the reviewer settled it\n\n" + (
+        "\n\n".join(verdicts) or "The review's log has no verdicts.")
+    if len(text) > DOSSIER_MAX:
+        text = text[:DOSSIER_MAX] + "\n[cut]"
+    return text
+
+
+def _lens_write(tool_input: dict) -> Optional[tuple]:
+    """(lens, JSON text) when a lens's tool call writes its file."""
+    if "file_path" in tool_input:
+        where, text = tool_input["file_path"], tool_input.get("content")
+    else:
+        where = command = tool_input.get("command") or ""
+        heredoc = _HEREDOC_RE.search(command)
+        if heredoc:
+            text = heredoc.group(2)
+        else:  # echoed, or written by a script that holds the JSON
+            text = (command[command.find("{"):command.rfind("}") + 1]
+                    if "candidates" in command else None)
+    match = _LENS_FILE_RE.search(where)
+    if not match or not text:
+        return None
+    return match.group(1), text.strip()

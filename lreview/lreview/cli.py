@@ -455,6 +455,16 @@ def cmd_run(args) -> int:
     if not check_lenses(args):
         return 1
 
+    if args.chat:
+        if args.agent != "claude" or args.github:
+            print("error: --chat needs the claude agent and does not "
+                  "support --github")
+            return 1
+        if not args.dry_run and not (sys.stdin.isatty()
+                                     and sys.stdout.isatty()):
+            print("error: --chat needs a terminal")
+            return 1
+
     prompts_status = ensure_prompts(args)
     if prompts_status is None:
         return 2
@@ -806,6 +816,13 @@ def cmd_run(args) -> int:
             print(f"  lreview post {changes_arg} "
                   f"--results-dir {results_dir}{prefix_arg}")
 
+    if args.chat:
+        from .chat import chat_after_run
+        try:
+            chat_after_run(config, results, in_place=in_place)
+        except Exception as exc:
+            print(f"error: cannot start the chat: {exc}")
+            return 1
     return 1 if failed else 0
 
 
@@ -1269,6 +1286,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--lens-effort", choices=list(CLAUDE_EFFORTS), default=None,
         help="Effort for the --lenses lenses (claude only; default: medium)")
     run_p.add_argument(
+        "--chat", action="store_true",
+        help="When the review ends, go on in its conversation "
+             "interactively (claude; pick one of several). Claude's cache "
+             "keeps it for 5 minutes, so this is far cheaper than a later "
+             "'lreview chat'")
+    run_p.add_argument(
         "--memory", "-m", action="store_true",
         help="Deprecated, will be removed: lowers bug recall")
     run_p.add_argument(
@@ -1486,8 +1509,8 @@ def build_parser() -> argparse.ArgumentParser:
              "backend, others are best-effort)")
     chat_p.add_argument(
         "--model", default=None,
-        help="Model for the interactive session (default: the "
-             "agent's own default)")
+        help="Model for the interactive session (default: the review's "
+             "when continuing its conversation, else the agent's own)")
     chat_p.add_argument(
         "--effort", choices=list(EFFORT_LEVELS),
         default=os.environ.get("LREVIEW_EFFORT"),
@@ -1501,9 +1524,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep the discussion worktree after the session ends")
     chat_p.add_argument(
         "--no-resume", action="store_true",
-        help="Claude agent: start a fresh session primed with the review "
-             "artifacts and the memory document, instead of continuing a "
-             "fork of the review's own session")
+        help="Claude agent: start a fresh session from the report and, "
+             "for a lens review, the lenses' suspicions and the reviewer's "
+             "verdicts, instead of continuing the review's conversation")
     chat_p.add_argument(
         "--agent-arg", "--claude-arg", action="append", dest="agent_arg",
         metavar="ARG",

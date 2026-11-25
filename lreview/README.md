@@ -768,23 +768,35 @@ Changes are Gerrit change numbers or URLs; flags may come before or
 after them, but keep the change list contiguous (argparse cannot
 rejoin a positional list split around a flag).
 
-### chat — discuss an existing review interactively
+### chat — discuss a review interactively
 
-`lreview chat 64086` checks the **reviewed revision** out into a
-worktree (taken from the results manifest, so it matches the report
-byte-for-byte and needs no network; an unreviewed change is resolved
-from Gerrit instead) and starts an **interactive claude session**
-primed with the change's artifacts — findings JSON, report, severity
-metadata and event log. Ask why a
-finding was raised, whether it survives a counter-argument, how the
-patch works, anything. The session is instructed to verify claims
-against the checked-out code rather than trusting the report, and
-never to modify the checkout or post anywhere. The
-worktree is removed when the session ends (`--keep-worktree` to
-keep it); `--model` and `--agent-arg` pass through to the agent CLI.
+```bash
+lreview run --chat --lenses 64086   # review, then go on in its conversation
+lreview chat 64086                  # later: continue the review's conversation
+lreview chat --no-resume 64086      # fresh session from the report
+```
 
-For a review run with the deprecated `-m`, chat continues a fork of
-that review's own conversation instead; `--no-resume` starts fresh.
+- **`run --chat`** (claude) opens the review's own conversation as soon
+  as the review ends, results written and `--post` done. Claude's cache
+  still holds it, so it costs next to nothing to open; the cache lasts 5
+  minutes, after which the next question reloads the conversation. Of
+  several reviews you pick one.
+- **`chat`** continues a fork of the review's conversation (claude; on
+  the machine that ran it, 30 days by default), lens reviews included,
+  with the review's model, effort and tools. `--model` overrides the
+  model.
+- **`chat --no-resume`**, another agent, or a conversation Claude no
+  longer has: a fresh session that reads the report and, for a lens
+  review, what each lens suspected and how the reviewer settled it,
+  taken from the review's log.
+
+The reviewed revision is checked out into a worktree (from the results
+manifest, so it matches the report and needs no network; an unreviewed
+change is resolved from Gerrit), which is removed when the session ends
+(`--keep-worktree` keeps it). The session is told to verify claims
+against the code, never to modify the checkout, and never to post.
+Ask why a finding was raised, why one was not, how the patch works.
+It runs with your normal permission mode, unlike a review.
 
 `chat --local [REF]` (default HEAD) discusses a **local review**
 instead: the ref is resolved in `--repo` (or the cwd) and matched
@@ -832,6 +844,7 @@ opencode's `--model` wants the `provider/model` form.
 | `--lenses` | off | Five lens subagents feed the reviewer (claude, full mode); see "Lens reviews" |
 | `--lens-model M` | the review's model | Model for the `--lenses` subagents |
 | `--lens-effort LEVEL` | `medium` | Effort for the `--lenses` subagents |
+| `--chat` | off | Go on in the review's conversation when it ends (claude; see "chat") |
 | `--memory, -m` | off | Deprecated, prints a warning: [lowers bug recall](docs/lens-review-evaluation.md#review-memory---memory) |
 | `--lean` / `--no-lean` | on (`$LREVIEW_LEAN=0` for off) | claude: minimal tools, no MCP/skills/CLAUDE.md, 5-minute prompt cache; codex: unused features off; agy: `--disable-slash-commands` (see "Cost, speed and telemetry") |
 | `--preload` / `--no-preload` | on (`$LREVIEW_PRELOAD=0` for off) | full mode: the protocol and its always-loaded files up front (claude: system prompt; codex, cursor and agy: start of the prompt on stdin), the commit in the first message |

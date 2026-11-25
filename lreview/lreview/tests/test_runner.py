@@ -558,6 +558,9 @@ class TestRunBatch:
         assert summary["101"]["cost_usd"] == 1.23
         assert summary["101"]["markdown"] == "markdown/101_change_101_ps1.md"
         assert summary["101"]["sha"] == sha_findings
+        # so that chat can continue the review's conversation
+        assert summary["101"]["session"]["id"] == "sess-1"
+        assert summary["101"]["session"]["effort"] == config.effort
         assert summary["101"]["posted"] is False
         assert summary["102"]["status"] == STATUS_CLEAN
         assert summary["102"]["markdown"] == "markdown/102_change_102_ps1.md"

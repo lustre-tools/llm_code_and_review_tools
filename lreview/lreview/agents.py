@@ -315,6 +315,7 @@ class AgentSpec:
         prompt_text: str,
         effort: Optional[str] = None,
         resume: Optional[str] = None,
+        session_args: tuple = (),
     ) -> list[str]:
         """Interactive session seeded with an initial prompt.
 
@@ -326,6 +327,7 @@ class AgentSpec:
         allowed by default in all four).
 
         resume, claude only: start from a fork of that session.
+        session_args, claude only: the flags from session.launch().
         """
         if self.name == "claude":
             cmd = ["claude"]
@@ -335,7 +337,7 @@ class AgentSpec:
                 cmd += ["--effort", effort]
             if resume:
                 cmd += ["--resume", resume, "--fork-session"]
-            return cmd + extra_args + [prompt_text]
+            return cmd + [*session_args, *extra_args, prompt_text]
         if self.name == "codex":
             # Bare `codex` is the TUI; the positional prompt is
             # auto-submitted as the first turn (`codex exec` is the
@@ -490,10 +492,18 @@ _SESSION_ID_RE = re.compile(r"[A-Za-z0-9-]+")
 def claude_session_exists(session_id: str) -> bool:
     """Whether Claude Code still keeps the session: it deletes old ones
     (cleanupPeriodDays), and another machine never had it."""
+    return claude_session_dir(session_id) is not None
+
+
+def claude_session_dir(session_id: str) -> Optional[Path]:
+    """The directory Claude Code keeps beside the session's transcript
+    (its subagents' transcripts; it need not exist), None without one."""
     if not _SESSION_ID_RE.fullmatch(session_id):
-        return False
+        return None
     config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude"
-    return any((Path(config_dir) / "projects").glob(f"*/{session_id}.jsonl"))
+    for path in (Path(config_dir) / "projects").glob(f"*/{session_id}.jsonl"):
+        return path.with_suffix("")
+    return None
 
 
 AGENTS = {

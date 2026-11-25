@@ -34,7 +34,7 @@ def load_config() -> dict:
 _NOT_CONFIGURABLE = frozenset({
     "changes", "change", "paths", "github", "local", "last", "since",
     "output", "dry_run", "clear_memory", "force", "help", "version",
-    "func", "command", "worktrees_dir",
+    "func", "command", "worktrees_dir", "chat",
 })
 
 # Environment variable that outranks the config file for an option.

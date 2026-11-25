@@ -1,9 +1,13 @@
 """Interactive discussion sessions over existing review results.
 
 `lreview chat <change>` checks the reviewed revision out into a
-worktree and starts an interactive claude session primed with the
-collected review artifacts (findings JSON, report, memory document),
-so findings can be questioned and the patch explored conversationally.
+worktree and starts an interactive claude session 
+that continues a fork of the review's own conversation (session.py).
+Without one -- Claude lost it, another agent, or --no-resume -- the
+session starts from the collected artifacts instead: findings JSON,
+report, and from a lens review's log what each lens suspected and how
+the reviewer settled it.  `lreview run --chat` goes on in the review's
+conversation as soon as the review ends.
 The reviewed revision comes from the manifest when the change was
 reviewed before — the session then matches the report byte-for-byte
 and needs no network — and is resolved from Gerrit otherwise.
@@ -17,7 +21,10 @@ from typing import Optional
 from .defaults import DEFAULT_AGENT
 from .gerrit import LocalChange, ResolvedChange, change_ref
 from .manifest import read_summary
-from .runner import BatchConfig, artifact_tag, prepare_worktree
+from .runner import (STATUS_CLEAN, STATUS_FINDINGS, BatchConfig,
+                     artifact_tag, prepare_worktree, reviewed_label)
+from .session import (ReviewSession, launch, launch_options,
+                      lens_transcripts, review_session)
 from . import worktree as wt
 
 
@@ -47,6 +54,8 @@ def artifact_lines(results_dir: Path, db_dir: Optional[Path],
             ("human-readable report", entry.get("markdown")),
             ("severity metadata",
              f"review-metadata-{change.slug}{tag}.json"),
+            ("pre-existing bugs the review noticed",
+             f"pre-existing-{change.slug}{tag}.json"),
             ("review event log (JSONL, large — only for provenance "
              "questions)", entry.get("log")),
         ]
@@ -69,7 +78,8 @@ def artifact_lines(results_dir: Path, db_dir: Optional[Path],
 
 
 def chat_prompt(change, artifacts: list[str], session=None,
-                worktree: Optional[Path] = None) -> str:
+                worktree: Optional[Path] = None, report: str = "",
+                dossier: str = "", transcripts: Optional[Path] = None) -> str:
     """The chat's first message. Continuing the review's own session,
     it says where the code is now: the conversation remembers the
     review's worktree, which is gone."""
@@ -86,34 +96,43 @@ def chat_prompt(change, artifacts: list[str], session=None,
               "out at HEAD of this worktree; `git show HEAD` is the "
               "patch under discussion.")
     if session is not None:
-        header = (f"You are continuing your earlier review of {what} "
-                  f"(it looked at {session.reviewed}), now as an "
-                  "interactive discussion with the user. The review's "
+        header = (f"The review of {what} is finished (it looked at "
+                  f"{session.reviewed}): you are continuing it as an "
+                  "interactive discussion with the user, so the review "
+                  "protocol and its output files no longer apply. The "
+                  "review's "
                   "worktree is gone: the change is checked out at HEAD "
                   f"of {worktree}; `git show HEAD` is the patch under "
                   "discussion.")
     if artifacts:
         listing = ("Artifacts from earlier lreview runs of this "
                    "change:\n" + "\n".join(artifacts))
-        opening = ("Start by reading the report and the memory document "
-                   "(when listed), then give a short summary of what "
-                   "the patch does and the current findings, and wait "
-                   "for questions.")
+        opening = ("Start by reading the patch and the report, then give "
+                   "a short summary of what the patch does and the "
+                   "findings, and wait for questions.")
         if session is not None:
-            opening = ("Give a short summary of what the patch does and "
-                       "the current findings, reading the report and the "
-                       "memory document for anything you no longer have, "
-                       "and wait for questions.")
+            opening = ("From what you already have, give a short summary "
+                       "of what the patch does and the findings, and wait "
+                       "for questions.")
     else:
         listing = ("No collected review artifacts were found for this "
                    "change — work from the checkout alone.")
         opening = ("Start by reading the patch, then give a short "
                    "summary of what it does and wait for questions.")
+    if transcripts is not None:
+        listing += (f"\nThe lens subagents' own conversations: "
+                    f"{transcripts}/*.jsonl")
+    if report:
+        listing += f"\n\nThe report:\n\n{report}"
+    if dossier:
+        listing += ("\n\nThis was a lens review. The lenses' suspicions "
+                    "and the reviewer's verdicts, from its log:\n\n"
+                    + dossier)
     rules = ("When discussing a finding, verify every claim against "
              "the code in this worktree instead of trusting the "
              "report. Ground rules: do not modify the checkout, never "
-             "post to Gerrit or write to JIRA, and touch the memory "
-             "document only when explicitly asked to record something.")
+             "post to Gerrit or write to JIRA, and leave a listed memory "
+             "document alone unless asked to record something.")
     return f"{header}\n\n{listing}\n\n{opening} {rules}"
 
 
@@ -297,35 +316,133 @@ def _launch(agent_spec, change, entries, repo, results_dir,
         return 1
 
     session = None
-    if agent_spec.name == "claude" and resume and db_dir is not None:
-        from .agents import claude_session_exists
+    if agent_spec.name == "claude" and resume:
+        session = find_session(change, entries, results_dir, db_dir)
+    return _interact(agent_spec, change, entries, worktree_dir, results_dir,
+                     db_dir, model, effort, agent_args, session,
+                     cleanup_repo=None if keep_worktree else config.repo)
+
+
+def find_session(change, entries, results_dir, db_dir=None):
+    """The review's Claude session, when Claude still has it."""
+    from .agents import claude_session_exists
+    session = (review_session(entries[0][1], results_dir, change)
+               if entries else None)
+    if session is None and db_dir is not None:
+        # a review run with the deprecated --memory
         from .memory import find_doc, read_session
         doc = find_doc(db_dir, change)
         mode = entries[0][1].get("mode", "full") if entries else "full"
         session = read_session(doc, mode) if doc else None
-        if session is not None and not claude_session_exists(
-                session.session_id):
-            print(f"  note: Claude no longer has the review session "
-                  f"{session.session_id}; starting a fresh one")
-            session = None
-        elif session is not None:
-            print(f"  continuing a fork of the review session "
-                  f"{session.session_id} ({session.reviewed})")
+        if session is not None:
+            session = ReviewSession(session.session_id, session.reviewed)
+    if session is None:
+        return None
+    if not claude_session_exists(session.session_id):
+        print(f"  note: Claude no longer has the review session "
+              f"{session.session_id}; starting a fresh one")
+        return None
+    print(f"  continuing a fork of the review session "
+          f"{session.session_id} ({session.reviewed})")
+    return session
+
+
+def _interact(agent_spec, change, entries, worktree_dir, results_dir,
+              db_dir, model, effort, agent_args, session,
+              cleanup_repo=None) -> int:
+    """Run the interactive session in worktree_dir, which is removed
+    from cleanup_repo afterwards."""
+    session_args, env, report, dossier, transcripts = [], {}, "", "", None
+    if session is not None:
+        # The review's model and effort: another model cannot read the
+        # review's prompt cache.
+        model = model or session.options.get("model")
+        effort = effort or session.options.get("effort")
+        session_args, env = launch(session, worktree_dir, results_dir)
+        transcripts = lens_transcripts(session.session_id)
+    else:
+        if agent_spec.name == "claude":
+            # as a review: nothing from the checkout or CLAUDE.md files,
+            # which would also prompt in every new worktree
+            session_args, env = launch_options({"lean": True}, worktree_dir,
+                                               results_dir)
+        # in the message itself: reading files outside the worktree
+        # asks for permission
+        if entries and entries[0][1].get("markdown"):
+            try:
+                report = (results_dir / entries[0][1]["markdown"]).read_text()
+            except OSError:
+                pass
+        if entries and entries[0][1].get("log"):
+            from .lenses import dossier as lens_dossier
+            dossier = lens_dossier(results_dir / entries[0][1]["log"])
 
     prompt = chat_prompt(
         change, artifact_lines(results_dir, db_dir, change, entries),
-        session=session, worktree=worktree_dir)
+        session=session, worktree=worktree_dir, report=report,
+        dossier=dossier, transcripts=transcripts)
     cmd = agent_spec.build_interactive_cmd(
         model, list(agent_args or []), prompt, effort=effort,
-        resume=session.session_id if session is not None else None)
-
+        resume=session.session_id if session is not None else None,
+        session_args=tuple(session_args))
 
     print(f"\nStarting interactive session in {worktree_dir}\n")
     try:
-        return subprocess.call(cmd, cwd=str(worktree_dir))
+        return subprocess.call(cmd, cwd=str(worktree_dir),
+                               env={**os.environ, **env})
     except KeyboardInterrupt:
         print("\ninterrupted")
         return 130
     finally:
-        if not keep_worktree:
-            wt.remove_worktree(config.repo, worktree_dir)
+        if cleanup_repo is not None:
+            wt.remove_worktree(cleanup_repo, worktree_dir)
+
+
+def pick_result(results):
+    """The finished claude review to discuss: the only one, else the
+    one the user picks; None for none."""
+    offered = [r for r in results
+               if r.session_id and r.status in (STATUS_FINDINGS, STATUS_CLEAN)]
+    if not offered:
+        print("\nno finished claude review to discuss")
+        return None
+    if len(offered) == 1:
+        return offered[0]
+    print("\nDiscuss which review?")
+    for i, r in enumerate(offered, 1):
+        print(f"  {i}. {r.change.slug}  {r.status}"
+              f" ({r.findings})  {r.change.subject[:50]}")
+    while True:
+        try:
+            answer = input(f"1-{len(offered)}, Enter for none: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        if not answer:
+            return None
+        if answer.isdigit() and 1 <= int(answer) <= len(offered):
+            return offered[int(answer) - 1]
+
+
+def chat_after_run(config, results, in_place: bool = False) -> int:
+    """`run --chat`: go on in the review's own conversation."""
+    result = pick_result(results)
+    if result is None:
+        return 0
+    change = result.change
+    summary = read_summary(config.results_dir)
+    key = str(change.number) if change.number else change.slug
+    key += artifact_tag(result.mode)
+    entries = [(key, summary[key])] if key in summary else []
+    # The review's own path again (it is named after change and pid):
+    # the conversation's file names stay valid.
+    worktree_dir = (config.repo if in_place
+                    else prepare_worktree(config, change))
+    session = ReviewSession(result.session_id, reviewed_label(change),
+                            result.session_options or {})
+    from .agents import get_agent
+    return _interact(
+        get_agent("claude"), change, entries, worktree_dir,
+        config.results_dir, None, None, None, None, session,
+        cleanup_repo=(None if in_place or config.keep_worktrees
+                      else config.repo))
