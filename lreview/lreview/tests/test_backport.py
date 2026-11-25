@@ -8,8 +8,8 @@ import pytest
 from lreview import backport
 from lreview.backport import (AI_REVIEW_TAG, GerritFacts, ReviewThread,
                               Trailer, Upstream, backport_prompt, detect,
-                              change_id_taken, find_unmarked, open_ai_threads,
-                              parse_trailers, subject_tail)
+                              change_id_taken, find_main, find_unmarked,
+                              open_ai_threads, parse_trailers, subject_tail)
 from lreview.gerrit import LocalChange, ResolvedChange
 from lreview.runner import (BatchConfig, attach_backport, build_agent_cmd,
                             compaction_settings, count_findings, preload_file,
@@ -180,6 +180,7 @@ class TestDetect:
 
 
 ID_PORT = "I" + "c" * 40
+ID_UP2 = "I" + "9" * 40
 ID_UP = "I" + "d" * 40
 SUBJECT = "osd-ldiskfs: flag overwrite of committed blocks"
 MASTER = "project:fs/lustre-release branch:master"
@@ -319,6 +320,35 @@ class TestUnmarkedPort:
         taken.assert_called_once()
         assert found[0].change_id_taken_by == "https://t"
 
+    @pytest.mark.parametrize("order", [(0, 1), (1, 0)])
+    def test_squash_main_is_found_in_any_order(self, repo, order):
+        ups = [(f"LU-1 {SUBJECT}", ID_UP), ("LU-2 osd: fix the fix", ID_PORT)]
+        shas = [commit(repo, f"{s}\n\nChange-Id: {i}\n") for s, i in ups]
+        pairs = "".join(f"Lustre-change: https://r/{n}\n"
+                        f"Lustre-commit: {shas[n]}\n\n" for n in order)
+        sha = commit(repo, f"ABC-1 {SUBJECT}\n\n{pairs}"
+                           f"Change-Id: {ID_UP}\n")
+        found = detect(repo, sha)
+        assert [u.name for u in found if u.main] == ["https://r/0"]
+        assert "it differs" not in backport_prompt(found)
+
+    def test_squash_with_a_new_change_id_differs(self, repo):
+        ups = [(f"LU-1 {SUBJECT}", ID_UP), ("LU-2 osd: fix the fix", ID_UP2)]
+        shas = [commit(repo, f"{s}\n\nChange-Id: {i}\n") for s, i in ups]
+        pairs = "".join(f"Lustre-change: https://r/{n}\n"
+                        f"Lustre-commit: {h}\n\n"
+                        for n, h in enumerate(shas))
+        found = detect(repo, commit(repo, f"ABC-1 {SUBJECT}\n\n{pairs}"
+                                          f"Change-Id: {ID_PORT}\n"))
+        assert [u.port_change_id for u in found] == [ID_PORT, None]
+        assert "it differs" in backport_prompt(found)
+
+    def test_squash_main_by_change_id_then_unknown(self):
+        ups = [Upstream("a", SHA_A, True, change_id=ID_UP, subject="x: y"),
+               Upstream("b", SHA_B, True, change_id=ID_UP2, subject="x: z")]
+        assert find_main(ups, "ABC-1 other: subject", ID_UP2) == 1
+        assert find_main(ups, "ABC-1 other: subject", ID_PORT) is None
+
     def test_local_change_is_not_searched(self, repo):
         sha = commit(repo, f"ABC-1 {SUBJECT}")
         assert detect(repo, sha, LocalChange("HEAD", sha, "s")) is None
@@ -363,6 +393,12 @@ class TestPrompt:
         text = backport_prompt([Upstream("a", SHA_A, True),
                                 Upstream("b", SHA_B, True)])
         assert "squashes" in text
+
+    def test_squash_names_the_main_change(self):
+        main = Upstream("a", SHA_A, True, change_id=ID_UP, main=True)
+        rest = Upstream("b", SHA_B, True)
+        assert "The main change is a." in backport_prompt([main, rest])
+        assert "Do not report the Change-Id" in backport_prompt([rest, rest])
 
     def test_review_prompt_only_for_a_port(self, tmp_path, repo):
         config = config_for(tmp_path, repo)

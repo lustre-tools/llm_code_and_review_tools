@@ -96,6 +96,7 @@ class Upstream:
     port_change_id: Optional[str] = None
     # Another change on the port's branch that has the upstream Change-Id
     change_id_taken_by: Optional[str] = None
+    main: bool = False  # of a squashed port: the change the rest is for
 
 
 def parse_trailers(body: str) -> list[Trailer]:
@@ -320,6 +321,27 @@ def _check_change_ids(upstreams: list[Upstream], change) -> list[Upstream]:
     return checked
 
 
+def find_main(upstreams: list[Upstream], subject: str,
+              change_id: Optional[str]) -> Optional[int]:
+    """The index of the change that a squashed port is of.
+
+    The port has its subject and its Change-Id. The order of the
+    trailers says nothing: people list it first or last. None when
+    neither matches: the upstream changes can be squashed into a patch
+    that only the port's branch has.
+    """
+    tail = subject_tail(subject)
+    same_subject = [i for i, u in enumerate(upstreams)
+                    if u.subject and subject_tail(u.subject) == tail]
+    same_id = [i for i, u in enumerate(upstreams)
+               if change_id and u.change_id == change_id]
+    both = [i for i in same_subject if i in same_id]
+    for found in (both, same_subject, same_id):
+        if found:
+            return found[0]
+    return None
+
+
 def detect(repo: Path, sha: str, change=None) -> Optional[list[Upstream]]:
     """The upstream changes of a commit, or None if it is not a port.
 
@@ -330,15 +352,19 @@ def detect(repo: Path, sha: str, change=None) -> Optional[list[Upstream]]:
     ids = _CHANGE_ID_RE.findall(body)
     port_change_id = ids[-1] if ids else None
     trailers = parse_trailers(body)
+    subject = body.split("\n", 1)[0]
     if not trailers:
         if change is None or not needs_upstream_search(change):
             return None
-        subject = body.split("\n", 1)[0]
         upstreams = find_unmarked(repo, change, subject, port_change_id)
     else:
         upstreams = [_resolve(repo, trailer) for trailer in trailers]
-        upstreams[-1] = replace(upstreams[-1],
-                                port_change_id=port_change_id)
+        squash = len(upstreams) > 1
+        main = (find_main(upstreams, subject, port_change_id) if squash
+                else 0)
+        if main is not None:
+            upstreams[main] = replace(upstreams[main], main=squash,
+                                      port_change_id=port_change_id)
     return _check_change_ids(upstreams, change) or None
 
 
@@ -411,6 +437,11 @@ def backport_prompt(upstreams: list[Upstream]) -> str:
     if len(upstreams) > 1 and not any(u.unmarked for u in upstreams):
         lines += ["", "The commit squashes these changes: together, they "
                       "are the upstream side of the comparison."]
+        main = next((u for u in upstreams if u.main), None)
+        lines.append(f"The main change is {main.name}." if main else
+                     "None of them has the port's subject or Change-Id, so "
+                     "the main change is unknown: it can be a patch of this "
+                     "branch only. Do not report the Change-Id.")
     return "\n".join(lines) + "\n\n" + BACKPORT_PROMPT_PATH.read_text()
 
 

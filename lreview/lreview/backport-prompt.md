@@ -19,7 +19,7 @@ Classify every finding.
   Gerrit cannot change the Change-Id of an existing change. Say so in the
   comment.
 - Each `Lustre-change:` names the right upstream change: its subject and
-  Change-Id match the port.
+  Change-Id match the port (in a squashed port, those of the main change).
 - The port is not stale. It matches the landed commit, or the current patch
   set of an upstream change that has not landed. A port of an older patch set
   is a `BACKPORT` defect.
@@ -62,8 +62,10 @@ a note with `unresolved: false`, not a defect.
 
 A port can squash an upstream change with its upstream follow-up fixes. Then:
 - Each squashed change has its own `Lustre-change:` and `Lustre-commit:` pair.
-- The Change-Id of each squashed change becomes a `Was-Change-Id:` line.
-- Only the Change-Id of the final change stays as `Change-Id:`.
+- The Change-Id of the main change (see the facts above) stays as
+  `Change-Id:`. That of another squashed change is a note with
+  `unresolved: false`. The order and place of the trailers do not matter.
+- The Change-Id of each other squashed change becomes a `Was-Change-Id:` line.
 - The port must not squash unrelated changes.
 
 ## Unresolved upstream review comments

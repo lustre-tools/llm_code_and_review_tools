@@ -312,7 +312,8 @@ patch set of the upstream change. The prompt gets the upstream Change-Id and
 subject, the patch set that the port names, and the unresolved AI review
 comments of an upstream change that has not landed. The review checks the
 Change-Id, the `Lustre-change:` target, a stale port, and the
-`Was-Change-Id:` rules of a squashed port. An open upstream `(defect)` comment
+`Was-Change-Id:` rules of a squashed port, whose Change-Id is that of the
+squashed change with the port's subject, wherever its trailers are. An open upstream `(defect)` comment
 that applies to the port is an `UPSTREAM-BLOCKER`, because the port can land
 before the upstream change. If it cannot get an upstream commit, the
 review still runs and says so.
