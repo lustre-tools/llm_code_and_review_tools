@@ -19,6 +19,7 @@ from llm_tool_common.config import (
     hoist_args,
 )
 from llm_tool_common.update_check import maybe_check_for_updates
+from llm_tool_common.version import version_option
 
 from .envelope import error_response_from_dict, format_json
 from .errors import ErrorCode, ExitCode
@@ -156,7 +157,7 @@ class JsonErrorGroup(JsonUsageErrorGroup):
 # ── Main group ──────────────────────────────────────────────────────
 
 @click.group(cls=JsonErrorGroup)
-@click.version_option(package_name="jira-tool", prog_name="jira")
+@version_option("jira")
 @click.option("--server", help="JIRA server URL (overrides config and env)")
 @click.option("--token", help="JIRA API token (overrides config and env)")
 @click.option("--config", "config_path", type=click.Path(), help="Config file path")

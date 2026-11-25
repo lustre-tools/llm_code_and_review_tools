@@ -29,6 +29,7 @@ from llm_tool_common.config import (
 from llm_tool_common.envelope import format_json, success_response
 from llm_tool_common.errors import ErrorCode, ExitCode, ToolError
 from llm_tool_common.update_check import maybe_check_for_updates
+from llm_tool_common.version import version_option
 
 from . import gather as rg
 from . import status as rs
@@ -136,7 +137,7 @@ class Group(JsonErrorGroup):
 
 
 @click.group(cls=Group)
-@click.version_option(package_name="release-priority", prog_name="release-priority")
+@version_option("release-priority")
 @click.option("--envelope", is_flag=True, help="Include full response envelope (ok/data/meta wrapper)")
 @click.option("--user", "-U", default=None,
               help="gerrit-cli credential set to use: a [section] alias or a GERRIT_USER "

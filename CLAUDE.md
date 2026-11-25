@@ -9,7 +9,7 @@ human-readable colored output (no `--envelope`).
 
 ## Tools
 
-### JIRA tool (`jira`, v0.5.2)
+### JIRA tool (`jira`)
 
 Bug tracking, issue management, and test failure research.
 Reads (`get`, `search`, `comments`) work with no token against a public
@@ -90,7 +90,7 @@ JIRA_CLOUD_PROJECTS="PROJ1,PROJ2"   # comma-separated project prefixes
 
 Run `jira --help` for full command list.
 
-### Gerrit tool (`gerrit`, aliased as `gc`, v0.2.5)
+### Gerrit tool (`gerrit`, aliased as `gc`)
 
 Code review, comment management, patch workflows, and CI triage.
 Reads work with only `GERRIT_URL`; anything that changes a patch needs
@@ -186,7 +186,7 @@ Run `gerrit --help` for full command list.
 Run `gc examples` for common workflow examples.
 Run `gc explain <command>` for detailed usage of a command.
 
-### lreview tool (`lreview`, v0.1.0)
+### lreview tool (`lreview`)
 
 Runs AI patch reviews — the
 [review-prompts](https://github.com/verygreen/review-prompts/)
@@ -323,14 +323,19 @@ changing a command. Implementation: `llm_tool_common/timing.py`.
 
 ## Versioning
 
-Each tool's `pyproject.toml` carries its own version. The tracked
-pre-commit hook bumps the patch of every tool with staged changes;
-docs- and test-only commits move nothing, and a version edited by hand
-in the same commit is left alone. Enable it per clone:
+All tools share one version, `X.Y.0` in every `pyproject.toml`. Never
+change it in a normal commit or PR; a test fails if the files differ.
+What identifies a build is the checkout: `--version` shows
+`0.6.25_g445db69`, the 25th commit after the bump to 0.6.0, at commit
+`445db69`. Telemetry sends `0.6.25`, counting only commits on
+`origin/main`.
 
 ```bash
-make hooks        # git config core.hooksPath .githooks
+make bump VERSION=0.7.0   # about monthly, on an up-to-date main; commits
 ```
+
+The installed-tool check in `install.sh` does not see a change of
+`[tool.setuptools]`: after one, run `install.sh --reinstall`.
 
 ## Development
 

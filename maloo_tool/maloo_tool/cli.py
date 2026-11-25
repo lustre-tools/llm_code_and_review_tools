@@ -24,6 +24,7 @@ from llm_tool_common.envelope import (
 )
 from llm_tool_common.errors import exit_code_for
 from llm_tool_common.update_check import maybe_check_for_updates
+from llm_tool_common.version import version_option
 
 from .client import GerritLookupError, MalooClient, get_patchset_revisions
 from .config import load_config
@@ -196,7 +197,7 @@ class MalooGroup(JsonErrorGroup):
 
 
 @click.group(cls=MalooGroup)
-@click.version_option(package_name="maloo-tool", prog_name="maloo")
+@version_option("maloo")
 @click.option("--envelope", is_flag=True, help="Include full response envelope (ok/data/meta wrapper)")
 @click.option(
     "--user",

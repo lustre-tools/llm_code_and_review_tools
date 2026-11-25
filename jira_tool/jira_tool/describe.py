@@ -5,15 +5,14 @@ without parsing --help text.
 """
 
 from llm_tool_common import Argument, Command, ToolDescription
-
-from . import __version__
+from llm_tool_common.version import repo_version
 
 
 def get_tool_description() -> ToolDescription:
     """Return the complete JIRA tool API description."""
     return ToolDescription(
         name="jira",
-        version=__version__,
+        version=repo_version(),
         description="JIRA CLI tool for LLM agents. Provides issue tracking operations with structured JSON output.",
         env_vars=[
             {"name": "JIRA_SERVER", "description": "JIRA server URL", "required": "true"},

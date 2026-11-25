@@ -21,6 +21,7 @@ from llm_tool_common.envelope import (
 from llm_tool_common.decorators import handle_errors
 from llm_tool_common.errors import ErrorCode, ExitCode, exit_code_for
 from llm_tool_common.update_check import maybe_check_for_updates
+from llm_tool_common.version import version_option
 
 from .client import JenkinsClient
 from .config import CREDENTIAL_HINT, load_config
@@ -265,7 +266,7 @@ class JenkinsGroup(JsonUsageErrorGroup):
 
 
 @click.group(cls=JenkinsGroup)
-@click.version_option(package_name="jenkins-tool", prog_name="jenkins")
+@version_option("jenkins")
 @click.option("--envelope", is_flag=True, help="Include full response envelope (ok/data/meta wrapper)")
 @click.option(
     "--user",

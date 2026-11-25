@@ -7,8 +7,7 @@ without parsing --help text.
 import argparse
 
 from llm_tool_common import Argument, Command, ToolDescription
-
-from . import __version__
+from llm_tool_common.version import repo_version
 
 
 def registered_commands(parser: argparse.ArgumentParser) -> dict[str, tuple[str, argparse.ArgumentParser]]:
@@ -108,7 +107,7 @@ def get_tool_description() -> ToolDescription:
     """Return the complete gerrit-cli tool API description."""
     return ToolDescription(
         name="gerrit-cli",
-        version=__version__,
+        version=repo_version(),
         description=(
             "Gerrit code review tool for LLM agents. "
             "Extract comments, reply, review diffs, and manage patch series. "

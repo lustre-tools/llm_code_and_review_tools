@@ -844,30 +844,11 @@ class TestErrorExitCodes:
 
 
 class TestDescribeVersion:
-    def test_describe_reports_the_installed_version(self, runner):
-        from importlib import metadata
-
-        try:
-            installed = metadata.version("jenkins-tool")
-        except metadata.PackageNotFoundError:
-            pytest.skip("jenkins-tool is not installed")
+    def test_describe_reports_the_version(self, runner):
         result = runner.invoke(main, ["describe"])
         assert result.exit_code == 0
-        assert _parse(result)["version"] == installed
-
         version_line = runner.invoke(main, ["--version"]).output
-        assert version_line.strip().endswith(_parse(result)["version"])
-
-    def test_describe_without_package_metadata(self, runner):
-        from importlib import metadata
-
-        with patch(
-            "jenkins_tool.describe.metadata.version",
-            side_effect=metadata.PackageNotFoundError("jenkins-tool"),
-        ):
-            result = runner.invoke(main, ["describe"])
-        assert result.exit_code == 0
-        assert _parse(result)["version"] == "unknown"
+        assert version_line == f"jenkins, version {_parse(result)['version']}\n"
 
 
 class TestInvalidInputExitCodes:

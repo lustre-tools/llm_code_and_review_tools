@@ -179,7 +179,8 @@ def bench_change(case: dict) -> LocalChange:
 
 def environment(config, cases_path: Path = CASES_PATH) -> dict:
     """What a bench run ran with, for comparing runs made apart."""
-    from . import __version__
+    from llm_tool_common.version import repo_version
+
     from .prompts import _git_out
 
     def version(cmd):
@@ -189,7 +190,7 @@ def environment(config, cases_path: Path = CASES_PATH) -> dict:
         except (OSError, subprocess.TimeoutExpired):
             return None
     return {
-        "lreview": __version__,
+        "lreview": repo_version(),
         "agent": config.agent,
         "agent_version": version([config.agent, "--version"]),
         "model": config.model, "effort": config.effort, "mode": config.mode,

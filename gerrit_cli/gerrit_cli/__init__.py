@@ -57,8 +57,6 @@ Example usage:
         print(f"  {patch.change_number}: {patch.subject}")
 """
 
-from importlib.metadata import PackageNotFoundError, version
-
 from .client import GerritCommentsClient, GerritConfigError  # noqa: F401
 from .envelope import (
     error_response,
@@ -179,13 +177,3 @@ __all__ = [
     "StagedOperation",
     "StagedPatch",
 ]
-
-
-def _installed_version() -> str:
-    try:
-        return version("gerrit-cli")
-    except PackageNotFoundError:
-        return "unknown"
-
-
-__version__ = _installed_version()

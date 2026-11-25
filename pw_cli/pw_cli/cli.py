@@ -30,6 +30,7 @@ from llm_tool_common.config import (
 from llm_tool_common.envelope import format_json, success_response
 from llm_tool_common.errors import ErrorCode, ExitCode, ToolError
 from llm_tool_common.update_check import maybe_check_for_updates
+from llm_tool_common.version import version_option
 
 TOOL_NAME = "pw-cli"
 DEFAULT_URL = "https://patchwatcher.mulberrytree.us"
@@ -176,7 +177,7 @@ class RetestGroup(JsonErrorGroup):
 
 
 @click.group(cls=RetestGroup)
-@click.version_option(package_name="pw-cli", prog_name="pw-cli")
+@version_option("pw-cli")
 @click.option("--envelope", is_flag=True, help="Include full response envelope (ok/data/meta wrapper)")
 @click.option(
     "--user", "-U", default=None,

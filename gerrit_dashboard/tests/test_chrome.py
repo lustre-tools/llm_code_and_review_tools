@@ -112,7 +112,7 @@ class TestVersion:
         assert re.fullmatch(r"\d+\.\d+\.\d+", __version__)
 
     def test_version_comes_from_pyproject(self):
-        # pyproject.toml is what the repo's pre-commit hook bumps; the
+        # pyproject.toml is what `make bump` sets; the
         # package must report that, not a copy that drifts.
         from pathlib import Path
         text = (Path(__file__).parent.parent / "pyproject.toml").read_text()

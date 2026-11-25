@@ -348,27 +348,12 @@ class TestParser:
 
 class TestVersion:
 
-    def test_version_is_the_installed_distributions(self, capsys):
-        from importlib.metadata import version
+    def test_version_is_the_checkouts(self, capsys):
+        from llm_tool_common.version import repo_version
         with pytest.raises(SystemExit) as exc:
             build_parser().parse_args(["--version"])
         assert exc.value.code == 0
-        assert capsys.readouterr().out == f"lreview {version('lreview')}\n"
-
-    def test_version_without_an_installed_distribution(self, monkeypatch):
-        import importlib
-        import importlib.metadata
-        import lreview
-
-        def not_installed(name):
-            raise importlib.metadata.PackageNotFoundError(name)
-
-        monkeypatch.setattr(importlib.metadata, "version", not_installed)
-        try:
-            assert importlib.reload(lreview).__version__ == "unknown"
-        finally:
-            monkeypatch.undo()
-            importlib.reload(lreview)
+        assert capsys.readouterr().out == f"lreview {repo_version()}\n"
 
 
 class TestCmdPost:

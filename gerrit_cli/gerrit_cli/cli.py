@@ -40,6 +40,7 @@ from llm_tool_common.config import (
 )
 from llm_tool_common import telemetry
 from llm_tool_common.update_check import maybe_check_for_updates
+from llm_tool_common.version import VersionAction
 
 from .envelope import error_response_from_dict, format_json
 from .errors import ErrorCode, ExitCode
@@ -443,21 +444,13 @@ def build_parser() -> argparse.ArgumentParser:
     """The whole command line: global options and every subcommand."""
     from .parsers import setup_parsers
 
-    from importlib.metadata import version as _pkg_version
-    try:
-        _ver = _pkg_version("gerrit-cli")
-    except Exception:
-        _ver = "unknown"
-
     parser = _JsonErrorParser(
         description="Extract and reply to Gerrit review comments. "
                     "Run 'gc describe' for machine-readable API documentation.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {_ver}",
-    )
+    parser.add_argument("--version", action=VersionAction)
     parser.add_argument(
         "--envelope",
         action="store_true",

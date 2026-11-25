@@ -5,9 +5,9 @@ from pathlib import Path
 
 
 def _version() -> str:
-    # pyproject.toml is the single source (the repo's pre-commit hook bumps
-    # it), so a checkout or editable install reads it directly: installed
-    # metadata would keep the version from the last `pip install`.
+    # pyproject.toml is the single source (`make bump` sets it), so a
+    # checkout or editable install reads it directly: installed metadata
+    # would keep the version from the last `pip install`.
     pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
     try:
         text = pyproject.read_text()

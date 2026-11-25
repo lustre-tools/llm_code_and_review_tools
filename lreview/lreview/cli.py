@@ -23,8 +23,8 @@ from pathlib import Path
 
 from llm_tool_common import telemetry
 from llm_tool_common.update_check import maybe_check_for_updates
+from llm_tool_common.version import VersionAction
 
-from . import __version__
 from .defaults import (
     AGY_DEFAULT_MODEL, CLAUDE_DEFAULT_MODEL, CODEX_DEFAULT_MODEL,
     CURSOR_DEFAULT_MODEL, DEFAULT_AGENT, DEFAULT_BACKPORT, DEFAULT_BENCH_JOBS,
@@ -1113,8 +1113,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  lreview chat 64086          # discuss an existing review\n"
         ),
     )
-    parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("--version", action=VersionAction)
     sub = parser.add_subparsers(dest="command", required=True,
                                 metavar="{setup,check,run,chat,models,render,post}")
 

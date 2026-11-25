@@ -14,7 +14,8 @@ by ``llm-tools-telemetry show``:
 
   * a random install ID, minted once and not derived from the host;
   * host facts: OS and version, architecture, WSL or not, Python;
-  * for each tool used since the last check-in: its version, how many
+  * for each tool used since the last check-in: the version of the
+    tools, without a commit and counting only what is on main; how many
     times each of its commands ran with an ok/fail split, and how many
     runs came from a terminal (human), an AI agent (agent) or neither
     (script).
@@ -76,17 +77,10 @@ ENDPOINT_DEFAULT = "https://llm-tools.mulberrytree.cc/v1/checkin"
 SCHEMA_VERSION = 1
 DISABLE_ENV = "LLM_TOOLS_TELEMETRY"
 
-# Tool label -> the distribution its version is read from.  Closed: a
-# tool not listed here is not counted, and the server takes no other.
-# The other tools share llm_tool_common's click group, and so call
+# Closed: a tool not listed here is not counted, and the server takes no
+# other.  The other tools share llm_tool_common's click group, and so call
 # session() too; for them it does nothing at all.
-TOOLS: dict[str, str] = {
-    "gerrit": "gerrit-cli",
-    "jira": "jira-tool",
-    "maloo": "maloo-tool",
-    "jenkins": "jenkins-tool",
-    "lreview": "lreview",
-}
+TOOLS = frozenset({"gerrit", "jira", "maloo", "jenkins", "lreview"})
 # Console scripts that count.  As in update_check: a test driving main()
 # through CliRunner, or a program importing a tool as a library, is not a
 # use of the tool.
@@ -417,25 +411,19 @@ def _host_info() -> dict[str, Any]:
     }
 
 
-def _tool_version(tool: str) -> str | None:
-    from importlib.metadata import PackageNotFoundError, version
-
-    try:
-        return version(TOOLS[tool])[:MAX_STR_LEN]
-    except (PackageNotFoundError, KeyError):
-        return None
-
-
 def _payload() -> dict[str, Any]:
     """Everything that leaves the machine.  A new field goes on the list
     in this module's docstring first."""
+    from .version import published_version
+
     counters = _load_counters()
+    version = published_version()[:MAX_STR_LEN]
     tools: dict[str, Any] = {}
     for tool, entry in sorted(counters["tools"].items()):
         if tool not in TOOLS or not isinstance(entry, dict):
             continue
         tools[tool] = {
-            "version": _tool_version(tool),
+            "version": version,
             "commands": entry.get("commands", {}),
             "callers": entry.get("callers", {}),
         }

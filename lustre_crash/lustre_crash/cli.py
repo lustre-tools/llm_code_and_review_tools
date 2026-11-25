@@ -15,6 +15,7 @@ from llm_tool_common import (
     format_json,
     success_response,
 )
+from llm_tool_common.version import version_option
 
 from .session import (
     CommandResult,
@@ -75,7 +76,7 @@ class CrashGroup(click.Group):
 
 
 @click.group(cls=CrashGroup)
-@click.version_option(package_name="lustre-crash", prog_name="lustre-crash")
+@version_option("lustre-crash")
 @click.option("--pretty", is_flag=True, help="Pretty-print JSON output.")
 @click.option("--envelope", is_flag=True, help="Wrap output in full envelope.")
 @click.pass_context

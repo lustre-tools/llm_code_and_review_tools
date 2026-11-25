@@ -2450,29 +2450,21 @@ class TestCmdGraphConflicts:
 
 
 class TestVersion:
-    """describe and __version__ report the installed package's version."""
+    """describe and --version report the version of the checkout."""
 
-    def test_describe_and_version_match_the_package(self):
-        from importlib.metadata import PackageNotFoundError, version
-
-        import gerrit_cli
+    def test_describe_and_version_agree(self, capsys):
+        from gerrit_cli.cli import build_parser
         from gerrit_cli.describe import get_tool_description
 
-        try:
-            installed = version("gerrit-cli")
-        except PackageNotFoundError:
-            pytest.skip("gerrit-cli is not installed")
-        assert gerrit_cli.__version__ == installed
-        assert get_tool_description().version == installed
-
-    def test_unknown_when_not_installed(self):
-        from importlib.metadata import PackageNotFoundError
-
-        import gerrit_cli
-
-        with patch('gerrit_cli.version',
-                   side_effect=PackageNotFoundError("gerrit-cli")):
-            assert gerrit_cli._installed_version() == "unknown"
+        with patch('llm_tool_common.version.repo_version',
+                   return_value="0.6.25_gabc1234"), \
+             patch('gerrit_cli.describe.repo_version',
+                   return_value="0.6.25_gabc1234"):
+            assert get_tool_description().version == "0.6.25_gabc1234"
+            with pytest.raises(SystemExit) as exc:
+                build_parser().parse_args(["--version"])
+        assert exc.value.code == 0
+        assert capsys.readouterr().out.endswith(" 0.6.25_gabc1234\n")
 
 
 class TestIndexOfAResolvedThread:

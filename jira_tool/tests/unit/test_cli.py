@@ -2501,17 +2501,13 @@ class TestCLIDefaultNoEnvelope:
 class TestCLIDescribe:
     """Tests for 'jira describe'."""
 
-    def test_versions_match_the_installed_package(self, runner):
-        from importlib.metadata import version
-
-        import jira_tool
-
-        installed = version("jira-tool")
+    def test_versions_match_the_checkout(self, runner):
+        from llm_tool_common.version import repo_version
 
         described = json.loads(runner.invoke(main, ["describe"]).output)
-        assert described["version"] == installed
-        assert jira_tool.__version__ == installed
-        assert runner.invoke(main, ["--version"]).output.split()[-1] == installed
+        assert described["version"] == repo_version()
+        assert runner.invoke(main, ["--version"]).output == (
+            f"jira, version {repo_version()}\n")
 
     def test_every_command_is_described(self, runner):
         import click

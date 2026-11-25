@@ -1,21 +1,13 @@
 """Tool self-description for Jenkins CLI."""
 
-from importlib import metadata
-
 from llm_tool_common.describe import Argument, Command, ToolDescription
-
-
-def _installed_version() -> str:
-    try:
-        return metadata.version("jenkins-tool")
-    except metadata.PackageNotFoundError:
-        return "unknown"
+from llm_tool_common.version import repo_version
 
 
 def get_tool_description() -> ToolDescription:
     return ToolDescription(
         name="jenkins",
-        version=_installed_version(),
+        version=repo_version(),
         description="LLM-agent-focused CLI for Jenkins build server. "
                     "Query build status, console output, and Gerrit review builds.",
         env_vars=[

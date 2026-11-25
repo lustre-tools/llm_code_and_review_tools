@@ -17,6 +17,7 @@ from llm_tool_common.envelope import (
 )
 from llm_tool_common.errors import exit_code_for
 from llm_tool_common.update_check import maybe_check_for_updates
+from llm_tool_common.version import version_option
 
 from .client import JanitorClient
 from .config import load_config
@@ -210,7 +211,7 @@ class JanitorGroup(JsonErrorGroup):
 
 
 @click.group(cls=JanitorGroup)
-@click.version_option(package_name="janitor-tool", prog_name="janitor")
+@version_option("janitor")
 @click.option(
     "--envelope", is_flag=True,
     help="Include full response envelope",

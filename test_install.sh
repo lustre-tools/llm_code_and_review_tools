@@ -512,14 +512,8 @@ out=$(printf 'y\n\n\n\n' | env HOME="$HOME_DIR" VERIFY=0 \
 contains "an unanswered optional credential leaves it read-only" \
     "leaving Jenkins read-only" "$out"
 
-# --- the version-bump hook -------------------------------------------------
-# The list this hook used to carry had drifted: it named crash_tool, which
-# has no pyproject.toml, and not lreview, lustre_crash or gerrit_dashboard,
-# whose versions therefore never moved.  Discovery cannot drift, and these
-# pin the behaviour.
-HOOK="$SCRIPT_DIR/.githooks/pre-commit"
-
-hook_repo() {  # a checkout shaped like this one
+# --- one version for every tool --------------------------------------------
+bump_repo() {  # a checkout shaped like this one
     local repo
     repo=$(mktemp -d)
     TRASH="$TRASH $repo"
@@ -528,55 +522,39 @@ hook_repo() {  # a checkout shaped like this one
         git init -q .
         git config user.email t@example.invalid
         git config user.name Test
-        for tool in jira_tool lreview; do
+        for tool in jira_tool llm_tool_common; do
             mkdir -p "$tool"
-            printf '[project]\nname = "%s"\nversion = "0.2.0"\n' "$tool" \
-                > "$tool/pyproject.toml"
-            echo "x = 1" > "$tool/code.py"
+            printf '[project]\nname = "%s"\nversion = "0.6.0"\n\n[tool.other]\nversion = "0.2.0"\n' \
+                "$tool" > "$tool/pyproject.toml"
         done
-        mkdir docs && echo hi > docs/readme.md
+        mkdir scripts unversioned
+        echo '[tool.pytest.ini_options]' > unversioned/pyproject.toml
+        cp "$SCRIPT_DIR/scripts/bump_version.sh" scripts/
         git add -A && git commit -qm init
-        cp "$HOOK" .git/hooks/pre-commit
-    )
+    ) > /dev/null
     printf '%s' "$repo"
 }
 
 tool_version() {  # tool_version <repo> <tool>
-    sed -n 's/^version = "\(.*\)"/\1/p' "$1/$2/pyproject.toml"
+    sed -n 's/^version = "\(.*\)"/\1/p' "$1/$2/pyproject.toml" | tr '\n' ' ' | sed 's/ $//'
 }
 
-repo=$(hook_repo)
-(cd "$repo" && echo "x = 2" > lreview/code.py && git add lreview/code.py &&
-    git commit -qm "lreview change") > /dev/null 2>&1
-check "a staged tool change bumps that tool" "0.2.1" "$(tool_version "$repo" lreview)"
-check "  and leaves the other tools alone" "0.2.0" "$(tool_version "$repo" jira_tool)"
+bump() { (cd "$1" && ./scripts/bump_version.sh "$2") > /dev/null 2>&1; echo $?; }
 
-repo=$(hook_repo)
-(cd "$repo" && echo bye > docs/readme.md && git add docs &&
-    git commit -qm docs) > /dev/null 2>&1
-check "a change outside every tool bumps nothing" "0.2.0" \
-    "$(tool_version "$repo" lreview)"
-
-repo=$(hook_repo)
-(cd "$repo" &&
-    printf '[project]\nname = "jira_tool"\nversion = "0.3.0"\n' \
-        > jira_tool/pyproject.toml &&
-    echo "x = 3" > jira_tool/code.py && git add -A &&
-    git commit -qm "minor bump") > /dev/null 2>&1
-check "a hand-edited version is not bumped on top" "0.3.0" \
-    "$(tool_version "$repo" jira_tool)"
-
-# Only the project's own version line: a later table may carry one too.
-# (The sed this used before took GNU's "0,/re/" address; BSD sed on macOS
-# changed nothing, and the hook still said it had bumped.)
-repo=$(hook_repo)
-(cd "$repo" &&
-    printf '[tool.other]\nversion = "0.2.0"\n' >> lreview/pyproject.toml &&
-    git add -A && git commit -qm "second version line" &&
-    echo "x = 4" > lreview/code.py && git add lreview/code.py &&
-    git commit -qm "lreview change") > /dev/null 2>&1
-check "only the first version line is bumped" \
-    "0.2.1 0.2.0" "$(tool_version "$repo" lreview | tr '\n' ' ' | sed 's/ $//')"
+repo=$(bump_repo)
+check "a bump succeeds" 0 "$(bump "$repo" 0.7.0)"
+check "  and sets every tool, its own version line only" \
+    "0.7.0 0.2.0/0.7.0 0.2.0" \
+    "$(tool_version "$repo" jira_tool)/$(tool_version "$repo" llm_tool_common)"
+check "  in one commit" "Version 0.7.0" "$(git -C "$repo" log -1 --format=%s)"
+check "  leaving nothing behind" "" "$(git -C "$repo" status --porcelain)"
+check "0.10 is newer than 0.7" 0 "$(bump "$repo" 0.10.0)"
+check "an older version is refused" 1 "$(bump "$repo" 0.9.0)"
+check "the same version is refused" 1 "$(bump "$repo" 0.10.0)"
+check "a patch version is refused" 2 "$(bump "$repo" 0.11.1)"
+check "no version is refused" 2 "$(bump "$repo" "")"
+(cd "$repo" && echo x > f && git add f)
+check "staged changes are refused" 1 "$(bump "$repo" 0.11.0)"
 
 # --- after an install: ask about each tool's credentials once ---------------
 echo ""
