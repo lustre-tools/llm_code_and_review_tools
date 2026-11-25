@@ -150,7 +150,7 @@ or `jira describe` for machine-readable API documentation.
 
 | Command | Description |
 |---------|-------------|
-| `jira config test` | Test connectivity |
+| `jira config test` | Test connectivity and the token |
 | `jira config show` | Show configuration (redacted) |
 | `jira config sample` | Output a sample configuration file |
 

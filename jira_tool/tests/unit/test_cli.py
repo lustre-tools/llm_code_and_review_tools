@@ -866,12 +866,85 @@ class TestCLIConfigTest:
             status=200,
         )
 
+        responses.add(
+            responses.GET,
+            "https://jira.example.com/rest/api/2/myself",
+            json={"name": "jdoe", "displayName": "J. Doe"},
+            status=200,
+        )
+
         result = runner.invoke(main, ["--envelope", "config", "test"])
 
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["data"]["connected"] is True
         assert data["data"]["version"] == "8.0.0"
+        assert data["data"]["authenticated"] is True
+        assert data["data"]["user"] == "jdoe"
+
+    SERVER_INFO = {"serverTitle": "Test JIRA", "version": "8.0.0",
+                   "baseUrl": "https://jira.example.com"}
+
+    @responses.activate
+    def test_config_test_rejected_token(self, runner, mock_env):
+        """serverInfo is served anonymously, so it does not prove a token."""
+        responses.add(responses.GET,
+                      "https://jira.example.com/rest/api/2/serverInfo",
+                      json=self.SERVER_INFO, status=200)
+        responses.add(responses.GET,
+                      "https://jira.example.com/rest/api/2/myself",
+                      body="<html><h1>401</h1></html>", status=401,
+                      content_type="text/html")
+
+        result = runner.invoke(main, ["--envelope", "config", "test"])
+
+        assert result.exit_code == 2, result.output
+        data = json.loads(result.output)
+        assert data["ok"] is False
+        assert "rejected the Jira token" in data["error"]["message"]
+
+    @responses.activate
+    def test_config_test_without_token(self, runner, monkeypatch, tmp_path):
+        """No token is a valid read-only setup."""
+        monkeypatch.setenv("JIRA_SERVER", "https://jira.example.com")
+        monkeypatch.delenv("JIRA_TOKEN", raising=False)
+        monkeypatch.delenv("JIRA_TOOL_CONFIG", raising=False)
+        responses.add(responses.GET,
+                      "https://jira.example.com/rest/api/2/serverInfo",
+                      json=self.SERVER_INFO, status=200)
+
+        result = runner.invoke(main, [
+            "--envelope", "--config", str(tmp_path / "none.json"),
+            "config", "test"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["data"]["connected"] is True
+        assert data["data"]["authenticated"] is False
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_config_test_scope_without_profile(self, runner, monkeypatch, tmp_path):
+        """A scoped Cloud token may work without the scope to read myself."""
+        (tmp_path / "c.json").write_text(json.dumps({
+            "server": "https://myorg.atlassian.net", "cloud_id": "site",
+            "auth": {"type": "basic", "email": "u@example.com", "token": "t"}}))
+        for var in ("JIRA_SERVER", "JIRA_TOKEN", "JIRA_TOOL_CONFIG",
+                    "JIRA_CLOUD_ID", "JIRA_CLOUD_EMAIL"):
+            monkeypatch.delenv(var, raising=False)
+        base = "https://myorg.atlassian.net/rest/api/3/"
+        responses.add(responses.GET, base + "serverInfo",
+                      json=self.SERVER_INFO, status=200)
+        responses.add(
+            responses.GET, base + "myself", status=401,
+            json={"code": 401, "message": "Unauthorized; scope does not match"})
+
+        result = runner.invoke(main, [
+            "--envelope", "--config", str(tmp_path / "c.json"),
+            "config", "test"])
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["data"]["authenticated"] is None
 
     def test_config_missing(self, runner, monkeypatch):
         """Should error when config missing."""

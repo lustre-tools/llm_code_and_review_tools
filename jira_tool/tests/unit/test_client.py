@@ -1838,3 +1838,78 @@ class TestSearchRejectedCli:
         assert out["code"] == "INVALID_JQL"
         assert "project EX does not exist" in out["message"]
         assert "DOCTYPE" not in result.output
+
+
+class TestRejectedToken:
+    """Jira answers a request with a bad token as anonymous, so reads work
+    and a write fails with a 400 that gives no reason."""
+
+    API = "https://jira.example.com/rest/api/2/"
+
+    def _create_400(self, **kwargs):
+        kwargs = kwargs or {"body": APACHE_400, "content_type": "text/html"}
+        responses.add(responses.POST, self.API + "issue", status=400, **kwargs)
+
+    def _create(self, client):
+        return client.create_issue("LU", "Improvement", "summary")
+
+    @responses.activate
+    def test_create_400_names_the_rejected_token(self, client):
+        self._create_400()
+        responses.add(responses.GET, self.API + "myself", body=APACHE_400,
+                      status=401, content_type="text/html")
+        with pytest.raises(AuthError) as exc_info:
+            self._create(client)
+        assert "https://jira.example.com rejected the Jira token" in (
+            exc_info.value.message)
+        assert exc_info.value.http_status == 401
+        # The create is not sent again.
+        assert [c.request.method for c in responses.calls] == ["POST", "GET"]
+
+    @responses.activate
+    def test_create_400_with_a_good_token_is_unchanged(self, client):
+        self._create_400()
+        responses.add(responses.GET, self.API + "myself",
+                      json={"name": "me"}, status=200)
+        with pytest.raises(InvalidInputError) as exc_info:
+            self._create(client)
+        assert "HTTP 400 from https://jira.example.com" in (
+            exc_info.value.message)
+
+    @responses.activate
+    @pytest.mark.parametrize("status", [403, 404, 500])
+    def test_an_inconclusive_check_keeps_the_400(self, config, status):
+        client = JiraClient(config, max_retries=0)
+        self._create_400()
+        responses.add(responses.GET, self.API + "myself", status=status)
+        with pytest.raises(InvalidInputError) as exc_info:
+            self._create(client)
+        assert exc_info.value.http_status == 400
+
+    @responses.activate
+    def test_jira_reason_is_kept_and_nothing_else_is_asked(self, client):
+        self._create_400(json={"errors": {"issuetype": "is required"}})
+        with pytest.raises(InvalidInputError) as exc_info:
+            self._create(client)
+        assert "issuetype: is required" in exc_info.value.message
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_a_read_400_does_not_check_the_token(self, client):
+        responses.add(responses.GET, self.API + "issue/LU-1", body=APACHE_400,
+                      status=400, content_type="text/html")
+        with pytest.raises(InvalidInputError):
+            client.get_issue("LU-1")
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_cloud_write_400_does_not_check_the_token(self):
+        client = JiraClient(JiraConfig(
+            server="https://myorg.atlassian.net", token="t",
+            auth_type="basic", email="u@example.com", cloud_id="site"))
+        responses.add(responses.POST,
+                      "https://myorg.atlassian.net/rest/api/3/issue",
+                      body=APACHE_400, status=400, content_type="text/html")
+        with pytest.raises(InvalidInputError):
+            self._create(client)
+        assert len(responses.calls) == 1

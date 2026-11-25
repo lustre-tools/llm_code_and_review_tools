@@ -143,7 +143,7 @@ Add these to your `~/.zshrc` (macOS) or `~/.bashrc` (Linux) to persist across se
 jira config test
 ```
 
-You should see your server name and version. If you get an auth error, double-check your token.
+You should see your server name and version, and your user. If you get an auth error, double-check your token.
 
 ## Telling Claude Code About the Tool
 

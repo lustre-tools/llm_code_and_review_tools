@@ -220,6 +220,55 @@ class JiraClient:
             "Set JIRA_TOKEN, or run `install.sh --configure --only jira`."
         )
 
+    def _rejected_token_error(self) -> AuthError:
+        return AuthError(
+            message=(
+                f"{self.config.server} rejected the Jira token; it may have "
+                "expired or been revoked. Jira serves such a request "
+                "anonymously, so reads can still work. Create a new token "
+                "and set JIRA_TOKEN, or run "
+                "`install.sh --configure --only jira`."
+            ),
+            http_status=401,
+        )
+
+    def _explain_rejected_write(
+        self, error: InvalidInputError, method: str, endpoint: str
+    ) -> None:
+        """Raise AuthError if a 400 without a reason is the token's fault.
+
+        Server only: Cloud gives its reason, and its 401 for myself may
+        be a scope the token was created without.
+        """
+        if (
+            method.upper() in ("GET", "HEAD", "OPTIONS")
+            or endpoint.strip("/") in self.READ_ONLY_POSTS
+            or self.config.is_cloud
+            or (error.details or {}).get("jira_errors")
+        ):
+            return
+        try:
+            self.get_myself()
+        except JiraToolError as e:
+            if e.http_status == 401:
+                raise self._rejected_token_error() from error
+
+    def check_token(self) -> dict[str, Any] | None:
+        """The token's own user, or None if the token cannot say.
+
+        Raises:
+            AuthError: the server rejected the token
+        """
+        try:
+            return self.get_myself()
+        except AuthError as e:
+            if e.http_status != 401:
+                raise
+            # A scoped Cloud token without the scope to read its user.
+            if "scope does not match" in e.message:
+                return None
+            raise self._rejected_token_error() from e
+
     def _debug(self, msg: str) -> None:
         """Print debug message to stderr if debug mode is enabled."""
         if self.debug:
@@ -581,7 +630,10 @@ class JiraClient:
                     details={"url": url, "attempt": attempt + 1},
                 )
                 last_error.__cause__ = e
-            except (AuthError, NotFoundError, InvalidInputError):
+            except InvalidInputError as e:
+                self._explain_rejected_write(e, method, endpoint)
+                raise
+            except (AuthError, NotFoundError):
                 # Non-retryable errors - raise immediately
                 raise
             except JiraToolError as e:
@@ -1428,12 +1480,17 @@ class JiraClient:
         """
         Get JIRA server information.
 
-        Useful for testing connectivity and authentication.
+        Useful for testing connectivity; a public Jira serves it to
+        anyone, so it does not test the token (see check_token).
 
         Returns:
             Server info including version, base URL, etc.
         """
         return self._request("GET", "serverInfo")
+
+    def get_myself(self) -> dict[str, Any]:
+        """Get the user the token belongs to."""
+        return self._request("GET", "myself")
 
     # =========================================================================
     # Attachment Operations

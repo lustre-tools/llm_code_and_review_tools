@@ -81,16 +81,24 @@ def register(main):
     @config.command("test")
     @click.pass_context
     def config_test(ctx: click.Context) -> None:
-        """Test connectivity to JIRA server."""
+        """Test connectivity to JIRA server, and the token if one is set."""
         command = "config.test"
         pretty = ctx.obj.get("pretty", False)
 
         try:
             client = get_client(ctx)
             server_info = client.get_server_info()
+            authenticated: bool | None = False
+            user = None
+            if client.config.authenticated:
+                myself = client.check_token()
+                authenticated = True if myself else None
+                user = (myself or {}).get("name") or (myself or {}).get("displayName")
 
             test_data = {
                 "connected": True,
+                "authenticated": authenticated,
+                "user": user,
                 "server_title": server_info.get("serverTitle"),
                 "version": server_info.get("version"),
                 "base_url": server_info.get("baseUrl"),
