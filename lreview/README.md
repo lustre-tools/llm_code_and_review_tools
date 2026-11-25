@@ -454,6 +454,7 @@ lreview run 64086 --validate --validate-classes defect,minor
 lreview validate 64086                                    # an earlier review
 lreview validate 64086 --post                             # reply in the threads
 lreview validate 64086 --post-report                      # reports to the ticket
+lreview validate 64086 --drafts --validate-classes minor --post  # your drafts
 ```
 
 - lreview selects findings by their marker: `(defect)` by default. A
@@ -462,6 +463,13 @@ lreview validate 64086 --post-report                      # reports to the ticke
   Without one, it reads the unresolved AI-review threads of N on
   Gerrit, from any account. It always tests the newest patchset, or
   the merged commit.
+- `lreview validate N --drafts` reads your own unresolved draft
+  comments on N, not the AI-review threads. It skips the
+  patchset-level draft, a draft on `/COMMIT_MSG`, and a draft reply.
+  The results go under the key `N-drafts`. With `--post`, lreview adds
+  the verdict under the text of each draft. The draft stays a draft,
+  and you then keep, edit or delete it. A draft gets no proof of a bug
+  in landed code, because one click publishes all drafts.
 - A second `lreview validate` of the same revision keeps the verdicts
   and tests only the inconclusive findings again. `--force` tests all
   of them.

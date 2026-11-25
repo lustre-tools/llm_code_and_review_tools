@@ -73,6 +73,7 @@ Chris settled these uses on 2026-11-25.
 | `run --local`, `--last N` | The new review. | The reviewed commit. | Never. The text dump holds the full QA reports. |
 | `validate N`, with a local review of N | The local review JSON. | The newest patchset, or the merged commit. | With `--post`: a review not yet posted goes out with the verdicts applied. A posted review gets thread replies. |
 | `validate N`, no local review of N | The unresolved AI-review threads on Gerrit, from any account. | The newest patchset, or the merged commit. | With `--post`: thread replies. |
+| `validate N --drafts` | The unresolved drafts of the logged-in account. | The newest patchset, or the merged commit. | With `--post`: the verdict goes into each draft. Nothing is published. |
 
 Rules that apply to every use:
 
@@ -223,6 +224,16 @@ Three cases need a rule:
 - **`run --post --validate`.** The post for a change waits until its validation ends. A change with no selected finding posts at once.
 - **Findings that are on Gerrit already.** Two cases are the same here. One is a review that lreview posted before. The other is a validation of the AI-review threads from Gerrit. The double-post guard in `poster.py` refuses a second post of the same review. Thus lreview posts each decisive verdict as a reply in the thread of its finding, with `in_reply_to`. A reply goes on the revision of the comment that it answers, so lreview posts one review for each such revision. The replies use the prefix `[AI validation - <model>]`, with the validator's model. A finding read from Gerrit carries its comment ID. Gerrit does not return comment IDs when lreview posts a review. To get them, the tool reads the change's published comments (`GET /changes/N/comments`) and finds each finding by file, line, tag, revision and text. A finding that lreview cannot find gets a line in a patchset-level message instead. That message also gives the verdict counts. The message does not say "not posted", because the comments are on Gerrit already. gerrit-cli's `post_review` now passes `in_reply_to` through. Each verdict records its own `posted` mark, so a later run posts only the new verdicts.
 - **The cover message after lreview holds a finding.** The reviewer wrote the cover message, for example "Problematic, see inline comments.", before validation. The tool does not rewrite that text. It adds one line under the text, for example `VM validation: 2 confirmed, 1 refuted (not posted), 1 inconclusive`. When lreview holds every `(defect)` finding, the line also says so. The tool posts no vote now, so no vote needs a change.
+
+### Verdicts in the reviewer's drafts
+
+A reviewer can post lreview's findings as Gerrit drafts, then keep, edit or delete each draft before publishing. `lreview validate N --drafts` validates those drafts.
+
+- lreview reads the drafts with `GET /changes/N/drafts`, which needs the Gerrit login. Each unresolved draft that starts a thread becomes one finding. The patchset-level draft, a draft on `/COMMIT_MSG` and a draft reply are not findings. The drafts carry no AI-review tag, so lreview selects them by the severity marker only.
+- Gerrit lets a comment reply only to a published comment. Thus with `--post`, lreview changes each draft in place (`PUT .../revisions/R/drafts/ID`, gerrit-cli `update_draft`). It adds the verdict block under the draft text, with the validation prefix on its own line. A second post replaces that block. It keeps the reviewer's edits of the text above the block, but it removes text under the block.
+- lreview never publishes a draft. The setting `GERRIT_CLI_MODE` does not change this behavior.
+- A reviewer can publish every draft with one click. Thus a draft gets the same proof rule as Gerrit. A confirmed bug in landed code gets the verdict and the reason, with no steps and no actual result. A bug with no baseline run keeps no `posted` mark. A later validation with the baseline tests it again, and its proof can then replace that line.
+- The manifest key is `N-drafts`. Thus the threads and the drafts of one change keep separate verdicts. The option `--post-report` skips such an entry, because only the reviewer sees the findings.
 
 ### QA reports to the ticket
 

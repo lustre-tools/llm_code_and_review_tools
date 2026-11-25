@@ -1055,6 +1055,22 @@ def _entry_change(entry: dict):
         base_url=entry.get("base_url") or "")
 
 
+# Manifest entries whose findings lreview read from Gerrit: the
+# AI-review threads, or the reviewer's own drafts.
+READ_SOURCES = ("gerrit", "drafts")
+
+
+def _change_number(item: str) -> Optional[int]:
+    """The change number of a bare number or a Gerrit URL, or None."""
+    if item.isdigit():
+        return int(item)
+    from gerrit_cli.client import GerritCommentsClient
+    try:
+        return int(GerritCommentsClient.parse_gerrit_url(item)[1])
+    except Exception:  # noqa: BLE001 - not a change
+        return None
+
+
 def _manifest_key(summary: dict, item: str) -> Optional[str]:
     """A manifest key for a request: the key itself, else the full-mode
     entry of a change number, else its light-mode entry."""
@@ -1066,7 +1082,8 @@ def _manifest_key(summary: dict, item: str) -> Optional[str]:
     return None
 
 
-def _validation_target(config, entry: Optional[dict], item: str):
+def _validation_target(config, entry: Optional[dict], item: str,
+                       drafts: bool = False):
     """What one `lreview validate` request tests.
 
     Returns (tested change, reviewed Revision, review spec, artifact
@@ -1074,14 +1091,16 @@ def _validation_target(config, entry: Optional[dict], item: str):
     from Gerrit or None).  A Gerrit change is tested on its newest
     patchset (the merged commit, once merged); a local review on its
     own commit.  Without a review of lreview's own in the manifest, the
-    findings are the unresolved AI-review threads on Gerrit."""
+    findings are the unresolved AI-review threads on Gerrit, or with
+    `drafts` the logged-in account's unresolved drafts."""
     from gerrit_cli.client import GerritCommentsClient
     from .gerrit import change_ref, resolve_change
     from .poster import DEFAULT_TAG
-    from .validate import Revision, gerrit_findings_spec
+    from .validate import (Revision, drafts_findings_spec,
+                           gerrit_findings_spec)
 
     results_dir = config.results_dir
-    if entry is not None and entry.get("source") != "gerrit":
+    if entry is not None and entry.get("source") not in READ_SOURCES:
         reviewed_change = _entry_change(entry)
         spec = json.loads((results_dir / entry["json"]).read_text())
         reviewed = Revision(sha=entry["sha"],
@@ -1110,9 +1129,13 @@ def _validation_target(config, entry: Optional[dict], item: str):
     detail = client.get_change_detail(tested.number)
     revisions = {r.get("_number"): (sha, r.get("ref"))
                  for sha, r in (detail.get("revisions") or {}).items()}
-    spec = gerrit_findings_spec(
-        client.get_comments(tested.number) or {}, DEFAULT_TAG,
-        {ps: sha for ps, (sha, _ref) in revisions.items()})
+    shas = {ps: sha for ps, (sha, _ref) in revisions.items()}
+    if drafts:
+        spec = drafts_findings_spec(client.get_drafts(tested.number) or {},
+                                    shas)
+    else:
+        spec = gerrit_findings_spec(
+            client.get_comments(tested.number) or {}, DEFAULT_TAG, shas)
     for entries in spec["comments"].values():
         for e in entries:
             sha = e.get("commit_id")
@@ -1120,16 +1143,17 @@ def _validation_target(config, entry: Optional[dict], item: str):
                 ref = (revisions.get(e.get("patch_set")) or (None, None))[1]
                 _fetch_commit(config, tested, sha, ref or change_ref(
                     tested.number, e.get("patch_set") or tested.patchset))
-    spec_name = f"gerrit-findings-{tested.number}.json"
+    source = spec["source"]
+    spec_name = f"{source}-findings-{tested.number}.json"
     (results_dir / spec_name).write_text(json.dumps(spec, indent=2) + "\n")
     fields = {"number": tested.number, "patchset": tested.patchset,
               "sha": tested.sha, "subject": tested.subject,
               "repository": tested.project, "branch": tested.branch,
               "base_url": tested.base_url, "provider": "gerrit",
-              "source": "gerrit", "status": STATUS_FINDINGS,
+              "source": source, "status": STATUS_FINDINGS,
               "json": spec_name, "mode": "full", "posted": True,
               "findings": sum(len(v) for v in spec["comments"].values())}
-    return (tested, None, spec, f"{tested.number}_gerrit", True, fields)
+    return (tested, None, spec, f"{tested.number}_{source}", True, fields)
 
 
 def _fetch_commit(config, change, sha: str, ref: str) -> None:
@@ -1169,6 +1193,14 @@ def cmd_validate(args) -> int:
 
     jobs = []  # (manifest key, entry or None, request)
     for item in args.changes:
+        if args.drafts:
+            number = _change_number(str(item))
+            if number is None:
+                print(f"error: {item} is not a Gerrit change")
+                return 1
+            key = f"{number}-drafts"
+            jobs.append((key, summary.get(key), str(item)))
+            continue
         key = _manifest_key(summary, str(item))
         entry = summary.get(key) if key else None
         if entry is None:
@@ -1181,7 +1213,7 @@ def cmd_validate(args) -> int:
         if entry.get("provider") == "github":
             print(f"error: {key}: GitHub reviews cannot be validated")
             return 1
-        if entry.get("source") != "gerrit" and (
+        if entry.get("source") not in READ_SOURCES and (
                 entry.get("status") != STATUS_FINDINGS
                 or not entry.get("json")):
             print(f"  {key}: skipped, the review has no findings "
@@ -1202,11 +1234,12 @@ def cmd_validate(args) -> int:
     def one(job):
         key, entry, item = job
         tested, reviewed, spec, slug, on_gerrit, fields = \
-            _validation_target(config, entry, item)
+            _validation_target(config, entry, item, drafts=args.drafts)
         if fields is not None:
             key = key or str(fields["number"])
             if not fields["findings"]:
-                print(f"  {key}: no unresolved AI-review thread on Gerrit")
+                what = "draft" if args.drafts else "AI-review thread"
+                print(f"  {key}: no unresolved {what} on Gerrit")
                 return key, fields, None
         worktree = prepare_worktree(config, tested)
         try:
@@ -1249,7 +1282,8 @@ def cmd_validate(args) -> int:
                     if record is None and key not in current:
                         continue
                     now = current.get(key)
-                    if now is not None and now.get("source") != "gerrit":
+                    if (now is not None
+                            and now.get("source") not in READ_SOURCES):
                         continue  # a review of lreview's own came first
                     current[key] = {**fields, "validation": record,
                                     "reviewed_at": datetime.now(
@@ -1285,13 +1319,15 @@ def cmd_validate(args) -> int:
             print(f"  {outcome.number}: {outcome.status} {outcome.detail}")
             failed += outcome.status == "error"
     elif keys:
-        from .validate import load_validation, unposted
+        from .validate import draft_todo, load_validation, unposted
         # A review not yet on Gerrit can go out; findings on Gerrit
-        # already need a verdict to post.
+        # already need a verdict to post.  A draft also takes the
+        # verdict of a bug that stays private.
         ready = [k for k in keys
                  if (not now[k].get("posted")
-                     and now[k].get("source") != "gerrit")
-                 or unposted(load_validation(results_dir, now[k]))]
+                     and now[k].get("source") not in READ_SOURCES)
+                 or (draft_todo if now[k].get("source") == "drafts"
+                     else unposted)(load_validation(results_dir, now[k]))]
         if ready:
             print(f"\nPost with: lreview post {' '.join(ready)} "
                   f"--results-dir {results_dir}")
@@ -1974,6 +2010,13 @@ def build_parser() -> argparse.ArgumentParser:
              "review in --results-dir is validated from its unresolved "
              "AI-review threads on Gerrit. A Gerrit change is tested on "
              "its newest patchset.")
+    validate_p.add_argument(
+        "--drafts", action="store_true",
+        help="Validate your own unresolved draft comments on each Gerrit "
+             "change, not the AI-review threads. With --post, each "
+             "verdict goes into its draft, which stays a draft: lreview "
+             "publishes nothing. The results go under the key "
+             "<number>-drafts")
     validate_p.add_argument(
         "--force", action="store_true",
         help="Test every finding again. By default, a second validation "

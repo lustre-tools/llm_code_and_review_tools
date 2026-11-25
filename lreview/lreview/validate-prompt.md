@@ -15,6 +15,12 @@ which.
 You do not review the commit again. You do not look for new bugs. You
 do not change the review.
 
+A human reviewer can write a finding as a question. The question "Can
+a longer interval stall NI deletion?" is an example. Test the failure
+that the question asks about. The verdict `confirmed` means that the
+run showed the failure. The verdict `refuted` means that the run
+reached the path and the failure did not occur.
+
 ## Rules
 
 1. A run that does not show a bug does not refute the bug. Give

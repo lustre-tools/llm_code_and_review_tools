@@ -165,6 +165,52 @@ def _post_verdicts(results_dir: Path, entry: dict, dry_run: bool = False):
     return True, detail
 
 
+def _post_drafts(results_dir: Path, entry: dict, dry_run: bool = False):
+    """Put the VM verdicts into the reviewer's own drafts, which the
+    validation read.  The drafts stay drafts: lreview publishes
+    nothing.  Returns (status, detail)."""
+    from gerrit_cli.client import GerritCommentsClient
+    from .validate import (_needs_baseline, draft_todo, load_validation,
+                           plan_draft_updates, private_note,
+                           private_reason, save_validation,
+                           validation_prefix)
+    validation = load_validation(results_dir, entry)
+    if not draft_todo(validation):
+        return "skipped", "no confirmed or refuted verdict to put in a draft"
+    client = GerritCommentsClient(url=entry["base_url"]) \
+        if entry.get("base_url") else GerritCommentsClient()
+    drafts = client.get_drafts(entry["number"]) or {}
+    prefix = validation_prefix(validation, entry.get("validation"))
+    updates, missing = plan_draft_updates(drafts, validation, prefix)
+    notes = [f"{item['id']}: {why}" for item, why in missing]
+    note = private_note(validation)
+    detail = (f"VM verdicts in {len(updates)} draft(s), not published"
+              + (f"; skipped {'; '.join(notes)}" if notes else "")
+              + (f"; {note}" if note else ""))
+    if not updates:
+        return "skipped", detail
+    if dry_run:
+        return "would post", detail
+    errors = []
+    for item, revision, draft_id, comment in updates:
+        try:
+            client.update_draft(entry["number"], revision, draft_id,
+                                comment)
+        except Exception as exc:  # noqa: BLE001 - the next draft
+            errors.append(f"{item['id']}: {exc}")
+            continue
+        # A bug with no baseline run keeps no mark: the next validation
+        # with the baseline retests it, and its proof can replace the
+        # line in the draft.
+        if not (private_reason(item, validation)
+                and _needs_baseline(item, validation)):
+            item["posted"] = True
+    save_validation(results_dir, entry, validation)
+    if errors:
+        return "error", "; ".join(errors)
+    return "posted", detail
+
+
 def _mark_review_verdicts(results_dir: Path, entry: dict) -> None:
     """After a review went out with its verdicts applied: the confirmed
     notes are in it, and the refuted findings stay off Gerrit.  Neither
@@ -380,6 +426,14 @@ def post_results(
                     and not _is_postable_clean(entry)):
                 outcomes.append(PostOutcome(
                     number, "skipped", f"status is '{entry['status']}'"))
+                continue
+            if entry.get("source") == "drafts":
+                try:
+                    status, detail = _post_drafts(
+                        results_dir, entry, dry_run=dry_run)
+                except Exception as exc:  # noqa: BLE001
+                    status, detail = "error", str(exc)
+                outcomes.append(PostOutcome(number, status, detail))
                 continue
             from_gerrit = entry.get("source") == "gerrit"
             if ((entry.get("posted") or from_gerrit)

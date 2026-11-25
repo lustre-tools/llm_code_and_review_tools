@@ -271,6 +271,50 @@ def gerrit_findings_spec(gerrit_comments: dict, tag: str,
     return {"comments": comments, "source": "gerrit"}
 
 
+# --- findings from the reviewer's own drafts -------------------------
+
+# The line in front of the verdict that lreview adds to a draft.  A
+# second run replaces the block that starts at it.
+_DRAFT_VERDICT_RE = re.compile(r"\n*^\[AI validation - [^\]\n]*\]\s*$.*",
+                               re.M | re.S)
+
+
+def draft_text(message: str) -> str:
+    """A draft's own text, without the verdict that lreview added."""
+    return _DRAFT_VERDICT_RE.sub("", message or "").rstrip()
+
+
+def drafts_findings_spec(drafts: dict,
+                         revisions: Optional[dict] = None) -> dict:
+    """A review JSON built from the logged-in account's drafts.
+
+    Each unresolved draft that starts a thread becomes one comment.  A
+    draft reply, the patchset-level draft and a draft on /COMMIT_MSG
+    are not findings.  The comment keeps the draft's ID, patchset and
+    commit, so that the verdict can go into the draft.  `revisions`
+    maps a patchset number to its commit."""
+    comments: dict = {}
+    for path, items in (drafts or {}).items():
+        if path.startswith("/"):
+            continue
+        for c in items or []:
+            if (not isinstance(c, dict) or not c.get("id")
+                    or c.get("in_reply_to") or not c.get("unresolved")):
+                continue
+            entry = {"message": strip_prefix(draft_text(c.get("message"))),
+                     "unresolved": True, "gerrit_id": c["id"],
+                     "patch_set": c.get("patch_set"),
+                     "commit_id": c.get("commit_id") or (
+                         revisions or {}).get(c.get("patch_set"))}
+            for k in ("line", "range", "side"):
+                if c.get(k) is not None:
+                    entry[k] = c[k]
+            comments.setdefault(path, []).append(entry)
+    for entries in comments.values():
+        entries.sort(key=lambda e: (e.get("line") or 0, e["gerrit_id"]))
+    return {"comments": comments, "source": "drafts"}
+
+
 @dataclass
 class ValidateConfig:
     classes: tuple = DEFAULT_CLASSES
@@ -1257,6 +1301,56 @@ def plan_replies(gerrit_comments: dict, spec: dict, validation: dict,
     return groups, unmatched
 
 
+def draft_todo(validation: Optional[dict]) -> list[dict]:
+    """The confirmed and refuted verdicts not yet in their drafts.  A
+    draft is private, so a confirmed bug whose proof must stay private
+    goes in too, with no proof."""
+    return [i for i in (validation or {}).get("findings") or []
+            if i["verdict"] in POSTED and not i.get("posted")]
+
+
+def draft_verdict(item: dict, validation: dict, prefix: str) -> str:
+    """The block that lreview adds under a draft.  The reviewer can
+    publish every draft with one click, so a bug whose proof must stay
+    private gets the verdict and the reason alone."""
+    reason = private_reason(item, validation)
+    if reason:
+        body = (f"Confirmed on a VM, {_rev_text(validation)}. The proof "
+                f"stays private: {reason}.")
+    else:
+        body = reply_text(item, validation)
+    return f"{prefix}\n{body}"
+
+
+def plan_draft_updates(drafts: dict, validation: dict,
+                       prefix: str) -> tuple[list, list]:
+    """([(item, revision, draft ID, CommentInput)], [(item, why)]) for
+    the verdicts not yet in their drafts.  The new text is the draft's
+    current text, which the reviewer can have changed since the run,
+    with the verdict block in place of an older one."""
+    by_id = {c.get("id"): {**c, "path": path}
+             for path, items in (drafts or {}).items()
+             for c in items or [] if isinstance(c, dict)}
+    updates, missing = [], []
+    for item in draft_todo(validation):
+        draft = by_id.get(item.get("gerrit_id"))
+        if draft is None:
+            missing.append((item, "the draft is gone (published or "
+                                  "deleted)"))
+            continue
+        text = (f"{draft_text(draft.get('message'))}\n\n"
+                f"{draft_verdict(item, validation, prefix)}")
+        comment = {"id": draft["id"], "path": draft["path"],
+                   "message": text}
+        for k in ("line", "range", "side", "unresolved"):
+            if draft.get(k) is not None:
+                comment[k] = draft[k]
+        revision = str(draft.get("commit_id") or draft.get("patch_set")
+                       or item.get("reviewed_commit"))
+        updates.append((item, revision, draft["id"], comment))
+    return updates, missing
+
+
 # --- QA reports to the ticket -----------------------------------------
 
 TICKET_RE = re.compile(r"^\s*([A-Z][A-Z0-9]+-\d+)\b")
@@ -1371,6 +1465,9 @@ def post_reports(results_dir: Path, entry: dict, *, dry_run: bool = False,
     detail): status is "posted", "would post", "skipped" or "error"."""
     if entry.get("number") is None or entry.get("local"):
         return "skipped", "a local review has no change to link"
+    if entry.get("source") == "drafts":
+        return "skipped", ("the findings are drafts, which only you see. "
+                           "Publish them, then validate the threads")
     validation = load_validation(results_dir, entry)
     if not validation:
         return "skipped", "no validation"

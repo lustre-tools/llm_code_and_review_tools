@@ -1123,9 +1123,11 @@ class TestCmdValidate:
                   "status": "findings", "json": "gerrit-findings-64086.json",
                   "mode": "full", "posted": True, "findings": 1}
         monkeypatch.setattr(cli, "_validation_target",
-                            lambda cfg, entry, item: (
-                                tested, None, {}, "64086_gerrit", True,
-                                fields))
+                            lambda cfg, entry, item, drafts=False: (
+                                tested, None, {},
+                                "64086_drafts" if drafts else "64086_gerrit",
+                                True, {**fields, "source": (
+                                    "drafts" if drafts else "gerrit")}))
         monkeypatch.setattr(cli, "validate_config",
                             lambda args: v.ValidateConfig())
         monkeypatch.setattr("lreview.runner.prepare_worktree",
@@ -1499,3 +1501,244 @@ class TestPrivatePost:
         assert "confirmed" not in kwargs["message"].split("VM validation")[-1]
         saved = json.loads(name.read_text())
         assert saved["findings"][0]["posted"] is False
+
+
+def _draft(id, line, message, **over):
+    d = {"id": id, "line": line, "patch_set": 3, "commit_id": "d" * 40,
+         "unresolved": True, "message": message,
+         "updated": "2026-11-25 10:00:00.000000000"}
+    d.update(over)
+    return d
+
+
+DRAFTS = {
+    "/PATCHSET_LEVEL": [_draft("p1", None, "Some concerns",
+                               unresolved=False)],
+    "/COMMIT_MSG": [_draft("m1", 32, "(style) Signed-off-by order")],
+    "lnet/a.c": [
+        _draft("d3", 40, "(minor) Can NI deletion stall?"),
+        _draft("d1", 10, "(minor) Does the interval set the resend?"),
+        _draft("d2", 20, "(nit) unsigned int"),
+        _draft("d4", 30, "(minor) resolved", unresolved=False),
+        _draft("d5", 50, "(minor) a reply", in_reply_to="x9"),
+    ],
+}
+
+
+class TestDraftFindings:
+
+    def test_unresolved_root_drafts_become_findings(self):
+        spec = v.drafts_findings_spec(DRAFTS)
+        assert spec["source"] == "drafts"
+        assert list(spec["comments"]) == ["lnet/a.c"]
+        got = [(e["gerrit_id"], e["line"], e["commit_id"])
+               for e in spec["comments"]["lnet/a.c"]]
+        assert got == [("d1", 10, "d" * 40), ("d2", 20, "d" * 40),
+                       ("d3", 40, "d" * 40)]
+        found = v.select_findings(spec, ("minor",))
+        assert [(f.id, f.gerrit_id, f.reviewed_patchset) for f in found] \
+            == [("F1", "d1", 3), ("F2", "d3", 3)]
+
+    def test_an_earlier_verdict_is_not_part_of_the_finding(self):
+        text = ("(minor) Can NI deletion stall?\n\n"
+                "[AI validation - opus]\nConfirmed on a VM: it stalls.")
+        assert v.draft_text(text) == "(minor) Can NI deletion stall?"
+        spec = v.drafts_findings_spec(
+            {"lnet/a.c": [_draft("d1", 4, text, commit_id=None)]},
+            {3: "e" * 40})
+        entry = spec["comments"]["lnet/a.c"][0]
+        assert entry["message"] == "(minor) Can NI deletion stall?"
+        assert entry["commit_id"] == "e" * 40
+
+
+@pytest.fixture
+def drafts_dir(tmp_path):
+    """A validation of three draft minors: F1 confirmed with a baseline
+    run, F2 confirmed without one (private), F3 refuted."""
+    d = tmp_path / "results"
+    d.mkdir()
+    drafts = {"lnet/a.c": [_draft("d1", 10, "(minor) one"),
+                           _draft("d2", 20, "(minor) two"),
+                           _draft("d3", 30, "(minor) three")]}
+    spec = v.drafts_findings_spec(drafts)
+    (d / "drafts-findings-64086.json").write_text(json.dumps(spec))
+    found = v.select_findings(spec, ("minor",))
+    root = d / "validation-64086_drafts"
+    for f in found:
+        (root / f.id).mkdir(parents=True)
+        (root / f.id / "out.txt").write_text("x")
+        (root / f.id / "report.md").write_text("r")
+    validation = v.normalize({"findings": [
+        {"id": "F1", "verdict": "confirmed", "summary": "it stalls",
+         "steps": "1. lnetctl net del", "actual": "hung 60 s",
+         "baseline": "passes", "origin": "change",
+         "evidence": ["F1/out.txt"]},
+        {"id": "F2", "verdict": "confirmed", "summary": "secret",
+         "steps": "1. exploit", "actual": "oops",
+         "evidence": ["F2/out.txt"]},
+        {"id": "F3", "verdict": "refuted", "summary": "fine",
+         "evidence": ["F3/out.txt"]}]}, found, evidence_root=root)
+    validation.update(evidence_dir=root.name, model="opus",
+                      tested={"sha": "d" * 40, "patchset": 3,
+                              "merged": False, "branch": "master"})
+    (d / "validation-64086_drafts.json").write_text(json.dumps(validation))
+    entry = {"number": 64086, "patchset": 3, "sha": "d" * 40,
+             "subject": "LU-1 lnet: x",
+             "base_url": "https://gerrit.invalid", "provider": "gerrit",
+             "source": "drafts", "status": "findings", "posted": True,
+             "json": "drafts-findings-64086.json", "mode": "full",
+             "validation": {"json": "validation-64086_drafts.json",
+                            "posted": False, "model": "opus"}}
+    (d / "summary.json").write_text(json.dumps({"64086-drafts": entry}))
+    return d, drafts
+
+
+def _drafts_client(drafts):
+    client = MagicMock()
+    client.get_drafts.return_value = drafts
+    return client
+
+
+class TestPostingDrafts:
+
+    def _post(self, d, client, **kw):
+        reviewer = _reviewer()
+        with patch("gerrit_cli.client.GerritCommentsClient",
+                   return_value=client), \
+                patch("gerrit_cli.reviewer.CodeReviewer",
+                      return_value=reviewer):
+            outcomes = post_results(d, prefix="", **kw)
+        assert reviewer.post_review.call_count == 0
+        client.publish_drafts.assert_not_called()
+        return outcomes
+
+    def test_verdicts_go_into_the_drafts(self, drafts_dir):
+        d, drafts = drafts_dir
+        client = _drafts_client(drafts)
+        outcomes = self._post(d, client)
+        assert outcomes[0].status == "posted"
+        assert "3 draft(s), not published" in outcomes[0].detail
+        calls = {c[0][2]: c[0] for c in client.update_draft.call_args_list}
+        assert set(calls) == {"d1", "d2", "d3"}
+        number, rev, _id, one = calls["d1"]
+        assert (number, rev) == (64086, "d" * 40)
+        assert one["path"] == "lnet/a.c" and one["line"] == 10
+        assert one["unresolved"] is True
+        assert one["message"].startswith(
+            "(minor) one\n\n[AI validation - opus]\n"
+            "Confirmed on a VM, patchset 3: it stalls")
+        assert "lnetctl net del" in one["message"]
+        # The proof of a bug that can be in master stays out of the
+        # draft, which one click publishes.
+        two = calls["d2"][3]["message"]
+        assert "Confirmed on a VM, patchset 3. The proof stays private" \
+            in two
+        assert "exploit" not in two and "secret" not in two
+        assert "Refuted on a VM" in calls["d3"][3]["message"]
+        assert "--validate-baseline" in outcomes[0].detail
+        saved = json.loads((d / "validation-64086_drafts.json").read_text())
+        # F2 has no baseline run, so it keeps no mark: a validation
+        # with the baseline tests it again.
+        assert [i.get("posted", False) for i in saved["findings"]] == [
+            True, False, True]
+        vcfg = v.ValidateConfig(classes=("minor",), baseline=True)
+        spec = json.loads((d / "drafts-findings-64086.json").read_text())
+        _all, todo, _kept = v.plan_findings(spec, vcfg, None, saved)
+        assert [f.id for f in todo] == ["F2"]
+
+    def test_the_proof_replaces_the_private_line(self, drafts_dir):
+        d, drafts = drafts_dir
+        client = _drafts_client(drafts)
+        self._post(d, client)
+        stub = [c[0][3]["message"] for c in client.update_draft.call_args_list
+                if c[0][2] == "d2"][0]
+        drafts["lnet/a.c"][1]["message"] = stub
+        name = d / "validation-64086_drafts.json"
+        saved = json.loads(name.read_text())
+        saved["findings"][1].update(baseline="passes", origin="change")
+        name.write_text(json.dumps(saved))
+        client = _drafts_client(drafts)
+        outcomes = self._post(d, client)
+        assert outcomes[0].status == "posted"
+        [(_n, _r, draft_id, comment)] = [
+            c[0] for c in client.update_draft.call_args_list]
+        assert draft_id == "d2"
+        assert comment["message"].startswith(
+            "(minor) two\n\n[AI validation - opus]\n"
+            "Confirmed on a VM, patchset 3: secret")
+        assert "proof stays private" not in comment["message"]
+
+    def test_an_edited_draft_keeps_the_edit(self, drafts_dir):
+        d, drafts = drafts_dir
+        drafts["lnet/a.c"][0]["message"] = (
+            "(minor) one, edited\n\n[AI validation - opus]\nold verdict")
+        client = _drafts_client(drafts)
+        self._post(d, client)
+        one = [c[0][3] for c in client.update_draft.call_args_list
+               if c[0][2] == "d1"][0]
+        assert one["message"].startswith(
+            "(minor) one, edited\n\n[AI validation - opus]\nConfirmed")
+        assert "old verdict" not in one["message"]
+        assert one["message"].count("[AI validation") == 1
+
+    def test_a_gone_draft_is_skipped(self, drafts_dir):
+        d, drafts = drafts_dir
+        del drafts["lnet/a.c"][2]
+        client = _drafts_client(drafts)
+        outcomes = self._post(d, client)
+        assert outcomes[0].status == "posted"
+        assert "F3: the draft is gone" in outcomes[0].detail
+        saved = json.loads((d / "validation-64086_drafts.json").read_text())
+        assert [i.get("posted", False) for i in saved["findings"]] == [
+            True, False, False]
+
+    def test_dry_run_changes_nothing(self, drafts_dir):
+        d, drafts = drafts_dir
+        client = _drafts_client(drafts)
+        outcomes = self._post(d, client, dry_run=True)
+        assert outcomes[0].status == "would post"
+        client.update_draft.assert_not_called()
+
+    def test_no_jira_report_for_drafts(self, drafts_dir):
+        d, _drafts = drafts_dir
+        entry = load_summary(d)["64086-drafts"]
+        run = MagicMock()
+        status, detail = v.post_reports(d, entry, run=run)
+        assert status == "skipped" and "drafts" in detail
+        run.assert_not_called()
+
+
+class TestDraftsCli:
+
+    def test_target_reads_the_drafts(self, tmp_path, monkeypatch):
+        from lreview import cli
+        tested = _change()
+        tested.sha, tested.patchset = "d" * 40, 3
+        client = MagicMock()
+        client.get_change_detail.return_value = {"revisions": {
+            "d" * 40: {"_number": 3, "ref": "refs/changes/86/64086/3"}}}
+        client.get_drafts.return_value = DRAFTS
+        monkeypatch.setattr("lreview.gerrit.resolve_change",
+                            lambda number, client=None: tested)
+        monkeypatch.setattr("gerrit_cli.client.GerritCommentsClient",
+                            lambda url=None: client)
+        config = MagicMock(results_dir=tmp_path)
+        _c, _r, spec, slug, on_gerrit, fields = cli._validation_target(
+            config, None, "64086", drafts=True)
+        client.get_comments.assert_not_called()
+        assert slug == "64086_drafts" and on_gerrit is True
+        assert fields["source"] == "drafts" and fields["findings"] == 3
+        assert fields["json"] == "drafts-findings-64086.json"
+        assert (tmp_path / "drafts-findings-64086.json").is_file()
+
+    def test_drafts_go_under_their_own_key(self, tmp_path, monkeypatch,
+                                           capsys):
+        record = {"status": "done", "json": "validation-64086_drafts.json",
+                  "counts": {"confirmed": 1}, "error": None,
+                  "posted": False}
+        code, summary, posted = TestCmdValidate()._run(
+            tmp_path, monkeypatch, record, ["--drafts", "--post"])
+        assert code == 0
+        assert summary["64086-drafts"]["source"] == "drafts"
+        assert "64086" not in summary
+        assert posted == [["64086-drafts"]]
