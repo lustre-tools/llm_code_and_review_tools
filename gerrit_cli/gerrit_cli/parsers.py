@@ -126,6 +126,14 @@ def add_extract_parser(subparsers):
              "rebases and vote-only messages need --include-system.",
     )
     parser.add_argument(
+        "--thread",
+        metavar="COMMENT_ID",
+        default=None,
+        help="Only the thread holding this comment id (its root or any reply), "
+             "resolved or not; reply to it by that id, since a thread index "
+             "here is not the one 'gc reply' takes",
+    )
+    parser.add_argument(
         "--since",
         metavar="TIME",
         default=None,

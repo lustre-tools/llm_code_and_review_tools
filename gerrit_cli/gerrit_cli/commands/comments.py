@@ -63,9 +63,10 @@ def cmd_extract(args):
         # CI bot messages is rarely useful and leads to confusion)
         if include_system:
             include_ci = True
+        wanted = getattr(args, 'thread', None)
         result = cli.extract_comments(
             url=args.url,
-            include_resolved=args.all,
+            include_resolved=args.all or bool(wanted),
             include_code_context=not args.no_context,
             context_lines=args.context_lines,
             include_system=include_system,
@@ -74,6 +75,17 @@ def cmd_extract(args):
         )
 
         since = normalize_since(getattr(args, 'since', None))
+        if wanted:
+            # One thread, found by any comment id in it, resolved or not
+            # (fb-91144aaaaa12: a reply-only run filtered --all by hand).
+            result.threads = [
+                t for t in result.threads
+                if any(c.id == wanted for c in t.all_comments)]
+            result.hidden_resolved_count = 0
+            if not result.threads:
+                raise ValueError(
+                    f"No comment thread holds comment id {wanted!r}; "
+                    "'gerrit comments --all' lists every thread with its ids.")
         if getattr(args, 'messages', False):
             entries = message_list(result.review_messages, since)
             data = {"messages": entries, "count": len(entries)}
@@ -120,6 +132,12 @@ def cmd_extract(args):
                 )
         else:
             data = result.to_dict()
+            if wanted:
+                data["review_messages"] = []
+                data["thread"] = wanted
+                for entry in data["threads"]:
+                    # Its index in a one-thread list is not what reply takes.
+                    entry.pop("index", None)
             if since:
                 # Threads keep the index they have in the full listing,
                 # which is what reply/done/ack/stage take.
