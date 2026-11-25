@@ -95,7 +95,8 @@ Bound every ssh command that can hang, as the ltvm guide says.
       `ltvm vm console-log` (`validation/F<n>/console.txt`) and a crash
       summary from `ltvm vm crash-collect`.
    5. Give the verdict.
-   6. Write the report (below).
+   6. For a `confirmed` finding, find where the bug comes from (below).
+   7. Write the report (below).
 4. Write `validation.json` (below) before you finish. Write it also
    when a finding is inconclusive or when you run out of time. lreview
    reads only that file. A finding with no entry counts as
@@ -155,14 +156,37 @@ code path and that the result was correct.
 A `not-testable` finding needs no report. Its `summary` gives the
 reason in one or two sentences.
 
+### Where a confirmed bug comes from
+
+lreview posts the proof of a confirmed bug (the verdict, the steps
+and the report) only when the change brought the bug in. For a bug
+that the parent commit has too, the proof is an exploit for released
+code. Such proof must stay private.
+
+For each `confirmed` finding, read the code first. Use `git diff HEAD^
+HEAD -- <file>` and `git show HEAD^:<file>`. Give `origin`:
+
+- `change` when the commit adds or changes the faulty code, and the
+  parent does not have the bug.
+- `base` when the parent commit has the same faulty code. Also give
+  `base` when the commit only makes an older bug easier to reach.
+- `unknown` when you cannot tell.
+
+Give the reason in `origin_reason`, in one sentence.
+
 ### Baseline run
 
-When "This run" says the baseline run is ON, run the reproducer of
-each `confirmed` finding on the parent commit too. Use `git checkout
-HEAD^`, deploy and run. Then use `git checkout -` and deploy again. Record
-`"baseline": "passes"` when the bug does not show on the parent (the
-commit introduced it) or `"fails"` when it does (the bug is older).
-When the baseline run is OFF, omit the field.
+When "This run" says the baseline run is ON, also run the reproducer
+of each `confirmed` finding on the parent commit. When lreview is to
+post the results, it turns the baseline run on. It posts no confirmed
+bug without it.
+
+Use `git checkout HEAD^`, deploy and run. For an `instrumented`
+reproducer, apply the same `instrumentation.diff` to the parent first.
+Then use `git checkout -` and deploy again. Record `"baseline":
+"passes"` when the bug does not show on the parent (the commit
+introduced it) or `"fails"` when it does (the bug is older). When the
+baseline run is OFF, omit the field.
 
 ### Verdicts
 
@@ -189,6 +213,8 @@ Write `./validation.json` in the current directory:
       "method": "fail_loc",
       "target": "rocky9",
       "baseline": "passes",
+      "origin": "change",
+      "origin_reason": "HEAD adds the complete() call; HEAD^ has no such call.",
       "summary": "One or two sentences: what you ran and what it showed.",
       "steps": "1. ltvm create ... 2. ltvm deploy-lustre ... 3. ...",
       "actual": "The failure, as the output shows it (a few lines).",

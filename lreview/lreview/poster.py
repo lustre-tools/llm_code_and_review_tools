@@ -108,10 +108,13 @@ def _post_verdicts(results_dir: Path, entry: dict, dry_run: bool = False):
                            tested_sha, unposted, validation_prefix,
                            verdict_message)
 
+    from .validate import private_note
     validation = load_validation(results_dir, entry)
     todo = unposted(validation)
+    note = private_note(validation)
     if not todo:
-        return False, "no confirmed or refuted verdict to post"
+        return False, "no confirmed or refuted verdict to post" + (
+            f"; {note}" if note else "")
     client = GerritCommentsClient(url=entry["base_url"]) \
         if entry.get("base_url") else GerritCommentsClient()
     try:
@@ -133,7 +136,8 @@ def _post_verdicts(results_dir: Path, entry: dict, dry_run: bool = False):
         posts.append((tested, {}))
     replies = sum(len(r) for _, files in posts for r in files.values())
     detail = (f"VM verdicts for {len(todo)} finding(s), {replies} as "
-              f"thread replies, in {len(posts)} post(s)")
+              f"thread replies, in {len(posts)} post(s)"
+              + (f"; {note}" if note else ""))
     if dry_run:
         return True, detail
     prefix = validation_prefix(validation, entry.get("validation"))
@@ -164,15 +168,23 @@ def _post_verdicts(results_dir: Path, entry: dict, dry_run: bool = False):
 def _mark_review_verdicts(results_dir: Path, entry: dict) -> None:
     """After a review went out with its verdicts applied: the confirmed
     notes are in it, and the refuted findings stay off Gerrit.  Neither
-    needs a reply later."""
-    from .validate import load_validation, save_validation, POSTED
+    needs a reply later.  A confirmed bug that must stay private was
+    not in the review, so it keeps no mark."""
+    from .validate import (load_validation, public_findings,
+                           save_validation, POSTED)
     validation = load_validation(results_dir, entry)
     if not validation:
         return
-    for item in validation.get("findings") or []:
+    for item in public_findings(validation):
         if item["verdict"] in POSTED:
             item["posted"] = True
     save_validation(results_dir, entry, validation)
+
+
+def _private_detail(results_dir: Path, entry: dict) -> str:
+    from .validate import load_validation, private_note
+    note = private_note(load_validation(results_dir, entry))
+    return f"; {note}" if note else ""
 
 
 def _validation_pending(results_dir: Path, entry: dict) -> bool:
@@ -225,7 +237,8 @@ def _post_one(results_dir: Path, entry: dict, prefix: Optional[str]):
                   f"{result.comments_posted} comment(s) on "
                   f"ps{entry['patchset']}")
         if held:
-            detail += f", {len(held)} refuted or obsolete finding(s) held back"
+            detail += f", {len(held)} finding(s) held back"
+        detail += _private_detail(results_dir, entry)
         if prefix:
             detail += f" as '{prefix}'"
         return True, detail, prefix
@@ -287,8 +300,8 @@ def _would_post_detail(results_dir: Path, entry: dict) -> str:
              else entry.get("head_sha", "")[:12])
     detail = f"{count} comment(s) on {where}"
     if held:
-        detail += f", {len(held)} refuted or obsolete finding(s) held back"
-    return detail
+        detail += f", {len(held)} finding(s) held back"
+    return detail + _private_detail(results_dir, entry)
 
 
 def post_results(
@@ -377,10 +390,13 @@ def post_results(
                 # from Gerrit is someone's posted comments, so --force
                 # does not post it again either.
                 if not _validation_pending(results_dir, entry):
+                    from .validate import load_validation, private_note
+                    note = private_note(load_validation(results_dir, entry))
                     outcomes.append(PostOutcome(
                         number, "skipped",
-                        "no VM verdicts to post" if from_gerrit else
-                        "already posted (use --force to repost)"))
+                        ("no VM verdicts to post" if from_gerrit else
+                         "already posted (use --force to repost)")
+                        + (f"; {note}" if note else "")))
                     continue
                 try:
                     success, detail = _post_verdicts(

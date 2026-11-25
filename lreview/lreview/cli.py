@@ -1285,8 +1285,16 @@ def cmd_validate(args) -> int:
             print(f"  {outcome.number}: {outcome.status} {outcome.detail}")
             failed += outcome.status == "error"
     elif keys:
-        print(f"\nPost with: lreview post {' '.join(keys)} "
-              f"--results-dir {results_dir}")
+        from .validate import load_validation, unposted
+        # A review not yet on Gerrit can go out; findings on Gerrit
+        # already need a verdict to post.
+        ready = [k for k in keys
+                 if (not now[k].get("posted")
+                     and now[k].get("source") != "gerrit")
+                 or unposted(load_validation(results_dir, now[k]))]
+        if ready:
+            print(f"\nPost with: lreview post {' '.join(ready)} "
+                  f"--results-dir {results_dir}")
     if args.post_report and keys:
         from .validate import post_reports
         print("\nAttaching QA reports...")
@@ -1427,7 +1435,11 @@ def validate_config(args):
         classes=classes, jobs=args.validate_jobs,
         model=args.validate_model, effort=args.validate_effort,
         timeout=args.validate_timeout, target=args.validate_target,
-        baseline=args.validate_baseline, keep_vms=args.keep_vms,
+        # A post needs the baseline run: it shows that the change
+        # brought each confirmed bug in.
+        baseline=(args.validate_baseline or getattr(args, "post", False)
+                  or getattr(args, "post_report", False)),
+        keep_vms=args.keep_vms,
         force=getattr(args, "force", False))
 
 

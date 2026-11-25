@@ -46,6 +46,11 @@ NEEDS_REPORT = ("confirmed", "refuted")
 # keeps every other verdict.
 RETEST = ("inconclusive",)
 
+# Where a confirmed bug comes from, by the validator's code check:
+# the change brought the faulty code in, or the code that the change
+# is based on has it already.
+ORIGINS = ("change", "base", "unknown")
+
 VALIDATION_JSON_NAME = "validation.json"
 VALIDATION_DIR_NAME = "validation"
 REPORT_NAME = "report.md"
@@ -462,6 +467,9 @@ def normalize(spec: Optional[dict], findings: list[Finding],
             **base, "verdict": verdict, "note": note,
             "method": method if method in METHODS else None,
             "baseline": item.get("baseline"),
+            "origin": (item.get("origin") if item.get("origin") in ORIGINS
+                       else "unknown"),
+            "origin_reason": _text(item.get("origin_reason")),
             "target": item.get("target"),
             "summary": _text(item.get("summary")),
             "steps": _text(item.get("steps")),
@@ -590,8 +598,14 @@ def plan_findings(spec: Optional[dict], vcfg: ValidateConfig,
     if not vcfg.force:
         for f in findings:
             old = old_items.get(f.key)
-            if old and old.get("verdict") not in RETEST:
-                kept[f.id] = old
+            if not old or old.get("verdict") in RETEST:
+                continue
+            # A post needs the baseline run behind each confirmed bug.
+            if (vcfg.baseline and old.get("verdict") == "confirmed"
+                    and old.get("baseline") not in ("passes", "fails")
+                    and not old.get("posted")):
+                continue
+            kept[f.id] = old
     todo = [f for f in findings if f.id not in kept]
     selected = {f.key for f in findings}
     for key, old in old_items.items():
@@ -769,7 +783,7 @@ def finish(results_dir: Path, json_name: str, validation: dict,
 
 
 def all_posted(validation: dict) -> bool:
-    return all(i.get("posted") for i in validation.get("findings") or []
+    return all(i.get("posted") for i in public_findings(validation)
                if i["verdict"] in POSTED)
 
 
@@ -853,6 +867,9 @@ def index_text(validation: dict) -> str:
         link = (f"[{report}]({validation.get('evidence_dir')}/{report})"
                 if report else "-")
         summary = (item.get("summary") or item.get("note") or "")
+        reason = private_reason(item, validation)
+        if reason:
+            summary = f"**PRIVATE: {reason}.** {summary}"
         summary = summary.replace("|", "\\|").replace("\n", " ")
         lines.append(f"| {item['id']} | {item['verdict']} | {item['class']} "
                      f"| `{_loc(item)}` | {link} | {summary} |")
@@ -887,6 +904,14 @@ def report_lines(results_dir: Path, record: Optional[dict]) -> list[str]:
         if item.get("note"):
             text += f"  ({item['note']})"
         out.append(text)
+        reason = private_reason(item, validation)
+        if reason:
+            out.append(f"   PRIVATE: {reason}. lreview does not post the "
+                       "proof. Do not post the verdict, the steps or the "
+                       "report in public.")
+            if _needs_baseline(item, validation):
+                out.append("   To post it if the change brought it in, "
+                           "validate again with --validate-baseline.")
     if record.get("index"):
         out.append(f"index: {results_dir / record['index']}")
     if record.get("refuted"):
@@ -897,7 +922,8 @@ def report_lines(results_dir: Path, record: Optional[dict]) -> list[str]:
     if tested.get("merged") and confirmed:
         branch = tested.get("branch") or "its branch"
         out.append(f"MERGED: {confirmed} confirmed bug(s) are in {branch}. "
-                   "Each one needs a ticket.")
+                   "Each one needs a ticket. Report them privately, not "
+                   "in public.")
     return out
 
 
@@ -1024,9 +1050,73 @@ def reply_text(item: dict, validation: Optional[dict] = None) -> str:
     return _cap(text)
 
 
+def private_reason(item: dict, validation: Optional[dict]) -> Optional[str]:
+    """Why the proof of a confirmed bug must not go to a public place
+    (Gerrit, a public Jira), or None when it may.  The proof (the
+    verdict, the steps, the actual result, the QA report) of a bug in
+    landed code is a ready exploit, and lreview cannot tell an exploit
+    from a plain bug.  So the proof goes public only when the change
+    brought the bug in: the change is not merged, the reproducer passes
+    on the parent commit, and the code check does not say that the
+    faulty code is older.  The finding text is not proof: the review
+    posts it as it does with no validation."""
+    if item.get("verdict") != "confirmed":
+        return None
+    tested = (validation or {}).get("tested") or {}
+    branch = tested.get("branch") or "the branch"
+    if tested.get("merged"):
+        return f"the change is merged, so the bug is in {branch}"
+    if item.get("baseline") == "fails":
+        return ("the reproducer also fails on the parent commit, so the "
+                f"bug is older than the change and can be in {branch}")
+    if item.get("baseline") != "passes":
+        return ("no baseline run shows that the change brought the bug "
+                f"in, so it can be in {branch}")
+    if item.get("origin") == "base":
+        return ("the code check says that the faulty code is older than "
+                f"the change, so the bug can be in {branch}")
+    return None
+
+
+def public_findings(validation: Optional[dict]) -> list[dict]:
+    """The findings whose verdict may be posted in public."""
+    return [i for i in (validation or {}).get("findings") or []
+            if private_reason(i, validation) is None]
+
+
+def private_findings(validation: Optional[dict]) -> list[dict]:
+    return [i for i in (validation or {}).get("findings") or []
+            if private_reason(i, validation) is not None]
+
+
+def private_note(validation: Optional[dict]) -> str:
+    """The text that a post adds when it holds a confirmed bug back as
+    private, or "" when it holds none."""
+    held = private_findings(validation)
+    if not held:
+        return ""
+    note = (f"no proof of {len(held)} confirmed bug(s), which stay "
+            "private ("
+            + "; ".join(f"{i['id']}: {private_reason(i, validation)}"
+                        for i in held) + ")")
+    if any(_needs_baseline(i, validation) for i in held):
+        note += (". To post a bug that the change brought in, validate "
+                 "again with --validate-baseline")
+    return note
+
+
+def _needs_baseline(item: dict, validation: Optional[dict]) -> bool:
+    tested = (validation or {}).get("tested") or {}
+    return (not tested.get("merged")
+            and item.get("baseline") not in ("passes", "fails")
+            and item.get("origin") != "base")
+
+
 def apply_verdicts(spec: dict, validation: dict) -> tuple[dict, list]:
     """The review JSON to post: refuted and obsolete findings removed,
-    confirmed ones annotated.  Returns (new spec, the held findings)."""
+    confirmed ones annotated.  A confirmed bug whose proof must stay
+    private keeps its finding text with no annotation, as with no
+    validation.  Returns (new spec, the held findings)."""
     by_pos = {(i["file"], i["comment_index"]): i
               for i in validation.get("findings") or []}
     comments = spec.get("comments")
@@ -1041,7 +1131,8 @@ def apply_verdicts(spec: dict, validation: dict) -> tuple[dict, list]:
             if item and item["verdict"] in ("refuted", "obsolete"):
                 held.append(item)
                 continue
-            if item and item["verdict"] == "confirmed":
+            if (item and item["verdict"] == "confirmed"
+                    and not private_reason(item, validation)):
                 entry = {**entry, "message":
                          f"{entry.get('message', '').rstrip()}\n\n"
                          f"{reply_text(item, validation)}"}
@@ -1058,8 +1149,9 @@ def decisive(validation: Optional[dict]) -> bool:
 
 
 def unposted(validation: Optional[dict]) -> list[dict]:
-    """The confirmed and refuted verdicts not yet on Gerrit."""
-    return [i for i in (validation or {}).get("findings") or []
+    """The confirmed and refuted verdicts not yet on Gerrit, without
+    the confirmed bugs that must stay private."""
+    return [i for i in public_findings(validation)
             if i["verdict"] in POSTED and not i.get("posted")]
 
 
@@ -1067,15 +1159,17 @@ def cover_line(validation: dict) -> Optional[str]:
     """The line under the cover message of a review posted with its
     verdicts applied, or None when no verdict is decisive."""
     held = ("refuted", "obsolete")
+    # A bug that must stay private gets no word in public, also not
+    # in a count.
+    visible = {**validation, "findings": public_findings(validation)}
     if not any(i["verdict"] in POSTED + held
-               for i in validation.get("findings") or []):
+               for i in visible["findings"]):
         return None
-    c = counts(validation)
+    c = counts(visible)
     parts = [f"{c[v]} {v}" + (" (not posted)" if v in held else "")
              for v in VERDICTS if c.get(v)]
     line = "VM validation: " + ", ".join(parts) + "."
-    defects = [i for i in validation.get("findings") or []
-               if i["class"] == "defect"]
+    defects = [i for i in visible["findings"] if i["class"] == "defect"]
     if defects and all(i["verdict"] == "refuted" for i in defects):
         line += (" The VM runs refuted every (defect) finding, so none "
                  "of them is posted.")
@@ -1090,7 +1184,7 @@ def verdict_message(validation: dict,
     find."""
     if not unposted(validation):
         return None
-    c = counts(validation)
+    c = counts({**validation, "findings": public_findings(validation)})
     lines = [f"VM validation of the findings on {_rev_text(validation)}: "
              + ", ".join(f"{c[v]} {v}" for v in VERDICTS if c.get(v))
              + "."]
@@ -1250,8 +1344,9 @@ def report_comment(entry: dict, validation: dict,
              f"A test on a VM confirmed {len(attached)} review finding(s) "
              f"in {change_url(entry)} patchset {ps} (commit {sha}).",
              "The QA report of each finding is attached:"]
-    lines += [f"- {links.get(item['id']) or _loc(item)}: {name}"
-              for item, name in attached]
+    for item, name in attached:
+        lines += [f"- Finding: {links.get(item['id']) or _loc(item)}",
+                  f"- Report: {name}"]
     return "\n".join(lines)
 
 
@@ -1282,9 +1377,13 @@ def post_reports(results_dir: Path, entry: dict, *, dry_run: bool = False,
     ticket = ticket_of(entry.get("subject"))
     if ticket is None:
         return "skipped", "the commit subject names no ticket"
-    todo = []
+    todo, private = [], []
     for item in validation.get("findings") or []:
         if item["verdict"] != "confirmed" or item.get("report_posted"):
+            continue
+        reason = private_reason(item, validation)
+        if reason:
+            private.append(f"{item['id']}: {reason}")
             continue
         path = evidence_path(results_dir, validation, item.get("report"))
         if path is None or not path.is_file():
@@ -1292,12 +1391,14 @@ def post_reports(results_dir: Path, entry: dict, *, dry_run: bool = False,
         todo.append((item, path,
                      report_attachment_name(entry, validation, item,
                                             path)))
+    held = ("; held back, not for a public ticket: " + "; ".join(private)
+            if private else "")
     if not todo:
-        return "skipped", f"no new QA report of a confirmed finding " \
-                          f"for {ticket}"
+        return "skipped", (f"no new QA report of a confirmed finding "
+                           f"for {ticket}" + held)
     if dry_run:
         return "would post", (f"{len(todo)} report(s) to {ticket}: "
-                              + ", ".join(n for _, _, n in todo))
+                              + ", ".join(n for _, _, n in todo) + held)
     attached, errors = [], []
     for item, path, name in todo:
         ok, error = _jira(["attachment", "upload", ticket, str(path),
@@ -1318,7 +1419,7 @@ def post_reports(results_dir: Path, entry: dict, *, dry_run: bool = False,
                                           links)], run)
         if not ok:
             errors.append(f"comment: {error}")
-    detail = f"{len(attached)} report(s) attached to {ticket}"
+    detail = f"{len(attached)} report(s) attached to {ticket}" + held
     if errors:
         return "error", detail + "; " + "; ".join(errors)
     return "posted", detail

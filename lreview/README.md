@@ -484,9 +484,16 @@ lreview validate 64086 --post-report                      # reports to the ticke
   `refuted-<slug>.json` holds the refuted findings, ready for a manual
   `gc review --post-comments`.
 - For findings that are on Gerrit already, `post` replies in the thread
-  of each finding, with the prefix `[AI validation - <model>]`. A
-  merged change gets its replies too. stdout then says that the
-  confirmed bugs need a ticket.
+  of each finding, with the prefix `[AI validation - <model>]`.
+- lreview posts the proof of a confirmed bug (the verdict, the steps
+  and the report) only when the change brought the bug in. The
+  validator checks the code of the parent commit. The options `--post`
+  and `--post-report` also make it run the reproducer on the parent
+  commit. The proof stays private for a bug that the parent has too,
+  a bug with no baseline run, and a bug of a merged change.
+  The review still posts the finding text, as with no validation. The
+  output marks each such bug `PRIVATE` with the reason. Give its
+  report to the author privately, not in public.
 - `lreview validate --post-report` attaches the `report.md` of each
   confirmed finding to the Jira ticket at the start of the commit
   subject, for example `LU-21098`. One short comment links the change
@@ -938,7 +945,7 @@ opencode's `--model` wants the `provider/model` form.
 | `--validate-model M` / `--validate-effort LEVEL` | `opus` / `high` | The validator's claude model and effort |
 | `--validate-timeout SECS` | `5400` | Time limit for one change's validation |
 | `--validate-target T` | `rocky9` | ltvm target of the default VM |
-| `--validate-baseline` | off | Also run each confirmed reproducer on the parent commit |
+| `--validate-baseline` | off (on with `--post` or `--post-report`) | Also run each confirmed reproducer on the parent commit |
 | `--keep-vms` | off | Leave the validator's VMs instead of destroying them |
 | `--post` | off | Post findings when batch finishes |
 | `--prefix TEXT` | `[AI review - <model>]` | Message prefix; `<model>` placeholder substituted (`$LREVIEW_PREFIX` overrides the default; `''` for none) |

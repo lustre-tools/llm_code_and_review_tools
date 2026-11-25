@@ -282,6 +282,7 @@ def _validation(verdicts, root=None):
         {"id": f.id, "verdict": verdict, "method": "unmodified",
          "target": "rocky9", "summary": f"summary {f.id}",
          "steps": "ltvm create; repro.sh", "actual": "oops",
+         "baseline": "passes", "origin": "change",
          "evidence": [f"{f.id}/out.txt"]}
         for f, verdict in zip(found, verdicts)]}, found, evidence_root=root)
     out["tested"] = {"sha": "c" * 40, "patchset": 2, "merged": False,
@@ -411,8 +412,11 @@ class TestReports:
         _validation_, record = self._write(tmp_path, ["confirmed",
                                                       "confirmed"],
                                            merged=True)
+        lines = v.report_lines(tmp_path, record)
         assert ("MERGED: 2 confirmed bug(s) are in master. Each one needs "
-                "a ticket.") in v.report_lines(tmp_path, record)
+                "a ticket. Report them privately, not in public.") in lines
+        assert sum("PRIVATE: the change is merged" in line
+                   for line in lines) == 2
 
     def test_reports_text(self, tmp_path):
         _validation_, record = self._write(tmp_path, ["confirmed", "refuted"])
@@ -795,7 +799,7 @@ class TestPosting:
         with p_rev, p_client:
             outcomes = post_results(posted_dir, prefix="")
         assert outcomes[0].status == "posted"
-        assert "1 refuted or obsolete finding(s) held back" in outcomes[0].detail
+        assert "1 finding(s) held back" in outcomes[0].detail
         kwargs = reviewer.post_review.call_args[1]
         b = kwargs["comments"]["lustre/b.c"]
         assert [c["message"] for c in b] == ["(minor) leak on retry"]
@@ -815,7 +819,7 @@ class TestPosting:
 
     def test_dry_run_reports_held(self, posted_dir):
         outcomes = post_results(posted_dir, dry_run=True)
-        assert "1 refuted or obsolete finding(s) held back" in outcomes[0].detail
+        assert "1 finding(s) held back" in outcomes[0].detail
 
     def test_posted_review_gets_verdicts_message_once(self, posted_dir):
         summary = json.loads((posted_dir / "summary.json").read_text())
@@ -936,12 +940,13 @@ def gerrit_dir(tmp_path):
         (root / f.id / "report.md").write_text("r")
     validation = v.normalize({"findings": [
         {"id": "F1", "verdict": "confirmed", "summary": "oops",
+         "baseline": "passes", "origin": "change",
          "evidence": ["F1/out.txt"]},
         {"id": "F2", "verdict": "refuted", "summary": "fine",
          "evidence": ["F2/out.txt"]}]}, found, evidence_root=root)
     validation.update(evidence_dir=root.name, model="opus",
                       tested={"sha": "b" * 40, "patchset": 2,
-                              "merged": True, "branch": "master"})
+                              "merged": False, "branch": "master"})
     (d / "validation-64086_gerrit.json").write_text(json.dumps(validation))
     entry = {"number": 64086, "patchset": 2, "sha": "b" * 40,
              "base_url": "https://gerrit.invalid", "provider": "gerrit",
@@ -972,9 +977,28 @@ class TestPostingGerritFindings:
         assert new["message"].startswith(
             "VM validation of the findings on patchset 2")
         assert new["prefix"] == "[AI validation - opus]"
-        # A merged change gets its replies too.
         assert "Confirmed on a VM, patchset 2" in \
             old["comments"]["lustre/a.c"][0]["message"]
+
+    def test_merged_change_keeps_its_bugs_private(self, gerrit_dir):
+        name = gerrit_dir / "validation-64086_gerrit.json"
+        validation = json.loads(name.read_text())
+        validation["tested"]["merged"] = True
+        name.write_text(json.dumps(validation))
+        reviewer = _reviewer()
+        p_rev, p_client = _patched(reviewer)
+        with p_rev, p_client:
+            outcomes = post_results(gerrit_dir, prefix="")
+        assert outcomes[0].status == "posted"
+        # Only the refuted reply goes out, and the message counts only
+        # that verdict.
+        calls = reviewer.post_review.call_args_list
+        assert len(calls) == 1
+        kwargs = calls[0][1]
+        assert list(kwargs["comments"]) == ["lustre/b.c"]
+        assert kwargs["message"].endswith(": 1 refuted.")
+        saved = json.loads(name.read_text())
+        assert saved["findings"][0]["posted"] is False
 
     def test_force_never_reposts_someone_elses_review(self, gerrit_dir):
         reviewer = _reviewer()
@@ -1284,11 +1308,194 @@ class TestFindingLinks:
                                 comments=lambda: 1 / 0)
         assert links == {}
         text = v.report_comment(entry, validation, [(item, "r.md")], links)
-        assert f"- {item['file']}:{item['line']}: r.md" in text
+        assert (f"- Finding: {item['file']}:{item['line']}\n"
+                "- Report: r.md") in text
         failing = v.finding_links(tmp_path, {**entry, "posted": True},
                                   validation, [item],
                                   comments=lambda: 1 / 0)
         assert failing == {}
         linked = v.report_comment(entry, validation, [(item, "r.md")],
                                   {"F1": "https://g/c/p/+/1/comment/z/"})
-        assert "- https://g/c/p/+/1/comment/z/: r.md" in linked
+        assert ("- Finding: https://g/c/p/+/1/comment/z/\n"
+                "- Report: r.md") in linked
+
+
+class TestPrivateBugs:
+    """A confirmed bug goes public only when the change brought it in."""
+
+    def _item(self, **over):
+        return {"id": "F1", "verdict": "confirmed", "baseline": "passes",
+                "origin": "change", **over}
+
+    def _val(self, merged=False):
+        return {"tested": {"merged": merged, "branch": "b_es7_0"}}
+
+    def test_reasons(self):
+        val = self._val()
+        assert v.private_reason(self._item(), val) is None
+        assert "merged" in v.private_reason(self._item(), self._val(True))
+        assert "b_es7_0" in v.private_reason(self._item(), self._val(True))
+        assert "fails on the parent" in v.private_reason(
+            self._item(baseline="fails"), val)
+        assert "no baseline run" in v.private_reason(
+            self._item(baseline=None), val)
+        assert "code check" in v.private_reason(
+            self._item(origin="base"), val)
+        # The baseline run decides when the code check is unsure.
+        assert v.private_reason(self._item(origin="unknown"), val) is None
+        # Only a confirmed bug can be private.
+        assert v.private_reason(
+            self._item(verdict="refuted", baseline=None), val) is None
+
+    def test_normalize_keeps_origin(self, tmp_path):
+        found = v.select_findings(SPEC, ("defect",))[:1]
+        (tmp_path / "F1").mkdir()
+        (tmp_path / "F1" / "out.txt").write_text("x")
+        given = {"findings": [{"id": "F1", "verdict": "confirmed",
+                               "origin": "base", "origin_reason": "old",
+                               "evidence": ["F1/out.txt"]}]}
+        item = v.normalize(given, found, evidence_root=tmp_path)[
+            "findings"][0]
+        assert (item["origin"], item["origin_reason"]) == ("base", "old")
+        given["findings"][0]["origin"] = "maybe"
+        item = v.normalize(given, found, evidence_root=tmp_path)[
+            "findings"][0]
+        assert item["origin"] == "unknown"
+
+    def test_private_bug_posts_its_text_without_proof(self):
+        validation = _validation(["confirmed", "confirmed"])
+        validation["findings"][1]["baseline"] = "fails"
+        new, held = v.apply_verdicts(SPEC, validation)
+        assert held == []
+        posted = [c["message"] for cs in new["comments"].values()
+                  for c in cs]
+        f2 = validation["findings"][1]
+        original = SPEC["comments"][f2["file"]][f2["comment_index"]]
+        # The finding text goes out as with no validation, with no note.
+        assert original["message"] in posted
+        assert sum("Confirmed on a VM" in m for m in posted) == 1
+        line = v.cover_line(validation)
+        assert line == "VM validation: 1 confirmed."
+        assert [i["id"] for i in v.unposted(validation)] == ["F1"]
+
+    def test_only_private_bugs_post_no_line(self):
+        validation = _validation(["confirmed", "confirmed"])
+        for item in validation["findings"]:
+            item["baseline"] = None
+        assert v.cover_line(validation) is None
+        assert v.unposted(validation) == []
+        assert v.verdict_message(validation) is None
+        assert v.all_posted(validation)
+
+    def test_post_reports_skips_private_bugs(self, tmp_path):
+        entry = TestPostReports()._setup(tmp_path, ("confirmed",
+                                                    "confirmed"))
+        saved = json.loads((tmp_path / "validation.json").read_text())
+        saved["findings"][1]["baseline"] = "fails"
+        (tmp_path / "validation.json").write_text(json.dumps(saved))
+        calls, run = TestPostReports()._runner()
+        status, detail = v.post_reports(tmp_path, entry, run=run)
+        assert status == "posted"
+        assert "1 report(s) attached" in detail
+        assert "held back, not for a public ticket: F2:" in detail
+        uploads = [c for c in calls if c[1] == "attachment"]
+        assert len(uploads) == 1 and "F1" in uploads[0][-1]
+
+    def test_post_needs_the_baseline(self):
+        vcfg = v.ValidateConfig(baseline=True)
+        found = v.select_findings(SPEC, ("defect",))
+        previous = _validation(["confirmed", "refuted"])
+        previous["findings"][0]["baseline"] = None
+        _all, todo, kept = v.plan_findings(SPEC, vcfg, None, previous)
+        assert [f.id for f in todo] == ["F1"]
+        assert "F2" in kept
+        # Without a post, the verdict stays.
+        _all, todo, _kept = v.plan_findings(SPEC, v.ValidateConfig(),
+                                            None, previous)
+        assert todo == []
+
+    @pytest.mark.parametrize("flags,on", [
+        ([], False), (["--post"], True), (["--post-report"], True),
+        (["--validate-baseline"], True)])
+    def test_post_turns_the_baseline_on(self, flags, on, monkeypatch):
+        from lreview import cli
+        monkeypatch.setattr("shutil.which", lambda tool: "/bin/" + tool)
+        args = build_parser().parse_args(["validate", "64086", *flags])
+        assert cli.validate_config(args).baseline is on
+
+
+class TestPrivateNotes:
+
+    def test_note_says_how_to_release(self):
+        validation = _validation(["confirmed", "confirmed"])
+        validation["findings"][0]["baseline"] = None
+        validation["findings"][1]["baseline"] = "fails"
+        note = v.private_note(validation)
+        assert note.startswith(
+            "no proof of 2 confirmed bug(s), which stay private")
+        assert "F1: no baseline run" in note and "F2: the reproducer" in note
+        assert note.endswith("validate again with --validate-baseline")
+        validation["findings"][0]["baseline"] = "fails"
+        assert "--validate-baseline" not in v.private_note(validation)
+        validation["findings"] = []
+        assert v.private_note(validation) == ""
+
+    def test_post_explains_a_held_bug(self, gerrit_dir):
+        name = gerrit_dir / "validation-64086_gerrit.json"
+        validation = json.loads(name.read_text())
+        validation["findings"][0]["baseline"] = None
+        validation["findings"][1]["posted"] = True
+        name.write_text(json.dumps(validation))
+        outcomes = post_results(gerrit_dir, prefix="", dry_run=True)
+        assert outcomes[0].status == "skipped"
+        assert "no proof of 1 confirmed bug(s), which stay private (F1:" \
+            in outcomes[0].detail
+
+    def test_no_post_hint_when_all_is_private(self, tmp_path, monkeypatch,
+                                              capsys):
+        record = {"status": "done", "json": "validation-64086_gerrit.json",
+                  "counts": {"confirmed": 1}, "error": None,
+                  "posted": False}
+        results = tmp_path / "results"
+        results.mkdir()
+        validation = _validation(["confirmed"])
+        validation["findings"][0]["baseline"] = None
+        (results / record["json"]).write_text(json.dumps(validation))
+        code, _summary, posted = TestCmdValidate()._run(
+            tmp_path, monkeypatch, record)
+        out = capsys.readouterr().out
+        assert "PRIVATE: no baseline run" in out
+        assert "Post with" not in out
+
+    def test_run_validate_post_turns_the_baseline_on(self, monkeypatch):
+        from lreview import cli
+        monkeypatch.setattr("shutil.which", lambda tool: "/bin/" + tool)
+        args = build_parser().parse_args(
+            ["run", "64086", "--validate", "--post"])
+        assert cli.validate_config(args).baseline is True
+        args = build_parser().parse_args(["run", "64086", "--validate"])
+        assert cli.validate_config(args).baseline is False
+
+
+class TestPrivatePost:
+
+    def test_review_keeps_the_text_and_the_verdict_waits(self, posted_dir):
+        name = posted_dir / "validation-64086_ps2.json"
+        validation = json.loads(name.read_text())
+        validation["findings"][0]["baseline"] = None
+        name.write_text(json.dumps(validation))
+        reviewer = _reviewer()
+        p_rev, p_client = _patched(reviewer)
+        with p_rev, p_client:
+            outcomes = post_results(posted_dir, prefix="")
+        assert outcomes[0].status == "posted"
+        assert "which stay private (F1:" in outcomes[0].detail
+        kwargs = reviewer.post_review.call_args[1]
+        f1 = validation["findings"][0]
+        posted = kwargs["comments"][f1["file"]]
+        original = SPEC["comments"][f1["file"]][f1["comment_index"]]
+        assert original["message"] in [c["message"] for c in posted]
+        assert not any("Confirmed on a VM" in c["message"] for c in posted)
+        assert "confirmed" not in kwargs["message"].split("VM validation")[-1]
+        saved = json.loads(name.read_text())
+        assert saved["findings"][0]["posted"] is False
