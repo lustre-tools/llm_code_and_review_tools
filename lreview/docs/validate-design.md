@@ -247,6 +247,7 @@ A reviewer can post lreview's findings as Gerrit drafts, then keep, edit or dele
 
 ### VM lifecycle
 
+- Before the first review or validator starts, lreview checks the host. The tool `ltvm` must be on PATH, `ltvm doctor` must report no issue, and the default kernel of `--validate-target` must have a ready image (`ltvm target list --json`). A failed check stops the command with the reason and the fix. A validator on a broken host spends its whole time limit on setup errors. It must not run `ltvm install` or `doctor --fix`, so it gives no verdict. The check takes about 2 seconds. A target list that lreview cannot read, from an older ltvm, skips the image check.
 - The validator names VMs by the ltvm rule: `<hh><N>-lrv-<change>`. lreview picks `<hh>` and `<N>` before it starts the agent, and passes the names in the prompt.
 - lreview exports `LTVM_OWNER_ID=lreview:<run id>:<change>` and `LTVM_OWNER_PID`. ltvm reads `LTVM_OWNER_ID` before it looks for a Claude Code session (`vm_claim.current_owner`). Thus the claims identify the run, and `ltvm list --json` finds the VMs.
 - `create` and `cluster create` get `--wait 1800`. A validation waits for memory and does not fail.

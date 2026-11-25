@@ -1463,10 +1463,18 @@ def validate_config(args):
     except ValueError as exc:
         print(f"error: --validate-classes: {exc}")
         return None
-    for tool in ("ltvm", "claude"):
-        if not _shutil.which(tool):
-            print(f"error: validation needs `{tool}` on PATH")
-            return None
+    from .validate import LTVM_SETUP_HINT, ltvm_preflight
+    if not _shutil.which("claude"):
+        print("error: validation needs `claude` (Claude Code) on PATH")
+        return None
+    if not _shutil.which("ltvm"):
+        print("error: validation runs on ltvm VMs, and `ltvm` is not on "
+              f"PATH. {LTVM_SETUP_HINT}")
+        return None
+    problem = ltvm_preflight(args.validate_target)
+    if problem:
+        print(f"error: {problem}")
+        return None
     return ValidateConfig(
         classes=classes, jobs=args.validate_jobs,
         model=args.validate_model, effort=args.validate_effort,

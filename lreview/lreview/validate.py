@@ -555,6 +555,55 @@ def _ltvm(*args, owner: Optional[str] = None,
                           env=env)
 
 
+LTVM_SETUP_HINT = ("See the ltvm README: run `ltvm install` once on the "
+                   "host, then `ltvm doctor`")
+_ARCH_NAMES = {"arm64": "aarch64", "amd64": "x86_64"}
+
+
+def ltvm_preflight(target: str) -> Optional[str]:
+    """Why ltvm cannot run a validation on this host, or None.
+
+    A validator that meets a broken host spends its whole time limit
+    on setup errors that it may not fix, and gives no verdict.  So
+    lreview checks two things before it starts one: `ltvm doctor`
+    reports no issue, and the target's default kernel has a ready
+    image.  A target list that lreview cannot read (an older ltvm)
+    skips the second check."""
+    try:
+        doctor = _ltvm("doctor", timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"`ltvm doctor` did not run: {exc}. {LTVM_SETUP_HINT}"
+    if doctor.returncode != 0:
+        tail = (doctor.stdout + doctor.stderr).strip().splitlines()[-15:]
+        return ("`ltvm doctor` found host issues. Fix them (`ltvm doctor "
+                "--fix`), then validate again:\n    "
+                + "\n    ".join(tail))
+    try:
+        rows = json.loads(_ltvm("target", "list", "--json",
+                                timeout=60).stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return None
+    if not isinstance(rows, list):
+        return None
+    mine = [r for r in rows if isinstance(r, dict)
+            and r.get("name") == target]
+    if not mine:
+        names = sorted({r.get("name") for r in rows
+                        if isinstance(r, dict) and r.get("name")})
+        return (f"ltvm has no target {target!r} (--validate-target); "
+                f"it has {', '.join(names)}")
+    import platform
+    arch = _ARCH_NAMES.get(platform.machine(), platform.machine())
+    mine = [r for r in mine if r.get("arch") == arch] or mine
+    if any(r.get("available") == "ready"
+           and r.get("kernel") == r.get("default_kernel") for r in mine):
+        return None
+    kernel = mine[0].get("default_kernel") or "default"
+    return (f"ltvm target {target} has no ready image for its default "
+            f"kernel ({kernel}). Run `ltvm target fetch {target}`, or "
+            f"`ltvm build all {target}` where no release exists")
+
+
 def owned_vms(owner: str) -> tuple[list[str], list[str]]:
     """(clusters, standalone VMs) that carry this owner ID."""
     try:

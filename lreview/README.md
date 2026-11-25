@@ -448,6 +448,16 @@ verdict:
 | `inconclusive` | The reproducer did not show the failure, with no proof against it |
 | `not-testable` | No VM can show it (hardware, comment-only, no such target) |
 
+Validation needs `claude` and a working ltvm host. Before lreview
+starts a review or a validator, it checks three things:
+- `ltvm` is on PATH.
+- `ltvm doctor` reports no issue.
+- The `--validate-target` target has a ready image for its default
+  kernel.
+
+When a check fails, lreview stops with the reason and the fix, for
+example `ltvm target fetch rocky9`.
+
 ```bash
 lreview run 64086 --validate                              # (defect) findings
 lreview run 64086 --validate --validate-classes defect,minor

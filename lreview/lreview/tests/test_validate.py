@@ -1422,6 +1422,7 @@ class TestPrivateBugs:
     def test_post_turns_the_baseline_on(self, flags, on, monkeypatch):
         from lreview import cli
         monkeypatch.setattr("shutil.which", lambda tool: "/bin/" + tool)
+        monkeypatch.setattr(v, "ltvm_preflight", lambda target: None)
         args = build_parser().parse_args(["validate", "64086", *flags])
         assert cli.validate_config(args).baseline is on
 
@@ -1472,6 +1473,7 @@ class TestPrivateNotes:
     def test_run_validate_post_turns_the_baseline_on(self, monkeypatch):
         from lreview import cli
         monkeypatch.setattr("shutil.which", lambda tool: "/bin/" + tool)
+        monkeypatch.setattr(v, "ltvm_preflight", lambda target: None)
         args = build_parser().parse_args(
             ["run", "64086", "--validate", "--post"])
         assert cli.validate_config(args).baseline is True
@@ -1742,3 +1744,95 @@ class TestDraftsCli:
         assert summary["64086-drafts"]["source"] == "drafts"
         assert "64086" not in summary
         assert posted == [["64086-drafts"]]
+
+
+def _row(kernel="5.14-rhel9.7", available="ready", arch="aarch64",
+         name="rocky9"):
+    return {"name": name, "arch": arch, "kernel": kernel,
+            "default_kernel": "5.14-rhel9.7", "available": available}
+
+
+class TestLtvmPreflight:
+
+    def _fake(self, monkeypatch, doctor_rc=0, rows=None, doctor_out="",
+              arch="arm64"):
+        import subprocess
+        calls = []
+
+        def run(*args, owner=None, timeout=600):
+            calls.append(args)
+            if args[0] == "doctor":
+                return subprocess.CompletedProcess(args, doctor_rc,
+                                                   doctor_out, "")
+            out = rows if isinstance(rows, str) else json.dumps(rows)
+            return subprocess.CompletedProcess(args, 0, out, "")
+        monkeypatch.setattr(v, "_ltvm", run)
+        monkeypatch.setattr("platform.machine", lambda: arch)
+        return calls
+
+    def test_ready_host_passes(self, monkeypatch):
+        calls = self._fake(monkeypatch, rows=[
+            _row(available=""), _row(), _row(arch="x86_64",
+                                             available="fetch")])
+        assert v.ltvm_preflight("rocky9") is None
+        assert [c[0] for c in calls] == ["doctor", "target"]
+
+    def test_doctor_issues_stop_the_run(self, monkeypatch):
+        calls = self._fake(monkeypatch, doctor_rc=1,
+                           doctor_out="ok line\nuser not in group ltvm\n"
+                                      "1 issue(s) found")
+        problem = v.ltvm_preflight("rocky9")
+        assert "`ltvm doctor` found host issues" in problem
+        assert "user not in group ltvm" in problem
+        assert [c[0] for c in calls] == ["doctor"]
+
+    def test_doctor_that_cannot_run(self, monkeypatch):
+        def run(*args, **kw):
+            raise OSError("permission denied")
+        monkeypatch.setattr(v, "_ltvm", run)
+        assert "did not run: permission denied" in v.ltvm_preflight("rocky9")
+
+    def test_target_without_a_ready_default_kernel(self, monkeypatch):
+        # Another kernel is ready, and the host's arch decides.
+        self._fake(monkeypatch, rows=[
+            _row(available="fetch"), _row(kernel="5.14-rhel9.5"),
+            _row(arch="x86_64")])
+        problem = v.ltvm_preflight("rocky9")
+        assert "no ready image for its default kernel (5.14-rhel9.7)" \
+            in problem
+        assert "ltvm target fetch rocky9" in problem
+
+    def test_unknown_target(self, monkeypatch):
+        self._fake(monkeypatch, rows=[_row(), _row(name="rocky10")])
+        problem = v.ltvm_preflight("rocky99")
+        assert "no target 'rocky99'" in problem
+        assert "rocky10, rocky9" in problem
+
+    def test_unreadable_target_list_is_skipped(self, monkeypatch):
+        self._fake(monkeypatch, rows="not json")
+        assert v.ltvm_preflight("rocky9") is None
+
+    def test_validate_config_without_ltvm(self, monkeypatch, capsys):
+        from lreview import cli
+        monkeypatch.setattr("shutil.which",
+                            lambda tool: None if tool == "ltvm"
+                            else "/bin/" + tool)
+        monkeypatch.setattr(v, "ltvm_preflight",
+                            lambda target: pytest.fail("ran preflight"))
+        args = build_parser().parse_args(["validate", "64086"])
+        assert cli.validate_config(args) is None
+        out = capsys.readouterr().out
+        assert "`ltvm` is not on PATH" in out and "ltvm install" in out
+
+    def test_validate_config_reports_the_preflight(self, monkeypatch,
+                                                   capsys):
+        from lreview import cli
+        monkeypatch.setattr("shutil.which", lambda tool: "/bin/" + tool)
+        seen = []
+        monkeypatch.setattr(v, "ltvm_preflight",
+                            lambda target: seen.append(target) or "broken")
+        args = build_parser().parse_args(
+            ["run", "64086", "--validate", "--validate-target", "rocky10"])
+        assert cli.validate_config(args) is None
+        assert seen == ["rocky10"]
+        assert "error: broken" in capsys.readouterr().out
