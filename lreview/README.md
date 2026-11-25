@@ -453,6 +453,7 @@ lreview run 64086 --validate                              # (defect) findings
 lreview run 64086 --validate --validate-classes defect,minor
 lreview validate 64086                                    # an earlier review
 lreview validate 64086 --post                             # reply in the threads
+lreview validate 64086 --post-report                      # reports to the ticket
 ```
 
 - lreview selects findings by their marker: `(defect)` by default. A
@@ -486,6 +487,14 @@ lreview validate 64086 --post                             # reply in the threads
   of each finding, with the prefix `[AI validation - <model>]`. A
   merged change gets its replies too. stdout then says that the
   confirmed bugs need a ticket.
+- `lreview validate --post-report` attaches the `report.md` of each
+  confirmed finding to the Jira ticket at the start of the commit
+  subject, for example `LU-21098`. One short comment links the change
+  and the Gerrit comment of each finding, and names the attachments. The attachment name gives the change, the
+  tested patchset and commit, the finding and the time of the verdict:
+  `lreview-70373-ps3-7bc0929b-F1-20261125T192853Z.md`. A report goes to
+  the ticket only once. The option uses the `jira` tool, which needs
+  write access to the ticket.
 - A validation builds and runs the patch, so it runs the author's build
   scripts on the host. Use it on changes from authors you trust.
 - Expect 30 to 90 minutes and an Opus session for each change.

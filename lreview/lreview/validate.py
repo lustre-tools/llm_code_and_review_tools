@@ -729,6 +729,9 @@ def run_validation(config, vcfg: ValidateConfig, change, worktree: Path,
     dest = config.results_dir / dir_name
     _collect(worktree / VALIDATION_DIR_NAME, dest, [f.id for f in findings])
     validation = normalize(spec, findings, error, dest, tested)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    for item in validation["findings"]:
+        item["validated_at"] = stamp
     validation["findings"] = sorted(
         validation["findings"] + list(kept.values()),
         key=lambda i: int(i["id"][1:]))
@@ -1158,3 +1161,164 @@ def plan_replies(gerrit_comments: dict, spec: dict, validation: dict,
         groups.setdefault(revision, {}).setdefault(
             item["file"], []).append(reply)
     return groups, unmatched
+
+
+# --- QA reports to the ticket -----------------------------------------
+
+TICKET_RE = re.compile(r"^\s*([A-Z][A-Z0-9]+-\d+)\b")
+
+
+def ticket_of(subject: Optional[str]) -> Optional[str]:
+    """The Jira key at the start of a commit subject ("LU-21098 lnet:
+    ..."), or None."""
+    m = TICKET_RE.match(subject or "")
+    return m.group(1) if m else None
+
+
+def report_attachment_name(entry: dict, validation: dict, item: dict,
+                           path: Optional[Path] = None) -> str:
+    """A name unique to one QA report: the change, the tested patchset
+    and commit, the finding ID and the time of the verdict.  A verdict
+    from before lreview recorded that time uses the time of the report
+    file."""
+    tested = validation.get("tested") or {}
+    sha = (tested.get("sha") or entry.get("sha") or "")[:8]
+    ps = tested.get("patchset") or entry.get("patchset")
+    stamp = item.get("validated_at")
+    if not stamp and path is not None and path.exists():
+        stamp = time.strftime("%Y%m%dT%H%M%SZ",
+                              time.gmtime(path.stat().st_mtime))
+    stamp = stamp or "undated"
+    return (f"lreview-{entry['number']}-ps{ps}-{sha}-{item['id']}-"
+            f"{stamp}.md")
+
+
+def change_url(entry: dict) -> str:
+    base = (entry.get("base_url") or "").rstrip("/")
+    return f"{base}/c/{entry.get('repository')}/+/{entry['number']}"
+
+
+def comment_url(entry: dict, comment_id: str) -> str:
+    return f"{change_url(entry)}/comment/{comment_id}/"
+
+
+def finding_links(results_dir: Path, entry: dict, validation: dict,
+                  items: list, comments=None) -> dict:
+    """{finding ID: URL of the Gerrit comment of the finding}.  A
+    finding read from Gerrit carries its comment ID.  For a finding
+    from lreview's own posted review, lreview reads the published
+    comments (`comments`, a callable that returns them) and finds the
+    comment as the Gerrit replies do.  A finding with no comment found
+    gets no link."""
+    links = {i["id"]: comment_url(entry, i["gerrit_id"])
+             for i in items if i.get("gerrit_id")}
+    rest = [i for i in items if i["id"] not in links]
+    if not rest or not entry.get("posted"):
+        return links
+    try:
+        published = comments() if comments else _published(entry)
+        spec = json.loads((results_dir / entry["json"]).read_text())
+    except Exception:  # noqa: BLE001 - fall back to file and line
+        return links
+    from .poster import DEFAULT_TAG
+    for item in rest:
+        parent = find_posted(published or {}, spec, item, entry["sha"],
+                             DEFAULT_TAG)
+        if parent and parent.get("id"):
+            links[item["id"]] = comment_url(entry, parent["id"])
+    return links
+
+
+def _published(entry: dict) -> dict:
+    from gerrit_cli.client import GerritCommentsClient
+    client = (GerritCommentsClient(url=entry["base_url"])
+              if entry.get("base_url") else GerritCommentsClient())
+    return client.get_comments(entry["number"])
+
+
+def report_comment(entry: dict, validation: dict,
+                   attached: list[tuple[dict, str]],
+                   links: Optional[dict] = None) -> str:
+    """The short Jira comment that goes with the attached reports.  Each
+    line names the Gerrit comment of the finding, else its file and
+    line."""
+    links = links or {}
+    tested = validation.get("tested") or {}
+    sha = (tested.get("sha") or entry.get("sha") or "")[:10]
+    ps = tested.get("patchset") or entry.get("patchset")
+    lines = [f"{validation_prefix(validation, entry.get('validation'))} "
+             f"A test on a VM confirmed {len(attached)} review finding(s) "
+             f"in {change_url(entry)} patchset {ps} (commit {sha}).",
+             "The QA report of each finding is attached:"]
+    lines += [f"- {links.get(item['id']) or _loc(item)}: {name}"
+              for item, name in attached]
+    return "\n".join(lines)
+
+
+def _jira(args: list, run=subprocess.run) -> tuple[bool, str]:
+    try:
+        proc = run(["jira", *args], capture_output=True, text=True,
+                   timeout=300)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, str(exc)
+    if proc.returncode != 0:
+        text = (proc.stderr or proc.stdout or "").strip()
+        return False, text.splitlines()[-1] if text else \
+            f"jira exited {proc.returncode}"
+    return True, ""
+
+
+def post_reports(results_dir: Path, entry: dict, *, dry_run: bool = False,
+                 run=subprocess.run, comments=None) -> tuple[str, str]:
+    """Attach the QA report of each confirmed finding to the ticket that
+    the commit subject names, with one short comment.  A report that
+    went to the ticket before is not attached again.  Returns (status,
+    detail): status is "posted", "would post", "skipped" or "error"."""
+    if entry.get("number") is None or entry.get("local"):
+        return "skipped", "a local review has no change to link"
+    validation = load_validation(results_dir, entry)
+    if not validation:
+        return "skipped", "no validation"
+    ticket = ticket_of(entry.get("subject"))
+    if ticket is None:
+        return "skipped", "the commit subject names no ticket"
+    todo = []
+    for item in validation.get("findings") or []:
+        if item["verdict"] != "confirmed" or item.get("report_posted"):
+            continue
+        path = evidence_path(results_dir, validation, item.get("report"))
+        if path is None or not path.is_file():
+            continue
+        todo.append((item, path,
+                     report_attachment_name(entry, validation, item,
+                                            path)))
+    if not todo:
+        return "skipped", f"no new QA report of a confirmed finding " \
+                          f"for {ticket}"
+    if dry_run:
+        return "would post", (f"{len(todo)} report(s) to {ticket}: "
+                              + ", ".join(n for _, _, n in todo))
+    attached, errors = [], []
+    for item, path, name in todo:
+        ok, error = _jira(["attachment", "upload", ticket, str(path),
+                           "--filename", name], run)
+        if not ok:
+            errors.append(f"{item['id']}: {error}")
+            continue
+        item["report_posted"] = {"ticket": ticket, "attachment": name}
+        attached.append((item, name))
+    if attached:
+        # Record the uploads before the comment, so that a failed
+        # comment does not attach the reports a second time.
+        save_validation(results_dir, entry, validation)
+        links = finding_links(results_dir, entry, validation,
+                              [i for i, _ in attached], comments)
+        ok, error = _jira(["comment", ticket, "--body",
+                           report_comment(entry, validation, attached,
+                                          links)], run)
+        if not ok:
+            errors.append(f"comment: {error}")
+    detail = f"{len(attached)} report(s) attached to {ticket}"
+    if errors:
+        return "error", detail + "; " + "; ".join(errors)
+    return "posted", detail

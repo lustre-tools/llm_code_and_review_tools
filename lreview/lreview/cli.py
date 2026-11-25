@@ -1287,6 +1287,14 @@ def cmd_validate(args) -> int:
     elif keys:
         print(f"\nPost with: lreview post {' '.join(keys)} "
               f"--results-dir {results_dir}")
+    if args.post_report and keys:
+        from .validate import post_reports
+        print("\nAttaching QA reports...")
+        with locked_summary(results_dir) as current:
+            for key in keys:
+                status, detail = post_reports(results_dir, current[key])
+                print(f"  {key}: {status} {detail}")
+                failed += status == "error"
     return 1 if failed else 0
 
 
@@ -1983,6 +1991,12 @@ def build_parser() -> argparse.ArgumentParser:
     validate_p.add_argument(
         "--prefix", default=default_prefix,
         help="Prefix for every posted message (default: as for post)")
+    validate_p.add_argument(
+        "--post-report", action="store_true",
+        help="Attach the QA report of each confirmed finding to the Jira "
+             "ticket at the start of the commit subject, with a short "
+             "comment. A report is attached only once. Needs the jira "
+             "tool with write access")
     validate_p.set_defaults(func=cmd_validate)
 
     post_p = sub.add_parser(

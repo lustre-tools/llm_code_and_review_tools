@@ -1,6 +1,7 @@
 """Tests for VM validation of review findings (--validate)."""
 
 import json
+import re
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -546,6 +547,8 @@ class TestRunValidation:
         assert '"id": "F2"' in prompt and "lrv-64086" in prompt
         assert "Do not give `obsolete`" in prompt
         assert saved["tested"]["sha"] == "c" * 40
+        assert all(re.fullmatch(r"\d{8}T\d{6}Z", i["validated_at"])
+                   for i in saved["findings"])
         assert record["index"] == "validation-64086_ps2.md"
         assert record["refuted"] is None
 
@@ -1139,3 +1142,153 @@ class TestCmdValidate:
         assert "64086" not in summary
         assert posted == []
         assert "Post with" not in capsys.readouterr().out
+
+
+class TestPostReports:
+    """--post-report: QA reports to the ticket of the commit subject."""
+
+    def _setup(self, tmp_path, verdicts=("confirmed", "refuted"),
+               subject="LU-21098 lnet: reap expired responses"):
+        validation = _validation(list(verdicts), tmp_path / "ev")
+        validation["evidence_dir"] = "ev"
+        for item in validation["findings"]:
+            item["validated_at"] = "20261125T192853Z"
+        (tmp_path / "validation.json").write_text(json.dumps(validation))
+        entry = {"number": 70373, "patchset": 2, "sha": "c" * 40,
+                 "subject": subject, "repository": "fs/lustre-release",
+                 "base_url": "https://review.example/",
+                 "validation": {"json": "validation.json", "model": "opus"}}
+        return entry
+
+    def _runner(self, fail=()):
+        calls = []
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            rc = 1 if cmd[1] in fail else 0
+            return MagicMock(returncode=rc, stdout="{}", stderr="denied")
+        return calls, run
+
+    def test_ticket_from_the_subject(self):
+        assert v.ticket_of("LU-21098 lnet: x") == "LU-21098"
+        assert v.ticket_of("EX-12 osd: y") == "EX-12"
+        assert v.ticket_of("lnet: no ticket LU-1") is None
+        assert v.ticket_of(None) is None
+
+    def test_attaches_confirmed_reports_once(self, tmp_path):
+        entry = self._setup(tmp_path)
+        calls, run = self._runner()
+        status, detail = v.post_reports(tmp_path, entry, run=run)
+        assert status == "posted"
+        assert "1 report(s) attached to LU-21098" in detail
+        name = "lreview-70373-ps2-cccccccc-F1-20261125T192853Z.md"
+        upload, comment = calls
+        assert upload[:4] == ["jira", "attachment", "upload", "LU-21098"]
+        assert upload[4].endswith("ev/F1/report.md")
+        assert upload[-2:] == ["--filename", name]
+        assert comment[:3] == ["jira", "comment", "LU-21098"]
+        body = comment[-1]
+        assert body.startswith("[AI validation - opus] ")
+        assert "https://review.example/c/fs/lustre-release/+/70373" in body
+        assert "patchset 2" in body and name in body
+        saved = json.loads((tmp_path / "validation.json").read_text())
+        assert saved["findings"][0]["report_posted"] == {
+            "ticket": "LU-21098", "attachment": name}
+        # A second run attaches nothing.
+        calls2, run2 = self._runner()
+        status, _ = v.post_reports(tmp_path, entry, run=run2)
+        assert status == "skipped" and calls2 == []
+
+    def test_no_ticket_in_the_subject(self, tmp_path):
+        entry = self._setup(tmp_path, subject="lnet: fix a leak")
+        calls, run = self._runner()
+        status, detail = v.post_reports(tmp_path, entry, run=run)
+        assert status == "skipped" and "names no ticket" in detail
+        assert calls == []
+
+    def test_failed_upload_is_not_marked(self, tmp_path):
+        entry = self._setup(tmp_path)
+        calls, run = self._runner(fail=("attachment",))
+        status, detail = v.post_reports(tmp_path, entry, run=run)
+        assert status == "error" and "F1: denied" in detail
+        assert len(calls) == 1  # no comment without an attachment
+        saved = json.loads((tmp_path / "validation.json").read_text())
+        assert "report_posted" not in saved["findings"][0]
+
+    def test_failed_comment_keeps_the_attachment_mark(self, tmp_path):
+        entry = self._setup(tmp_path)
+        calls, run = self._runner(fail=("comment",))
+        status, detail = v.post_reports(tmp_path, entry, run=run)
+        assert status == "error" and "comment: denied" in detail
+        saved = json.loads((tmp_path / "validation.json").read_text())
+        assert saved["findings"][0]["report_posted"]["ticket"] == "LU-21098"
+
+    def test_dry_run_and_local(self, tmp_path):
+        entry = self._setup(tmp_path)
+        calls, run = self._runner()
+        status, detail = v.post_reports(tmp_path, entry, dry_run=True,
+                                        run=run)
+        assert status == "would post" and calls == []
+        status, _ = v.post_reports(tmp_path, {**entry, "number": None},
+                                   run=run)
+        assert status == "skipped" and calls == []
+
+    def test_cli_option(self, tmp_path, monkeypatch, capsys):
+        record = {"status": "done", "json": "validation-64086_gerrit.json",
+                  "counts": {"confirmed": 1}, "error": None,
+                  "posted": False}
+        seen = []
+        monkeypatch.setattr(v, "post_reports",
+                            lambda results_dir, entry: seen.append(
+                                entry["number"]) or ("posted", "1 report"))
+        code, _, posted = TestCmdValidate()._run(
+            tmp_path, monkeypatch, record, ["--post-report"])
+        assert code == 0 and seen == [64086] and posted == []
+        assert "64086: posted 1 report" in capsys.readouterr().out
+
+
+class TestFindingLinks:
+
+    def _entry(self, tmp_path, posted=True):
+        (tmp_path / "review.json").write_text(json.dumps(SPEC))
+        return {"number": 70373, "sha": "c" * 40, "posted": posted,
+                "json": "review.json", "repository": "fs/lustre-release",
+                "base_url": "https://review.example"}
+
+    def test_gerrit_id_needs_no_lookup(self, tmp_path):
+        entry = self._entry(tmp_path)
+        item = {"id": "F1", "gerrit_id": "abc_123", "file": "x.c"}
+        links = v.finding_links(tmp_path, entry, {}, [item],
+                                comments=lambda: 1 / 0)
+        assert links == {"F1": "https://review.example/c/fs/lustre-release"
+                               "/+/70373/comment/abc_123/"}
+
+    def test_own_review_found_by_lookup(self, tmp_path):
+        entry = self._entry(tmp_path)
+        validation = _validation(["confirmed", "refuted"])
+        item = validation["findings"][0]
+        original = SPEC["comments"][item["file"]][item["comment_index"]]
+        published = {item["file"]: [{
+            "id": "own_1", "tag": "autogenerated:ai-review",
+            "line": original.get("line"), "commit_id": "c" * 40,
+            "message": "**[AI review]**\n" + original["message"]}]}
+        links = v.finding_links(tmp_path, entry, validation, [item],
+                                comments=lambda: published)
+        assert links["F1"].endswith("/70373/comment/own_1/")
+
+    def test_no_comment_falls_back_to_location(self, tmp_path):
+        entry = self._entry(tmp_path, posted=False)
+        validation = _validation(["confirmed", "refuted"])
+        item = validation["findings"][0]
+        links = v.finding_links(tmp_path, entry, validation, [item],
+                                comments=lambda: 1 / 0)
+        assert links == {}
+        text = v.report_comment(entry, validation, [(item, "r.md")], links)
+        assert f"- {item['file']}:{item['line']}: r.md" in text
+        failing = v.finding_links(tmp_path, {**entry, "posted": True},
+                                  validation, [item],
+                                  comments=lambda: 1 / 0)
+        assert failing == {}
+        linked = v.report_comment(entry, validation, [(item, "r.md")],
+                                  {"F1": "https://g/c/p/+/1/comment/z/"})
+        assert "- https://g/c/p/+/1/comment/z/: r.md" in linked
