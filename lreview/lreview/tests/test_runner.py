@@ -480,6 +480,15 @@ class TestTokenParsing:
         log.write_text('{"type":"result","billing":{"usage_unit":"credits","total_cost":42}}\n')
         assert parse_final_usage(log) == (None, None)
 
+    def test_parse_auggie_billing_event(self, tmp_path):
+        from lreview.runner import parse_final_usage
+        log = tmp_path / "auggie.log"
+        log.write_text('{"type":"agent_end","messages":[]}\n'
+                       '{"type":"billing","usage_unit":"usd","total_cost":0.09}\n')
+        assert parse_final_usage(log) == (None, 0.09)
+        log.write_text('{"type":"billing","usage_unit":"credits","total_cost":42}\n')
+        assert parse_final_usage(log) == (None, None)
+
 
 class TestCountFindings:
 

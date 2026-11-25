@@ -178,7 +178,7 @@ class AgentSpec:
         # nothing prompts. cursor: see below.
         # effort: claude and agy get --effort; codex gets a config override
         # for model_reasoning_effort (Codex has no --effort flag); auggie
-        # gets --reasoning-effort. gemini/opencode/cursor ignore it (the
+        # gets --thinking. gemini/opencode/cursor ignore it (the
         # CLI warns when dropped).
         # extra_tools, claude: tools on top of the lean set or the
         # allowlist (the Agent tool for --lenses). agents, claude: an
@@ -287,13 +287,12 @@ class AgentSpec:
                 cmd += ["-m", model]
             return cmd + extra_args + ["-p", prompt_text]
         if self.name == "auggie":
-            cmd = ["auggie", "--print", "--output-format", "json", "--show-cost",
-                   "--log-file", "-", "--log-level", "info",
-                   "--permission", "launch-process:allow"]
+            cmd = ["auggie", "--print", "--mode", "json", "--show-cost",
+                   "--no-session"]
             if model:
                 cmd += ["--model", model]
             if effort:
-                cmd += ["--reasoning-effort", effort]
+                cmd += ["--thinking", effort]
             return cmd + extra_args + [prompt_text]
         if self.name == "opencode":
             cmd = ["opencode", "run"]
@@ -372,7 +371,7 @@ class AgentSpec:
             if model:
                 cmd += ["--model", model]
             if effort:
-                cmd += ["--reasoning-effort", effort]
+                cmd += ["--thinking", effort]
             return cmd + extra_args + [prompt_text]
         if self.name == "cursor":
             # Each chat runs in a new worktree, as a review does.
