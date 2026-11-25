@@ -322,12 +322,23 @@ def compact_candidate(entry):
     for flag in ("newcomer", "inactive", "maintainer"):
         if entry.get(flag):
             out[flag] = True
+    if entry.get("account_id") is None:
+        # fb-4354c0d9d048, fb-40c0a2b9cdb5: no Gerrit account found, so
+        # load and holds are unknown and balanced may rank them too high.
+        out["no_account"] = ("no Gerrit account matched; load unknown: "
+                             "gerrit find-user by name or username first")
     if "balanced" in entry:
         out["balanced"] = entry["balanced"]
     if "load" in entry:
         load = entry["load"] or {}
         out["waiting"] = load.get("waiting")
         out["votes"] = load.get("reviewed")
+        # fb-501c7741fb5f: "votes 0" read as wrong for someone with +1s
+        # 56 days back; say the window, and the longer one when looked at.
+        out["votes_days"] = load.get("window_days")
+        if "reviewed_active" in load:
+            out["votes_active"] = load["reviewed_active"]
+            out["active_days"] = load.get("active_days")
     if "asked" in entry:
         asked = entry["asked"] or {}
         for key in ("asked", "answered", "pending", "last_asked"):

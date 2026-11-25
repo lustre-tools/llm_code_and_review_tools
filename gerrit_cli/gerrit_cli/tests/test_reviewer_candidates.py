@@ -285,3 +285,19 @@ def test_the_command_says_who_is_senior(monkeypatch, capsys, repo):
     assert code == 0
     assert all(isinstance(c["senior"], bool) and "reviews_12m" in c
                for c in data["candidates"])
+
+
+def test_compact_votes_say_their_window():
+    """fb-501c7741fb5f: votes 0 for someone whose +1s were 56 days back
+    read as a bug; the 30-day window and the 90-day count are shown."""
+    from gerrit_cli.commands.reviewer_candidates import compact_candidate
+    out = compact_candidate({"name": "P", "load": {
+        "window_days": 30, "waiting": 0, "reviewed": 0,
+        "active_days": 90, "reviewed_active": 7}})
+    assert (out["votes"], out["votes_days"]) == (0, 30)
+    assert (out["votes_active"], out["active_days"]) == (7, 90)
+    busy = compact_candidate({"name": "Q", "load": {
+        "window_days": 30, "waiting": 2, "reviewed": 40}})
+    assert busy["votes_days"] == 30 and "votes_active" not in busy
+    assert "find-user" in busy["no_account"]
+    assert "no_account" not in compact_candidate({"name": "R", "account_id": 5})
