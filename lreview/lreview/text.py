@@ -74,6 +74,16 @@ def result_text(result, spec: Optional[dict] = None,
     if result.severity:
         status += f", severity {result.severity}"
     lines.append(f"status: {status}")
+    validation = getattr(result, "validation", None)
+    if validation:
+        from .validate import counts_text
+        text = (counts_text(validation["counts"])
+                if validation.get("counts") else validation.get("status"))
+        if validation.get("error"):
+            text += f" ({validation['error']})"
+        if validation.get("json"):
+            text += f", see {validation['json']}"
+        lines.append(f"validation: {text}")
     focus = getattr(change, "since", None)
     if focus is not None:
         from .since import focus_label
@@ -115,6 +125,14 @@ def result_text(result, spec: Optional[dict] = None,
         if body:
             lines.append(body)
         lines.append("")
+
+    # A local review has no Gerrit thread for the verdicts: its dump
+    # carries the full QA reports.
+    if validation and not change.number and result.json_path:
+        from .validate import reports_text
+        reports = reports_text(Path(result.json_path).parent, validation)
+        if reports:
+            lines += ["VM validation reports", THIN, reports, ""]
 
     return "\n".join(lines)
 

@@ -505,6 +505,57 @@ class TestCountFindings:
 
 class TestRunBatch:
 
+    def test_validate_runs_in_the_review_worktree(
+            self, repo, tmp_path, stub_claude, monkeypatch):
+        from lreview.validate import ValidateConfig
+        sha_findings = _commit_with_marker(
+            repo, "HAS_FINDINGS", json.dumps(REVIEW_SPEC))
+        sha_clean = _git(repo, "rev-parse", "HEAD")
+        seen = []
+
+        def fake_validation(config, vcfg, change, worktree, findings,
+                            mode="full", **kw):
+            seen.append((change.number, worktree.is_dir(),
+                         [f.id for f in findings]))
+            return {"json": "validation-101_ps1.json", "status": "done",
+                    "counts": {"confirmed": 3}, "error": None,
+                    "posted": False}
+
+        monkeypatch.setattr("lreview.validate.run_validation",
+                            fake_validation)
+        config = _config(repo, tmp_path, jobs=2,
+                         validate=ValidateConfig(classes=("minor",)))
+        results = {r.change.number: r for r in run_batch(
+            config, [_change(101, sha_findings), _change(102, sha_clean)])}
+
+        # Only the review with findings is validated, while its
+        # worktree still exists; unmarked comments count as (minor).
+        assert seen == [(101, True, ["F1", "F2", "F3"])]
+        assert results[101].validation["counts"] == {"confirmed": 3}
+        assert results[102].validation is None
+        assert not any((tmp_path / "worktrees").glob("kreview_*"))
+        summary = json.loads(
+            (config.results_dir / "summary.json").read_text())
+        assert summary["101"]["validation"]["status"] == "done"
+        assert summary["102"]["validation"] is None
+
+    def test_validation_error_keeps_the_review(
+            self, repo, tmp_path, stub_claude, monkeypatch):
+        from lreview.validate import ValidateConfig
+        sha = _commit_with_marker(repo, "HAS_FINDINGS",
+                                  json.dumps(REVIEW_SPEC))
+
+        def boom(*a, **k):
+            raise RuntimeError("ltvm broke")
+
+        monkeypatch.setattr("lreview.validate.run_validation", boom)
+        config = _config(repo, tmp_path,
+                         validate=ValidateConfig(classes=("minor",)))
+        [result] = run_batch(config, [_change(101, sha)])
+        assert result.status == STATUS_FINDINGS
+        assert result.validation["status"] == "failed"
+        assert "ltvm broke" in result.validation["error"]
+
     def test_findings_clean_failed_invalid(self, repo, tmp_path, stub_claude):
         sha_findings = _commit_with_marker(
             repo, "HAS_FINDINGS", json.dumps(REVIEW_SPEC))
