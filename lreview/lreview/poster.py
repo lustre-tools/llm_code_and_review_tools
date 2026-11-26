@@ -82,6 +82,164 @@ def cover_message(entry: dict, spec: Optional[dict]) -> Optional[str]:
     return message
 
 
+def _validated(results_dir: Path, entry: dict, spec: Optional[dict]):
+    """(spec, cover line, held findings) after the VM verdicts: refuted
+    findings come out, confirmed ones get a note (validate.py).  An
+    entry with no validation comes back unchanged."""
+    from .validate import apply_verdicts, cover_line, load_validation
+    validation = load_validation(results_dir, entry) if spec else None
+    if not validation:
+        return spec, None, []
+    new_spec, held = apply_verdicts(spec, validation)
+    return new_spec, cover_line(validation), held
+
+
+def _post_verdicts(results_dir: Path, entry: dict, dry_run: bool = False):
+    """Post the VM verdicts of findings that are on Gerrit already:
+    those of a review posted before its validation ran, or the AI-review
+    threads a validation read from Gerrit.  Each verdict goes as a reply
+    in its finding's thread, on that comment's revision, under the
+    validation prefix.  A finding whose comment lreview cannot find
+    gets a line in the patchset-level message instead.  Returns
+    (success, detail)."""
+    from gerrit_cli.client import GerritCommentsClient
+    from gerrit_cli.reviewer import CodeReviewer
+    from .validate import (load_validation, plan_replies, save_validation,
+                           tested_sha, unposted, validation_prefix,
+                           verdict_message)
+
+    from .validate import private_note
+    validation = load_validation(results_dir, entry)
+    todo = unposted(validation)
+    note = private_note(validation)
+    if not todo:
+        return False, "no confirmed or refuted verdict to post" + (
+            f"; {note}" if note else "")
+    client = GerritCommentsClient(url=entry["base_url"]) \
+        if entry.get("base_url") else GerritCommentsClient()
+    try:
+        spec = json.loads((results_dir / entry["json"]).read_text())
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        spec = {}
+    try:
+        published = client.get_comments(entry["number"]) or {}
+    except Exception:  # noqa: BLE001 - fall back to the message alone
+        published = {}
+    groups, unmatched = plan_replies(published, spec, validation,
+                                     entry["sha"], DEFAULT_TAG)
+    tested = tested_sha(validation) or entry["sha"]
+    message = verdict_message(validation, unmatched)
+    # The message goes with the replies on the tested revision, or
+    # alone on it.
+    posts = [(rev, files) for rev, files in groups.items()]
+    if not any(rev == tested for rev, _ in posts):
+        posts.append((tested, {}))
+    replies = sum(len(r) for _, files in posts for r in files.values())
+    detail = (f"VM verdicts for {len(todo)} finding(s), {replies} as "
+              f"thread replies, in {len(posts)} post(s)"
+              + (f"; {note}" if note else ""))
+    if dry_run:
+        return True, detail
+    prefix = validation_prefix(validation, entry.get("validation"))
+    reviewer = CodeReviewer(client=client)
+    done = {i["id"] for i in unmatched}
+    errors = []
+    for rev, files in posts:
+        ids = {r.pop("_id") for rs in files.values() for r in rs}
+        result = reviewer.post_review(
+            change_number=entry["number"], comments=files or None,
+            message=message if rev == tested else None, vote=None,
+            revision=rev, prefix=prefix, tag=DEFAULT_TAG)
+        if result.success:
+            done |= ids
+        else:
+            errors.append(result.error or "unknown error")
+            if rev == tested:
+                done -= {i["id"] for i in unmatched}
+    for item in validation.get("findings") or []:
+        if item["id"] in done:
+            item["posted"] = True
+    save_validation(results_dir, entry, validation)
+    if errors:
+        return False, "; ".join(errors)
+    return True, detail
+
+
+def _post_drafts(results_dir: Path, entry: dict, dry_run: bool = False):
+    """Put the VM verdicts into the reviewer's own drafts, which the
+    validation read.  The drafts stay drafts: lreview publishes
+    nothing.  Returns (status, detail)."""
+    from gerrit_cli.client import GerritCommentsClient
+    from .validate import (_needs_baseline, draft_todo, load_validation,
+                           plan_draft_updates, private_note,
+                           private_reason, save_validation,
+                           validation_prefix)
+    validation = load_validation(results_dir, entry)
+    if not draft_todo(validation):
+        return "skipped", "no confirmed or refuted verdict to put in a draft"
+    client = GerritCommentsClient(url=entry["base_url"]) \
+        if entry.get("base_url") else GerritCommentsClient()
+    drafts = client.get_drafts(entry["number"]) or {}
+    prefix = validation_prefix(validation, entry.get("validation"))
+    updates, missing = plan_draft_updates(drafts, validation, prefix)
+    notes = [f"{item['id']}: {why}" for item, why in missing]
+    note = private_note(validation)
+    detail = (f"VM verdicts in {len(updates)} draft(s), not published"
+              + (f"; skipped {'; '.join(notes)}" if notes else "")
+              + (f"; {note}" if note else ""))
+    if not updates:
+        return "skipped", detail
+    if dry_run:
+        return "would post", detail
+    errors = []
+    for item, revision, draft_id, comment in updates:
+        try:
+            client.update_draft(entry["number"], revision, draft_id,
+                                comment)
+        except Exception as exc:  # noqa: BLE001 - the next draft
+            errors.append(f"{item['id']}: {exc}")
+            continue
+        # A bug with no baseline run keeps no mark: the next validation
+        # with the baseline retests it, and its proof can replace the
+        # line in the draft.
+        if not (private_reason(item, validation)
+                and _needs_baseline(item, validation)):
+            item["posted"] = True
+    save_validation(results_dir, entry, validation)
+    if errors:
+        return "error", "; ".join(errors)
+    return "posted", detail
+
+
+def _mark_review_verdicts(results_dir: Path, entry: dict) -> None:
+    """After a review went out with its verdicts applied: the confirmed
+    notes are in it, and the refuted findings stay off Gerrit.  Neither
+    needs a reply later.  A confirmed bug that must stay private was
+    not in the review, so it keeps no mark."""
+    from .validate import (load_validation, public_findings,
+                           save_validation, POSTED)
+    validation = load_validation(results_dir, entry)
+    if not validation:
+        return
+    for item in public_findings(validation):
+        if item["verdict"] in POSTED:
+            item["posted"] = True
+    save_validation(results_dir, entry, validation)
+
+
+def _private_detail(results_dir: Path, entry: dict) -> str:
+    from .validate import load_validation, private_note
+    note = private_note(load_validation(results_dir, entry))
+    return f"; {note}" if note else ""
+
+
+def _validation_pending(results_dir: Path, entry: dict) -> bool:
+    """Whether findings on Gerrit have VM verdicts still to post: only
+    a confirmed or refuted verdict goes to Gerrit."""
+    from .validate import load_validation, unposted
+    return bool(unposted(load_validation(results_dir, entry)))
+
+
 def _post_one(results_dir: Path, entry: dict, prefix: Optional[str]):
     """Post a single review; returns (success, detail, prefix used).
 
@@ -96,6 +254,9 @@ def _post_one(results_dir: Path, entry: dict, prefix: Optional[str]):
     spec = (None if _is_postable_clean(entry)
             else json.loads((results_dir / entry["json"]).read_text()))
     message = cover_message(entry, spec)
+    spec, line, held = _validated(results_dir, entry, spec)
+    if line:
+        message = f"{message}\n\n{line}" if message else line
 
     # Post to the Gerrit host the change was reviewed from, not
     # whatever $GERRIT_URL happens to point at.
@@ -121,6 +282,9 @@ def _post_one(results_dir: Path, entry: dict, prefix: Optional[str]):
                   if spec is None else
                   f"{result.comments_posted} comment(s) on "
                   f"ps{entry['patchset']}")
+        if held:
+            detail += f", {len(held)} finding(s) held back"
+        detail += _private_detail(results_dir, entry)
         if prefix:
             detail += f" as '{prefix}'"
         return True, detail, prefix
@@ -172,6 +336,7 @@ def _would_post_detail(results_dir: Path, entry: dict) -> str:
     spec = json.loads((results_dir / entry["json"]).read_text())
     if entry.get("provider") == "github":
         return _github_review(spec, entry["head_sha"], None)[1]
+    spec, _line, held = _validated(results_dir, entry, spec)
     comments = spec.get("comments") or {}
     if isinstance(comments, dict):
         count = sum(len(v) for v in comments.values())
@@ -179,7 +344,10 @@ def _would_post_detail(results_dir: Path, entry: dict) -> str:
         count = len(comments)
     where = (f"ps{entry['patchset']}" if entry.get("patchset")
              else entry.get("head_sha", "")[:12])
-    return f"{count} comment(s) on {where}"
+    detail = f"{count} comment(s) on {where}"
+    if held:
+        detail += f", {len(held)} finding(s) held back"
+    return detail + _private_detail(results_dir, entry)
 
 
 def post_results(
@@ -259,6 +427,41 @@ def post_results(
                 outcomes.append(PostOutcome(
                     number, "skipped", f"status is '{entry['status']}'"))
                 continue
+            if entry.get("source") == "drafts":
+                try:
+                    status, detail = _post_drafts(
+                        results_dir, entry, dry_run=dry_run)
+                except Exception as exc:  # noqa: BLE001
+                    status, detail = "error", str(exc)
+                outcomes.append(PostOutcome(number, status, detail))
+                continue
+            from_gerrit = entry.get("source") == "gerrit"
+            if ((entry.get("posted") or from_gerrit)
+                    and (not force or from_gerrit)
+                    and entry.get("provider") != "github"):
+                # The findings are on Gerrit already: post the verdicts
+                # alone, never the review a second time.  A review read
+                # from Gerrit is someone's posted comments, so --force
+                # does not post it again either.
+                if not _validation_pending(results_dir, entry):
+                    from .validate import load_validation, private_note
+                    note = private_note(load_validation(results_dir, entry))
+                    outcomes.append(PostOutcome(
+                        number, "skipped",
+                        ("no VM verdicts to post" if from_gerrit else
+                         "already posted (use --force to repost)")
+                        + (f"; {note}" if note else "")))
+                    continue
+                try:
+                    success, detail = _post_verdicts(
+                        results_dir, entry, dry_run=dry_run)
+                except Exception as exc:  # noqa: BLE001
+                    outcomes.append(PostOutcome(number, "error", str(exc)))
+                    continue
+                status = ("would post" if dry_run else
+                          "posted" if success else "error")
+                outcomes.append(PostOutcome(number, status, detail))
+                continue
             if entry.get("posted") and not force:
                 outcomes.append(PostOutcome(
                     number, "skipped",
@@ -286,6 +489,7 @@ def post_results(
                 entry["posted_at"] = datetime.now(timezone.utc).isoformat(
                     timespec="seconds")
                 entry["posted_prefix"] = used_prefix
+                _mark_review_verdicts(results_dir, entry)
                 outcomes.append(PostOutcome(number, "posted", detail))
             else:
                 outcomes.append(PostOutcome(number, "error", detail))

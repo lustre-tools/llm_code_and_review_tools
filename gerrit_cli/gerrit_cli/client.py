@@ -486,6 +486,16 @@ class GerritCommentsClient:
             json=comment,
         )
 
+    def update_draft(self, change_number: int, revision_id: str,
+                     draft_id: str, comment: dict[str, Any]) -> dict[str, Any]:
+        """Change one of the logged-in account's draft comments (a
+        CommentInput); returns the CommentInfo. The draft stays a draft."""
+        return self.rest.put(
+            f"/changes/{change_number}/revisions/{revision_id}"
+            f"/drafts/{draft_id}",
+            json=comment,
+        )
+
     def delete_draft(self, change_number: int, revision_id: str,
                      draft_id: str) -> None:
         """Delete one of the logged-in account's draft comments."""

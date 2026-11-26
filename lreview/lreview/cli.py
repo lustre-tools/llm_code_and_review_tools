@@ -16,10 +16,13 @@ Subcommands:
 """
 
 import argparse
+import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 from llm_tool_common import telemetry
 from llm_tool_common.update_check import maybe_check_for_updates
@@ -454,6 +457,25 @@ def cmd_run(args) -> int:
         return 1
     if not check_lenses(args):
         return 1
+    vcfg = None
+    if args.validate:
+        if args.github:
+            print("error: --validate works on Gerrit changes and local "
+                  "commits, not GitHub pull requests")
+            return 1
+        if args.allow_tool:
+            print("error: --allow-tool cannot restrict the validator, "
+                  "which runs with --dangerously-skip-permissions to "
+                  "drive ltvm; drop one of the two")
+            return 1
+        vcfg = validate_config(args)
+        if vcfg is None:
+            return 1
+    elif (args.validate_classes or args.validate_baseline or args.keep_vms
+          or args.validate_jobs != 1):
+        print("error: the --validate-* options and --keep-vms need "
+              "--validate")
+        return 1
 
     if args.chat:
         if args.agent != "claude" or args.github:
@@ -699,6 +721,7 @@ def cmd_run(args) -> int:
         lens_effort=lens_effort(args),
         agent_args=args.agent_arg or [],
         allowed_tools=args.allow_tool or [],
+        validate=vcfg,
     )
     try:
         results = run_batch(config, changes, in_place=in_place)
@@ -734,6 +757,11 @@ def cmd_run(args) -> int:
                 line += f", ${result.cost_usd:.2f}"
             line += "]"
         print(line)
+        if vcfg is not None and result.status == STATUS_FINDINGS:
+            print(f"  {'':<16} validation: "
+                  f"{validation_text(result.validation)}")
+            print_report(results_dir, result.validation,
+                         postable=bool(result.change.number))
 
     total_tokens = sum(r.tokens for r in results if r.tokens)
     total_cost = sum(r.cost_usd for r in results if r.cost_usd)
@@ -1011,6 +1039,309 @@ def cmd_render(args) -> int:
     return 0 if written or not skipped else 1
 
 
+def _entry_change(entry: dict):
+    """The change a manifest entry reviewed, for a later validation."""
+    from .gerrit import LocalChange, ResolvedChange, change_ref
+    if entry.get("local"):
+        return LocalChange(ref_name=entry.get("ref_name") or "local",
+                           sha=entry["sha"],
+                           subject=entry.get("subject") or "")
+    number, patchset = entry["number"], entry.get("patchset")
+    return ResolvedChange(
+        number=number, project=entry.get("repository") or "",
+        subject=entry.get("subject") or "", sha=entry["sha"],
+        patchset=patchset,
+        ref=change_ref(number, patchset) if patchset else "",
+        base_url=entry.get("base_url") or "")
+
+
+# Manifest entries whose findings lreview read from Gerrit: the
+# AI-review threads, or the reviewer's own drafts.
+READ_SOURCES = ("gerrit", "drafts")
+
+
+def _change_number(item: str) -> Optional[int]:
+    """The change number of a bare number or a Gerrit URL, or None."""
+    if item.isdigit():
+        return int(item)
+    from gerrit_cli.client import GerritCommentsClient
+    try:
+        return int(GerritCommentsClient.parse_gerrit_url(item)[1])
+    except Exception:  # noqa: BLE001 - not a change
+        return None
+
+
+def _manifest_key(summary: dict, item: str) -> Optional[str]:
+    """A manifest key for a request: the key itself, else the full-mode
+    entry of a change number, else its light-mode entry."""
+    if item in summary:
+        return item
+    for key in (item, f"{item}-light"):
+        if key in summary:
+            return key
+    return None
+
+
+def _validation_target(config, entry: Optional[dict], item: str,
+                       drafts: bool = False):
+    """What one `lreview validate` request tests.
+
+    Returns (tested change, reviewed Revision, review spec, artifact
+    slug, findings on Gerrit already, manifest fields of a review read
+    from Gerrit or None).  A Gerrit change is tested on its newest
+    patchset (the merged commit, once merged); a local review on its
+    own commit.  Without a review of lreview's own in the manifest, the
+    findings are the unresolved AI-review threads on Gerrit, or with
+    `drafts` the logged-in account's unresolved drafts."""
+    from gerrit_cli.client import GerritCommentsClient
+    from .gerrit import change_ref, resolve_change
+    from .poster import DEFAULT_TAG
+    from .validate import (Revision, drafts_findings_spec,
+                           gerrit_findings_spec)
+
+    results_dir = config.results_dir
+    if entry is not None and entry.get("source") not in READ_SOURCES:
+        reviewed_change = _entry_change(entry)
+        spec = json.loads((results_dir / entry["json"]).read_text())
+        reviewed = Revision(sha=entry["sha"],
+                            patchset=entry.get("patchset"))
+        slug = reviewed_change.slug
+        if entry.get("local"):
+            return reviewed_change, reviewed, spec, slug, False, None
+        client = (GerritCommentsClient(url=entry["base_url"])
+                  if entry.get("base_url") else None)
+        tested = resolve_change(str(entry["number"]), client=client)
+        if entry.get("base_url"):
+            tested.base_url = entry["base_url"]
+        if tested.sha != reviewed.sha:
+            _fetch_commit(config, tested, reviewed.sha,
+                          change_ref(entry["number"], reviewed.patchset))
+        return (tested, reviewed, spec, slug, bool(entry.get("posted")),
+                None)
+
+    number = entry["number"] if entry else item
+    base_url = (entry or {}).get("base_url")
+    client = GerritCommentsClient(url=base_url) if base_url else None
+    tested = resolve_change(str(number), client=client)
+    if base_url:
+        tested.base_url = base_url
+    client = client or GerritCommentsClient(url=tested.base_url)
+    detail = client.get_change_detail(tested.number)
+    revisions = {r.get("_number"): (sha, r.get("ref"))
+                 for sha, r in (detail.get("revisions") or {}).items()}
+    shas = {ps: sha for ps, (sha, _ref) in revisions.items()}
+    if drafts:
+        spec = drafts_findings_spec(client.get_drafts(tested.number) or {},
+                                    shas)
+    else:
+        spec = gerrit_findings_spec(
+            client.get_comments(tested.number) or {}, DEFAULT_TAG, shas)
+    for entries in spec["comments"].values():
+        for e in entries:
+            sha = e.get("commit_id")
+            if sha and sha != tested.sha:
+                ref = (revisions.get(e.get("patch_set")) or (None, None))[1]
+                _fetch_commit(config, tested, sha, ref or change_ref(
+                    tested.number, e.get("patch_set") or tested.patchset))
+    source = spec["source"]
+    spec_name = f"{source}-findings-{tested.number}.json"
+    (results_dir / spec_name).write_text(json.dumps(spec, indent=2) + "\n")
+    fields = {"number": tested.number, "patchset": tested.patchset,
+              "sha": tested.sha, "subject": tested.subject,
+              "repository": tested.project, "branch": tested.branch,
+              "base_url": tested.base_url, "provider": "gerrit",
+              "source": source, "status": STATUS_FINDINGS,
+              "json": spec_name, "mode": "full", "posted": True,
+              "findings": sum(len(v) for v in spec["comments"].values())}
+    return (tested, None, spec, f"{tested.number}_{source}", True, fields)
+
+
+def _fetch_commit(config, change, sha: str, ref: str) -> None:
+    """Fetch a reviewed patchset into the repository, so that the
+    validator can compare it with the tested one."""
+    from . import worktree as wt
+    if wt.commit_exists(config.repo, sha):
+        return
+    urls = wt.gerrit_remote_urls(config.repo, change.base_url,
+                                 change.project) + [change.fetch_url()]
+    try:
+        wt.fetch_change(config.repo, urls, ref)
+    except Exception as exc:  # noqa: BLE001 - the validator can do without
+        print(f"  {change.number}: could not fetch {ref}: {exc}")
+
+
+def cmd_validate(args) -> int:
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime, timezone
+    from .manifest import locked_summary, read_summary
+    from .runner import kill_running_reviews, prepare_worktree
+    from .validate import validate_change
+    from .worktree import is_git_repo, remove_worktree
+
+    results_dir = Path(args.results_dir).expanduser().resolve()
+    repo = Path(args.repo).expanduser().resolve()
+    if not is_git_repo(repo):
+        print(f"error: {repo} is not a git repository (--repo)")
+        return 1
+    try:
+        summary = read_summary(results_dir)
+    except FileNotFoundError:
+        summary = {}
+    vcfg = validate_config(args)
+    if vcfg is None:
+        return 1
+
+    jobs = []  # (manifest key, entry or None, request)
+    for item in args.changes:
+        if args.drafts:
+            number = _change_number(str(item))
+            if number is None:
+                print(f"error: {item} is not a Gerrit change")
+                return 1
+            key = f"{number}-drafts"
+            jobs.append((key, summary.get(key), str(item)))
+            continue
+        key = _manifest_key(summary, str(item))
+        entry = summary.get(key) if key else None
+        if entry is None:
+            if not re.fullmatch(r"\d+|https?://\S+", str(item)):
+                print(f"error: {item} is not in {results_dir}/summary.json "
+                      "and is not a Gerrit change")
+                return 1
+            jobs.append((None, None, str(item)))
+            continue
+        if entry.get("provider") == "github":
+            print(f"error: {key}: GitHub reviews cannot be validated")
+            return 1
+        if entry.get("source") not in READ_SOURCES and (
+                entry.get("status") != STATUS_FINDINGS
+                or not entry.get("json")):
+            print(f"  {key}: skipped, the review has no findings "
+                  f"(status {entry.get('status')})")
+            continue
+        jobs.append((key, entry, str(item)))
+    if not jobs:
+        return 0
+
+    worktrees_dir = (Path(args.worktrees_dir).expanduser().resolve()
+                     if args.worktrees_dir
+                     else default_worktrees_dir(repo, results_dir))
+    results_dir.mkdir(parents=True, exist_ok=True)
+    config = BatchConfig(
+        repo=repo, results_dir=results_dir, worktrees_dir=worktrees_dir,
+        keep_worktrees=args.keep_worktrees, lean=args.lean, validate=vcfg)
+
+    def one(job):
+        key, entry, item = job
+        tested, reviewed, spec, slug, on_gerrit, fields = \
+            _validation_target(config, entry, item, drafts=args.drafts)
+        if fields is not None:
+            key = key or str(fields["number"])
+            if not fields["findings"]:
+                what = "draft" if args.drafts else "AI-review thread"
+                print(f"  {key}: no unresolved {what} on Gerrit")
+                return key, fields, None
+        worktree = prepare_worktree(config, tested)
+        try:
+            record = validate_change(
+                config, vcfg, tested, worktree, spec,
+                (entry or {}).get("mode", "full"), reviewed=reviewed,
+                slug=slug, on_gerrit=on_gerrit)
+        finally:
+            if not config.keep_worktrees:
+                remove_worktree(repo, worktree)
+        return key, fields, record
+
+    done = []  # (key, fields, record)
+    pool = ThreadPoolExecutor(max_workers=vcfg.jobs)
+    futures = [(job, pool.submit(one, job)) for job in jobs]
+    try:
+        for job, future in futures:
+            try:
+                done.append(future.result())
+            except Exception as exc:  # noqa: BLE001 - next change
+                label = job[0] or job[2]
+                print(f"  {label}: validation failed: {exc}")
+                if job[1] is not None:
+                    done.append((job[0], None, {
+                        "status": "failed", "error": str(exc), "json": None,
+                        "counts": None, "posted": False}))
+    except KeyboardInterrupt:
+        vcfg.cancel.set()
+        killed = kill_running_reviews()
+        print(f"\ninterrupted — stopped {killed} validator(s); "
+              "destroying their VMs")
+        pool.shutdown(wait=True, cancel_futures=True)
+        return 130
+    finally:
+        pool.shutdown(wait=True)
+        entries = {key: entry for key, entry, _ in jobs if key}
+        with locked_summary(results_dir) as current:
+            for key, fields, record in done:
+                if fields is not None:
+                    if record is None and key not in current:
+                        continue
+                    now = current.get(key)
+                    if (now is not None
+                            and now.get("source") not in READ_SOURCES):
+                        continue  # a review of lreview's own came first
+                    current[key] = {**fields, "validation": record,
+                                    "reviewed_at": datetime.now(
+                                        timezone.utc).isoformat(
+                                            timespec="seconds")}
+                    continue
+                now = current.get(key)
+                # A re-review of a newer revision replaced the entry:
+                # these verdicts belong to the old one.
+                if now and record is not None and \
+                        now.get("sha") == entries[key]["sha"]:
+                    now["validation"] = record
+
+    print("\n=== Validation summary ===")
+    failed = 0
+    now = read_summary(results_dir)
+    keys = []
+    for key, _fields, record in done:
+        if record and record.get("error"):
+            failed += 1
+        local = bool((now.get(key) or {}).get("local"))
+        print(f"  {key:<16} {validation_text(record)}")
+        print_report(results_dir, record, postable=not local)
+        # Only an entry in the manifest can be posted, and never a
+        # local review.
+        if key in now and not local and record is not None:
+            keys.append(key)
+    if args.post and keys:
+        print("\nPosting results...")
+        outcomes = post_results(results_dir, changes=keys,
+                                prefix=args.prefix)
+        for outcome in outcomes:
+            print(f"  {outcome.number}: {outcome.status} {outcome.detail}")
+            failed += outcome.status == "error"
+    elif keys:
+        from .validate import draft_todo, load_validation, unposted
+        # A review not yet on Gerrit can go out; findings on Gerrit
+        # already need a verdict to post.  A draft also takes the
+        # verdict of a bug that stays private.
+        ready = [k for k in keys
+                 if (not now[k].get("posted")
+                     and now[k].get("source") not in READ_SOURCES)
+                 or (draft_todo if now[k].get("source") == "drafts"
+                     else unposted)(load_validation(results_dir, now[k]))]
+        if ready:
+            print(f"\nPost with: lreview post {' '.join(ready)} "
+                  f"--results-dir {results_dir}")
+    if args.post_report and keys:
+        from .validate import post_reports
+        print("\nAttaching QA reports...")
+        with locked_summary(results_dir) as current:
+            for key in keys:
+                status, detail = post_reports(results_dir, current[key])
+                print(f"  {key}: {status} {detail}")
+                failed += status == "error"
+    return 1 if failed else 0
+
+
 def cmd_post(args) -> int:
     results_dir = Path(args.results_dir).expanduser().resolve()
 
@@ -1071,6 +1402,114 @@ def _add_stall_options(parser) -> None:
         default=DEFAULT_STALL_RETRY,
         help="Start a stalled review once more before reporting it "
              f"stalled (default: {'on' if DEFAULT_STALL_RETRY else 'off'})")
+
+
+def _add_validate_options(parser) -> None:
+    """The options of the validation phase, shared by `run --validate`
+    and `lreview validate` (validate.py)."""
+    from .models import EFFORT_LEVELS
+    from .validate import (DEFAULT_VALIDATE_EFFORT, DEFAULT_VALIDATE_MODEL,
+                           DEFAULT_VALIDATE_TARGET, DEFAULT_VALIDATE_TIMEOUT,
+                           MARKERS)
+    parser.add_argument(
+        "--validate-classes", default=None, metavar="LIST",
+        help="Finding classes to validate, comma-separated, from "
+             f"{', '.join(MARKERS)}, or all (default: defect)")
+    parser.add_argument(
+        "--validate-jobs", type=_positive_int, default=1, metavar="N",
+        help="Validations that hold VMs at the same time (default: 1)")
+    parser.add_argument(
+        "--validate-model", default=DEFAULT_VALIDATE_MODEL,
+        help=f"Model of the validator agent, a claude session "
+             f"(default: {DEFAULT_VALIDATE_MODEL})")
+    parser.add_argument(
+        "--validate-effort", choices=list(EFFORT_LEVELS),
+        default=DEFAULT_VALIDATE_EFFORT,
+        help=f"Effort of the validator agent "
+             f"(default: {DEFAULT_VALIDATE_EFFORT})")
+    parser.add_argument(
+        "--validate-timeout", type=_seconds,
+        default=DEFAULT_VALIDATE_TIMEOUT, metavar="SECS",
+        help="Time limit for the validation of one change "
+             f"(default: {DEFAULT_VALIDATE_TIMEOUT})")
+    parser.add_argument(
+        "--validate-target", default=DEFAULT_VALIDATE_TARGET,
+        metavar="TARGET",
+        help="ltvm target of the default VM "
+             f"(default: {DEFAULT_VALIDATE_TARGET})")
+    parser.add_argument(
+        "--validate-baseline", action="store_true",
+        help="Also run the reproducer of each confirmed finding on the "
+             "parent commit, to tell a regression from an older bug")
+    parser.add_argument(
+        "--keep-vms", action="store_true",
+        help="Leave the validator's VMs for inspection instead of "
+             "destroying them")
+
+
+_VALIDATE_OPTION_DEFAULTS = {
+    "validate_classes": None, "validate_jobs": 1,
+    "validate_baseline": False, "keep_vms": False,
+}
+
+
+def validate_config(args):
+    """A ValidateConfig from the --validate-* options, or None after
+    printing why the options cannot work."""
+    import shutil as _shutil
+    from .validate import ValidateConfig, parse_classes
+    try:
+        classes = parse_classes(args.validate_classes)
+    except ValueError as exc:
+        print(f"error: --validate-classes: {exc}")
+        return None
+    from .validate import LTVM_SETUP_HINT, ltvm_preflight
+    if not _shutil.which("claude"):
+        print("error: validation needs `claude` (Claude Code) on PATH")
+        return None
+    if not _shutil.which("ltvm"):
+        print("error: validation runs on ltvm VMs, and `ltvm` is not on "
+              f"PATH. {LTVM_SETUP_HINT}")
+        return None
+    problem = ltvm_preflight(args.validate_target)
+    if problem:
+        print(f"error: {problem}")
+        return None
+    return ValidateConfig(
+        classes=classes, jobs=args.validate_jobs,
+        model=args.validate_model, effort=args.validate_effort,
+        timeout=args.validate_timeout, target=args.validate_target,
+        # A post needs the baseline run: it shows that the change
+        # brought each confirmed bug in.
+        baseline=(args.validate_baseline or getattr(args, "post", False)
+                  or getattr(args, "post_report", False)),
+        keep_vms=args.keep_vms,
+        force=getattr(args, "force", False))
+
+
+def validation_text(record) -> str:
+    """One line for a change's validation record."""
+    from .validate import counts_text
+    if not record:
+        return "no finding in the selected classes"
+    text = (counts_text(record["counts"]) if record.get("counts")
+            else record.get("status", "failed"))
+    if record.get("error"):
+        text += f" ({record['error']})"
+    return text
+
+
+def print_report(results_dir: Path, record, postable: bool = True) -> None:
+    """Each finding of a validation with its verdict and QA report, the
+    index, the refuted findings file and how to post it, and the
+    ticket reminder for a merged change."""
+    from .validate import report_lines
+    for line in report_lines(results_dir, record):
+        print(f"  {'':<16}   {line}")
+    if postable and record and record.get("refuted"):
+        print(f"  {'':<16}   post one by hand: edit the file, then "
+              f"gc review --post-comments {results_dir / record['refuted']} "
+              "<change URL>  (it posts on the current patchset)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1334,6 +1773,14 @@ def build_parser() -> argparse.ArgumentParser:
              "{worktree} and {prompts} expand to the review worktree and "
              "the prompts directory: 'Edit(/{worktree}/**)'")
     run_p.add_argument(
+        "--validate", action="store_true",
+        help="After each review, show its findings on ltvm VMs: a "
+             "claude validator builds the change, writes a reproducer "
+             "for each finding, and gives it a verdict (confirmed, "
+             "refuted, inconclusive, not-testable). Gerrit reviews and "
+             "local commits only; see docs/validate-design.md")
+    _add_validate_options(run_p)
+    run_p.add_argument(
         "--post", action="store_true",
         help="Post results with findings to their provider when the batch finishes")
     run_p.add_argument(
@@ -1560,6 +2007,60 @@ def build_parser() -> argparse.ArgumentParser:
         "--results-dir", default=default_results_dir(),
         help="Results directory to render (default: as for run)")
     render_p.set_defaults(func=cmd_render)
+
+    validate_p = sub.add_parser(
+        "validate",
+        help="Show the findings of earlier reviews on ltvm VMs")
+    validate_p.add_argument(
+        "changes", nargs="+",
+        help="Change numbers, Gerrit URLs or manifest keys (64086, "
+             "64086-light, a local review's key). A change with no "
+             "review in --results-dir is validated from its unresolved "
+             "AI-review threads on Gerrit. A Gerrit change is tested on "
+             "its newest patchset.")
+    validate_p.add_argument(
+        "--drafts", action="store_true",
+        help="Validate your own unresolved draft comments on each Gerrit "
+             "change, not the AI-review threads. With --post, each "
+             "verdict goes into its draft, which stays a draft: lreview "
+             "publishes nothing. The results go under the key "
+             "<number>-drafts")
+    validate_p.add_argument(
+        "--force", action="store_true",
+        help="Test every finding again. By default, a second validation "
+             "of the same revision tests only the inconclusive findings "
+             "and keeps the other verdicts")
+    validate_p.add_argument(
+        "--repo", default=".",
+        help="The git repository the reviews came from (default: cwd)")
+    validate_p.add_argument(
+        "--results-dir", default=default_results_dir(),
+        help="Results directory from a previous run (default: as for run)")
+    validate_p.add_argument(
+        "--worktrees-dir", default=None,
+        help="Where validation worktrees go (default: as for run)")
+    validate_p.add_argument(
+        "--keep-worktrees", action="store_true",
+        help="Keep the validation worktrees")
+    validate_p.add_argument(
+        "--lean", action=argparse.BooleanOptionalAction, default=True,
+        help="Start the validator with the lean tool set (default: on)")
+    _add_validate_options(validate_p)
+    validate_p.add_argument(
+        "--post", action="store_true",
+        help="Post the results when validation finishes: an unposted "
+             "review goes out with the verdicts applied, a posted one "
+             "gets a verdicts message")
+    validate_p.add_argument(
+        "--prefix", default=default_prefix,
+        help="Prefix for every posted message (default: as for post)")
+    validate_p.add_argument(
+        "--post-report", action="store_true",
+        help="Attach the QA report of each confirmed finding to the Jira "
+             "ticket at the start of the commit subject, with a short "
+             "comment. A report is attached only once. Needs the jira "
+             "tool with write access")
+    validate_p.set_defaults(func=cmd_validate)
 
     post_p = sub.add_parser(
         "post", help="Post previously collected results to Gerrit")

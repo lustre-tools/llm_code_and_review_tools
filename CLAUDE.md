@@ -220,6 +220,19 @@ one run than two or three ordinary runs, at about 2x the cost
 and found no more). See
 `lreview/docs/lens-review-evaluation.md`.
 
+`--validate` adds a phase after each review. One claude validator
+for each change builds the tree on ltvm VMs. It writes a reproducer
+and a QA report for each `(defect)` finding (`--validate-classes
+defect,minor` for more). Each finding gets a verdict: confirmed,
+refuted, obsolete, inconclusive or not-testable. The `post` command holds
+refuted findings back. The command `lreview validate <change>`
+validates an earlier review, or the AI-review threads on Gerrit, on
+the newest patchset. Its option `--post-report` attaches the report of
+each confirmed finding to the Jira ticket in the commit subject. For
+a confirmed bug that the parent commit or the branch has too, the
+proof (verdict, steps, report) stays private. See
+`lreview/docs/validate-design.md`.
+
 `--last N` (`-n`) points lreview at a directory instead of Gerrit and
 reviews the newest N commits of that repo, each in its own worktree
 pinned to that commit. Local results are never posted; `--output`

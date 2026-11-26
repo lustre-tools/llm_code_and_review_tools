@@ -619,7 +619,8 @@ class CodeReviewer:
         Args:
             change_number: The change number
             comments: Either a flat list of comment dicts with keys:
-                path, line, message, unresolved (optional), or the
+                path, line, message, unresolved, range, side and
+                in_reply_to (the last four optional), or the
                 Gerrit REST format dict mapping path -> comment list
             message: Overall review message, posted as a resolved
                 patchset-level comment (see with_patchset_comment)
@@ -661,6 +662,8 @@ class CodeReviewer:
                         comment_input["range"] = comment["range"]
                     if comment.get("side") is not None:
                         comment_input["side"] = comment["side"]
+                    if comment.get("in_reply_to"):
+                        comment_input["in_reply_to"] = comment["in_reply_to"]
                     comments_dict[path].append(comment_input)
 
                 review_input["comments"] = comments_dict

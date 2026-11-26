@@ -432,6 +432,100 @@ and found no more. `docs/lens-review-evaluation.md` has the measurements and
 - The results record the lens setup: `lenses` in `summary.json` and the
   telemetry (`sonnet/medium`), and in `bench-run.json`.
 
+## VM validation (`--validate`)
+
+A review finds bugs by reading source. `--validate` adds a phase that
+tries to show each finding on ltvm VMs. One claude validator for each
+change builds the newest revision. For each selected finding, it
+writes a reproducer and a QA report, runs the reproducer, and gives a
+verdict:
+
+| Verdict | Meaning |
+|---------|---------|
+| `confirmed` | The VM showed the wrong behavior that the finding claims |
+| `refuted` | The run reached the code path, and the result was correct |
+| `obsolete` | The code that the finding names is gone in the tested revision |
+| `inconclusive` | The reproducer did not show the failure, with no proof against it |
+| `not-testable` | No VM can show it (hardware, comment-only, no such target) |
+
+Validation needs `claude` and a working ltvm host. Before lreview
+starts a review or a validator, it checks three things:
+- `ltvm` is on PATH.
+- `ltvm doctor` reports no issue.
+- The `--validate-target` target has a ready image for its default
+  kernel.
+
+When a check fails, lreview stops with the reason and the fix, for
+example `ltvm target fetch rocky9`.
+
+```bash
+lreview run 64086 --validate                              # (defect) findings
+lreview run 64086 --validate --validate-classes defect,minor
+lreview validate 64086                                    # an earlier review
+lreview validate 64086 --post                             # reply in the threads
+lreview validate 64086 --post-report                      # reports to the ticket
+lreview validate 64086 --drafts --validate-classes minor --post  # your drafts
+```
+
+- lreview selects findings by their marker: `(defect)` by default. A
+  comment with no marker counts as `(minor)`.
+- `lreview validate N` uses the review of N in the results directory.
+  Without one, it reads the unresolved AI-review threads of N on
+  Gerrit, from any account. It always tests the newest patchset, or
+  the merged commit.
+- `lreview validate N --drafts` reads your own unresolved draft
+  comments on N, not the AI-review threads. It skips the
+  patchset-level draft, a draft on `/COMMIT_MSG`, and a draft reply.
+  The results go under the key `N-drafts`. With `--post`, lreview adds
+  the verdict under the text of each draft. The draft stays a draft,
+  and you then keep, edit or delete it. A draft gets no proof of a bug
+  in landed code, because one click publishes all drafts.
+- A second `lreview validate` of the same revision keeps the verdicts
+  and tests only the inconclusive findings again. `--force` tests all
+  of them.
+- One validation holds VMs at a time (`--validate-jobs`). The VMs carry
+  `LTVM_OWNER_ID=lreview:<pid>:<change>`, and lreview destroys them when
+  the validator exits, also after a timeout or Ctrl-C (`--keep-vms`
+  leaves them).
+- Results in the results directory: `validation-<slug>.json`, the
+  index `validation-<slug>.md`, and the evidence directory
+  `validation-<slug>/F<n>/` with `repro.sh`, `report.md` and the logs.
+  The top of `repro.sh` gives the VM setup. `report.md` is a QA bug
+  report: environment, steps, expected and actual result, evidence,
+  analysis and debug hints. The text dump of a local review holds the
+  reports.
+- At the end of the run, stdout lists each finding with its verdict and
+  report.
+- `post` holds refuted and obsolete findings back. Each confirmed
+  finding gets the verdict, the steps to reproduce and the actual
+  result. The cover message gets a verdict count. The file
+  `refuted-<slug>.json` holds the refuted findings, ready for a manual
+  `gc review --post-comments`.
+- For findings that are on Gerrit already, `post` replies in the thread
+  of each finding, with the prefix `[AI validation - <model>]`.
+- lreview posts the proof of a confirmed bug (the verdict, the steps
+  and the report) only when the change brought the bug in. The
+  validator checks the code of the parent commit. The options `--post`
+  and `--post-report` also make it run the reproducer on the parent
+  commit. The proof stays private for a bug that the parent has too,
+  a bug with no baseline run, and a bug of a merged change.
+  The review still posts the finding text, as with no validation. The
+  output marks each such bug `PRIVATE` with the reason. Give its
+  report to the author privately, not in public.
+- `lreview validate --post-report` attaches the `report.md` of each
+  confirmed finding to the Jira ticket at the start of the commit
+  subject, for example `LU-21098`. One short comment links the change
+  and the Gerrit comment of each finding, and names the attachments. The attachment name gives the change, the
+  tested patchset and commit, the finding and the time of the verdict:
+  `lreview-70373-ps3-7bc0929b-F1-20261125T192853Z.md`. A report goes to
+  the ticket only once. The option uses the `jira` tool, which needs
+  write access to the ticket.
+- A validation builds and runs the patch, so it runs the author's build
+  scripts on the host. Use it on changes from authors you trust.
+- Expect 30 to 90 minutes and an Opus session for each change.
+
+Design and rationale: `docs/validate-design.md`.
+
 ## Cost, speed and telemetry
 
 A full review is one headless claude session. Almost all of its wall
@@ -863,6 +957,14 @@ opencode's `--model` wants the `provider/model` form.
 | `--preload` / `--no-preload` | on (`$LREVIEW_PRELOAD=0` for off) | full mode: the protocol and its always-loaded files up front (claude: system prompt; codex, cursor and agy: start of the prompt on stdin), the commit in the first message |
 | `--agent-arg=ARG` | — | Extra agent-CLI arg (repeatable; `--claude-arg` is a legacy alias) |
 | `--allow-tool=RULE` | — | claude or cursor. A permission rule in that agent's syntax, for example `Bash(git log *)` or `Shell(git:log *)` (repeatable). With one or more rules, a claude review runs with `--permission-mode dontAsk` and only these tools, in place of `--dangerously-skip-permissions`. `{worktree}` and `{prompts}` expand to absolute paths, so `Edit(/{worktree}/**)` lets the agent write only in its worktree. Add a deny rule with `--agent-arg=--disallowedTools --agent-arg=RULE`. A cursor review gets the rules in its worktree's `.cursor/cli.json` and runs without `--force`, so Cursor rejects a shell command that no rule allows. Cursor's file tools are not gated: they run with no allow rule, and only a deny rule in `~/.cursor/cli-config.json` stops them. The sandbox stays off, because in the sandbox Cursor runs every shell command whatever the rules say. Rules in `~/.cursor/cli-config.json` also apply |
+| `--validate` | off | Show the findings on ltvm VMs after each review; see "VM validation" |
+| `--validate-classes LIST` | `defect` | Finding markers to validate, comma-separated, or `all` |
+| `--validate-jobs N` | `1` | Validations that hold VMs at the same time |
+| `--validate-model M` / `--validate-effort LEVEL` | `opus` / `high` | The validator's claude model and effort |
+| `--validate-timeout SECS` | `5400` | Time limit for one change's validation |
+| `--validate-target T` | `rocky9` | ltvm target of the default VM |
+| `--validate-baseline` | off (on with `--post` or `--post-report`) | Also run each confirmed reproducer on the parent commit |
+| `--keep-vms` | off | Leave the validator's VMs instead of destroying them |
 | `--post` | off | Post findings when batch finishes |
 | `--prefix TEXT` | `[AI review - <model>]` | Message prefix; `<model>` placeholder substituted (`$LREVIEW_PREFIX` overrides the default; `''` for none) |
 | `--prompts-dir DIR` | auto | review-prompts location (repo root or its `kernel/`); default: `$REVIEW_PROMPTS_DIR`, the bundled submodule, a legacy kreview.md install, or `~/review-prompts` |

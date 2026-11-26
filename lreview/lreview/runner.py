@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .agents import (get_agent, scrub_agy_worktree,
                      write_agy_offline_hooks, write_cursor_permissions)
@@ -394,6 +394,8 @@ class ReviewResult:
     # The agent whose provider refused the review, when this result is
     # its rerun on BatchConfig.fallback_agent
     fallback_from: Optional[str] = None
+    # The manifest's "validation" record when --validate ran (validate.py)
+    validation: Optional[dict] = None
 
 
 @dataclass
@@ -446,6 +448,9 @@ class BatchConfig:
     # fallback_model (None: that agent's default)
     fallback_agent: Optional[str] = None
     fallback_model: Optional[str] = None
+    # --validate: after each review, show the selected findings on
+    # ltvm VMs (validate.py); None: no validation
+    validate: Optional[Any] = None
 
     def __post_init__(self) -> None:
         # git -C <repo> resolves relative paths against the repo, not
@@ -479,6 +484,11 @@ class BatchConfig:
                 validate_selection("claude", self.lens_model, self.lens_effort)
         if self.jobs < 1:
             raise ValueError(f"jobs must be >= 1, got {self.jobs}")
+        if self.validate is not None:
+            # The validator is always a claude session, whatever agent
+            # ran the review.
+            validate_selection("claude", self.validate.model,
+                               self.validate.effort)
         if self.stall_timeout < 0:
             raise ValueError(
                 f"stall_timeout must be >= 0, got {self.stall_timeout}")
@@ -1682,6 +1692,12 @@ def _review_and_cleanup(
             result = run_review(config, change, worktree_dir,
                                 log_path=log_path, session=None)
             result.fallback_from = refused_agent
+        if tracker:
+            tracker.finish(change.slug)
+            tracker = None
+        if config.validate is not None and result.status == STATUS_FINDINGS:
+            result.validation = _validate(config, change, worktree_dir,
+                                          result)
     except Exception as exc:  # noqa: BLE001 - one bad review must not
         # abort the batch or strand the other results
         _log(f"[{change.slug}] FAILED with unexpected error: {exc!r}")
@@ -1735,6 +1751,29 @@ def _review_and_cleanup(
                     _log(f"[{change.slug}] warning: could not record the "
                          f"Claude session: {exc}")
     return result
+
+
+def _validate(config: BatchConfig, change, worktree_dir: Path,
+              result: ReviewResult) -> Optional[dict]:
+    """Validate a review's findings on VMs (validate.py); None when no
+    finding is in the selected classes.  A failed validation is a
+    record with an error, never a failed review."""
+    from .validate import validate_change
+    if getattr(change, "provider", None) == "github":
+        return None
+    try:
+        spec = (json.loads(result.json_path.read_text())
+                if result.json_path else None)
+    except (OSError, json.JSONDecodeError) as exc:
+        _log(f"[{change.slug}] validation skipped: {exc}")
+        return None
+    try:
+        return validate_change(config, config.validate, change,
+                               worktree_dir, spec, config.mode)
+    except Exception as exc:  # noqa: BLE001 - the review stands
+        _log(f"[{change.slug}] validation FAILED: {exc!r}")
+        return {"status": "failed", "error": repr(exc), "json": None,
+                "counts": None, "posted": False}
 
 
 def record_telemetry(config: BatchConfig, result: ReviewResult):
@@ -1887,6 +1926,8 @@ def run_batch(
                         results.append(future.result())
                 except KeyboardInterrupt:
                     interrupted = True
+                    if config.validate is not None:
+                        config.validate.cancel.set()
                     killed = kill_running_reviews()
                     _log(f"interrupted — killed {killed} running "
                          "review(s), cancelling pending ones")
@@ -1999,6 +2040,7 @@ def update_summary(results_dir: Path, results: list[ReviewResult],
                 "error": result.error,
                 "stalls": result.stalls or None,
                 "fallback_from": result.fallback_from,
+                "validation": result.validation,
                 "posted": False,
                 "reviewed_at": datetime.now(timezone.utc).isoformat(
                     timespec="seconds"),
