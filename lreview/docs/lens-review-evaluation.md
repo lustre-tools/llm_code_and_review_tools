@@ -10,9 +10,14 @@ $540 of reviews at list price. Updated 2026-11-17 with how the reviewer
 settles lens candidates ("Lens finds that do not reach the review") and
 what a lens review costs ("Where the cost goes"), about $90 more.
 Updated 2026-11-20 with strict verification on the full sets, nine cases
-added to the benchmark from changes aireview had reviewed (52 changes,
-60 known bugs now), and two changes that cut a lens review's cost by a
-third ("Full sets and cheaper lens reviews"), about $230 more.
+added to the benchmark from changes aireview had reviewed, and two
+changes that cut a lens review's cost by a
+third ("Full sets and cheaper lens reviews"), about $230 more. On
+2026-11-26 two cases were dropped whose bug the reviewed commit does not
+have (`ban-search-unlocked`: the search runs under the lock, the fix only
+makes it a read lock; `fileset-parent-check`: the check was removed by a
+later commit): 50 changes and 58 known bugs now. The numbers below count
+them as found by no run, which they were.
 
 Which bug each variant found, run by run, is in
 `lens-review-benchmark-results.md`.
@@ -47,7 +52,7 @@ Which bug each variant found, run by run, is in
 - **On the full sets with strict verification** (reviewer at high, lenses
   at medium): 74% of known bugs on the pilot set plus the nine new cases,
   84% and 74% in two runs with the two cost changes, against 57% for an
-  ordinary run; on all 52 cases 51/60 and 48/60; 87% on
+  ordinary run; on all 50 cases 51/58 and 48/58; 87% on
   the eval set against 84% (92% for the old lenses at high). On the nine
   new cases, never used while designing the lenses, lens reviews found
   28 of 30 bug-runs against 10 of 20 for ordinary runs.
@@ -218,8 +223,9 @@ build lens); `--lens-effort high` is the full variant.
 ### Never found
 
 `lnetctl-import` fgets overflow (see below), lfs mirror nosync+stale
-verify, root project-quota force flag, nodemap fileset parent check;
-nodemap ban search without the lock in 1 of 6 lens reviews. The qmt
+verify, root project-quota force flag. (The nodemap fileset parent
+check and the unlocked ban search were also never found; they turned
+out not to be bugs of the reviewed commits, see the top.) The qmt
 workqueue teardown order was first reported with strict verification
 (below).
 
@@ -278,7 +284,7 @@ findings the blind check called wrong are such questions -- one of them
 the qmt comment itself, a bug a later commit on master fixed, so the
 checker is fallible on exactly the cases nobody can settle quickly.
 Still dropped: the svc stats read. Not written by any lens in these runs:
-the fgets overflow, the unlocked tree dump, the unlocked ban search.
+the fgets overflow, the unlocked tree dump.
 
 ## Full sets and cheaper lens reviews
 
@@ -315,7 +321,7 @@ strict verification, one run per variant; per-bug results in
   against 23/31: about a third cheaper at the same recall. The second run
   missed three bugs the first had found (fld-range-uninit, the root
   project-quota data loss, unlocked-tree-dump); single runs differ by about
-  that much. On all 52 cases: 51/60 and 48/60 at $1.11 and $1.14. On the
+  that much. On all 50 cases: 51/58 and 48/58 at $1.11 and $1.14. On the
   other four cases of the verification round: 5/7 in both runs. Part of
   the saving is that the lenses look less: about half as many lens calls
   per review (50 to 24) and a third fewer candidates (25.1 to 16.8).

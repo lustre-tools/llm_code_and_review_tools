@@ -688,45 +688,6 @@
    ]
   },
   {
-   "id": "nodemap-ban-default",
-   "change": 60074,
-   "patchset": 15,
-   "sha": "26361c3f3206473182fa15bda7675f57ca5412ba",
-   "subject": "LU-19157 nodemap: allow ban list on default nodemap",
-   "change_id": "I4c3d6f86353aa5f4ec00750891d9b47511b4e384",
-   "merged": "2025-08-26",
-   "lines": 116,
-   "subsystem": "nodemap",
-   "kind": "bug",
-   "bugs": [
-    {
-     "id": "ban-search-unlocked",
-     "fix_sha": "5a3722af0849e6503777f46b163a5372fde3e6d9",
-     "fix_subject": "LU-19157 nodemap: read semaphore for ban_range_search",
-     "summary": "nodemap_add_range_helper() calls ban_range_search() on the ban range tree without taking nmc_ban_range_tree_lock, so the search can race with ban-range insertion or deletion.",
-     "locations": [
-      "lustre/ptlrpc/nodemap_handler.c:nodemap_add_range_helper"
-     ],
-     "match": [
-      [
-       "ban_range_search",
-       "lock|sem|race|unlocked|without"
-      ]
-     ],
-     "calibration": {
-      "found": 0,
-      "reviews": 2,
-      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
-     },
-     "difficulty": "hard"
-    }
-   ],
-   "notes": "",
-   "sets": [
-    "hard"
-   ]
-  },
-  {
    "id": "mount-large-nids",
    "change": 57560,
    "patchset": 10,
@@ -1154,46 +1115,6 @@
    "sets": [
     "eval",
     "quick"
-   ]
-  },
-  {
-   "id": "nodemap-fileset-inherit",
-   "change": 55614,
-   "patchset": 24,
-   "sha": "e8c244e81e906d77fe08bdbd761ff63343c364c4",
-   "subject": "LU-17431 nodemap: fileset inheritance for dynamic nodemap",
-   "change_id": "I61a5fe82d92233bc66d10b8c1b939c04777bcf94",
-   "merged": "2025-07-22",
-   "lines": 473,
-   "subsystem": "nodemap",
-   "kind": "bug",
-   "bugs": [
-    {
-     "id": "fileset-parent-check",
-     "fix_sha": "b32f37a0f64d22cfbb797c49a30474d873f8ab2e",
-     "fix_subject": "LU-19426 nodemap: check parent when setting fileset",
-     "summary": "When a parent nodemap has only alternate filesets, a child dynamic nodemap can set any primary fileset with 'lctl nodemap_set_fileset', even outside the parent's namespace: check_fileset_add_vs_parent() is not applied on that path.",
-     "locations": [
-      "lustre/ptlrpc/nodemap_handler.c:nodemap_set_fileset_prim_iam"
-     ],
-     "match": [
-      [
-       "check_fileset_add_vs_parent|parent",
-       "fileset",
-       "primary|alternate|outside|bypass|escape|restrict"
-      ]
-     ],
-     "calibration": {
-      "found": 0,
-      "reviews": 2,
-      "config": "opus-5.5 (medium effort), lean, preload; 2026-10-09"
-     },
-     "difficulty": "hard"
-    }
-   ],
-   "notes": "",
-   "sets": [
-    "hard"
    ]
   },
   {
