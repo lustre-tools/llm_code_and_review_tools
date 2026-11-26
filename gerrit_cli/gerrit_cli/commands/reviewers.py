@@ -288,6 +288,15 @@ def _match_account(client, name):
     if not matches:
         # Try a broader search
         matches = client.search_accounts(name=name, limit=5)
+    if not matches and "@" in name:
+        # fb-27d85250a01e: an old address (yujian@whamcloud.com) that
+        # reviewer-candidates hands out from history often survives only
+        # as the Gerrit username, the registered email having moved on.
+        # username: is exact, so take it only when it names one account.
+        local = name.strip().split("@", 1)[0]
+        byuser = client.search_accounts(username=local, limit=2) if local else []
+        if len(byuser or []) == 1:
+            return byuser[0], None
     if not matches:
         return None, "none"
     # An exact username or email wins over fuzzy neighbours

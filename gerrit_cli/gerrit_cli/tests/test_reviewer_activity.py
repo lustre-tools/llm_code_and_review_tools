@@ -405,6 +405,30 @@ def test_add_reviewer_takes_the_exact_username_among_fuzzy_matches(
     assert added == [(70550, "LiX", "REVIEWER")]
 
 
+def test_add_reviewer_falls_back_to_the_username_of_an_old_email(
+        monkeypatch, capsys):
+    """fb-27d85250a01e: yujian@whamcloud.com is not a Gerrit email any
+    more, but username yujian is one account: add that one."""
+    from gerrit_cli.commands.reviewers import cmd_add_reviewer
+
+    added = []
+
+    class AddClient(_add_reviewer_client([], added)):
+        def search_accounts(self, name=None, email=None, username=None,
+                            limit=5):
+            if username == "yujian":
+                return [{"_account_id": 9, "name": "Jian Yu",
+                         "username": "yujian"}]
+            return []
+    monkeypatch.setattr(cli, "GerritCommentsClient", AddClient)
+    with pytest.raises(SystemExit) as done:
+        cmd_add_reviewer(SimpleNamespace(
+            url="71414", names=["yujian@whamcloud.com"], cc=False,
+            dry_run=False, pretty=False))
+    assert done.value.code == 0
+    assert added == [(71414, "yujian", "REVIEWER")]
+
+
 def test_add_reviewer_still_asks_when_nothing_matches_exactly(
         monkeypatch, capsys):
     from gerrit_cli.commands.reviewers import cmd_add_reviewer
