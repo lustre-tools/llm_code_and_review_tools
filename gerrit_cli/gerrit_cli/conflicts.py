@@ -1003,6 +1003,8 @@ def own_stack(result: dict, focus_stack: list[int], children: list[int],
     def entry(cn: int) -> dict:
         r = res.get(str(cn), {})
         e: dict[str, Any] = {"cn": cn, "status": r.get("status", "skipped")}
+        if r.get("files"):
+            e["files"] = r["files"]
         if r.get("parent"):
             e["parent"] = r["parent"]
         if cn in old:

@@ -131,6 +131,11 @@ def _hunk_lines(e: dict[str, Any], cn: int, target: int, s: _Style) -> list[str]
     return out
 
 
+def _in_files(res: dict[str, Any]) -> str:
+    files = res.get("files") or []
+    return f" in {', '.join(files)}" if files else ""
+
+
 def _status(res: dict[str, Any]) -> str:
     """A non-clean trial-merge result of the change itself, in words."""
     st = res.get("status", "?")
@@ -138,7 +143,7 @@ def _status(res: dict[str, Any]) -> str:
         return f"BLOCKED by {res.get('by', '?')} (a change below it does not apply)"
     if st == "error":
         return f"ERROR: {res.get('reason', 'unknown')}"
-    line = st.upper()
+    line = st.upper() + _in_files(res)
     if res.get("by"):
         line += f" (blocked by {res['by']})"
     elif res.get("under"):
@@ -168,7 +173,8 @@ def _header(r: dict[str, Any], s: _Style) -> list[str]:
         out.append(f"{branch}-next: " + s("lands cleanly", "green"))
     elif nx.get("status") == "conflict":
         w = nx.get("with") or {}
-        out.append(f"{branch}-next: " + s(f"CONFLICTS with {w.get('cn', '?')}", "red")
+        out.append(f"{branch}-next: " + s(f"CONFLICTS with {w.get('cn', '?')}"
+                                          + _in_files(nx), "red")
                    + (f"  {w['subject']}" if w.get("subject") else ""))
     elif nx.get("status") == "queued":
         out.append(f"{branch}-next: " + s("queued in it already", "green"))
@@ -212,7 +218,12 @@ def _own_stack(r: dict[str, Any], s: _Style) -> list[str]:
         for m in stack.get(kind) or []:
             if m.get("status") == "clean":
                 continue
-            line = f"{kind[:-1] if kind == 'parents' else 'child'} {m.get('cn')}: {m.get('status')}"
+            line = (f"{kind[:-1] if kind == 'parents' else 'child'} {m.get('cn')}: "
+                    f"{m.get('status')}{_in_files(m)}")
+            par = m.get("parent")
+            if par:
+                line += (f" (conflicts with the current patchset of {par.get('cn')}"
+                         f"{_in_files(par)})")
             old = m.get("on_old_patchset")
             if old:
                 line += f" (on PS{old.get('ps')} of {old.get('of')}, current {old.get('current')})"

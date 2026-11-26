@@ -545,7 +545,8 @@ def test_children_are_reported_in_own_stack(setup):
                           f"change 100 moved\n\nChange-Id: {change_id(100)}")
     out = run(client, local, commit=moved)
     assert out["own_stack"]["children"] == [
-        {"cn": 110, "status": "conflict", "parent": {"cn": 100, "files": ["a.c"]}}]
+        {"cn": 110, "status": "conflict", "files": ["a.c"],
+         "parent": {"cn": 100, "files": ["a.c"]}}]
 
 
 def test_target_parents_carry_their_tier(setup):
@@ -948,7 +949,8 @@ def test_a_child_on_an_older_patchset_conflicting_with_the_current_one(setup):
     rest.add(110, [child], ["a.c"])
     out = run(client, local)
     assert out["own_stack"]["children"] == [
-        {"cn": 110, "status": "conflict", "parent": {"cn": 100, "files": ["a.c"]},
+        {"cn": 110, "status": "conflict", "files": ["a.c"],
+         "parent": {"cn": 100, "files": ["a.c"]},
          "on_old_patchset": {"of": 100, "ps": 1, "current": 2}}]
 
 
@@ -1001,7 +1003,8 @@ def test_target_blocked_by_a_parent_on_an_older_patchset(setup):
     assert out["rebase_onto"] == {"cn": 80, "ps": 2, "for": 90}
     assert "outdated_parent" not in out
     assert out["own_stack"]["parents"][1] == {
-        "cn": 90, "status": "conflict", "parent": {"cn": 80, "files": ["b.c"]},
+        "cn": 90, "status": "conflict", "files": ["b.c"],
+        "parent": {"cn": 80, "files": ["b.c"]},
         "on_old_patchset": {"of": 80, "ps": 1, "current": 2}}
 
 

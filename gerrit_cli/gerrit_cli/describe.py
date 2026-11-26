@@ -533,6 +533,7 @@ Argument(name="--thread", description="Only the thread holding this comment id (
                     "rebase_cause", "rebase_onto", "outdated_parent",
                     "base.on_branch", "base.behind", "base.parents[]",
                     "base.rebase", "on_branch", "on_next (clean, conflict, blocked, error, queued, not-tried, stale, no-next)", "own_stack",
+                    "own_stack.parents[].files", "own_stack.children[].files",
                     "own_stack.parents[].on_old_patchset",
                     "own_stack.children[].on_old_patchset",
                     "own_stack.children[].parent",

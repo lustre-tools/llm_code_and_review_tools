@@ -1331,7 +1331,8 @@ when it does not apply on the branch tip so there is nothing to put on
 -next, stale or no-next); errors [{cn, reason}] the candidates that
 could not be tried: a commit that could not be fetched, or a trial merge
 git failed ("trial merge failed"); own_stack how its parents and
-children fare (the parents in both, bottom first, are every in-flight
+children fare (each entry's status, and files when it does not apply;
+the parents in both, bottom first, are every in-flight
 change the stack is tried with, including those below a parent's current
 patchset); already_conflicting the candidates that do not apply on the
 tip by themselves. counts: candidates = the open changes the file:

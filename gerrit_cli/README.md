@@ -656,7 +656,9 @@ gc conflicts 12345 --repo ~/lustre-release --human    # readable report for a pe
   `unknown` (it does not land for another reason); a parent or child
   sitting on an older patchset of the change below it carries
   `on_old_patchset` {of, ps, current} in `own_stack`, and a child
-  conflicting with the current one `parent` {cn, files}.
+  conflicting with the current one `parent` {cn, files}. Every
+  `own_stack` entry has its `status`, and `files` when it does not
+  apply; `--human` names the files on each line that conflicts.
 - `--commit SHA`: the local commit and the local commits below it down
   to the branch; each commit's last Change-Id names its change, and a
   commit without an open change belongs to the change above it. The

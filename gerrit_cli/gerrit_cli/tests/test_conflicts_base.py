@@ -45,7 +45,8 @@ def test_child_that_no_longer_applies_is_reported(gerrit, local):
     r = _check(gerrit, local, [t, ch], focus={1})
     assert r["results"]["2"]["status"] == "conflict"
     assert own_stack(r, [1], [2]) == {"parents": [],
-                                      "children": [{"cn": 2, "status": "conflict"}]}
+                                      "children": [{"cn": 2, "status": "conflict",
+                                                    "files": ["a.c"]}]}
 
 
 def test_child_that_still_applies_is_clean(gerrit, local):

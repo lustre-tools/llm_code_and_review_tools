@@ -208,3 +208,20 @@ def test_hint_quotes_paths_with_spaces(r70663):
     text = render(r70663, color=False,
                   rerun=["gerrit", "conflicts", "--repo", "/a b/lustre", "70663", "--human"])
     assert "--repo '/a b/lustre' 70663" in text
+
+
+def test_conflicting_files_are_named_on_every_status_line(r70663):
+    r = copy.deepcopy(r70663)
+    r["status"] = "needs-rebase"
+    r["on_branch"] = {"status": "conflict", "files": ["lov_lock.c", "sanity-flr.sh"],
+                      "under": 69762}
+    r["on_next"] = {"status": "conflict", "files": ["lov_io.c"],
+                    "with": {"cn": 69511, "subject": "queued"}}
+    r["own_stack"] = {"parents": [{"cn": 90, "status": "conflict", "files": ["b.c"],
+                                   "parent": {"cn": 80, "files": ["b.c"]}}],
+                      "children": [{"cn": 110, "status": "conflict", "files": ["a.c"]}]}
+    text = render(r, color=False)
+    assert "CONFLICT in lov_lock.c, sanity-flr.sh (on top of its parent 69762)" in text
+    assert "CONFLICTS with 69511 in lov_io.c" in text
+    assert "parent 90: conflict in b.c (conflicts with the current patchset of 80 in b.c)" in text
+    assert "child 110: conflict in a.c" in text
