@@ -895,6 +895,36 @@ def cmd_bench(args) -> int:
             print(bench.render(scoreds, judge=args.judge))
         return 0
 
+    if args.bench_cmd == "compare":
+        def arms(labels):
+            return [Path(d).expanduser() if Path(d).expanduser().is_dir()
+                    else bench_dir / d for d in labels]
+        base, variant = arms(args.baseline), arms(args.labels)
+        missing = [str(d) for d in base + variant if not d.is_dir()]
+        if missing:
+            print(f"error: no such arm: {', '.join(missing)}")
+            return 1
+        overlap = {d.resolve() for d in base} & {d.resolve() for d in variant}
+        if overlap:
+            print("error: an arm cannot be on both sides: "
+                  + ", ".join(sorted(d.name for d in overlap)))
+            return 1
+        result = bench.compare(
+            [bench.score(d, data["cases"], judge=args.judge) for d in base],
+            [bench.score(d, data["cases"], judge=args.judge)
+             for d in variant],
+            judge=args.judge,
+            without=tuple(filter(None, (args.without or "").split(","))))
+        differences = bench.environment_differences(
+            bench.environments(base), bench.environments(variant))
+        if args.json:
+            import json as _json
+            print(_json.dumps({**result, "environment": differences},
+                              indent=1))
+        else:
+            print(bench.render_compare(result, differences))
+        return 0
+
     # run
     prompts_status = ensure_prompts(args)
     if prompts_status is None:
@@ -1887,6 +1917,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Each known bug's hit rate in each arm, instead of the summary")
     bench_report.add_argument("--json", action="store_true")
     bench_report.set_defaults(func=cmd_bench)
+
+    bench_compare = bench_sub.add_parser(
+        "compare", help="An arm against recorded baseline arms, bug by bug")
+    bench_common(bench_compare)
+    bench_compare.add_argument(
+        "labels", nargs="+", help="The variant's arm(s), pooled")
+    bench_compare.add_argument(
+        "--baseline", nargs="+", required=True, metavar="ARM",
+        help="Recorded arm(s) to compare against, pooled; two or more "
+             "reviews of each case tell a lost bug from one that flips")
+    bench_compare.add_argument(
+        "--without", metavar="BUG,...",
+        help="Known bugs to leave out, such as a label found to be wrong")
+    bench_compare.add_argument(
+        "--judge", action="store_true",
+        help="Verdicts from the LLM judge instead of the regex patterns "
+             "(cached per rep)")
+    bench_compare.add_argument("--json", action="store_true")
+    bench_compare.set_defaults(func=cmd_bench)
 
     stats_p = sub.add_parser(
         "stats", help="Where reviews spent their time and money")

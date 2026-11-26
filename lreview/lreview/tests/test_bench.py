@@ -316,3 +316,88 @@ def test_render_says_when_verdicts_failed(tmp_path, monkeypatch):
     text = bench.render([bench.score(label, [_case("0" * 40)], judge=True)],
                         judge=True)
     assert "1 verdict(s) failed" in text
+
+
+def _scored(label, verdicts, cost=1.0):
+    """verdicts: {case: {bug: [found per rep]}}"""
+    reps = max(len(v) for bugs in verdicts.values() for v in bugs.values())
+    return {"label": label, "reps": [
+        {"rep": f"rep{i + 1}", "rows": [
+            {"case": case, "complete": True, "findings": 1, "cost": cost,
+             "bugs": {b: {"regex": v[i]} for b, v in bugs.items()
+                      if i < len(v)}}
+            for case, bugs in verdicts.items()
+            if any(i < len(v) for v in bugs.values())]}
+        for i in range(reps)]}
+
+
+def test_classify_bug():
+    from lreview.bench import classify_bug
+    assert classify_bug([2, 2], [0, 1]) == "lost"
+    assert classify_bug([2, 2], [1, 2]) == "weaker"
+    assert classify_bug([2, 2], [1, 1]) == "same"
+    assert classify_bug([0, 2], [1, 2]) == "gained"
+    assert classify_bug([0, 2], [0, 2]) == "same"
+    assert classify_bug([1, 2], [0, 2]) == "flips"
+    assert classify_bug([1, 1], [0, 1]) == "thin"
+    assert classify_bug([1, 1], [2, 2]) == "same"
+
+
+def test_compare_pools_the_baseline_and_pairs_by_bug():
+    from lreview.bench import compare, render_compare
+    base = [_scored("b1", {"a": {"x": [True], "y": [True]},
+                           "c": {"z": [False]}, "only": {"q": [True]}}, 2.0),
+            _scored("b2", {"a": {"x": [True], "y": [False]},
+                           "c": {"z": [False]}}, 2.0)]
+    variant = [_scored("v", {"a": {"x": [False], "y": [True]},
+                             "c": {"z": [True]}}, 1.0)]
+    c = compare(base, variant)
+    assert {(r["bug"], r["verdict"]) for r in c["bugs"]} == {
+        ("x", "lost"), ("y", "flips"), ("z", "gained")}
+    assert c["baseline_rate"] == 1.5 and c["variant_rate"] == 2.0
+    assert c["gain"] == 0.5 and c["gain_se"] > 0
+    assert c["repeat"] == ["a", "c"] and c["not_compared"] == 1
+    assert c["cost"] == (2.0, 1.0) and c["cheaper"] == 2
+    text = render_compare(c, {"effort": (['"high"'], ['"medium"'])})
+    assert "a/x  2/2 -> 0/1" in text and 'effort: "high" -> "medium"' in text
+    assert "--cases a,c" in text
+    left = compare(base, variant, without=("x", "q"))
+    assert {r["bug"] for r in left["bugs"]} == {"y", "z"}
+    assert left["not_compared"] == 0
+
+
+def test_compare_without_shared_bugs():
+    from lreview.bench import compare, render_compare
+    c = compare([_scored("b", {"a": {"x": [True]}})],
+                [_scored("v", {"c": {"z": [True]}})])
+    assert c["bugs"] == [] and c["cost"] is None
+    assert "no known bug has reviews in both" in render_compare(c, {})
+
+
+def test_environment_differences(tmp_path):
+    from lreview.bench import environment_differences, environments
+    for name, env in (("b", {"model": "sonnet", "cases_file": "/x"}),
+                      ("v", {"model": "sonnet", "cases_file": "/y",
+                             "agent_version": "2"})):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "bench-run.json").write_text(
+            json.dumps({"environment": env}))
+    b, v = environments([tmp_path / "b"]), environments([tmp_path / "v"])
+    assert environment_differences(b, v) == {
+        "agent_version": (["null"], ['"2"'])}
+    assert environments([tmp_path / "none"]) == [{}]
+
+
+def test_compare_command(tmp_path, capsys):
+    from lreview.cli import build_parser, cmd_bench
+    parse = build_parser().parse_args
+    args = parse(["bench", "compare", "v", "--baseline", "b1", "b2",
+                  "--bench-dir", str(tmp_path)])
+    assert args.labels == ["v"] and args.baseline == ["b1", "b2"]
+    assert cmd_bench(args) == 1
+    assert "no such arm" in capsys.readouterr().out
+    (tmp_path / "v").mkdir()
+    args = parse(["bench", "compare", "v", "--baseline", "v",
+                  "--bench-dir", str(tmp_path)])
+    assert cmd_bench(args) == 1
+    assert "both sides" in capsys.readouterr().out

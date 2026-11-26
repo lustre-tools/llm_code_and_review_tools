@@ -616,6 +616,15 @@ lreview bench report                                 # every arm, side by side
 lreview bench report --judge DIR...                  # LLM-judged matching
 ```
 
+`lreview bench compare <arm> --baseline <arm>...` compares a variant with
+recorded baseline arms bug by bug, so the baseline need not be run again:
+known bugs per pass and the gain with its standard error (by case), cost on
+the same cases, which bugs were lost, gained or weaker, which flip in the
+baseline itself, and the cases worth repeating. It lists what the arms did
+not share (agent version, prompts, model); lreview's own uncommitted changes
+do not show there. Give the baseline at least two runs: with one, a
+difference is only listed.
+
 - Each case is reviewed in its own repository (`<bench-dir>/repos/<case>`)
   that reaches only that case's history: the commits are fetched by
   SHA from `--repo` or Gerrit into a ref-less shared store the case

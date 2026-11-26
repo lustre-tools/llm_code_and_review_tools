@@ -513,6 +513,154 @@ def render_bugs(scoreds: list, judge: bool = False) -> str:
     return "\n".join(lines)
 
 
+# What may differ between two runs without changing what they measure.
+ENVIRONMENT_IGNORED = ("cases_file",)
+
+
+def environments(label_dirs: list) -> list:
+    """The recorded environment of each arm; {} when there is none."""
+    out = []
+    for d in label_dirs:
+        try:
+            out.append(json.loads((d / RUN_FILE).read_text()
+                                  ).get("environment") or {})
+        except (OSError, ValueError):
+            out.append({})
+    return out
+
+
+def environment_differences(base: list, variant: list) -> dict:
+    """{key: (baseline values, variant values)} for what the arms did not
+    share: the variant's own change, and anything else that moved."""
+    def values(envs, key):
+        return sorted({json.dumps(e.get(key)) for e in envs})
+    keys = {k for e in base + variant for k in e} - set(ENVIRONMENT_IGNORED)
+    return {k: (values(base, k), values(variant, k)) for k in sorted(keys)
+            if len(values(base + variant, k)) > 1}
+
+
+def _pooled(scoreds: list, judge: bool) -> dict:
+    """{(case, bug): [found, reviews]} over all the arms' reviews."""
+    pooled = {}
+    for key, by_arm in bug_rates(scoreds, judge).items():
+        pooled[key] = [sum(c[i] for c in by_arm.values()) for i in (0, 1)]
+    return pooled
+
+
+def _case_costs(scoreds: list) -> dict:
+    costs = defaultdict(list)
+    for scored in scoreds:
+        for rep in scored["reps"]:
+            for row in rep["rows"]:
+                if row["complete"] and row.get("cost") is not None:
+                    costs[row["case"]].append(row["cost"])
+    return {case: statistics.mean(v) for case, v in costs.items()}
+
+
+def classify_bug(base: list, variant: list) -> str:
+    """What one bug says, from [found, reviews] of each side.
+
+    lost / gained: the baseline always / never found it (at least two
+    reviews) and the variant did the opposite in every / any review.
+    weaker: always found before, now only sometimes.  flips: the
+    baseline itself is mixed, so a difference says little.  thin: fewer
+    than two baseline reviews."""
+    (bk, bn), (vk, vn) = base, variant
+    if bn < 2:
+        return "same" if bk * vn == vk * bn else "thin"
+    if 0 < bk < bn:
+        return "flips"
+    if bk == bn:
+        return "same" if vk == vn else "weaker" if vk else "lost"
+    return "gained" if vk else "same"
+
+
+def compare(base: list, variant: list, judge: bool = False,
+            without: tuple = ()) -> dict:
+    """A variant against a baseline, bug by bug, on the bugs both have.
+
+    gain is the sum over the bugs of the difference in hit rate, that
+    is, known bugs per pass over the cases.  Its standard error takes
+    the case as the unit: bugs of one review are not independent."""
+    b, v = _pooled(base, judge), _pooled(variant, judge)
+    shared = sorted(k for k in set(b) & set(v) if k[1] not in without)
+    rows, by_case = [], defaultdict(float)
+    for key in shared:
+        diff = v[key][0] / v[key][1] - b[key][0] / b[key][1]
+        by_case[key[0]] += diff
+        rows.append({"case": key[0], "bug": key[1], "baseline": b[key],
+                     "variant": v[key],
+                     "verdict": classify_bug(b[key], v[key])})
+    n = len(by_case)
+    diffs = list(by_case.values())
+    bc, vc = _case_costs(base), _case_costs(variant)
+    both = sorted(set(bc) & set(vc) & set(by_case))
+    again = {"lost", "gained", "weaker", "thin"}
+    return {
+        "baseline": [s["label"] for s in base],
+        "variant": [s["label"] for s in variant],
+        "bugs": rows, "cases": n,
+        "baseline_rate": sum(b[k][0] / b[k][1] for k in shared),
+        "variant_rate": sum(v[k][0] / v[k][1] for k in shared),
+        "gain": sum(diffs),
+        "gain_se": ((n * statistics.variance(diffs)) ** 0.5
+                    if n > 1 else None),
+        "cost": ((statistics.mean(bc[c] for c in both),
+                  statistics.mean(vc[c] for c in both)) if both else None),
+        "cheaper": sum(vc[c] < bc[c] for c in both), "costed": len(both),
+        "repeat": sorted({r["case"] for r in rows if r["verdict"] in again}),
+        "not_compared": len((set(b) ^ set(v))
+                            - {k for k in set(b) ^ set(v)
+                               if k[1] in without}),
+    }
+
+
+def render_compare(c: dict, differences: dict) -> str:
+    total = len(c["bugs"])
+    lines = [f"baseline: {', '.join(c['baseline'])}",
+             f"variant:  {', '.join(c['variant'])}", ""]
+    if not total:
+        return "\n".join(lines + ["no known bug has reviews in both"])
+    if differences:
+        lines.append("Differences in what they ran with (the baseline "
+                     "holds only if the variant's own change is all "
+                     "there is):")
+        for key, (old, new) in differences.items():
+            lines.append(f"  {key}: {', '.join(old)} -> {', '.join(new)}")
+        lines.append("")
+    se = c["gain_se"]
+    lines.append(f"known bugs per pass, {total} bugs in {c['cases']} cases: "
+                 f"baseline {c['baseline_rate']:.1f}, variant "
+                 f"{c['variant_rate']:.1f}, gain {c['gain']:+.1f}"
+                 + (f" (standard error {se:.1f}, by case)" if se else ""))
+    if c["cost"]:
+        lines.append(f"cost per review, same cases: ${c['cost'][0]:.2f} -> "
+                     f"${c['cost'][1]:.2f}, cheaper in {c['cheaper']} of "
+                     f"{c['costed']}")
+    if c["not_compared"]:
+        lines.append(f"{c['not_compared']} bug(s) with reviews on one side "
+                     "only are left out")
+    titles = {"lost": "lost (always found before, now never)",
+              "weaker": "weaker (always found before, now sometimes)",
+              "gained": "gained (never found before)",
+              "thin": "differs, but fewer than 2 baseline reviews",
+              "flips": "flips in the baseline itself (says little)"}
+    for verdict, title in titles.items():
+        rows = [r for r in c["bugs"] if r["verdict"] == verdict]
+        if not rows:
+            continue
+        lines += ["", f"{title}: {len(rows)}"]
+        for r in rows:
+            (bk, bn), (vk, vn) = r["baseline"], r["variant"]
+            lines.append(f"  {r['case']}/{r['bug']}  {bk}/{bn} -> {vk}/{vn}")
+    same = sum(r["verdict"] == "same" for r in c["bugs"])
+    lines += ["", f"unchanged: {same}"]
+    if c["repeat"]:
+        lines += ["", "One run of a bug proves nothing; worth repeating: "
+                  "--cases " + ",".join(c["repeat"])]
+    return "\n".join(lines)
+
+
 def render(scoreds: list, judge: bool = False) -> str:
     lines = []
     head = (f"{'arm':28s} {'reviews':>7s} {'$/review':>9s} {'Mtok':>5s} {'min':>5s} "
