@@ -537,8 +537,12 @@ writes (most of it thinking). Two defaults keep both down:
 
 - **`--lean`** (default on): the reviewer starts with only the tools a
   review uses (Bash, Read, Write, Edit, Grep, Glob), no MCP servers,
-  no skills listing and no CLAUDE.md files, and with a 5-minute prompt
-  cache instead of Claude Code's 1-hour one. The interactive setup
+  no skills listing, no CLAUDE.md files, no auto-memory and no git
+  status, and with a 5-minute prompt cache instead of Claude Code's
+  1-hour one.  Without the last two, a review in a worktree of the
+  user's repository gets the instructions to save memories in that
+  project's memory folder, and the user's git name, branch and recent
+  commits. The interactive setup
   otherwise puts some 40K tokens in front of every call, and a 1-hour
   cache write costs 2x input against 1.25x; calls in a review are
   seconds apart. It also switches off every plugin the user has
@@ -963,7 +967,7 @@ opencode's `--model` wants the `provider/model` form.
 | `--lens-effort LEVEL` | `medium` | Effort for the `--lenses` subagents |
 | `--chat` | off | Go on in the review's conversation when it ends (claude; see "chat") |
 | `--memory, -m` | off | Deprecated, prints a warning: [lowers bug recall](docs/lens-review-evaluation.md#review-memory---memory) |
-| `--lean` / `--no-lean` | on (`$LREVIEW_LEAN=0` for off) | claude: minimal tools, no MCP/skills/CLAUDE.md, 5-minute prompt cache; codex: unused features off; agy: `--disable-slash-commands` (see "Cost, speed and telemetry") |
+| `--lean` / `--no-lean` | on (`$LREVIEW_LEAN=0` for off) | claude: minimal tools, no MCP/skills/CLAUDE.md/auto-memory/git status, 5-minute prompt cache; codex: unused features off; agy: `--disable-slash-commands` (see "Cost, speed and telemetry") |
 | `--preload` / `--no-preload` | on (`$LREVIEW_PRELOAD=0` for off) | full mode: the protocol and its always-loaded files up front (claude: system prompt; codex, cursor and agy: start of the prompt on stdin), the commit in the first message |
 | `--agent-arg=ARG` | — | Extra agent-CLI arg (repeatable; `--claude-arg` is a legacy alias) |
 | `--allow-tool=RULE` | — | claude or cursor. A permission rule in that agent's syntax, for example `Bash(git log *)` or `Shell(git:log *)` (repeatable). With one or more rules, a claude review runs with `--permission-mode dontAsk` and only these tools, in place of `--dangerously-skip-permissions`. `{worktree}` and `{prompts}` expand to absolute paths, so `Edit(/{worktree}/**)` lets the agent write only in its worktree. Add a deny rule with `--agent-arg=--disallowedTools --agent-arg=RULE`. A cursor review gets the rules in its worktree's `.cursor/cli.json` and runs without `--force`, so Cursor rejects a shell command that no rule allows. Cursor's file tools are not gated: they run with no allow rule, and only a deny rule in `~/.cursor/cli-config.json` stops them. The sandbox stays off, because in the sandbox Cursor runs every shell command whatever the rules say. Rules in `~/.cursor/cli-config.json` also apply |

@@ -128,8 +128,14 @@ LEAN_CODEX_ARGS = [arg for name in LEAN_CODEX_FEATURES
                    for arg in ("--disable", name)]
 # Calls in a review are seconds apart, so the 1h cache Claude Code
 # defaults to only makes every cache write cost 2x input, not 1.25x.
+# A review in a worktree of the user's repository otherwise gets the
+# auto-memory instructions with the path of that project's memory
+# folder ("save memories there"), and the user's git name, branch and
+# recent commits.
 LEAN_CLAUDE_ENV = {
     "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+    "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS": "1",
     "CLAUDE_CODE_PROMPT_CACHE_TTL": "5m",
 }
 
