@@ -358,6 +358,8 @@ class TestLean:
         assert cmd[-1] == "--extra"
         assert spec.env(lean=True) == {
             "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+            "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS": "1",
             "CLAUDE_CODE_PROMPT_CACHE_TTL": "5m"}
         assert spec.env(lean=False) == {}
 
