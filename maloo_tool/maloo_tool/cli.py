@@ -310,6 +310,10 @@ _CLEANUP_START_RE = re.compile(r"^=== \S+: start cleanup\b")
 _FAIL_RE = re.compile(r"@@@@@@ FAIL: ")
 _ERRORISH_RE = re.compile(r"error|fail|cannot|denied|busy", re.IGNORECASE)
 _CLEANUP_SCAN_LINES = 500
+# Shell source the suite log echoes (a function body printed by a trace),
+# not an error: "while umount  /mnt/lustre2 2>&1 | grep -q busy; do".
+_SHELL_SOURCE_RE = re.compile(
+    r"^(while|until|if|elif|for|case)\s|;\s*(do|then)$|\|\s*grep\b|2>&1\s*\|")
 
 
 def _is_noise(line: str) -> bool:
@@ -344,6 +348,7 @@ def _parse_cleanup_error(lines: Iterable[str]) -> dict[str, Any] | None:
     errorish = [
         (lineno, text) for lineno, text in section
         if not _is_noise(text) and _ERRORISH_RE.search(text)
+        and not _SHELL_SOURCE_RE.search(text)
     ]
     if not errorish:
         return None

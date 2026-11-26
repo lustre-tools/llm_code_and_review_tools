@@ -221,6 +221,15 @@ class TestCleanupError:
         ])
         assert found["error"] == "umount: /mnt/lustre: target is busy."
 
+    def test_parser_skips_shell_source_the_log_echoes(self):
+        found = _parse_cleanup_error([
+            "=== sanity-dom: start cleanup 10:00:00 (1) ===\n",
+            "while umount  /mnt/lustre2 2>&1 | grep -q busy; do\n",
+            "if [ $rc -ne 0 ]; then\n",
+            "sanity-dom failed sanity\n",
+        ])
+        assert found["error"] == "sanity-dom failed sanity"
+
     def test_failures_notes_but_does_not_download_by_default(self, runner, mock_client):
         self._session(mock_client)
         env = _parse_output(runner.invoke(main, ["--envelope", "failures", SID_1]))
