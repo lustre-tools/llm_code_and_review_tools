@@ -36,8 +36,9 @@ AGY_LENS_AGENT_REL = Path(".agents") / "agents" / f"{LENS_AGENT}.md"
 LENS_REVIEW_TOOLS = ("Agent", "TodoWrite")
 LENS_OUTPUT_DIR = "review-context"
 DEFAULT_LENS_EFFORT = "medium"
-# The commit's diff goes into the lens agent's prompt up to this size;
-# a larger one the lenses read themselves.  --agents is one argument,
+# The commit's diff goes into the lens agent's prompt up to this size
+# once JSON-escaped (a non-ASCII character takes up to 12 bytes); a
+# larger one the lenses read themselves.  --agents is one argument,
 # which Linux caps at 128 KiB.
 INLINE_DIFF_MAX = 60_000
 
@@ -200,7 +201,7 @@ def lens_prompt(commit_diff: Optional[str] = None) -> str:
     text = ("You are a specialist Lustre kernel code reviewer.  Follow "
             "these lens instructions exactly.\n\n"
             + LENS_PROMPT_PATH.read_text())
-    if commit_diff and len(commit_diff) <= INLINE_DIFF_MAX:
+    if commit_diff and len(json.dumps(commit_diff)) <= INLINE_DIFF_MAX:
         text = text.replace(
             "1. `git show HEAD` and read the whole diff once.",
             "1. Read the whole diff once: it is at the end of these "

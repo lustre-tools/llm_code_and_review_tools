@@ -102,6 +102,19 @@ class TestLensPrompt:
                                  "--agents"))
         assert "+int a;" in agents[LENS_AGENT]["prompt"]
 
+    def test_a_diff_is_measured_as_it_goes_on_the_command_line(self):
+        """A non-ASCII diff grows sixfold in --agents; past 128 KiB the
+        review would not start (E2BIG)."""
+        from lreview.lenses import INLINE_DIFF_MAX
+        wide = "\u00e9" * (INLINE_DIFF_MAX // 2)
+        arg = agents_json("sonnet", "medium", diff=wide)
+        assert "## The commit under review" not in json.loads(arg)[LENS_AGENT]["prompt"]
+        assert len(arg.encode()) < 128 * 1024
+        for diff in ("x" * (INLINE_DIFF_MAX - 2), "\t\n" * (INLINE_DIFF_MAX // 4 - 1)):
+            arg = agents_json("sonnet", "medium", diff=diff)
+            assert "## The commit under review" in json.loads(arg)[LENS_AGENT]["prompt"]
+            assert len(arg.encode()) < 128 * 1024
+
     def test_unset_model_and_effort_are_left_out(self):
         spec = json.loads(agents_json(None, None))[LENS_AGENT]
         assert "model" not in spec and "effort" not in spec
