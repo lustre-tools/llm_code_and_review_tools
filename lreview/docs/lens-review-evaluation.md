@@ -32,9 +32,12 @@ Which bug each variant found, run by run, is in
 - **Cost:** about 2x an ordinary review ($1.02 against ~$0.50) since the
   lens prompt carries lens.md and the diff and the reviewer waits for the
   lenses; it was 3x before. Lenses at high cost twice as much again and,
-  with strict verification, found no more (26/31 both).
+  with strict verification, found no more (26/31 both, one run each).
 - **Not worth doing:** adding the TodoWrite tool, a "recall first" line in
-  the protocol, more effort, or more repeats.
+  the protocol, more effort, or more repeats; nor stricter wording for
+  settling lens candidates, or lenses that account for every changed
+  function (12 cases picked for their misses, up to two runs each against a
+  fresh control: 14/30 and 9/21 bug-runs against 13/30).
 - **The reviewer used to drop much of what the lenses found:** of the known
   bugs a lens review missed, a lens had written 43% down. Making the
   reviewer settle every candidate with evidence raised known bugs found
@@ -43,7 +46,8 @@ Which bug each variant found, run by run, is in
   `(minor)` precision fell (11/12 to 8/12 in a blind check).
 - **On the full sets with strict verification** (reviewer at high, lenses
   at medium): 74% of known bugs on the pilot set plus the nine new cases,
-  84% with the two cost changes, against 57% for an ordinary run; 87% on
+  84% and 74% in two runs with the two cost changes, against 57% for an
+  ordinary run; on all 52 cases 51/60 and 48/60; 87% on
   the eval set against 84% (92% for the old lenses at high). On the nine
   new cases, never used while designing the lenses, lens reviews found
   28 of 30 bug-runs against 10 of 20 for ordinary runs.
@@ -55,8 +59,8 @@ Which bug each variant found, run by run, is in
 - **Where a lens review's cost goes:** the reviewer's work after the lenses
   return (settling candidates on a ~100K context) is the largest part;
   each lens costs about 9% of a review, needed or not. The reviewer at
-  `--effort medium` cut the cost by 22% and the time by 30% at the same
-  recall, once it is told to run the lenses on every change.
+  `--effort medium` cut the cost by 22% and the time by 30% on 8 cases, but
+  lost bugs on the full pilot set (see the bullet above).
 
 ## Why one run misses bugs
 
@@ -287,6 +291,7 @@ strict verification, one run per variant; per-bug results in
 | pilot 19 + nine new cases | ordinary review | ~0.45 | 47/83 (57%) |
 | pilot 19 + nine new cases | lens review | 1.56 | 23/31 (74%) |
 | pilot 19 + nine new cases | **+ D1 + D2** | **1.02** | **26/31 (84%)** |
+| pilot 19 + nine new cases | + D1 + D2, second run | 1.08 | 23/31 (74%) |
 | pilot 19 + nine new cases | + D1 + D2, lenses at high | 2.04 | 26/31 (84%) |
 | eval | ordinary review | 0.50 | 64/76 (84%) |
 | eval | lenses at high, before strict verification | 2.46 | 72/78 (92%) |
@@ -305,10 +310,15 @@ strict verification, one run per variant; per-bug results in
   so each Agent call blocks until its lens returns (the five calls in one
   message still run in parallel). Same 8 cases: $1.51 (-14%), 8/11 known
   bugs against 7/11.
-- **Both together** on 28 cases: $1.02 against $1.56, cheaper on every
-  case, 26/31 against 23/31 (unlocked-tree-dump, skip-ipv6-uninit and the
-  qmt workqueue order found, nothing lost). On the other four cases of the
-  verification round: 5/7, losing the test-script version gate once.
+- **Both together** on 28 cases, two runs: $1.02 and $1.08 a review
+  against $1.56 (the first run cheaper on every case), and 26/31 and 23/31 known bugs
+  against 23/31: about a third cheaper at the same recall. The second run
+  missed three bugs the first had found (fld-range-uninit, the root
+  project-quota data loss, unlocked-tree-dump); single runs differ by about
+  that much. On all 52 cases: 51/60 and 48/60 at $1.11 and $1.14. On the
+  other four cases of the verification round: 5/7 in both runs. Part of
+  the saving is that the lenses look less: about half as many lens calls
+  per review (50 to 24) and a third fewer candidates (25.1 to 16.8).
 - **Lenses at high** found the same 26/31 at twice the cost (one bug more,
   one less), so `--lenses` keeps them at medium.
 - **The reviewer at medium**, with the "every change" wording, on the
@@ -424,5 +434,4 @@ of their own (lreview now stops both). Still open:
 Opus as the reviewer with Sonnet lenses; the upstream per-file
 orchestrator (`kernel/agent/orc.md`); a union of Claude and another model;
 effort levels for the ordinary review; spin-cycle rounds whose code
-changes between rounds; D1 + D2 on the eval set, and a second run of the
-full-set round.
+changes between rounds.

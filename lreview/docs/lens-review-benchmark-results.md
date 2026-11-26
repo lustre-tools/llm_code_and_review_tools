@@ -131,7 +131,8 @@ The 32 `eval` cases, two runs each. One ordinary run of `o2iblnd-rtnl` read the 
 Strict verification on the full sets, and the two cost changes (the lens
 prompt with lens.md and the diff, "D1"; the reviewer waiting for the
 lenses, "D2"), one run each unless a cell says otherwise. Reviewer at
-high, lenses at medium unless a column says otherwise.
+high, lenses at medium unless a column says otherwise. The second run of
+D1 + D2 was made on 2026-11-24, the first on 2026-11-19.
 
 ### Pilot set and the nine aireview escapes
 
@@ -139,43 +140,43 @@ The 19 cases of the pilot round plus the nine cases added from changes
 aireview had reviewed. "Ordinary" is the pilot round's three runs; for the
 nine new cases it is the two runs recorded in each case's notes.
 
-| case (change) | bug | ordinary | strict, lenses medium | + D1 + D2, lenses medium | + D1 + D2, lenses high |
-|---|---|---|---|---|---|
-| debug-vlen-always-inline ([69231](https://review.whamcloud.com/c/fs/lustre-release/+/69231/10)) | va-list-in-static-inline | 0/2 | 0/1 | 0/1 | 1/1 |
-| dne-migrate-layout ([58585](https://review.whamcloud.com/c/fs/lustre-release/+/58585/8)) | fld-range-uninit | 1/3 | 1/1 | 1/1 | 1/1 |
-| ec-parity-km-zero ([62906](https://review.whamcloud.com/c/fs/lustre-release/+/62906/42)) | ec-k-zero-divide | 2/2 | 1/1 | 1/1 | 1/1 |
-| ec-parity-km-zero ([62906](https://review.whamcloud.com/c/fs/lustre-release/+/62906/42)) | ec-m-zero-lassert | 2/2 | 1/1 | 1/1 | 1/1 |
-| enforce-file-quota-for-root ([60213](https://review.whamcloud.com/c/fs/lustre-release/+/60213/9)) | fix-silent-data-loss-for-root | 0/3 | 1/1 | 1/1 | 1/1 |
-| gssiam-modprobe-loop ([65062](https://review.whamcloud.com/c/fs/lustre-release/+/65062/78)) | wireflavor2policy-loop | 0/2 | 1/1 | 1/1 | 1/1 |
-| lassert-side-effects ([56115](https://review.whamcloud.com/c/fs/lustre-release/+/56115/5)) | state-change-in-assert | 3/3 | 1/1 | 1/1 | 1/1 |
-| lfs-find-ost-supports-index ([55902](https://review.whamcloud.com/c/fs/lustre-release/+/55902/5)) | fix-lfs-find-m-mdtidx-negation | 3/3 | 1/1 | 1/1 | 1/1 |
-| llog-skip-plain-client ([60240](https://review.whamcloud.com/c/fs/lustre-release/+/60240/27)) | skip-plain-server-only | 2/2 | 1/1 | 1/1 | 1/1 |
-| llog-subcommands ([56040](https://review.whamcloud.com/c/fs/lustre-release/+/56040/8)) | remove-runs-check | 3/3 | 1/1 | 1/1 | 1/1 |
-| lmv-disconnect-uaf ([64317](https://review.whamcloud.com/c/fs/lustre-release/+/64317/23)) | upcall-clear-after-disconnect | 2/2 | 1/1 | 1/1 | 1/1 |
-| lnd-module-loading ([57946](https://review.whamcloud.com/c/fs/lustre-release/+/57946/3)) | err-ptr-positive | 3/3 | 1/1 | 1/1 | 1/1 |
-| lnet-recreate-peers ([61596](https://review.whamcloud.com/c/fs/lustre-release/+/61596/17)) | sleep-in-spinlock | 3/3 | 1/1 | 1/1 | 1/1 |
-| lnetctl-import ([65055](https://review.whamcloud.com/c/fs/lustre-release/+/65055/8)) | import-fgets-overflow | 0/3 | 0/1 | 0/1 | 0/1 |
-| memcg-balance-dirty ([59223](https://review.whamcloud.com/c/fs/lustre-release/+/59223/11)) | unlocked-tree-dump | 0/3 | 0/1 | 1/1 | 0/1 |
-| mgs-buffer-checks ([64953](https://review.whamcloud.com/c/fs/lustre-release/+/64953/4)) | skip-ipv6-uninit | 0/3 | 0/1 | 1/1 | 1/1 |
-| move-include-to-top-level ([60989](https://review.whamcloud.com/c/fs/lustre-release/+/60989/9)) | fix-shrinker-debug-init-fini-i | 3/3 | 1/1 | 1/1 | 1/1 |
-| nodemap-ban-default ([60074](https://review.whamcloud.com/c/fs/lustre-release/+/60074/15)) | ban-search-unlocked | 0/3 | 0/1 | 0/1 | 0/1 |
-| nodemap-fileset-inherit ([55614](https://review.whamcloud.com/c/fs/lustre-release/+/55614/24)) | fileset-parent-check | 0/3 | 0/1 | 0/1 | 0/1 |
-| o2iblnd-fastreg-gaps ([66689](https://review.whamcloud.com/c/fs/lustre-release/+/66689/3)) | mid-page-split-counted-as-gap | 0/2 | 1/1 | 1/1 | 1/1 |
-| ofd-failure-domain-race ([65184](https://review.whamcloud.com/c/fs/lustre-release/+/65184/18)) | failure-domain-unlocked-read | 0/2 | 1/1 | 1/1 | 1/1 |
-| osc-encrypt-unused-index ([69505](https://review.whamcloud.com/c/fs/lustre-release/+/69505/9)) | fallback-macro-drops-index | 0/2 | 1/1 | 1/1 | 1/1 |
-| osc-kswapd-deadlock ([64397](https://review.whamcloud.com/c/fs/lustre-release/+/64397/2)) | comment-cites-removed-osc-flush-async-page | 3/3 | 1/1 | 1/1 | 1/1 |
-| osc-kswapd-deadlock ([64397](https://review.whamcloud.com/c/fs/lustre-release/+/64397/2)) | oe-memalloc-never-set-dead-check | 3/3 | 1/1 | 1/1 | 1/1 |
-| osc-lu-device ([58818](https://review.whamcloud.com/c/fs/lustre-release/+/58818/8)) | device-free-null-obd | 3/3 | 1/1 | 1/1 | 1/1 |
-| p2pdma-per-stripe ([66987](https://review.whamcloud.com/c/fs/lustre-release/+/66987/30)) | p2p-decided-per-chunk | 2/2 | 1/1 | 1/1 | 1/1 |
-| relate-qmt-lvbo-free-wq-and ([56661](https://review.whamcloud.com/c/fs/lustre-release/+/56661/3)) | fix-the-order-of-freeing-qmt-l | 0/3 | 0/1 | 1/1 | 1/1 |
-| return-error-for-verify-when ([61751](https://review.whamcloud.com/c/fs/lustre-release/+/61751/8)) | fix-resync-with-nosync-stale-c | 0/3 | 0/1 | 0/1 | 0/1 |
-| support-pci-p2p-dma-mapping ([66985](https://review.whamcloud.com/c/fs/lustre-release/+/66985/26)) | fix-efa-p2p-configure-guard | 3/3 | 1/1 | 1/1 | 1/1 |
-| swap-layouts-interop ([64757](https://review.whamcloud.com/c/fs/lustre-release/+/64757/2)) | pack-before-set-size | 3/3 | 1/1 | 1/1 | 1/1 |
-| swap-layouts-interop ([64757](https://review.whamcloud.com/c/fs/lustre-release/+/64757/2)) | swab-min-size | 3/3 | 1/1 | 1/1 | 1/1 |
-| **total** | | **47/83 (57%)** | **23/31 (74%)** | **26/31 (84%)** | **26/31 (84%)** |
+| case (change) | bug | ordinary | strict, lenses medium | + D1 + D2, lenses medium | + D1 + D2, second run | + D1 + D2, lenses high |
+|---|---|---|---|---|---|---|
+| debug-vlen-always-inline ([69231](https://review.whamcloud.com/c/fs/lustre-release/+/69231/10)) | va-list-in-static-inline | 0/2 | 0/1 | 0/1 | 0/1 | 1/1 |
+| dne-migrate-layout ([58585](https://review.whamcloud.com/c/fs/lustre-release/+/58585/8)) | fld-range-uninit | 1/3 | 1/1 | 1/1 | 0/1 | 1/1 |
+| ec-parity-km-zero ([62906](https://review.whamcloud.com/c/fs/lustre-release/+/62906/42)) | ec-k-zero-divide | 2/2 | 1/1 | 1/1 | 1/1 | 1/1 |
+| ec-parity-km-zero ([62906](https://review.whamcloud.com/c/fs/lustre-release/+/62906/42)) | ec-m-zero-lassert | 2/2 | 1/1 | 1/1 | 1/1 | 1/1 |
+| enforce-file-quota-for-root ([60213](https://review.whamcloud.com/c/fs/lustre-release/+/60213/9)) | fix-silent-data-loss-for-root | 0/3 | 1/1 | 1/1 | 0/1 | 1/1 |
+| gssiam-modprobe-loop ([65062](https://review.whamcloud.com/c/fs/lustre-release/+/65062/78)) | wireflavor2policy-loop | 0/2 | 1/1 | 1/1 | 1/1 | 1/1 |
+| lassert-side-effects ([56115](https://review.whamcloud.com/c/fs/lustre-release/+/56115/5)) | state-change-in-assert | 3/3 | 1/1 | 1/1 | 1/1 | 1/1 |
+| lfs-find-ost-supports-index ([55902](https://review.whamcloud.com/c/fs/lustre-release/+/55902/5)) | fix-lfs-find-m-mdtidx-negation | 3/3 | 1/1 | 1/1 | 1/1 | 1/1 |
+| llog-skip-plain-client ([60240](https://review.whamcloud.com/c/fs/lustre-release/+/60240/27)) | skip-plain-server-only | 2/2 | 1/1 | 1/1 | 1/1 | 1/1 |
+| llog-subcommands ([56040](https://review.whamcloud.com/c/fs/lustre-release/+/56040/8)) | remove-runs-check | 3/3 | 1/1 | 1/1 | 1/1 | 1/1 |
+| lmv-disconnect-uaf ([64317](https://review.whamcloud.com/c/fs/lustre-release/+/64317/23)) | upcall-clear-after-disconnect | 2/2 | 1/1 | 1/1 | 1/1 | 1/1 |
+| lnd-module-loading ([57946](https://review.whamcloud.com/c/fs/lustre-release/+/57946/3)) | err-ptr-positive | 3/3 | 1/1 | 1/1 | 1/1 | 1/1 |
+| lnet-recreate-peers ([61596](https://review.whamcloud.com/c/fs/lustre-release/+/61596/17)) | sleep-in-spinlock | 3/3 | 1/1 | 1/1 | 1/1 | 1/1 |
+| lnetctl-import ([65055](https://review.whamcloud.com/c/fs/lustre-release/+/65055/8)) | import-fgets-overflow | 0/3 | 0/1 | 0/1 | 0/1 | 0/1 |
+| memcg-balance-dirty ([59223](https://review.whamcloud.com/c/fs/lustre-release/+/59223/11)) | unlocked-tree-dump | 0/3 | 0/1 | 1/1 | 0/1 | 0/1 |
+| mgs-buffer-checks ([64953](https://review.whamcloud.com/c/fs/lustre-release/+/64953/4)) | skip-ipv6-uninit | 0/3 | 0/1 | 1/1 | 1/1 | 1/1 |
+| move-include-to-top-level ([60989](https://review.whamcloud.com/c/fs/lustre-release/+/60989/9)) | fix-shrinker-debug-init-fini-i | 3/3 | 1/1 | 1/1 | 1/1 | 1/1 |
+| nodemap-ban-default ([60074](https://review.whamcloud.com/c/fs/lustre-release/+/60074/15)) | ban-search-unlocked | 0/3 | 0/1 | 0/1 | 0/1 | 0/1 |
+| nodemap-fileset-inherit ([55614](https://review.whamcloud.com/c/fs/lustre-release/+/55614/24)) | fileset-parent-check | 0/3 | 0/1 | 0/1 | 0/1 | 0/1 |
+| o2iblnd-fastreg-gaps ([66689](https://review.whamcloud.com/c/fs/lustre-release/+/66689/3)) | mid-page-split-counted-as-gap | 0/2 | 1/1 | 1/1 | 1/1 | 1/1 |
+| ofd-failure-domain-race ([65184](https://review.whamcloud.com/c/fs/lustre-release/+/65184/18)) | failure-domain-unlocked-read | 0/2 | 1/1 | 1/1 | 1/1 | 1/1 |
+| osc-encrypt-unused-index ([69505](https://review.whamcloud.com/c/fs/lustre-release/+/69505/9)) | fallback-macro-drops-index | 0/2 | 1/1 | 1/1 | 1/1 | 1/1 |
+| osc-kswapd-deadlock ([64397](https://review.whamcloud.com/c/fs/lustre-release/+/64397/2)) | comment-cites-removed-osc-flush-async-page | 3/3 | 1/1 | 1/1 | 1/1 | 1/1 |
+| osc-kswapd-deadlock ([64397](https://review.whamcloud.com/c/fs/lustre-release/+/64397/2)) | oe-memalloc-never-set-dead-check | 3/3 | 1/1 | 1/1 | 1/1 | 1/1 |
+| osc-lu-device ([58818](https://review.whamcloud.com/c/fs/lustre-release/+/58818/8)) | device-free-null-obd | 3/3 | 1/1 | 1/1 | 1/1 | 1/1 |
+| p2pdma-per-stripe ([66987](https://review.whamcloud.com/c/fs/lustre-release/+/66987/30)) | p2p-decided-per-chunk | 2/2 | 1/1 | 1/1 | 1/1 | 1/1 |
+| relate-qmt-lvbo-free-wq-and ([56661](https://review.whamcloud.com/c/fs/lustre-release/+/56661/3)) | fix-the-order-of-freeing-qmt-l | 0/3 | 0/1 | 1/1 | 1/1 | 1/1 |
+| return-error-for-verify-when ([61751](https://review.whamcloud.com/c/fs/lustre-release/+/61751/8)) | fix-resync-with-nosync-stale-c | 0/3 | 0/1 | 0/1 | 0/1 | 0/1 |
+| support-pci-p2p-dma-mapping ([66985](https://review.whamcloud.com/c/fs/lustre-release/+/66985/26)) | fix-efa-p2p-configure-guard | 3/3 | 1/1 | 1/1 | 1/1 | 1/1 |
+| swap-layouts-interop ([64757](https://review.whamcloud.com/c/fs/lustre-release/+/64757/2)) | pack-before-set-size | 3/3 | 1/1 | 1/1 | 1/1 | 1/1 |
+| swap-layouts-interop ([64757](https://review.whamcloud.com/c/fs/lustre-release/+/64757/2)) | swab-min-size | 3/3 | 1/1 | 1/1 | 1/1 | 1/1 |
+| **total** | | **47/83 (57%)** | **23/31 (74%)** | **26/31 (84%)** | **23/31 (74%)** | **26/31 (84%)** |
 
-$/review: strict $1.56, + D1 + D2 $1.02, + D1 + D2 with lenses at high
-$2.04.
+$/review: strict $1.56, + D1 + D2 $1.02 and $1.08 (second run), + D1 + D2
+with lenses at high $2.04.
 
 ### Eval set
 

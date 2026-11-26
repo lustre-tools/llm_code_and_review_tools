@@ -387,9 +387,10 @@ On `lreview bench`, with the lenses at high, known-bug recall went from
 59% to 70% and from 84% to 92% on two case sets, one run beat two or
 three ordinary runs together, and real defects per review rose by
 roughly 35-50% with unchanged precision. With the verification rules
-below and the lenses at medium (the default), a lens review found 84% of
-the known bugs of 28 cases against 57% for an ordinary run, at about 2x
-its cost ($1.02 against ~$0.50); lenses at high cost twice as much again
+below and the lenses at medium (the default), a lens review found 84% and
+74% of the known bugs of 28 cases in two runs, against 57% for an ordinary
+run, at about 2x its cost ($1.02-1.08 against ~$0.50); lenses at high cost
+twice as much again
 and found no more. `docs/lens-review-evaluation.md` has the measurements and
 `docs/lens-review-benchmark-results.md` the per-bug results.
 
