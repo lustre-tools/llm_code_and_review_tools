@@ -411,6 +411,7 @@ janitor crash 61009 "sanity3@zfs" -C 5         # LBUG/LASSERT/panic/oops with co
 janitor logs 61009 "sanity2@ldiskfs+DNE"       # what files exist
 janitor fetch 61009 "sanity3@zfs" console.txt --grep LBUG
 janitor fetch 61009 "sanity3@zfs" results.yml --raw > results.yml  # the file as is, no JSON
+janitor fetch 61009 "sanity3@zfs" "*console*" --grep LBUG  # a glob: every matching file
 ```
 
 Build and change numbers overlap; a bare number that could be either is

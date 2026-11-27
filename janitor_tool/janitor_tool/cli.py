@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import re
 import sys
 from typing import Any
@@ -526,6 +527,12 @@ def fetch(
       janitor fetch 61009 "sanity3@zfs" "results.yml"
       janitor fetch 61009 "sanity2@ldiskfs+DNE" "console.txt" --grep "LBUG"
       janitor fetch 61009 "sanity3@zfs" "results.yml" --raw > results.yml
+      janitor fetch 61009 "sanity3@zfs" "*console*" --grep LBUG
+
+    \b
+    A FILENAME with * ? or [ is a glob over the test's files (as
+    `janitor logs` lists them): JSON then gives {"files": [...]}, one
+    entry per match, and --raw heads each with "==> name <==".
     """
     pattern = None
     if grep_pattern:
@@ -550,39 +557,66 @@ def fetch(
             "fetch", pretty,
         )
 
-    content = client.fetch_log(build, test_dir, filename, max_bytes)
-    if content is None:
-        _error(
-            ErrorCode.LOG_NOT_FOUND,
-            f"Could not fetch '{filename}' for '{test_name}'",
-            "fetch", pretty,
-        )
+    names = [filename]
+    if any(c in filename for c in "*?["):
+        listed = [f["name"] for f in client.list_test_files(build, test_dir)]
+        names = sorted(n for n in listed if fnmatch.fnmatchcase(n, filename))
+        if not names:
+            _error(
+                ErrorCode.LOG_NOT_FOUND,
+                f"No file matches '{filename}' for '{test_name}'"
+                + (f" (files: {', '.join(listed)})" if listed else ""),
+                "fetch", pretty,
+            )
 
-    lines = content.splitlines()
-    if pattern is not None:
-        lines = [l for l in lines if pattern.search(l)]
-    if tail:
-        lines = lines[-tail:]
+    results = []
+    for name in names:
+        content = client.fetch_log(build, test_dir, name, max_bytes)
+        if content is None:
+            _error(
+                ErrorCode.LOG_NOT_FOUND,
+                f"Could not fetch '{name}' for '{test_name}'",
+                "fetch", pretty,
+            )
+
+        lines = content.splitlines()
+        if pattern is not None:
+            lines = [l for l in lines if pattern.search(l)]
+        if tail:
+            lines = lines[-tail:]
+
+        if raw:
+            if len(names) > 1:
+                sys.stdout.write(f"==> {name} <==\n")
+            if len(content) >= max_bytes:
+                click.echo(f"janitor fetch: {name} cut at --max-bytes {max_bytes}", err=True)
+            if pattern is None and not tail:
+                sys.stdout.write(content)
+                if len(names) > 1 and content and not content.endswith("\n"):
+                    sys.stdout.write("\n")
+            elif lines:
+                sys.stdout.write("\n".join(lines) + "\n")
+            continue
+
+        result: dict[str, Any] = {
+            "build": build,
+            "test": test_name,
+            "file": name,
+            "line_count": len(lines),
+            "truncated": len(content) >= max_bytes,
+        }
+        if grep_pattern:
+            result["grep"] = grep_pattern
+        result["content"] = "\n".join(lines)
+        results.append(result)
 
     if raw:
-        if len(content) >= max_bytes:
-            click.echo(f"janitor fetch: cut at --max-bytes {max_bytes}", err=True)
-        if pattern is None and not tail:
-            sys.stdout.write(content)
-        elif lines:
-            sys.stdout.write("\n".join(lines) + "\n")
         return
-
-    result: dict[str, Any] = {
-        "build": build,
-        "test": test_name,
-        "file": filename,
-        "line_count": len(lines),
-        "truncated": len(content) >= max_bytes,
-    }
-    if grep_pattern:
-        result["grep"] = grep_pattern
-    result["content"] = "\n".join(lines)
+    if len(names) == 1 and names[0] == filename:
+        result = results[0]
+    else:
+        result = {"build": build, "test": test_name, "pattern": filename,
+                  "files": results}
 
     env = success_response(result, TOOL_NAME, "fetch")
     _output(env, pretty)

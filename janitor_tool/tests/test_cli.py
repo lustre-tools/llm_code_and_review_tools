@@ -351,6 +351,50 @@ class TestFetchCommand:
         assert result.output == "LBUG two\nLBUG three\n"
 
     @patch("janitor_tool.cli._make_client")
+    def test_fetch_glob_expands_over_the_test_files(self, mock_make):
+        """fb-1359914d6972: janitor fetch did not expand globs in FILENAME."""
+        client = self._client(mock_make, None)
+        client.list_test_files.return_value = [
+            {"name": "oleg1-client-console.txt"}, {"name": "results.yml"},
+            {"name": "oleg2-mds1-console.txt"},
+        ]
+        client.fetch_log.side_effect = lambda b, d, name, m: f"{name} LBUG\nok\n"
+
+        result = CliRunner().invoke(main, [
+            "fetch", "61009", "sanity@ldiskfs", "*console*", "--grep", "LBUG"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["pattern"] == "*console*"
+        assert [f["file"] for f in data["files"]] == [
+            "oleg1-client-console.txt", "oleg2-mds1-console.txt"]
+        assert data["files"][0]["content"] == "oleg1-client-console.txt LBUG"
+
+    @patch("janitor_tool.cli._make_client")
+    def test_fetch_glob_raw_heads_each_file(self, mock_make):
+        client = self._client(mock_make, None)
+        client.list_test_files.return_value = [{"name": "a.txt"}, {"name": "b.txt"}]
+        client.fetch_log.side_effect = lambda b, d, name, m: f"in {name}"
+
+        result = CliRunner().invoke(main, [
+            "fetch", "61009", "sanity@ldiskfs", "*.txt", "--raw"])
+
+        assert result.exit_code == 0, result.output
+        assert result.output == "==> a.txt <==\nin a.txt\n==> b.txt <==\nin b.txt\n"
+
+    @patch("janitor_tool.cli._make_client")
+    def test_fetch_glob_no_match_lists_the_files(self, mock_make):
+        client = self._client(mock_make, None)
+        client.list_test_files.return_value = [{"name": "results.yml"}]
+
+        result = CliRunner().invoke(main, [
+            "fetch", "61009", "sanity@ldiskfs", "*console*"])
+
+        assert result.exit_code != 0
+        assert "results.yml" in result.output
+        client.fetch_log.assert_not_called()
+
+    @patch("janitor_tool.cli._make_client")
     def test_basic_fetch(self, mock_make):
         client = MagicMock()
         mock_make.return_value = client
