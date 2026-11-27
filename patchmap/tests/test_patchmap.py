@@ -104,6 +104,45 @@ class TestSet:
         (row,) = cli.load()
         assert row["session"] == "sid-1" and row["title"] == "LU-1 foo"
 
+    def test_another_session_does_not_take_the_row(self, capsys, monkeypatch):
+        """Marc's case: B updating A's state left B the owner."""
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "aaaa-session-a")
+        run(capsys, "set", "--patch", "71234", "--ticket", "LU-12345", "--state", "PS1 in CI")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "bbbb-session-b")
+        cli.main(["set", "--patch", "71234", "--state", "merged"])
+        assert "stays with session aaaa-ses" in capsys.readouterr().err
+        (row,) = cli.load()
+        assert row["session"] == "aaaa-session-a" and row["state"] == "merged"
+        assert row["updated_by"] == "bbbb-session-b"
+        assert "updated " in run(capsys, "show") and " by bbbb-ses" in run(capsys, "show")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "aaaa-session-a")
+        run(capsys, "set", "--patch", "71234", "--state", "landed")
+        assert "updated_by" not in cli.load()[0]
+
+    def test_shell_update_records_user_and_host(self, capsys, monkeypatch):
+        run(capsys, "set", "--patch", "7", "--session", "a")
+        monkeypatch.setattr(cli.getpass, "getuser", lambda: "andreas")
+        run(capsys, "set", "--patch", "7", "--state", "landed")
+        assert cli.load()[0]["updated_by"] == "andreas@here"
+        assert "by andreas@here" in run(capsys, "show")
+
+    def test_take_makes_this_session_the_owner(self, capsys, monkeypatch):
+        run(capsys, "set", "--patch", "7", "--session", "a", "--title", "A")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "b")
+        run(capsys, "set", "--patch", "7", "--take")
+        (row,) = cli.load()
+        assert row["session"] == "b" and "title" not in row
+
+    def test_resumed_app_session_keeps_its_row(self, capsys, monkeypatch):
+        """The desktop app starts a new CLI session id on resume."""
+        monkeypatch.setenv("CLAUDE_CODE_HOST_SESSION_ID", "local_1")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "old")
+        run(capsys, "set", "--patch", "7", "--title", "T")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "new")
+        run(capsys, "set", "--patch", "7", "--state", "x")
+        (row,) = cli.load()
+        assert row["session"] == "new" and row["app"] == "local_1" and row["title"] == "T"
+
     def test_new_owner_drops_old_title(self, capsys):
         run(capsys, "set", "--patch", "71234", "--session", "a", "--title", "old", "--app", "local_a")
         run(capsys, "set", "--patch", "71234", "--session", "b")
@@ -183,7 +222,7 @@ class TestSessionLabel:
 
 
 class TestRemote:
-    def test_set_fills_in_host_session_and_title(self, isolated, monkeypatch):
+    def test_set_sends_who_is_asking_not_an_owner(self, isolated, monkeypatch):
         transcript(isolated, "sid-9", [{"type": "custom-title", "customTitle": "on sookie"}])
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sid-9")
         monkeypatch.setattr(cli, "git_branch", lambda d: "LU-1-foo")
@@ -191,12 +230,27 @@ class TestRemote:
         cmd = cli.remote_argv("webber", argv, cli.build_parser().parse_args(argv))
         assert cmd[:4] == ["ssh", "-o", "BatchMode=yes", "webber"]
         far = shlex.split(cmd[4])
-        assert far[:2] == ["patchmap", "set"]
+        assert far[:5] == [
+            "env",
+            "CLAUDE_CODE_SESSION_ID=sid-9",
+            "PATCHMAP_SESSION_TITLE=on sookie",
+            "PATCHMAP_HOST=here",
+            "patchmap",
+        ]
         assert far[far.index("--dir") + 1] == cli.tilde(os.getcwd())
-        assert far[far.index("--host") + 1] == "here"
-        assert far[far.index("--session") + 1] == "sid-9"
-        assert far[far.index("--title") + 1] == "on sookie"
         assert far[far.index("--branch") + 1] == "LU-1-foo"
+        assert "--session" not in far and "--host" not in far
+
+    def test_far_side_keeps_another_sessions_row(self, capsys, monkeypatch):
+        run(capsys, "set", "--patch", "7", "--session", "owner")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "caller")
+        monkeypatch.setenv("PATCHMAP_SESSION_TITLE", "remote caller")
+        monkeypatch.setenv("PATCHMAP_HOST", "sookie")
+        run(capsys, "set", "--patch", "8")
+        run(capsys, "set", "--patch", "7", "--state", "landed")
+        rows = {r["patch"]: r for r in cli.load()}
+        assert rows[7]["session"] == "owner" and rows[7]["state"] == "landed" and rows[7]["host"] == "here"
+        assert rows[8]["session"] == "caller" and rows[8]["title"] == "remote caller" and rows[8]["host"] == "sookie"
 
     def test_show_mine_names_the_session(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sid-9")

@@ -37,6 +37,7 @@ there over ssh.
 import argparse
 import datetime
 import fcntl
+import getpass
 import glob
 import json
 import os
@@ -48,7 +49,20 @@ import sys
 import tomllib
 
 MAP = os.path.expanduser(os.environ.get("PATCHMAP_FILE", "~/.claude/patchmap.yaml"))
-FIELDS = ["patch", "ticket", "desc", "branch", "dir", "host", "session", "app", "title", "state", "updated"]
+FIELDS = [
+    "patch",
+    "ticket",
+    "desc",
+    "branch",
+    "dir",
+    "host",
+    "session",
+    "app",
+    "title",
+    "state",
+    "updated",
+    "updated_by",
+]
 HEADER = "# patchmap.yaml: one line per patch; write it with `patchmap set`, read with `patchmap show`.\n"
 HOME = os.path.expanduser("~")
 # The map's name before patchmap moved here; the first run renames it.
@@ -372,11 +386,28 @@ class SessionNames:
 
 
 def own_session():
-    """(session id, app id, title) of the session this runs in."""
+    """(session id, app id, title) of the session this runs in.
+
+    PATCHMAP_SESSION_TITLE carries the title across PATCHMAP_REMOTE's ssh,
+    where the session's transcript is not.
+    """
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
     app = os.environ.get("CLAUDE_CODE_HOST_SESSION_ID")
-    title = SessionNames().lookup(sid, app)[0] if sid or app else None
+    title = os.environ.get("PATCHMAP_SESSION_TITLE")
+    if title is None and (sid or app):
+        title = SessionNames().lookup(sid, app)[0]
     return sid, app, title
+
+
+def default_host():
+    """The host a new row is on: this one, or PATCHMAP_REMOTE's caller."""
+    return os.environ.get("PATCHMAP_HOST") or short_host()
+
+
+def owns(row, sid, app):
+    """Whether this session owns the row: the same session id, or the same
+    desktop-app session, which starts a new CLI session id on each resume."""
+    return bool(sid and row.get("session") == sid) or bool(app and row.get("app") == app)
 
 
 # ---- commands ----
@@ -394,12 +425,19 @@ def cmd_set(args):
             rows.append(row)
         if args.dir and not args.branch and "branch" not in row:
             args.branch = git_branch(args.dir)
-        if args.session is None:
-            sid, app, title = own_session()
-            if sid:
-                args.session = sid
-                args.app = args.app or app
-                args.title = args.title or title
+        # A row stays its owner's: another session updating its state does
+        # not take it over, unless it says so with --take or --session.
+        sid, app, title = own_session()
+        owner = row.get("session")
+        if args.session is None and sid and (not owner or owns(row, sid, app) or args.take):
+            args.session = sid
+            args.app = args.app or app
+            args.title = args.title or title
+        elif args.session is None and owner and sid:
+            print(
+                f"patchmap: {label(row)} stays with session {SessionNames().label(row)}; --take to take it over",
+                file=sys.stderr,
+            )
         updates = {
             "patch": as_patch(args.patch),
             "ticket": args.ticket,
@@ -412,18 +450,30 @@ def cmd_set(args):
             "title": args.title,
             "state": args.state,
         }
-        if args.session and args.session != row.get("session"):
+        if args.session and args.session != owner and not (args.app and args.app == row.get("app")):
             # another session's app id and title do not carry over
             row.pop("app", None)
             row.pop("title", None)
         row.update({k: v for k, v in updates.items() if v is not None})
         row.setdefault("patch", "new")
-        row.setdefault("host", short_host())
+        row.setdefault("host", default_host())
         row["updated"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        # who changed someone else's row: a session id, or user@host from a shell
+        if sid and row.get("session") == sid:
+            row.pop("updated_by", None)
+        else:
+            row["updated_by"] = sid or f"{getpass.getuser()}@{default_host()}"
         for k in args.clear or []:
             row.pop(k, None)
         save(rows)
         print(dump_row(row), end="")
+
+
+def updated_by_label(row, names):
+    who = row.get("updated_by")
+    if not who or "@" in who:
+        return who
+    return names.label({"session": who})
 
 
 def stale(row):
@@ -451,6 +501,7 @@ def cmd_show(args):
             r["label"] = label(r)
             r["session_label"] = names.label(r)
             r["dir_gone"] = stale(r)
+            r["updated_by_label"] = updated_by_label(r, names)
         json.dump(rows, sys.stdout)
         print()
         return
@@ -463,7 +514,9 @@ def cmd_show(args):
             f"    {r.get('state', '?')}{flag}\n"
             f"    {r.get('host', '?')}:{r.get('dir') or '-'}"
             f"  branch {r.get('branch') or '-'}"
-            f"  updated {r.get('updated', '?')}" + (f"\n    {links}" if links else "")
+            f"  updated {r.get('updated', '?')}"
+            + (f" by {updated_by_label(r, names)}" if r.get("updated_by") else "")
+            + (f"\n    {links}" if links else "")
         )
     page("".join(line + "\n" for line in out), args.no_pager)
 
@@ -546,16 +599,18 @@ def remote_argv(remote, argv, args):
                 branch = git_branch(args.dir)
                 if branch:
                     argv += ["--branch", branch]
-        if not args.host:
-            argv += ["--host", short_host()]
-        if args.session is None:
-            sid, app, title = own_session()
-            if sid:
-                argv += ["--session", sid]
-                if app and not args.app:
-                    argv += ["--app", app]
-                if title and not args.title:
-                    argv += ["--title", title]
+        # who is asking, as the environment the far side would have here;
+        # not --session, which would take the row over
+        sid, app, title = own_session()
+        ident = {
+            "CLAUDE_CODE_SESSION_ID": sid,
+            "CLAUDE_CODE_HOST_SESSION_ID": app,
+            "PATCHMAP_SESSION_TITLE": title,
+            "PATCHMAP_HOST": short_host(),
+        }
+        env = [f"{k}={v}" for k, v in ident.items() if v]
+        cmd = os.environ.get("PATCHMAP_REMOTE_CMD", "patchmap")
+        return ["ssh", "-o", "BatchMode=yes", remote, shlex.join(["env", *env, *shlex.split(cmd), *argv])]
     elif args.cmd == "show" and args.mine:
         sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
         if not sid:
@@ -576,6 +631,7 @@ def build_parser():
     for f in ("desc", "branch", "dir", "host", "session", "app", "title", "state"):
         s.add_argument("--" + f)
     s.add_argument("--clear", action="append", choices=FIELDS, help="drop a field from the row")
+    s.add_argument("--take", action="store_true", help="make this session the row's owner")
     s.set_defaults(func=cmd_set)
     s = sub.add_parser("show", help='print rows as NNNNN ("TICKET desc"), with their links')
     s.add_argument("--mine", action="store_true", help="only this session's rows ($CLAUDE_CODE_SESSION_ID)")

@@ -66,8 +66,13 @@ patchmap set --patch 71234 --state "landed"   # or: patchmap rm 71234
 - **The ticket** (`--ticket`, or its old name `--lu`) is the work item:
   `LU-nnnnn`, or anything a `[tickets]` prefix below matches.
 - **Another session's patch** is not yours to update.  Ask that session,
-  or tell the person, but do not take its row over.  A `set` with a new
-  `--session` takes ownership, and drops the old session's name.
+  or tell the person.  A `set` on its row (say, to mark it landed) keeps
+  its owner, says so on stderr, and records you as `updated_by` (a
+  session id, or `user@host` from a shell), which `show` prints as
+  "updated ... by ..." until the owner next updates the row; only `--take`, or `--session ID`, moves
+  the row to another session, and drops the old session's name.  A
+  desktop-app session that resumes under a new session id still owns its
+  rows.
 - `--clear FIELD` drops one field.  `rm` prints what it removed, so a
   mistake can be put back with `set`.
 
