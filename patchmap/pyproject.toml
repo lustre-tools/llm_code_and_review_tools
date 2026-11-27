@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "patchmap"
-version = "0.1.0"
+version = "0.6.0"
 description = "Which agent session owns which patch, branch and worktree"
 requires-python = ">=3.11"
 license = "MIT"
