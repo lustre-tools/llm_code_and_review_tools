@@ -50,7 +50,7 @@ test:
 # named "tests", and a single process imports them under the same names.
 TEST_DIRS = llm_tool_common jira_tool gerrit_cli maloo_tool jenkins_tool \
 	janitor_tool lreview lustre_crash patch_shepherd gerrit_dashboard pw_cli \
-	release_priority
+	release_priority patchmap
 PYTHON ?= $(if $(wildcard .venv/bin/python),$(CURDIR)/.venv/bin/python,python3)
 
 unit-test:

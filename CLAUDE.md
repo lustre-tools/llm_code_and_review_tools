@@ -292,13 +292,22 @@ Also installed from this repo:
   without a login. Read only. The same changes are on the public page
   https://mulberrytree.us/release_priority/. See
   `release_priority/README.md`.
+- `patchmap`: which agent session owns which patch, branch and worktree,
+  one line per patch in `~/.claude/patchmap.yaml`, with each
+  session's name (from the Claude desktop app, or the session's
+  transcript on any host).  Its `show` prints for people (`--json` for
+  programs) and `get` prints YAML rows, so it does not follow the JSON
+  convention below; standard library only.  `~/.config/patchmap.toml`
+  maps trackers and ticket prefixes to the URLs `show` prints.
+  `PATCHMAP_REMOTE` (opt-in) runs it
+  against a map on another host over ssh.
 
 ## Claude skills
 
 `skills/` holds task-shaped skills for these tools --
 `lustre-ci-triage`, `gerrit-patch-workflow`, `lreview-spin-cycle`,
 `lustre-crash-triage`, `jira-bug-research`, `lustre-debug-logs`,
-`pw-cli`, `release-priority`. `./install.sh` links them
+`pw-cli`, `release-priority`, `patchmap`. `./install.sh` links them
 into `~/.claude/skills`; `--skills` does only that, `--no-skills`
 skips it. They are symlinks, so edits in this checkout take effect
 immediately -- edit the skill here, not the copy in `~/.claude`.

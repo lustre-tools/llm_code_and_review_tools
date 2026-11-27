@@ -2,7 +2,7 @@
 #
 # Unified installer for LLM Code and Review Tools
 # Installs: jira, gerrit-cli, maloo, jenkins, lustre-crash, janitor, lreview, pw-cli,
-# release-priority, and gerrit-dashboard
+# release-priority, patchmap, and gerrit-dashboard
 #
 # Run it either way:
 #   ./install.sh [OPTIONS]          # normal run
@@ -63,13 +63,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Console scripts our packages install (used for ~/.local/bin symlinks
 # when installing into a venv, and for cleanup on uninstall)
-TOOL_BINS="jira gerrit gerrit-cli gc maloo jenkins janitor lustre-crash lreview pw-cli release-priority llm-tools-telemetry"
+TOOL_BINS="jira gerrit gerrit-cli gc maloo jenkins janitor lustre-crash lreview pw-cli release-priority patchmap llm-tools-telemetry"
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo "       source $0 [OPTIONS]   (activates the venv in your shell)"
     echo ""
-    echo "Install LLM code and review tools (jira, gerrit-cli, maloo, jenkins, lustre-crash, janitor, lreview, pw-cli, release-priority, gerrit-dashboard)"
+    echo "Install LLM code and review tools (jira, gerrit-cli, maloo, jenkins, lustre-crash, janitor, lreview, pw-cli, release-priority, patchmap, gerrit-dashboard)"
     echo ""
     echo "Options:"
     echo "  --help, -h     Show this help message"
@@ -428,6 +428,9 @@ install_tools() {
     # Install release_priority (needs gerrit_cli)
     install_tool release-priority "$SCRIPT_DIR/release_priority"
 
+    # Install patchmap (standard library only)
+    install_tool patchmap "$SCRIPT_DIR/patchmap"
+
     # Install drgn + lustre-drgn-tools
     if [[ "$(uname -s)" == "Darwin" && -z "${LLM_TOOLS_TRY_DRGN:-}" ]]; then
         # drgn ships no macOS wheels, its source build uses Linux-only
@@ -492,6 +495,7 @@ install_tools() {
     echo "  lreview         - Parallel AI patch reviews (kreview)"
     echo "  pw-cli          - Patch Watcher by Gerrit login: retest, shepherd, what a tag does"
     echo "  release-priority - A release's priority patches, and what is yours to do"
+    echo "  patchmap        - Which agent session owns which patch and worktree"
     echo ""
     echo "Verify installation:"
     echo "  jira --help"
@@ -503,6 +507,7 @@ install_tools() {
     echo "  lreview check"
     echo "  pw-cli whoami"
     echo "  release-priority whoami"
+    echo "  patchmap show"
     echo ""
     echo "See AGENTS.md for usage documentation."
 }
@@ -552,6 +557,9 @@ uninstall_tools() {
 
     echo "Uninstalling release-priority..."
     $PYTHON -m pip uninstall -y release-priority 2>/dev/null || true
+
+    echo "Uninstalling patchmap..."
+    $PYTHON -m pip uninstall -y patchmap 2>/dev/null || true
 
     echo "Uninstalling gerrit-dashboard..."
     $PYTHON -m pip uninstall -y gerrit-dashboard 2>/dev/null || true
