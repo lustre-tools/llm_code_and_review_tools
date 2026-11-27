@@ -324,11 +324,15 @@ them the way a `Test-Parameters:` line in the commit message would:
 
 ```bash
 jenkins review <change>                          # the build number
-maloo request-tests <build> "testgroup=review-dne-selinux-ssk-part-2 testlist=sanity-sec"
+maloo request-tests <build> "testgroup=review-dne-selinux-ssk-part-2"
 maloo request-tests <build> "testlist=sanity env=ONLY=56"
 maloo queue --build <build>                      # a few minutes later
 ```
 
+- `testgroup=G testlist=S` does not limit group G to script S: it runs
+  all of G and then S again, and a script that cannot run twice in one
+  session (e.g. sanity-sec) then times out.  Request either the bare
+  `testgroup=G` or a `testlist=S`, not both.
 - Once Maloo has voted (+1 or -1) on the patchset, requested sessions
   are optional. While its enforced sessions are still running, they are
   enforced too. Only then does `--optional` (`signofftest=false`)
