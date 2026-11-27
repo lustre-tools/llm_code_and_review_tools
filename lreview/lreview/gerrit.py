@@ -27,6 +27,7 @@ class ResolvedChange:
     branch: Optional[str] = None
     provider: str = "gerrit"
     status: Optional[str] = None  # NEW, MERGED or ABANDONED
+    created: Optional[str] = None  # Gerrit's "2026-01-02 03:04:05.000000000"
     backport: Optional[list] = None  # backport.Upstream, set by run_batch
     gates: str = ""  # gates.gate_facts(), set by run_batch
 
@@ -116,6 +117,7 @@ def resolve_change(url_or_number: str, client: Optional[Any] = None) -> Resolved
         change_id=detail.get("change_id"),
         branch=detail.get("branch"),
         status=detail.get("status"),
+        created=detail.get("created"),
     )
 
 

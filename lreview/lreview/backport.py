@@ -235,8 +235,11 @@ def needs_upstream_search(change) -> bool:
 
 
 def _search(client, scope: str, change_id: Optional[str],
-            subject: str, exclude: int, limit: int = 10) -> dict:
-    """Changes in scope with change_id or the same subject tail."""
+            subject: str, exclude: int, limit: int = 10,
+            before: Optional[str] = None) -> dict:
+    """Changes in scope with change_id or the same subject tail, created
+    before the time before: a newer change ports the commit, not the
+    other way round."""
     found: dict[int, tuple[dict, str]] = {}
     queries = []
     if change_id:
@@ -249,6 +252,8 @@ def _search(client, scope: str, change_id: Optional[str],
                                          limit=limit, options=[]):
             if how == "subject" and subject_tail(
                     hit.get("subject", "")) != tail:
+                continue
+            if before and hit.get("created", "") > before:
                 continue
             found.setdefault(hit["_number"], (hit, how))
     return found
@@ -267,14 +272,15 @@ def find_unmarked(repo: Path, change, subject: str,
     from gerrit_cli.client import GerritCommentsClient
 
     client = client or GerritCommentsClient(url=change.base_url)
+    created = getattr(change, "created", None)
     found = _search(client, f"project:{UPSTREAM_PROJECT} "
                             f"branch:{UPSTREAM_BRANCH} -status:abandoned",
-                    change_id, subject, change.number)
+                    change_id, subject, change.number, before=created)
     if not found:
         found = {
             number: entry for number, entry in _search(
                 client, "-status:abandoned", None, subject,
-                change.number).items()
+                change.number, before=created).items()
             if (entry[0].get("project"), entry[0].get("branch"))
             != (change.project, change.branch)}
     upstreams = []

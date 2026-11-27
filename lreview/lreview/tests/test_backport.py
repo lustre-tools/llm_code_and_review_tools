@@ -212,9 +212,10 @@ class FakeClient:
         return f"https://r/c/{project}/+/{number}"
 
 
-def hit(number, subject, project="fs/lustre-release", branch="master"):
+def hit(number, subject, project="fs/lustre-release", branch="master",
+        created="2026-01-01 00:00:00.000000000"):
     return {"_number": number, "project": project, "branch": branch,
-            "subject": subject}
+            "subject": subject, "created": created}
 
 
 def facts_for(sha, subject=f"LU-2 {SUBJECT}"):
@@ -277,6 +278,17 @@ class TestUnmarkedPort:
             found = find_unmarked(repo, branch_change(SHA_A),
                                   f"ABC-1 {SUBJECT}", None, client)
         assert [u.branch for u in found] == [None]
+
+    def test_newer_change_is_a_port_of_this_one(self, repo):
+        later = "2026-03-01 00:00:00.000000000"
+        client = FakeClient(
+            master_subject=[hit(7, f"LU-2 {SUBJECT}", created=later)],
+            other_subject=[hit(5, f"ABC-1 {SUBJECT}", "p", "b_x-y",
+                               created=later)])
+        change = branch_change(SHA_A)
+        change.created = "2026-02-01 00:00:00.000000000"
+        assert find_unmarked(repo, change, f"ABC-1 {SUBJECT}", None,
+                             client) == []
 
     def test_short_subject_is_not_searched(self, repo):
         client = FakeClient(master_subject=[hit(7, "LU-2 tests: fix typo")])
