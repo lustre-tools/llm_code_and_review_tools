@@ -89,6 +89,13 @@ def register(main):
     @click.argument("key")
     @click.argument("body", default=None, required=False)
     @click.option("--body", "body_opt", default=None, help="Comment text (alternative to positional BODY)")
+    @click.option(
+        "--body-file",
+        "body_file",
+        type=click.File("r", encoding="utf-8"),
+        default=None,
+        help="Read the comment text from this file ('-' for stdin)",
+    )
     @click.option("--update", "comment_id", default=None, help="Edit existing comment by ID instead of adding new")
     @click.option(
         "--reply-to",
@@ -104,14 +111,15 @@ def register(main):
     )
     @click.pass_context
     def issue_comment_add(ctx: click.Context, key: str, body: str | None, body_opt: str | None,
-                          comment_id: str | None, reply_to: str | None, visibility: str | None) -> None:
+                          body_file, comment_id: str | None, reply_to: str | None, visibility: str | None) -> None:
         """
         Add or edit a comment on an issue.
 
         KEY is the issue key (e.g., PROJ-123) or a JIRA URL.
         BODY is the comment text (positional or via --body).
 
-        Use --body when the comment text starts with a dash.
+        Use --body when the comment text starts with a dash, and
+        --body-file FILE (or - for stdin) for long or multi-line text.
         Use --update COMMENT_ID to edit an existing comment.
         Use --reply-to COMMENT_ID to reply in that comment's thread (Cloud).
 
@@ -120,9 +128,13 @@ def register(main):
         to JIRA formatting.  Write a mention as @[Display Name|accountId],
         the form reads return, or as @[Display Name] to look the name up.
         """
-        body = body_opt or body
-        if not body:
-            raise click.UsageError("Missing comment text. Provide BODY as argument or via --body.")
+        given = [b for b in (body, body_opt) if b] + ([body_file] if body_file else [])
+        if len(given) > 1:
+            raise click.UsageError("Give the comment text once: BODY, --body or --body-file.")
+        body = body_file.read() if body_file else (body_opt or body)
+        if not body or not body.strip():
+            raise click.UsageError(
+                "Missing comment text. Provide BODY as argument, via --body or via --body-file.")
         if comment_id and reply_to:
             raise click.UsageError("--update and --reply-to cannot be combined.")
         command = "edit-comment" if comment_id else "comment"

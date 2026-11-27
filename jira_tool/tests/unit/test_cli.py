@@ -2634,3 +2634,51 @@ class TestCLIGroupUsageErrors:
         result = runner.invoke(main, [])
         assert result.exit_code == 4
         assert json.loads(result.stdout)["code"] == "INVALID_INPUT"
+
+
+class TestCLICommentBodyFile:
+    """jira comment --body-file reads the text from a file or stdin
+    (pw-ops fb-1359914d6972: agents had to pass --body "$(cat file)")."""
+
+    @responses.activate
+    def test_body_file(self, runner, mock_env, tmp_path):
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue/PROJ-1/comment",
+            json={"id": "9", "body": "x", "author": {"displayName": "U"},
+                  "created": "2024-01-15T10:00:00.000+0000"},
+            status=201,
+        )
+        f = tmp_path / "c.txt"
+        f.write_text("- starts with a dash\nsecond line\n")
+        result = runner.invoke(main, ["comment", "PROJ-1", "--body-file", str(f)])
+        assert result.exit_code == 0, result.output
+        sent = json.loads(responses.calls[0].request.body)
+        assert sent["body"] == "- starts with a dash\nsecond line\n"
+
+    @responses.activate
+    def test_body_file_stdin(self, runner, mock_env):
+        responses.add(
+            responses.POST,
+            "https://jira.example.com/rest/api/2/issue/PROJ-1/comment",
+            json={"id": "9", "body": "x", "author": {"displayName": "U"},
+                  "created": "2024-01-15T10:00:00.000+0000"},
+            status=201,
+        )
+        result = runner.invoke(main, ["comment", "PROJ-1", "--body-file", "-"],
+                               input="from stdin\n")
+        assert result.exit_code == 0, result.output
+        assert json.loads(responses.calls[0].request.body)["body"] == "from stdin\n"
+
+    def test_body_file_and_body_conflict(self, runner, mock_env, tmp_path):
+        f = tmp_path / "c.txt"
+        f.write_text("text")
+        result = runner.invoke(main, ["comment", "PROJ-1", "--body", "x", "--body-file", str(f)])
+        assert result.exit_code != 0
+        assert "once" in result.output
+
+    def test_empty_body_file(self, runner, mock_env, tmp_path):
+        f = tmp_path / "c.txt"
+        f.write_text("  \n")
+        result = runner.invoke(main, ["comment", "PROJ-1", "--body-file", str(f)])
+        assert result.exit_code != 0

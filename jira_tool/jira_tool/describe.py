@@ -88,12 +88,13 @@ def get_tool_description() -> ToolDescription:
                 "converted to JIRA formatting; reads return the same Markdown. Mentions read as "
                 "@[Display Name|accountId] and are written back as is; a plain @[Display Name] "
                 "is looked up (jira users <name> shows what it resolves to).",
-                usage='jira comment <KEY> "<BODY>" [--update COMMENT_ID] [--reply-to COMMENT_ID] '
+                usage='jira comment <KEY> "<BODY>" [--body-file FILE] [--update COMMENT_ID] [--reply-to COMMENT_ID] '
                 '[--visibility role:RoleName]',
                 arguments=[
                     Argument(name="key", description="Issue key or JIRA URL", required=True),
                     Argument(name="body", description="Comment text; give it here or with --body"),
                     Argument(name="--body", description="Comment text, for text that starts with a dash"),
+                    Argument(name="--body-file", description="Read the comment text from this file ('-' for stdin)"),
                     Argument(name="--update", description="ID of an existing comment to edit instead of adding one"),
                     Argument(
                         name="--reply-to",
